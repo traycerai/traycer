@@ -56,7 +56,16 @@ vi.mock(
                       }
                     : { status: mocks.authorityStatus },
                 canMutate: mocks.canMutate,
-                collection: { terminalsById: mocks.terminalsById },
+                collection: {
+                  terminalsByIdentity: Object.fromEntries(
+                    Object.entries(mocks.terminalsById).map(
+                      ([terminalId, value]) => [
+                        JSON.stringify([hostId, terminalId]),
+                        value,
+                      ],
+                    ),
+                  ),
+                },
               },
               mutations: { close: { mutateAsync: mocks.closeAsync } },
             });
@@ -181,6 +190,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     await waitFor(() => {
       expect(mocks.closeAsync).toHaveBeenCalledWith({
+        hostId: "host-b",
         terminalId: "session-capable",
       });
       expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);

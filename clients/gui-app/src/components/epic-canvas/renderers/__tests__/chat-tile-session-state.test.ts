@@ -732,7 +732,10 @@ describe("canModifyChatMessages", () => {
     content: CONTENT,
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: 0,
+    restoreWorktreeIntent: null,
   };
 
   function gateState(

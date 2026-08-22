@@ -326,7 +326,10 @@ export function useTerminalTileBootstrap(
         const openingGrid =
           measuredGrid ??
           peekXtermHostGrid(input.instanceId) ??
-          peekXtermHostGridForSession(input.sessionId);
+          peekXtermHostGridForSession({
+            hostId: input.hostId,
+            sessionId: input.sessionId,
+          });
         createMutateRef.current(
           {
             scope: input.scope,
@@ -361,6 +364,7 @@ export function useTerminalTileBootstrap(
     gridReady,
     measuredGrid,
     input.scope,
+    input.hostId,
     input.sessionId,
     input.instanceId,
     input.sessionKind,
@@ -382,8 +386,11 @@ export function useTerminalTileBootstrap(
   const adoptSessionId = input.sessionId;
   const adoptInstanceId = input.instanceId;
   useEffect(() => {
-    adoptWarmSessionInstance(adoptSessionId, adoptInstanceId);
-  }, [adoptSessionId, adoptInstanceId]);
+    adoptWarmSessionInstance(
+      { hostId: input.hostId, sessionId: adoptSessionId },
+      adoptInstanceId,
+    );
+  }, [adoptInstanceId, adoptSessionId, input.hostId]);
 
   // Grid preference mirrors the create effect's: probe measurement first,
   // then engine peeks (render-time reads - the handle hook consumes these
@@ -393,7 +400,10 @@ export function useTerminalTileBootstrap(
   const openingGrid =
     measuredGrid ??
     peekXtermHostGrid(input.instanceId) ??
-    peekXtermHostGridForSession(input.sessionId);
+    peekXtermHostGridForSession({
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+    });
   const handle = useTerminalSessionHandle({
     hostId: input.hostId,
     scope: input.scope,

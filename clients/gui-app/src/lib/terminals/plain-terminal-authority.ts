@@ -1,11 +1,16 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { PLAIN_TERMINAL_FAMILY_VERSION } from "@traycer/protocol/host/terminal/plain-contracts";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   ImportLegacyPlainTerminalRequest,
   ImportLegacyPlainTerminalResponse,
+  PlainTerminalFleetIdentity,
+  PlainTerminalListCoverage,
+  PlainTerminalListState,
   PlainTerminalProjection,
   PlainTerminalScope,
 } from "@traycer/protocol/host/terminal/plain-schemas";
+import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 
 export const PLAIN_TERMINAL_RPC_METHODS = [
@@ -32,8 +37,9 @@ export type PlainTerminalCapability =
     };
 
 /**
- * Resolves the optional family as a unit. A partial family is legacy behavior,
- * never a license to mix local and host authority method by method.
+ * Resolves the optional family as a unit. Clients require the complete v2
+ * family; a partial v1/v2 mix is legacy behavior, never a license to compose
+ * incompatible method semantics.
  */
 export function resolvePlainTerminalCapability(input: {
   readonly manifestKnown: boolean;
@@ -42,31 +48,69 @@ export function resolvePlainTerminalCapability(input: {
   if (!input.manifestKnown) return { status: "unknown" };
   for (const method of PLAIN_TERMINAL_RPC_METHODS) {
     const version = input.versionFor(method);
-    if (version === null || version.major !== 1) {
+    if (
+      version === null ||
+      version.major !== PLAIN_TERMINAL_FAMILY_VERSION.major ||
+      version.minor !== PLAIN_TERMINAL_FAMILY_VERSION.minor
+    ) {
       return { status: "legacy" };
     }
   }
-  return { status: "capable", schemaVersion: { major: 1, minor: 0 } };
+  return {
+    status: "capable",
+    schemaVersion: PLAIN_TERMINAL_FAMILY_VERSION,
+  };
+}
+
+export function plainTerminalCollectionIdentityKey(
+  hostId: string,
+  terminalId: string,
+): string {
+  return plainTerminalFleetIdentityKey({ hostId, terminalId });
+}
+
+export function getPlainTerminal(
+  collection: PlainTerminalCollection | undefined,
+  hostId: string,
+  terminalId: string,
+): PlainTerminalProjection | undefined {
+  return collection?.terminalsByIdentity[
+    plainTerminalCollectionIdentityKey(hostId, terminalId)
+  ];
 }
 
 export interface PlainTerminalCollection {
-  readonly terminalsById: Readonly<
+  /**
+   * Current renderable authority keyed by canonical `(hostId, terminalId)`.
+   * Replacement states replace this map atomically; it is never a union with
+   * a previous complete snapshot.
+   */
+  readonly terminalsByIdentity: Readonly<
     Partial<Record<string, PlainTerminalProjection>>
   >;
-  readonly deletedRevisionById: Readonly<Partial<Record<string, number>>>;
-  /** Accepted tombstones whose broad presentation sweep awaits settlement. */
-  readonly pendingPresentationDeletionRevisionById: Readonly<
+  /**
+   * Explicit lifetime-delete revisions only. Host withdrawal is absence from
+   * a later replacement state and must not write these.
+   */
+  readonly deletedRevisionByIdentity: Readonly<Partial<Record<string, number>>>;
+  /** Accepted unary deletions whose presentation sweep awaits settlement. */
+  readonly pendingPresentationDeletionRevisionByIdentity: Readonly<
     Partial<Record<string, number>>
   >;
+  readonly coverage: PlainTerminalListCoverage | null;
+  readonly scope: PlainTerminalScope | null;
+  readonly servingHostId: string | null;
   /** Monotonic client-side order for accepted stream/unary projections. */
   readonly projectionSequence: number;
-  /** Monotonic count of accepted fresh stream snapshots. */
+  /** Monotonic count of accepted replacement states. */
   readonly snapshotEpoch: number;
-  /** Last accepted stream projection sequence for each logical id. */
-  readonly lastStreamSequenceById: Readonly<Partial<Record<string, number>>>;
+  /** Last accepted stream projection sequence for each fleet identity. */
+  readonly lastStreamSequenceByIdentity: Readonly<
+    Partial<Record<string, number>>
+  >;
   readonly streamStatus: StreamConnectionStatus | null;
   readonly streamCompatibility: "unknown" | "compatible" | "incompatible";
-  /** True only after a snapshot in the current stream connection episode. */
+  /** True only after an accepted replacement state in the current episode. */
   readonly streamSnapshotFresh: boolean;
 }
 
@@ -77,16 +121,49 @@ export interface PlainTerminalProjectionBarrier {
 
 export function emptyPlainTerminalCollection(): PlainTerminalCollection {
   return {
-    terminalsById: {},
-    deletedRevisionById: {},
-    pendingPresentationDeletionRevisionById: {},
+    terminalsByIdentity: {},
+    deletedRevisionByIdentity: {},
+    pendingPresentationDeletionRevisionByIdentity: {},
+    coverage: null,
+    scope: null,
+    servingHostId: null,
     projectionSequence: 0,
     snapshotEpoch: 0,
-    lastStreamSequenceById: {},
+    lastStreamSequenceByIdentity: {},
     streamStatus: null,
     streamCompatibility: "unknown",
     streamSnapshotFresh: false,
   };
+}
+
+function scopesEqual(
+  left: PlainTerminalScope,
+  right: PlainTerminalScope,
+): boolean {
+  if (left.kind === "independent") {
+    return right.kind === "independent";
+  }
+  return right.kind === "epic" && right.epicId === left.epicId;
+}
+
+function servingHostIdForState(state: PlainTerminalListState): string | null {
+  return state.coverage === "partial-serving-host" ? state.servingHostId : null;
+}
+
+function identityKeyForProjection(terminal: PlainTerminalProjection): string {
+  return plainTerminalCollectionIdentityKey(
+    terminal.record.hostId,
+    terminal.record.terminalId,
+  );
+}
+
+function identityKeyFor(
+  identity: Pick<PlainTerminalFleetIdentity, "hostId" | "terminalId">,
+): string {
+  return plainTerminalCollectionIdentityKey(
+    identity.hostId,
+    identity.terminalId,
+  );
 }
 
 /** Captured immediately before a unary request is dispatched. */
@@ -99,39 +176,86 @@ export function capturePlainTerminalProjectionBarrier(
   };
 }
 
+/**
+ * Atomically replaces the renderable collection with a schema-checked state.
+ * A partial-serving-host state keeps only the serving-host slice; a previous
+ * complete snapshot is never retained or promoted.
+ */
+export function replacePlainTerminalState(
+  current: PlainTerminalCollection | undefined,
+  state: PlainTerminalListState,
+): PlainTerminalCollection {
+  const base = current ?? emptyPlainTerminalCollection();
+  const nextSequence = base.projectionSequence + 1;
+  const terminalsByIdentity: Record<string, PlainTerminalProjection> = {};
+  const lastStreamSequenceByIdentity: Record<string, number> = {};
+  const pendingPresentationDeletionRevisionByIdentity = {
+    ...base.pendingPresentationDeletionRevisionByIdentity,
+  };
+  for (const terminal of state.terminals) {
+    const key = identityKeyForProjection(terminal);
+    const deletedRevision = base.deletedRevisionByIdentity[key];
+    if (
+      deletedRevision !== undefined &&
+      deletedRevision >= terminal.record.revision
+    ) {
+      continue;
+    }
+    terminalsByIdentity[key] = terminal;
+    lastStreamSequenceByIdentity[key] = nextSequence;
+    delete pendingPresentationDeletionRevisionByIdentity[key];
+  }
+  return {
+    ...base,
+    terminalsByIdentity,
+    pendingPresentationDeletionRevisionByIdentity,
+    coverage: state.coverage,
+    scope: state.scope,
+    servingHostId: servingHostIdForState(state),
+    projectionSequence: nextSequence,
+    snapshotEpoch: base.snapshotEpoch + 1,
+    lastStreamSequenceByIdentity,
+    streamCompatibility: "compatible",
+    streamSnapshotFresh: false,
+  };
+}
+
+function inferReplacementState(
+  current: PlainTerminalCollection | undefined,
+  terminals: readonly PlainTerminalProjection[],
+): PlainTerminalListState {
+  let inferredScope: PlainTerminalScope;
+  const firstTerminal = terminals.at(0);
+  if (current?.scope !== null && current?.scope !== undefined) {
+    inferredScope = current.scope;
+  } else if (firstTerminal !== undefined) {
+    inferredScope = firstTerminal.record.scope;
+  } else {
+    inferredScope = { kind: "independent" };
+  }
+  if (inferredScope.kind === "independent") {
+    return {
+      coverage: "complete-local",
+      scope: { kind: "independent" },
+      terminals: [...terminals],
+    };
+  }
+  return {
+    coverage: "complete-fleet",
+    scope: inferredScope,
+    terminals: [...terminals],
+  };
+}
+
+/** Test and unary helper: treat `terminals` as a complete replacement state. */
 export function replacePlainTerminalSnapshot(
   current: PlainTerminalCollection | undefined,
   terminals: readonly PlainTerminalProjection[],
 ): PlainTerminalCollection {
-  const base = current ?? emptyPlainTerminalCollection();
-  const nextSequence = base.projectionSequence + 1;
-  const terminalsById: Record<string, PlainTerminalProjection> = {};
-  const lastStreamSequenceById = { ...base.lastStreamSequenceById };
-  const pendingPresentationDeletionRevisionById = {
-    ...base.pendingPresentationDeletionRevisionById,
-  };
-  for (const terminal of terminals) {
-    const terminalId = terminal.record.terminalId;
-    const deletedRevision = base.deletedRevisionById[terminalId];
-    if (
-      deletedRevision === undefined ||
-      terminal.record.revision > deletedRevision
-    ) {
-      terminalsById[terminalId] = terminal;
-      lastStreamSequenceById[terminalId] = nextSequence;
-      delete pendingPresentationDeletionRevisionById[terminalId];
-    }
-  }
-  return {
-    ...base,
-    terminalsById,
-    pendingPresentationDeletionRevisionById,
-    projectionSequence: nextSequence,
-    snapshotEpoch: base.snapshotEpoch + 1,
-    lastStreamSequenceById,
-    streamCompatibility: "compatible",
-    streamSnapshotFresh: false,
-  };
+  return replacePlainTerminalState(
+    current,
+    inferReplacementState(current, terminals),
+  );
 }
 
 /** Marks the snapshot plus its buffered mutation prefix as fully applied. */
@@ -156,61 +280,46 @@ export function markPlainTerminalStreamIncompatible(
 
 /**
  * Unary list seeds the collection but never creates stream freshness.
- * Stream projections accepted after the request barrier survive the list;
- * a fresh snapshot after that barrier dominates the entire delayed response.
- * A response begun after the current snapshot preserves existing freshness.
+ * A replacement state accepted after the request barrier dominates the
+ * entire delayed response. Independent complete-local states stay isolated
+ * from fleet coverage rather than merging into it.
  */
 export function seedPlainTerminalList(
   current: PlainTerminalCollection | undefined,
-  terminals: readonly PlainTerminalProjection[],
+  state: PlainTerminalListState,
   barrier: PlainTerminalProjectionBarrier,
 ): PlainTerminalCollection {
   const base = current ?? emptyPlainTerminalCollection();
   if (base.snapshotEpoch > barrier.snapshotEpoch) return base;
-
-  const responseById = new Map(
-    terminals.map((terminal) => [terminal.record.terminalId, terminal]),
-  );
-  const terminalIds = new Set([
-    ...Object.keys(base.terminalsById),
-    ...responseById.keys(),
-  ]);
-  let seeded = base;
-  for (const terminalId of terminalIds) {
-    const responseTerminal = responseById.get(terminalId);
-    const streamAdvanced =
-      (base.lastStreamSequenceById[terminalId] ?? -1) >
-      barrier.projectionSequence;
-    if (responseTerminal !== undefined) {
-      seeded = adoptPlainTerminalUnary(seeded, responseTerminal, barrier);
-    } else if (!streamAdvanced) {
-      const terminalsById = { ...seeded.terminalsById };
-      delete terminalsById[terminalId];
-      seeded = { ...seeded, terminalsById };
-    }
+  if (base.scope !== null && !scopesEqual(base.scope, state.scope)) {
+    return base;
   }
+  const replaced = replacePlainTerminalState(base, state);
   return {
-    ...seeded,
+    ...replaced,
     streamCompatibility: base.streamCompatibility,
     streamSnapshotFresh: base.streamSnapshotFresh,
   };
 }
 
-/** Stream upserts are last-frame-wins at equal durable revision. */
+/**
+ * Adopts one projection by fleet identity. Used by unary mutation results
+ * and tests; stream collection updates use replacement states instead.
+ */
 export function upsertPlainTerminal(
   current: PlainTerminalCollection | undefined,
   terminal: PlainTerminalProjection,
 ): PlainTerminalCollection {
   const base = current ?? emptyPlainTerminalCollection();
-  const terminalId = terminal.record.terminalId;
-  const deletedRevision = base.deletedRevisionById[terminalId];
+  const key = identityKeyForProjection(terminal);
+  const deletedRevision = base.deletedRevisionByIdentity[key];
   if (
     deletedRevision !== undefined &&
     deletedRevision >= terminal.record.revision
   ) {
     return base;
   }
-  const existing = base.terminalsById[terminalId];
+  const existing = base.terminalsByIdentity[key];
   if (
     existing !== undefined &&
     existing.record.revision > terminal.record.revision
@@ -218,18 +327,18 @@ export function upsertPlainTerminal(
     return base;
   }
   const nextSequence = base.projectionSequence + 1;
-  const pendingPresentationDeletionRevisionById = {
-    ...base.pendingPresentationDeletionRevisionById,
+  const pendingPresentationDeletionRevisionByIdentity = {
+    ...base.pendingPresentationDeletionRevisionByIdentity,
   };
-  delete pendingPresentationDeletionRevisionById[terminalId];
+  delete pendingPresentationDeletionRevisionByIdentity[key];
   return {
     ...base,
-    terminalsById: { ...base.terminalsById, [terminalId]: terminal },
+    terminalsByIdentity: { ...base.terminalsByIdentity, [key]: terminal },
     projectionSequence: nextSequence,
-    pendingPresentationDeletionRevisionById,
-    lastStreamSequenceById: {
-      ...base.lastStreamSequenceById,
-      [terminalId]: nextSequence,
+    pendingPresentationDeletionRevisionByIdentity,
+    lastStreamSequenceByIdentity: {
+      ...base.lastStreamSequenceByIdentity,
+      [key]: nextSequence,
     },
   };
 }
@@ -237,7 +346,7 @@ export function upsertPlainTerminal(
 /**
  * Adopts a canonical unary projection under the collection ordering rule:
  * higher durable revisions win; at equal revision, a stream projection
- * accepted after request start wins; and a later snapshot's absence wins.
+ * accepted after request start wins; and a later replacement's absence wins.
  */
 export function adoptPlainTerminalUnary(
   current: PlainTerminalCollection | undefined,
@@ -245,12 +354,12 @@ export function adoptPlainTerminalUnary(
   barrier: PlainTerminalProjectionBarrier,
 ): PlainTerminalCollection {
   const base = current ?? emptyPlainTerminalCollection();
-  const terminalId = terminal.record.terminalId;
-  const existing = base.terminalsById[terminalId];
+  const key = identityKeyForProjection(terminal);
+  const existing = base.terminalsByIdentity[key];
   if (existing === undefined && base.snapshotEpoch > barrier.snapshotEpoch) {
     return base;
   }
-  const deletedRevision = base.deletedRevisionById[terminalId];
+  const deletedRevision = base.deletedRevisionByIdentity[key];
   if (
     deletedRevision !== undefined &&
     deletedRevision >= terminal.record.revision
@@ -264,8 +373,7 @@ export function adoptPlainTerminalUnary(
     return base;
   }
   const streamAdvanced =
-    (base.lastStreamSequenceById[terminalId] ?? -1) >
-    barrier.projectionSequence;
+    (base.lastStreamSequenceByIdentity[key] ?? -1) > barrier.projectionSequence;
   if (
     streamAdvanced &&
     existing !== undefined &&
@@ -273,46 +381,47 @@ export function adoptPlainTerminalUnary(
   ) {
     return base;
   }
-  const pendingPresentationDeletionRevisionById = {
-    ...base.pendingPresentationDeletionRevisionById,
+  const pendingPresentationDeletionRevisionByIdentity = {
+    ...base.pendingPresentationDeletionRevisionByIdentity,
   };
-  delete pendingPresentationDeletionRevisionById[terminalId];
+  delete pendingPresentationDeletionRevisionByIdentity[key];
   return {
     ...base,
-    terminalsById: { ...base.terminalsById, [terminalId]: terminal },
+    terminalsByIdentity: { ...base.terminalsByIdentity, [key]: terminal },
     projectionSequence: base.projectionSequence + 1,
-    pendingPresentationDeletionRevisionById,
+    pendingPresentationDeletionRevisionByIdentity,
   };
 }
 
 export function deletePlainTerminal(
   current: PlainTerminalCollection | undefined,
-  terminalId: string,
+  identity: PlainTerminalFleetIdentity,
   revision: number,
 ): PlainTerminalCollection {
   const base = current ?? emptyPlainTerminalCollection();
-  const previousDeletedRevision = base.deletedRevisionById[terminalId] ?? -1;
-  const existing = base.terminalsById[terminalId];
+  const key = identityKeyFor(identity);
+  const previousDeletedRevision = base.deletedRevisionByIdentity[key] ?? -1;
+  const existing = base.terminalsByIdentity[key];
   if (
     revision <= previousDeletedRevision ||
     (existing !== undefined && existing.record.revision > revision)
   ) {
     return base;
   }
-  const terminalsById = { ...base.terminalsById };
-  delete terminalsById[terminalId];
+  const terminalsByIdentity = { ...base.terminalsByIdentity };
+  delete terminalsByIdentity[key];
   const nextSequence = base.projectionSequence + 1;
   return {
     ...base,
-    terminalsById,
+    terminalsByIdentity,
     projectionSequence: nextSequence,
-    lastStreamSequenceById: {
-      ...base.lastStreamSequenceById,
-      [terminalId]: nextSequence,
+    lastStreamSequenceByIdentity: {
+      ...base.lastStreamSequenceByIdentity,
+      [key]: nextSequence,
     },
-    deletedRevisionById: {
-      ...base.deletedRevisionById,
-      [terminalId]: revision,
+    deletedRevisionByIdentity: {
+      ...base.deletedRevisionByIdentity,
+      [key]: revision,
     },
   };
 }
@@ -320,15 +429,15 @@ export function deletePlainTerminal(
 /** Unary deletion counterpart to `adoptPlainTerminalUnary`. */
 export function adoptPlainTerminalDeletionUnary(
   current: PlainTerminalCollection | undefined,
-  terminalId: string,
+  identity: PlainTerminalFleetIdentity,
   revision: number,
   barrier: PlainTerminalProjectionBarrier,
 ): PlainTerminalCollection {
   const base = current ?? emptyPlainTerminalCollection();
-  const existing = base.terminalsById[terminalId];
+  const key = identityKeyFor(identity);
+  const existing = base.terminalsByIdentity[key];
   const streamAdvanced =
-    (base.lastStreamSequenceById[terminalId] ?? -1) >
-    barrier.projectionSequence;
+    (base.lastStreamSequenceByIdentity[key] ?? -1) > barrier.projectionSequence;
   if (
     streamAdvanced &&
     existing !== undefined &&
@@ -336,22 +445,22 @@ export function adoptPlainTerminalDeletionUnary(
   ) {
     return base;
   }
-  const previousDeletedRevision = base.deletedRevisionById[terminalId] ?? -1;
+  const previousDeletedRevision = base.deletedRevisionByIdentity[key] ?? -1;
   if (
     revision <= previousDeletedRevision ||
     (existing !== undefined && existing.record.revision > revision)
   ) {
     return base;
   }
-  const terminalsById = { ...base.terminalsById };
-  delete terminalsById[terminalId];
+  const terminalsByIdentity = { ...base.terminalsByIdentity };
+  delete terminalsByIdentity[key];
   return {
     ...base,
-    terminalsById,
+    terminalsByIdentity,
     projectionSequence: base.projectionSequence + 1,
-    deletedRevisionById: {
-      ...base.deletedRevisionById,
-      [terminalId]: revision,
+    deletedRevisionByIdentity: {
+      ...base.deletedRevisionByIdentity,
+      [key]: revision,
     },
   };
 }
@@ -373,7 +482,7 @@ export function setPlainTerminalStreamStatus(
 export function plainTerminalCollectionValues(
   collection: PlainTerminalCollection | undefined,
 ): readonly PlainTerminalProjection[] {
-  return Object.values(collection?.terminalsById ?? {})
+  return Object.values(collection?.terminalsByIdentity ?? {})
     .filter(
       (terminal): terminal is PlainTerminalProjection => terminal !== undefined,
     )
@@ -381,10 +490,20 @@ export function plainTerminalCollectionValues(
       const created = left.record.createdAt.localeCompare(
         right.record.createdAt,
       );
-      return created !== 0
-        ? created
+      if (created !== 0) return created;
+      const host = left.record.hostId.localeCompare(right.record.hostId);
+      return host !== 0
+        ? host
         : left.record.terminalId.localeCompare(right.record.terminalId);
     });
+}
+
+export function plainTerminalActionAuthorized(
+  collection: PlainTerminalCollection | undefined,
+  hostId: string,
+  terminalId: string,
+): boolean {
+  return getPlainTerminal(collection, hostId, terminalId) !== undefined;
 }
 
 export function plainTerminalAuthorityCanMutate(
@@ -405,8 +524,9 @@ export interface PlainTerminalViewModel {
   readonly activeProcessName: string | null;
   readonly launchCwd: string;
   readonly liveCwd: string | null;
-  readonly runtimeStatus: "running" | "dormant";
+  readonly runtimeStatus: "running" | "dormant" | "unknown";
   readonly isDormant: boolean;
+  readonly isRuntimeUnknown: boolean;
   readonly displayTitle: string;
 }
 
@@ -428,6 +548,7 @@ export function selectPlainTerminalViewModel(
     liveCwd,
     runtimeStatus: terminal.runtime.status,
     isDormant: terminal.runtime.status === "dormant",
+    isRuntimeUnknown: terminal.runtime.status === "unknown",
     displayTitle: terminalSessionTitle({
       title: terminal.record.manualTitle,
       activeProcessName,
@@ -525,10 +646,44 @@ export function plainTerminalScopeKey(scope: PlainTerminalScope): string {
   return scope.kind === "independent" ? "independent" : `epic:${scope.epicId}`;
 }
 
+/**
+ * Injective `(hostId, scope.kind, epicId|"")` key for shared stream ownership.
+ * Scope is a separate tuple member so epic ids cannot collide with the
+ * independent sentinel or with host-id delimiters.
+ */
+export function plainTerminalHostScopeIdentityKey(
+  hostId: string,
+  scope: PlainTerminalScope,
+): string {
+  return JSON.stringify([
+    hostId,
+    scope.kind,
+    scope.kind === "epic" ? scope.epicId : "",
+  ]);
+}
+
+/**
+ * Injective `(hostId, scope.kind, epicId|"", terminalId)` key for migration
+ * in-flight dedup. Same tuple encoding as fleet identity: quotes, NULs, and
+ * backslashes stay distinct.
+ */
+export function plainTerminalMigrationIdentityKey(
+  hostId: string,
+  scope: PlainTerminalScope,
+  terminalId: string,
+): string {
+  return JSON.stringify([
+    hostId,
+    scope.kind,
+    scope.kind === "epic" ? scope.epicId : "",
+    terminalId,
+  ]);
+}
+
 function migrationKey(
   hostId: string,
   scope: PlainTerminalScope,
   terminalId: string,
 ): string {
-  return `${hostId}\u0000${plainTerminalScopeKey(scope)}\u0000${terminalId}`;
+  return plainTerminalMigrationIdentityKey(hostId, scope, terminalId);
 }

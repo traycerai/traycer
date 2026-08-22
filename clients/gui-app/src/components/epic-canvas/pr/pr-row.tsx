@@ -164,7 +164,7 @@ export function PrRow(props: {
   // Mirrors how a chat/terminal row lights up when its tile is the one showing
   // (`useIsActiveEpicArtifact`); a PR tile is renderer-only, so it matches on
   // the tile id instead of an artifact record.
-  const isActive = useIsActiveTile(props.tabId, props.entry.tileId);
+  const isActive = useIsActiveTile(props.tabId, props.entry.tileId, null);
   // The panel is canvas-serving, so its host follows the selection authority.
   // A tile still nominates its own bound host - see `PrOwnerBadges.fallbackHostId`.
   const activeHostId = useCanvasHostId();

@@ -13,6 +13,7 @@ import {
   type InitialChatHandoffScope,
 } from "@/stores/epics/initial-chat-handoff-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import {
   nextHandoffTransition,
   type HandoffStep,
@@ -125,6 +126,26 @@ interface ApplyInitialChatHandoffStepInput {
   readonly step: HandoffStep;
 }
 
+/**
+ * Whether the composer for this node has nothing the user would miss.
+ *
+ * `contentIsSubmittable` is the canonical answer - text OR image atoms - and
+ * it is deliberately shared so the rule stays in lockstep across surfaces. A
+ * plain-text reading of this question calls an attachment-only draft empty,
+ * and this guard would then overwrite images the user could have SENT with
+ * the restored prompt: the very loss it exists to prevent, on content that
+ * cannot be retyped at all.
+ *
+ * Read live rather than through a subscription: this runs inside an effect
+ * that fires on the transition, and a stale read would decide the question
+ * with the wrong draft.
+ */
+function composerDraftIsEmpty(nodeId: string): boolean {
+  const draft = useComposerDraftStore.getState().drafts[nodeId];
+  if (draft === undefined) return true;
+  return !contentIsSubmittable(draft.content);
+}
+
 function applyInitialChatHandoffStep(
   input: ApplyInitialChatHandoffStepInput,
 ): void {
@@ -183,8 +204,32 @@ function applyInitialChatHandoffStep(
       return;
     }
     case "restoreAndAckFailed": {
-      input.replaceDraftContent(input.nodeId, input.step.content, null);
-      input.state.ackFailedSendRestoration(input.step.clientActionId);
+      // THE consumption point for every restoration path - the pending pass,
+      // the settled pass, the rejection winner and the accepted-send pass all
+      // arrive here - so the newer-draft rule belongs here rather than at any
+      // one of them. `replaceDraftContent` is unconditional, and a queued send
+      // followed by more typing is the ordinary way to use a queue, so an
+      // unguarded restore overwrites work the user can still see themselves
+      // doing.
+      //
+      // The newer draft wins the composer and the older prompt is STATED with
+      // its text inlined. That keeps the founding invariant intact - restored
+      // XOR stated, never neither - with the composer going to whichever text
+      // the user is actually looking at.
+      if (composerDraftIsEmpty(input.nodeId)) {
+        input.replaceDraftContent(input.nodeId, input.step.content, null);
+        input.state.ackFailedSendRestoration(input.step.clientActionId);
+        return;
+      }
+      // The worktree hand-back already ran at RECONCILE time, so the stated
+      // prompt's binding is now staged under the user's newer draft. Left
+      // deliberately: a staged pick is VISIBLE in the composer's worktree
+      // picker, which makes it a wrong-looking choice rather than a silent
+      // local run - and the notice's own worktree clause names the binding. -
+      // Unwinding it here would mean a blind clear from a seam that does not
+      // know whose pick it is, re-opening exactly the cross-dispatch
+      // sweep-evidence lifecycle `restoreIntentForDispatch` exists to protect.
+      input.state.stateFailedSendRestoration(input.step.clientActionId);
       return;
     }
   }

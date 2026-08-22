@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type {
   WorktreeBindingSelectorRowV12,
   WorktreeFolderIntent,
+  WorktreeIntent,
 } from "@traycer/protocol/host";
 import {
   worktreeFolderIntentReferencesRemoved,
@@ -10,12 +11,27 @@ import {
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import {
+  stagedWorktreeIntentAwaitsDispatchOutcome,
+  partitionSweptIntent,
   useWorktreeIntentStagingStore,
   worktreeStagingKeyString,
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
 const ACME = { owner: "acme", repo: "app" } as const;
+
+/**
+ * The yes/no question, asked through the partition. There is deliberately no
+ * any-match helper in the store any more: every production caller NAMES the
+ * folders it describes, so the coarse answer had no honest consumer and a
+ * second way to ask is how the granularity drifted in the first place.
+ */
+function sweptAnythingOf(
+  key: WorktreeStagingKey,
+  intent: WorktreeIntent,
+): boolean {
+  return partitionSweptIntent(key, intent).swept !== null;
+}
 
 // The host the sweep actually ran on, and a second enrolled host that happens
 // to use the same local paths and branch names.
@@ -425,5 +441,207 @@ describe("withoutResolvedMissingRows", () => {
         runningDir: "/wt/shared-path",
       }),
     ).toEqual([selectedHostRow]);
+  });
+});
+
+describe("purge and an in-flight dispatch", () => {
+  const key = {
+    surface: "owner" as const,
+    hostId: SWEPT_HOST,
+    epicId: "epic-1",
+    ownerKind: "chat" as const,
+    ownerId: "chat-1",
+  };
+
+  it("stops a consumed slot from handing back a swept worktree", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    // The send takes the pick; the slot now holds no intent to filter, which
+    // is exactly why the purge loop could not see it.
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // The slot is still awaiting an outcome - the mark says nothing about
+    // WHICH pick, because several dispatches can have taken different ones.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+    // The refusal is decided per intent: this one names the swept branch, so
+    // the hand-back refuses and the composer can say why.
+    expect(
+      sweptAnythingOf(key, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves a consumed slot whose own worktree survived the sweep", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [existingBranchIntent("traycer/kept")] });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // The sweep removed a DIFFERENT branch. Refusing this one would cost the
+    // hand-back and - now that the refusal speaks - would tell the user a
+    // worktree was deleted that is still there.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(key)).toBe(true);
+    expect(
+      sweptAnythingOf(key, {
+        entries: [existingBranchIntent("traycer/kept")],
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves another host's consumed slot alone", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const otherKey = { ...key, hostId: OTHER_HOST };
+    useWorktreeIntentStagingStore.getState().setIntent(otherKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(otherKey, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    // A sweep is one machine's filesystem event.
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(otherKey)).toBe(true);
+    expect(
+      sweptAnythingOf(otherKey, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(false);
+  });
+
+  // `-Jy80` REACHABILITY. `stagedWorktreeIntentAwaitsDispatchOutcome` is
+  // deliberately ownership-blind ("the last consumer is not the one owed a
+  // hand-back"), so an OLDER send's hand-back passes the gate while a NEWER
+  // dispatch owns the mark - and `setIntent`'s "one lifetime, one drop"
+  // coupling then takes the newer dispatch's `sweptRefsByKey` with it.
+  it("loses a newer dispatch's sweep evidence when an older prompt hands its pick back", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const older = existingBranchIntent("main");
+    const newer = existingBranchIntent("traycer/gone-branch");
+
+    // S1 stages and dispatches.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [older],
+    });
+    useWorktreeIntentStagingStore.getState().consumeForDispatch(key, "send-1");
+    // S2 stages a different pick and dispatches; the mark is now S2's.
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [newer],
+    });
+    useWorktreeIntentStagingStore.getState().consumeForDispatch(key, "send-2");
+    // A sweep removes S2's worktree while S2 is still in flight.
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+    expect(sweptAnythingOf(key, { entries: [newer] })).toBe(true);
+
+    // S1's prompt comes back on a reconnect snapshot and brings its (intact)
+    // pick with it. Nothing here belongs to S2 - so nothing of S2's may go.
+    useWorktreeIntentStagingStore
+      .getState()
+      .restoreIntentForDispatch(key, { entries: [older] }, "send-1");
+
+    // S2's rejection has not arrived yet, and its evidence must still be here.
+    expect(sweptAnythingOf(key, { entries: [newer] })).toBe(true);
+  });
+
+  // `-IfOZ`: a `WorktreeIntent` is one binding PER WORKSPACE FOLDER, and those
+  // are independent. The any-match predicate answers the yes/no question
+  // correctly, but using it to decide the hand-back made one removed worktree
+  // forfeit every surviving folder's binding - and then said "its staged
+  // worktree no longer exists", as though there had been one. The ordinary
+  // purge loop has always filtered per entry.
+  it("keeps the surviving folders when a sweep takes only one of them", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const doomed = existingBranchIntent("traycer/gone-branch");
+    const survivor: WorktreeFolderIntent = {
+      kind: "local",
+      workspacePath: "/other-repo",
+      repoIdentifier: null,
+      isPrimary: false,
+    };
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(key, { entries: [doomed, survivor] });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const partition = partitionSweptIntent(key, {
+      entries: [doomed, survivor],
+    });
+    expect(partition.swept?.entries).toEqual([doomed]);
+    expect(partition.survivors?.entries).toEqual([survivor]);
+    // The whole-intent question still answers yes - it is the right answer to
+    // a different question, and the statement paths still need it.
+    expect(sweptAnythingOf(key, { entries: [doomed, survivor] })).toBe(true);
+  });
+
+  it("reports no survivors when the sweep takes every folder", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const doomed = existingBranchIntent("traycer/gone-branch");
+    useWorktreeIntentStagingStore.getState().setIntent(key, {
+      entries: [doomed],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(key, "action-1");
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    const partition = partitionSweptIntent(key, { entries: [doomed] });
+    expect(partition.survivors).toBeNull();
+    expect(partition.swept?.entries).toEqual([doomed]);
+  });
+
+  // The `slotSegment !== ""` half of the host guard, which nothing exercised:
+  // dropping it left the whole suite green. An EMPTY host segment is the
+  // unresolved-host bucket, not a host - no machine can claim it, and any
+  // machine's sweep may concern it - so it must accumulate from every sweep
+  // rather than being filtered out as "not this host".
+  it("records a sweep against an unresolved-host slot, whichever host swept", () => {
+    useWorktreeIntentStagingStore.getState().resetForTests();
+    const unresolvedKey = { ...key, hostId: null };
+    useWorktreeIntentStagingStore.getState().setIntent(unresolvedKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .consumeForDispatch(unresolvedKey, "action-1");
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(SWEPT_HOST, REMOVED);
+
+    expect(stagedWorktreeIntentAwaitsDispatchOutcome(unresolvedKey)).toBe(true);
+    expect(
+      sweptAnythingOf(unresolvedKey, {
+        entries: [existingBranchIntent("traycer/gone-branch")],
+      }),
+    ).toBe(true);
   });
 });

@@ -17,6 +17,8 @@ import type {
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
   PlainTerminalMigrationCoordinator,
+  getPlainTerminal,
+  plainTerminalCollectionIdentityKey,
   plainTerminalCollectionValues,
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
@@ -282,7 +284,10 @@ export function useLandingTerminalReconciliation(
             capability: plainAuthority.authority.capability,
             canMutate: plainAuthority.authority.canMutate,
             closeTerminal: (request) =>
-              plainAuthority.mutations.close.mutateAsync(request),
+              plainAuthority.mutations.close.mutateAsync({
+                ...request,
+                hostId: activeHostId,
+              }),
             importLegacyTerminal: (request) =>
               plainAuthority.mutations.importLegacy.mutateAsync(request),
             queryClient,
@@ -436,7 +441,10 @@ export async function reconcileCapableLandingTerminals(args: {
     pendingKills.map(async (pending) => {
       const collection =
         queryClient.getQueryData<PlainTerminalCollection>(queryKey);
-      if (collection?.terminalsById[pending.sessionId] !== undefined) {
+      if (
+        getPlainTerminal(collection, pending.hostId, pending.sessionId) !==
+        undefined
+      ) {
         await args.closeTerminal({ terminalId: pending.sessionId });
       }
       useLandingTerminalStore
@@ -463,14 +471,25 @@ export async function reconcileCapableLandingTerminals(args: {
     legacyTabs.map(async (legacyTab) => {
       const collection =
         queryClient.getQueryData<PlainTerminalCollection>(queryKey);
-      const known = collection?.terminalsById[legacyTab.sessionId];
+      const known = getPlainTerminal(
+        collection,
+        legacyTab.hostId,
+        legacyTab.sessionId,
+      );
       if (known !== undefined) {
         useLandingTerminalStore
           .getState()
           .adoptHostTerminal(legacyTab.instanceId, known);
         return;
       }
-      if (collection?.deletedRevisionById[legacyTab.sessionId] !== undefined) {
+      if (
+        collection?.deletedRevisionByIdentity[
+          plainTerminalCollectionIdentityKey(
+            legacyTab.hostId,
+            legacyTab.sessionId,
+          )
+        ] !== undefined
+      ) {
         consumeRetainedPlainTerminalTombstone({
           queryClient,
           queryKey,

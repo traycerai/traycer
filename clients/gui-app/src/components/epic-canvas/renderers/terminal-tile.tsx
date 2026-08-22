@@ -14,7 +14,7 @@ import type {
   SupportedEpicTerminalRef,
 } from "@/stores/epics/canvas/types";
 import {
-  isImportExemptEpicTerminalOrigin,
+  isImportExemptEpicTerminalRef,
   isLegacyEpicTerminalRef,
   isUnsupportedEpicTerminalRef,
   legacyEpicTerminalEvidence,
@@ -78,7 +78,9 @@ import {
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import type { PlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
-import { requestEpicTerminalLifetimeClose } from "@/lib/terminals/epic-terminal-close-coordinator";
+import { retryEpicTerminalDurableCreate } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
+import { useEpicTerminalDurableCreate } from "@/hooks/terminal/use-epic-terminal-durable-create";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
@@ -287,7 +289,7 @@ function ReachableTerminalTile(
     return <TerminalStartingTile tileId={props.tileId} />;
   }
   const supportedNode: SupportedEpicTerminalRef = props.node;
-  if (isImportExemptEpicTerminalOrigin(supportedNode.origin)) {
+  if (isImportExemptEpicTerminalRef(supportedNode)) {
     return <LegacyTerminalTileLive {...props} node={supportedNode} />;
   }
   if (controller.capability === "unknown") {
@@ -355,6 +357,7 @@ function LegacyTerminalTileLive(
       ? (props.node.originProviderId ?? null)
       : null;
   const isSignInTerminal = props.node.origin === "provider-login";
+  const managerOwned = props.node.lifecycleOwner === "manager";
   const bootstrap = useTerminalTileBootstrap({
     hostId,
     scope: { kind: "epic", epicId },
@@ -366,7 +369,10 @@ function LegacyTerminalTileLive(
     // measure-grid wait still has to arm or a probe that never reports (a
     // stalled xterm chunk, a zero-sized container) strands the tile on
     // "Starting terminal session…" with no bounded fallback.
-    adoptOnly: isSignInTerminal,
+    // Manager-owned list rows stay on the live session even without
+    // setup/provider origin enrichment; missing enrichment fails closed
+    // rather than recreating a bare shell.
+    adoptOnly: isSignInTerminal || managerOwned,
   });
   const closeExitedTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
@@ -468,6 +474,7 @@ function LegacyTerminalTileLive(
         <div className="relative min-h-0 flex-1">
           <TerminalGridMeasureProbe
             sessionId={sessionId}
+            hostId={hostId}
             instanceId={instanceId}
             tileKind="terminal"
             chrome="padded"
@@ -521,13 +528,18 @@ function HostTerminalTileLive(
   const hostId = useTabHostId();
   const epicId = useOpenEpicId();
   const pendingCreate = useEpicCanvasStore((state) =>
-    state.pendingCreateArtifactIds.has(props.node.id),
+    hasTerminalPendingCreate(
+      state.pendingCreateTerminalIdentities,
+      hostId,
+      props.node.id,
+    ),
   );
+  const durableCreate = useEpicTerminalDurableCreate(hostId, props.node.id);
   const adoptProjection = useEpicCanvasStore(
     (state) => state.adoptHostTerminalProjection,
   );
   const unmarkPendingCreate = useEpicCanvasStore(
-    (state) => state.unmarkArtifactPendingCreate,
+    (state) => state.unmarkTerminalPendingCreate,
   );
   const evidence = legacyEpicTerminalEvidence(props.node);
   const [measuredGrid, setMeasuredGrid] = useState<{
@@ -551,7 +563,10 @@ function HostTerminalTileLive(
   const gridReady = measuredGrid !== null || measureTimedOut;
   const openingGrid = measuredGrid ??
     peekXtermHostGrid(props.node.instanceId) ??
-    peekXtermHostGridForSession(props.node.id) ?? {
+    peekXtermHostGridForSession({
+      hostId,
+      sessionId: props.node.id,
+    }) ?? {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
     };
@@ -569,6 +584,7 @@ function HostTerminalTileLive(
             rows: openingGrid.rows,
           })
         : await ensureRunning.mutateAsync({
+            hostId,
             terminalId: props.node.id,
             cols: openingGrid.cols,
             rows: openingGrid.rows,
@@ -577,12 +593,12 @@ function HostTerminalTileLive(
   };
   const adopt = (terminal: PlainTerminalProjection): void => {
     adoptProjection(hostId, terminal);
-    unmarkPendingCreate(props.node.id);
+    unmarkPendingCreate(hostId, props.node.id);
   };
   const lifecycle = useLandingTerminalDurableLifecycle({
     projectionStatus:
       projection === undefined ? "missing" : projection.runtime.status,
-    pendingCreate,
+    pendingCreate: pendingCreate && durableCreate === null,
     active: props.isActive,
     canMutate: props.controller.canMutate,
     gridReady,
@@ -591,8 +607,11 @@ function HostTerminalTileLive(
   });
 
   useEffect(() => {
-    adoptWarmSessionInstance(props.node.id, props.node.instanceId);
-  }, [props.node.id, props.node.instanceId]);
+    adoptWarmSessionInstance(
+      { hostId, sessionId: props.node.id },
+      props.node.instanceId,
+    );
+  }, [hostId, props.node.id, props.node.instanceId]);
 
   const runtimeRunning = projection?.runtime.status === "running";
   const handle = useTerminalSessionHandle({
@@ -606,20 +625,26 @@ function HostTerminalTileLive(
     kind: "terminal",
     enabled: gridReady && (runtimeRunning || lifecycle.requestSettled),
   });
-  const close = props.controller.close;
-  const requestClose = () => {
-    const pending = requestEpicTerminalLifetimeClose({
-      hostId,
-      terminalId: props.node.id,
-      capability: props.controller.capability,
-      canMutate: props.controller.canMutate,
-      close: async () => {
-        await close.mutateAsync({ terminalId: props.node.id });
-      },
-    });
-    if (pending !== null) void pending.catch(() => undefined);
-  };
+  // Centered session-ended Close is presentation-only, matching tab X and
+  // the directory-offline dead banner. Explicit lifetime deletion stays on
+  // the sidebar/named overlay actions, never this surface.
+  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
+    props.viewTabId,
+    props.tileId,
+    props.node.instanceId,
+  );
 
+  if (durableCreate?.status === "failed" && durableCreate.error !== null) {
+    return (
+      <TerminalStartError
+        tileId={props.tileId}
+        message={durableCreate.error.message}
+        onRetry={() => {
+          retryEpicTerminalDurableCreate(hostId, props.node.id);
+        }}
+      />
+    );
+  }
   if (lifecycle.requestError !== null) {
     return (
       <TerminalStartError
@@ -636,6 +661,7 @@ function HostTerminalTileLive(
         probe={
           <TerminalGridMeasureProbe
             sessionId={props.node.id}
+            hostId={hostId}
             instanceId={props.node.instanceId}
             tileKind="terminal"
             chrome="padded"
@@ -658,7 +684,7 @@ function HostTerminalTileLive(
       onCrashExit={props.onCrashExit}
       authoritativeTerminal={props.controller.viewModel}
       closeOnExit={false}
-      onClose={requestClose}
+      onClose={closeCanvasTile}
       signInTile={null}
     />
   );
@@ -874,6 +900,7 @@ function TerminalLive(props: TerminalLiveProps) {
         <Suspense fallback={<TerminalLoadingSkeleton />}>
           <TerminalXtermHost
             sessionId={handle.sessionId}
+            hostId={hostId}
             tileKind="terminal"
             chrome="padded"
             instanceId={props.instanceId}

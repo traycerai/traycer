@@ -27,6 +27,7 @@ export interface EnsureRunningMutation {
   readonly error: Error | null;
   readonly data: EnsurePlainTerminalRunningResponse | undefined;
   readonly mutate: (request: {
+    readonly hostId: string;
     readonly terminalId: string;
     readonly cols: number;
     readonly rows: number;
@@ -75,12 +76,16 @@ export function useHostTerminalBootstrap(args: {
       return;
     const grid = measuredGrid ??
       peekXtermHostGrid(args.instanceId) ??
-      peekXtermHostGridForSession(args.terminalId) ?? {
+      peekXtermHostGridForSession({
+        hostId: args.hostId,
+        sessionId: args.terminalId,
+      }) ?? {
         cols: DEFAULT_COLS,
         rows: DEFAULT_ROWS,
       };
     dispatchedRevisionRef.current = args.projection.record.revision;
     args.ensureRunning.mutate({
+      hostId: args.hostId,
       terminalId: args.terminalId,
       cols: grid.cols,
       rows: grid.rows,
@@ -88,6 +93,7 @@ export function useHostTerminalBootstrap(args: {
   }, [
     args.canMutate,
     args.ensureRunning,
+    args.hostId,
     args.instanceId,
     args.projection,
     args.terminalId,
@@ -96,12 +102,18 @@ export function useHostTerminalBootstrap(args: {
   ]);
 
   useEffect(() => {
-    adoptWarmSessionInstance(args.terminalId, args.instanceId);
-  }, [args.instanceId, args.terminalId]);
+    adoptWarmSessionInstance(
+      { hostId: args.hostId, sessionId: args.terminalId },
+      args.instanceId,
+    );
+  }, [args.hostId, args.instanceId, args.terminalId]);
 
   const openingGrid = measuredGrid ??
     peekXtermHostGrid(args.instanceId) ??
-    peekXtermHostGridForSession(args.terminalId) ?? {
+    peekXtermHostGridForSession({
+      hostId: args.hostId,
+      sessionId: args.terminalId,
+    }) ?? {
       cols: DEFAULT_COLS,
       rows: DEFAULT_ROWS,
     };

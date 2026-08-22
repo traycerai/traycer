@@ -12,12 +12,17 @@ import {
   useEpicChatBackupStatus,
   type EpicChatBackupStatus,
 } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { cn } from "@/lib/utils";
+import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
- * highest-severity signal across artifact/Yjs durability and chat publication,
- * keeping chat backup on the dot + tooltip instead of a permanent sidebar row.
+ * highest-severity signal across artifact/Yjs durability, chat publication,
+ * and remote-terminal discovery. Secondary-plane failures live here rather
+ * than only in the panel whose data happened to expose them.
  *
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
@@ -49,15 +54,26 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
   const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
+  const canvasHostId = useCanvasHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const terminalAuthority = useHostPlainTerminalAuthority({
+    hostId: canvasHostId,
+    scope: { kind: "epic", epicId: props.epicId },
+  });
+  const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
+    terminalAuthority.coverage === "partial-serving-host",
+    JSON.stringify([terminalAuthority.hostId, props.epicId]),
+  );
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const selected = highestSeverityIndicator(
     indicatorFor(state, linkDownTooLong),
     chatBackupStatus,
+    terminalCatalogUnavailable,
   );
   const rawSelected = highestSeverityIndicator(
     indicatorFor(derived, linkDownTooLong),
     chatBackupStatus,
+    terminalCatalogUnavailable,
   );
   const { indicator } = selected;
 
@@ -97,7 +113,7 @@ function warningAnnouncement(
   linkDownTooLong: boolean,
 ): string | null {
   if (
-    selected.source === "chat-backup" &&
+    selected.source !== "artifact" &&
     selected.indicator.severity === "warning"
   ) {
     return selected.indicator.ariaLabel;
@@ -182,7 +198,7 @@ interface PillIndicator {
 }
 
 interface SelectedIndicator {
-  readonly source: "artifact" | "chat-backup";
+  readonly source: "artifact" | "chat-backup" | "terminal-catalog";
   readonly indicator: PillIndicator;
 }
 
@@ -282,18 +298,52 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 function highestSeverityIndicator(
   artifactIndicator: PillIndicator,
   chatBackupStatus: EpicChatBackupStatus | null,
+  terminalCatalogUnavailable: boolean,
 ): SelectedIndicator {
-  if (chatBackupStatus === null) {
-    return { source: "artifact", indicator: artifactIndicator };
+  let selected: SelectedIndicator = {
+    source: "artifact",
+    indicator: artifactIndicator,
+  };
+  if (chatBackupStatus !== null) {
+    const chatIndicator = indicatorForChatBackup(chatBackupStatus);
+    if (
+      SEVERITY_RANK[chatIndicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = { source: "chat-backup", indicator: chatIndicator };
+    }
   }
-  const chatIndicator = indicatorForChatBackup(chatBackupStatus);
-  // A tie stays with artifact/Yjs sync: those warnings can mean the newest
-  // bytes exist only in this renderer, while chat backup always starts from a
-  // durable local chat. Chat backup still wins over steady/activity sync.
-  return SEVERITY_RANK[chatIndicator.severity] >
-    SEVERITY_RANK[artifactIndicator.severity]
-    ? { source: "chat-backup", indicator: chatIndicator }
-    : { source: "artifact", indicator: artifactIndicator };
+  if (terminalCatalogUnavailable) {
+    const terminalIndicator = indicatorForTerminalCatalogUnavailable();
+    if (
+      SEVERITY_RANK[terminalIndicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = {
+        source: "terminal-catalog",
+        indicator: terminalIndicator,
+      };
+    }
+  }
+  // Ties stay with the earlier source. Artifact/Yjs warnings can mean the
+  // newest bytes exist only in this renderer; chat backup and catalog health
+  // remain secondary when an equally severe durability warning is active.
+  return selected;
+}
+
+function indicatorForTerminalCatalogUnavailable(): PillIndicator {
+  const message =
+    "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
+  return {
+    severity: "warning",
+    containerClassName: AMBER_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: "Remote terminals unavailable",
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: message,
+    ariaLabel: message,
+  };
 }
 
 function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {

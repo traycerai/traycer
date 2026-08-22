@@ -59,6 +59,10 @@ vi.mock("@/hooks/terminal/use-plain-terminal-mutations", () => ({
   }),
 }));
 
+vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
+  useResolvePlainTerminalOwnerHostClient: () => () => null,
+}));
+
 import { TerminalsPanelBody } from "../epic-terminal-sidebar";
 
 function wrapper(node: ReactNode): ReactNode {

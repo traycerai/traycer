@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
 import type {
-  CanonicalTerminalSessionInfoWithCurrentCwd,
-  ListTerminalsResponseV22,
+  CanonicalTerminalSessionInfoWithLifecycleOwner,
+  ListTerminalsResponseV23,
   TerminalSessionInfo,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -71,14 +71,15 @@ const listKey = [
 ] as const;
 
 function sessionInfo(
-  overrides: Partial<CanonicalTerminalSessionInfoWithCurrentCwd>,
-): CanonicalTerminalSessionInfoWithCurrentCwd {
+  overrides: Partial<CanonicalTerminalSessionInfoWithLifecycleOwner>,
+): CanonicalTerminalSessionInfoWithLifecycleOwner {
   return {
     sessionId: SESSION_ID,
     scope: { kind: "epic", epicId: EPIC_ID },
     sessionKind: "terminal",
     cwd: "/work/repo",
     currentCwd: "/work/repo",
+    lifecycleOwner: "manager",
     shellCommand: "/bin/zsh",
     shellArgs: [],
     cols: 80,
@@ -123,7 +124,7 @@ function setup() {
     sessionId: "term-other",
     title: "other",
   });
-  queryClient.setQueryData<ListTerminalsResponseV22>(listKey, {
+  queryClient.setQueryData<ListTerminalsResponseV23>(listKey, {
     sessions: [sessionInfo({}), otherSession],
     homeCwd: HOME_CWD,
   });
@@ -202,7 +203,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV23>(listKey);
     expect(data).toBeDefined();
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.activeProcessName).toBe("bun");
@@ -241,7 +242,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV23>(listKey);
     const patched = data?.sessions.find((s) => s.sessionId === SESSION_ID);
     expect(patched?.title).toBe("renamed");
     expect(patched?.activeProcessName).toBe("vim");
@@ -269,7 +270,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
     });
 
     const data =
-      harness.queryClient.getQueryData<ListTerminalsResponseV22>(listKey);
+      harness.queryClient.getQueryData<ListTerminalsResponseV23>(listKey);
     expect(
       data?.sessions.find((session) => session.sessionId === SESSION_ID)
         ?.currentCwd,
@@ -286,7 +287,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
 
     expect(
       harness.queryClient
-        .getQueryData<ListTerminalsResponseV22>(listKey)
+        .getQueryData<ListTerminalsResponseV23>(listKey)
         ?.sessions.find((session) => session.sessionId === SESSION_ID)
         ?.currentCwd,
     ).toBe("");
@@ -318,7 +319,7 @@ describe("useTerminalSessionHandle metadata -> terminal.list cache", () => {
 
     expect(
       harness.queryClient
-        .getQueryData<ListTerminalsResponseV22>(listKey)
+        .getQueryData<ListTerminalsResponseV23>(listKey)
         ?.sessions.find((session) => session.sessionId === SESSION_ID)
         ?.currentCwd,
     ).toBe("");

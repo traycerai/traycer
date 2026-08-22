@@ -426,7 +426,7 @@ const canvasMock = vi.hoisted(() => {
             hostId: "host-1",
             cwd: "/work",
           },
-        },
+        } as Record<string, Record<string, unknown>>,
         sizesByGroupId: {},
       },
       "tab-2": {
@@ -827,14 +827,20 @@ afterEach(() => {
   historyNavAvailableMock.enabled = true;
   liveArtifactTitleMock.title = null;
   liveAgentsMock.byAgentId = {};
-  canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
-    id: "term-1",
-    instanceId: "tile-term-1",
-    type: "terminal",
-    name: "Terminal Alpha",
-    titleSource: "manual",
-    hostId: "host-1",
-    cwd: "/work",
+  const tab1Canvas = canvasMock.state.canvasByTabId["tab-1"];
+  tab1Canvas.root.tabInstanceIds = ["tile-term-1"];
+  tab1Canvas.root.activeTabId = "tile-term-1";
+  tab1Canvas.root.activationHistory = ["tile-term-1"];
+  tab1Canvas.tilesByInstanceId = {
+    "tile-term-1": {
+      id: "term-1",
+      instanceId: "tile-term-1",
+      type: "terminal",
+      name: "Terminal Alpha",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/work",
+    },
   };
   canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
     ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
@@ -2431,7 +2437,9 @@ describe("ResourceMonitorPopover", () => {
       }),
       {
         ...emptyPlainTerminalCollection(),
-        deletedRevisionById: { "term-tombstoned": 2 },
+        deletedRevisionByIdentity: {
+          [JSON.stringify(["host-1", "term-tombstoned"])]: 2,
+        },
         projectionSequence: 1,
       },
     );
@@ -4382,5 +4390,151 @@ describe("ResourceMonitorPopover · host picker", () => {
       screen.queryByTestId("resource-monitor-host-incompatible"),
     ).toBeNull();
     expect(screen.getByText("Waiting for host-b…")).not.toBeNull();
+  });
+
+  it("activates the matching live tile when two hosts share a terminal id", async () => {
+    const tab1 = canvasMock.state.canvasByTabId["tab-1"];
+    tab1.root.tabInstanceIds = ["tile-term-1", "tile-term-1-b"];
+    tab1.tilesByInstanceId["tile-term-1-b"] = {
+      id: "term-1",
+      instanceId: "tile-term-1-b",
+      type: "terminal",
+      name: "Terminal Bravo",
+      titleSource: "manual",
+      hostId: "host-b",
+      cwd: "/work-b",
+    };
+    canvasMock.prepareSetActiveTileTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-1-b",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "term-1",
+              },
+              activeProcessName: "alpha",
+            }),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-b",
+                epicId: "epic-1",
+                ownerId: "term-1",
+              },
+              activeProcessName: "bravo",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(await screen.findByText("Terminal Bravo"));
+
+    expect(navigateNestedMock).toHaveBeenCalledWith(
+      "epic-1",
+      "tab-1",
+      expect.any(Function),
+    );
+    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      "pane-1",
+      "tile-term-1-b",
+    );
+    expect(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalledWith("tab-1", "pane-1", "tile-term-1");
+  });
+
+  it("reopens the matching closed tile when two hosts share a terminal id", async () => {
+    canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
+      "tile-term-shared-a": {
+        node: {
+          id: "term-shared",
+          instanceId: "tile-term-shared-a",
+          type: "terminal",
+          name: "Closed Alpha",
+          titleSource: "manual",
+          hostId: "host-a",
+          cwd: "/work-a",
+        },
+        pendingCreate: false,
+      },
+      "tile-term-shared-b": {
+        node: {
+          id: "term-shared",
+          instanceId: "tile-term-shared-b",
+          type: "terminal",
+          name: "Closed Bravo",
+          titleSource: "manual",
+          hostId: "host-b",
+          cwd: "/work-b",
+        },
+        pendingCreate: false,
+      },
+    };
+    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-shared-b",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-a",
+                epicId: "epic-1",
+                ownerId: "term-shared",
+              },
+              activeProcessName: "alpha",
+            }),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-b",
+                epicId: "epic-1",
+                ownerId: "term-shared",
+              },
+              activeProcessName: "bravo",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Closed Bravo/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      expect.objectContaining({
+        id: "term-shared",
+        instanceId: "tile-term-shared-b",
+        hostId: "host-b",
+      }),
+    );
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalledWith(
+      "tab-1",
+      expect.objectContaining({ instanceId: "tile-term-shared-a" }),
+    );
   });
 });

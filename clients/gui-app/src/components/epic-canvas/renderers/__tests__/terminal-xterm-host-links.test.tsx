@@ -153,6 +153,7 @@ function renderHost(): void {
   render(
     <TerminalXtermHost
       sessionId="test-session"
+      hostId="host-1"
       tileKind="terminal"
       instanceId="test-instance"
       effectiveCols={80}

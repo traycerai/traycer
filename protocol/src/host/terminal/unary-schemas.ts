@@ -128,6 +128,25 @@ export type CanonicalTerminalSessionInfoWithCurrentCwd = z.infer<
   typeof canonicalTerminalSessionInfoWithCurrentCwdSchema
 >;
 
+// Who owns the session's lifetime. `registry` is a persistent plain-terminal
+// record (a `terminal.list` shadow of `terminal.plain.*`); `manager` is a
+// TerminalSessionManager session such as setup or provider-login. Updated
+// hosts tag every `terminal.list@2.3` row from the actual list composition,
+// not from title, cwd, or session kind. This is a parallel schema: the v2.2
+// currentCwd shape already shipped and stays frozen.
+export const terminalLifecycleOwnerSchema = z.enum(["registry", "manager"]);
+export type TerminalLifecycleOwner = z.infer<
+  typeof terminalLifecycleOwnerSchema
+>;
+
+export const canonicalTerminalSessionInfoWithLifecycleOwnerSchema =
+  canonicalTerminalSessionInfoWithCurrentCwdSchema.extend({
+    lifecycleOwner: terminalLifecycleOwnerSchema,
+  });
+export type CanonicalTerminalSessionInfoWithLifecycleOwner = z.infer<
+  typeof canonicalTerminalSessionInfoWithLifecycleOwnerSchema
+>;
+
 // `terminal.create@1.0` - spawns a new PTY-backed session for the given epic.
 // `sessionKind` distinguishes user terminal tabs from terminal-agent backing
 // PTYs so UI surfaces can list only the sessions they own. `cwd` is the
@@ -258,6 +277,19 @@ export const listTerminalsResponseSchemaV22 = z.object({
 });
 export type ListTerminalsResponseV22 = z.infer<
   typeof listTerminalsResponseSchemaV22
+>;
+
+// `terminal.list@2.3` - additive lifetime-owner discriminator on every
+// session. A v2.2 host upgraded to v2.3 fills `lifecycleOwner: "registry"`
+// so a capable client fail-closes missing origin as a durable shadow rather
+// than promoting it. Genuinely older hosts remain full `terminal.list`
+// after positive legacy negotiation and do not consult the field.
+export const listTerminalsResponseSchemaV23 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoWithLifecycleOwnerSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV23 = z.infer<
+  typeof listTerminalsResponseSchemaV23
 >;
 
 // `terminal.readOutput@1.0` - read-only access to one session's output for a

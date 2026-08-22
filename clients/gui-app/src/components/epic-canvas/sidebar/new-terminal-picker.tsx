@@ -80,7 +80,10 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
       navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(tabId, mintNewEpicTerminalTile(target)),
+        prepareOpenTileInTabFocusTarget(
+          tabId,
+          mintNewEpicTerminalTile({ ...target, epicId }),
+        ),
       );
       setIsOpen(false);
     },
