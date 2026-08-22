@@ -292,22 +292,24 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
     },
   );
 
-  // KNOWN DEFECT, reported rather than fixed here (tests-only change):
+  // REGRESSION PIN for a defect this suite caught and that is now fixed.
+  //
   // `downgradeProviderCliStateToV10` (provider-schemas.ts) destructures every
   // post-v1.0 field off the row before the STRICT `providerCliStateSchemaV10`
-  // parse - its own comment says every field added to the live shape "must
-  // be added to this destructure too... forgetting one does not fail
+  // parse, and its own comment warns that every field added to the live shape
+  // "must be added to this destructure too... forgetting one does not fail
   // loudly - it empties the provider list for v1.0 clients, silently". The
-  // v7.1 fields (`enablementMode`, `enablementSource`) were not added to that
-  // destructure, so any provider that carries either one now fails the
-  // strict v1.0 parse and is silently dropped from the v1.0-downgraded
-  // `providers.list` response - not just stripped of the two new fields, the
-  // whole row vanishes. `it.fails` pins the correct behavior (the row
-  // survives, stripped of the two fields) so this documents the regression
-  // instead of silently passing or leaving the suite red; flip to a plain
-  // `it` once the destructure is fixed.
-  it.fails(
-    "the 7.1 -> v1.0 downgrade strips both fields and preserves the row (currently drops the whole row)",
+  // v7.1 pair was duly forgotten on the first pass: a provider carrying either
+  // field did not lose the two fields, the WHOLE ROW vanished from the
+  // v1.0-downgraded `providers.list` response.
+  //
+  // So this asserts stripped-NOT-vanished, which is the distinction the defect
+  // turned on and the one a future field will get wrong the same way. The
+  // companion test below covers a row with no enablement fields at all, so a
+  // failure here localizes to these two rather than to v1.0 downgrading
+  // generally.
+  it(
+    "the 7.1 -> v1.0 downgrade strips both fields and PRESERVES the row",
     () => {
       const result = providersListDowngradeV7ToV1.downgradeResponse(
         providersListResponseSchema.parse({

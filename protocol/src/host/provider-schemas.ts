@@ -3286,6 +3286,13 @@ export type DowngradableToV10ProviderState = (
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
+  // Widened the same way `profiles` is, and for the same reason: only the live
+  // shape carries the v7.1 enablement pair, but every arm of this union reaches
+  // the strict v1.0 parse below, which strips them either way. Optional here so
+  // an arm without them still satisfies the type while the destructure can
+  // still name them.
+  enablementMode?: ProviderCliState["enablementMode"];
+  enablementSource?: ProviderCliState["enablementSource"];
   profiles?: ProviderCliState["profiles"];
   // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
@@ -3338,6 +3345,12 @@ export function downgradeProviderCliStateToV10(
   //   time must be added to this destructure too. Forgetting one does not
   //   fail loudly - it empties the provider list for v1.0 clients, silently,
   //   because the row fails the parse and the caller filters it out.
+  // - `enablementMode` / `enablementSource` (v7.1) - the auth-aware enablement
+  //   pair. They were in fact forgotten on the first pass and caught by a
+  //   test, exactly as the paragraph above predicts: a row carrying either one
+  //   did not lose the two fields, it disappeared. `enabled` still travels, and
+  //   it already carries the EFFECTIVE value, so a v1.0 caller loses only the
+  //   explanation of a boolean it was always going to read on its own terms.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
@@ -3350,6 +3363,8 @@ export function downgradeProviderCliStateToV10(
     managedVersions: _managedVersions,
     managedVersionsUnavailable: _managedVersionsUnavailable,
     nextRunBinary: _nextRunBinary,
+    enablementMode: _enablementMode,
+    enablementSource: _enablementSource,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
