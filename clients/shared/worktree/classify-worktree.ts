@@ -98,11 +98,28 @@ export function worktreeTierRank(tier: WorktreeTier): number {
   return index === -1 ? WORKTREE_TIER_ORDER.length : index;
 }
 
+export const GIT_UNREADABLE_REASON =
+  "Git can't read this worktree — its main repository is missing or was moved";
+
+function gitUnreadableOf(entry: WorktreeHostEntryV12): boolean {
+  return (
+    "gitUnreadable" in entry &&
+    typeof entry.gitUnreadable === "boolean" &&
+    entry.gitUnreadable
+  );
+}
+
 /**
  * The canonical evidence ladder - FIRST MATCH WINS. Implements the merge-provenance
  * plan's precedence truth table. Order is deliberate:
  *
  *  1. `inUse` → **in-use** (blocked; never a delete candidate).
+ *  1b. `gitUnreadable` → **review**. The `.git` gitlink exists but git cannot
+ *     resolve the repository it points at (main missing / moved / re-cloned, or
+ *     the admin entry pruned). Checked BEFORE orphaned on purpose: this shape
+ *     also has `gitRemovable: false`, but its branch and dirty count are
+ *     fabricated, so it must not read as an fs-only cleanup with nothing to
+ *     lose. Older hosts omit the field; absence is treated as false.
  *  2. `!gitRemovable` → **orphaned**. Checked BEFORE the greens on purpose: an
  *     orphan's `branchStatus` is usually null. Per-row only, so this only changes
  *     the LABEL, never bulk safety.
@@ -160,6 +177,7 @@ export function classifyWorktreeTier(
   entry: WorktreeHostEntryV12,
 ): WorktreeTier {
   if (entry.inUse) return "in-use";
+  if (gitUnreadableOf(entry)) return "review";
   if (!entry.gitRemovable) return "orphaned";
   if (entry.uncommittedCount > 0) return "review";
   if (entry.branch === null) return "review";
@@ -199,13 +217,15 @@ export function describeReviewReasons(
 ): readonly string[] {
   if (classifyWorktreeTier(entry) !== "review") return [];
   const status = entry.branchStatus;
+  const unreadable = gitUnreadableOf(entry);
   return [
+    ...(unreadable ? [GIT_UNREADABLE_REASON] : []),
     ...(entry.uncommittedCount > 0
       ? [
           `${entry.uncommittedCount} uncommitted change${entry.uncommittedCount === 1 ? "" : "s"}`,
         ]
       : []),
-    ...(entry.branch === null ? ["Detached HEAD"] : []),
+    ...(!unreadable && entry.branch === null ? ["Detached HEAD"] : []),
     ...entry.submodules
       .filter((fact) => !submoduleMergeProven(fact))
       .map(describeUnprovenSubmodule),
@@ -236,7 +256,9 @@ export function describeReviewReasons(
           "Commits with no PR that were never pushed - they exist only in this worktree",
         ]
       : []),
-    ...(entry.prState === null ? ["Checking merge status…"] : []),
+    ...(!unreadable && entry.prState === null
+      ? ["Checking merge status…"]
+      : []),
     ...(status !== null && status.ahead === 0 && entry.owners.length > 0
       ? ["Referenced by a Task at the upstream tip"]
       : []),
@@ -330,16 +352,18 @@ function worktreeFacts(
   const cleanGreen =
     entry.uncommittedCount === 0 &&
     (tier === "merged" || tier === "at-base-commit" || tier === "unreferenced");
+  const unreadable = gitUnreadableOf(entry);
   return {
     prFacts: [
       ...mergedProvenanceFacts(entry, tier),
       ...unprovenSubmoduleFacts(entry.submodules),
     ],
     nonPrFacts: [
+      ...(unreadable ? [GIT_UNREADABLE_REASON] : []),
       ...branchStatusFacts(entry.branchStatus),
       ...dirtinessFacts(entry.uncommittedCount),
-      ...(entry.branch === null ? ["detached HEAD"] : []),
-      ...(entry.gitRemovable ? [] : ["git can't remove"]),
+      ...(!unreadable && entry.branch === null ? ["detached HEAD"] : []),
+      ...(!unreadable && !entry.gitRemovable ? ["git can't remove"] : []),
       ...(entry.branchStatus === null &&
       entry.gitRemovable &&
       entry.branch !== null

@@ -119,7 +119,10 @@ import {
   agentInboxSubscribeV12,
   agentInboxSubscribeV13,
 } from "@traycer/protocol/host/agent/inbox";
-import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
+import {
+  agentActivitySubscribeV10,
+  agentActivitySubscribeV11,
+} from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -538,6 +541,8 @@ import {
   worktreeListAllForHostResponseSchemaV14,
   worktreeListAllForHostRequestSchemaV15,
   worktreeListAllForHostResponseSchemaV15,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -1202,6 +1207,29 @@ export const worktreeListAllForHostUpgradeV14ToV15 = defineUpgradePath<
     worktrees: response.worktrees.map((worktree) => ({
       ...worktree,
       presence: "present" as const,
+    })),
+  }),
+});
+
+export const worktreeListAllForHostV16 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV16,
+  responseSchema: worktreeListAllForHostResponseSchemaV16,
+});
+
+export const worktreeListAllForHostUpgradeV15ToV16 = defineUpgradePath<
+  typeof worktreeListAllForHostV15,
+  typeof worktreeListAllForHostV16
+>({
+  from: worktreeListAllForHostV15.schemaVersion,
+  to: worktreeListAllForHostV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    worktrees: response.worktrees.map((worktree) => ({
+      ...worktree,
+      gitUnreadable: false,
     })),
   }),
 });
@@ -6561,7 +6589,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -6586,6 +6614,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: worktreeListAllForHostV15,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV14ToV15,
+        },
+        6: {
+          contract: worktreeListAllForHostV16,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},
@@ -7994,12 +8026,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // production wiring selects cloud everywhere; local remains dormant until an
   // explicit host mode exists. State frames report the selected plane, while
   // renderers never choose a different RPC from entitlement state.
+  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.0` stays
+  // registered verbatim so a `1.1` client bridges down to a `1.0` host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
+        },
+        1: {
+          contract: agentActivitySubscribeV11,
         },
       },
     },
