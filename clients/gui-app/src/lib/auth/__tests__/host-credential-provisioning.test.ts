@@ -109,6 +109,93 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
     );
   });
 
+  it("tells a joiner that did not win what is LEFT of the winner's claim", async () => {
+    // The THIRD `pending-elsewhere` producer - the per-caller claim gate,
+    // distinct from the stale-ask branch and the ladder. The tests above
+    // exercise it but only count `kind`, so a regression returning 0 (spin
+    // before delivery could land) or the full TTL (idle a host through a
+    // claim already partly spent) passed all of them.
+    //
+    // The wait matters most exactly here: if the winner closes before
+    // delivering, the transport drops the credential and nothing else wakes
+    // these joiners, so re-asking as the claim lapses is the only thing that
+    // keeps the last surviving transport from stranding.
+    const deferred: {
+      resolve: ((outcome: HostCredentialMintOutcome) => void) | null;
+      promise: Promise<HostCredentialMintOutcome> | null;
+    } = { resolve: null, promise: null };
+    const runner = vi.fn(() => {
+      const promise = new Promise<HostCredentialMintOutcome>((resolve) => {
+        deferred.resolve = resolve;
+      });
+      deferred.promise = promise;
+      return promise;
+    });
+    setHostCredentialMintRunner(runner);
+    const realNow = Date.now;
+    let clock = realNow();
+    try {
+      const start = clock;
+      Date.now = () => clock;
+
+      const joiners = Array.from({ length: 3 }, () =>
+        appHostCredentialMintFlow({
+          hostId: "host-joiner-wait",
+          reason: "missing",
+        }),
+      );
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      // Advance the clock BETWEEN the winner stamping its adoption claim and
+      // the joiners reading what is left of it. Elapsed time is the whole
+      // point: with a frozen clock the remainder equals the full TTL, and
+      // the assertion below could not tell a correct answer apart from a
+      // producer that ignores how much of the claim is already spent - which
+      // is exactly the regression it exists to catch.
+      //
+      // The two hops are load-bearing and deliberately match the flow's own
+      // chain, `runner().catch().then(register)`. One hop lands BEFORE
+      // registration and stamps the claim at the advanced time, which yields
+      // the full TTL and looks like a passing-but-vacuous assertion; two
+      // land after it and before the per-caller gates, which run on the
+      // promise registration resolves.
+      //
+      // This is coupled to that chain's length, and that is an accepted
+      // trade: if a hop is ever added or removed the advance lands on the
+      // wrong side and this test FAILS loudly with the full TTL rather than
+      // silently going vacuous. Read a 60_000 here as "the chain moved",
+      // not as "the producer is fine".
+      const runnerPromise = deferred.promise;
+      if (runnerPromise === null) {
+        throw new Error("runner promise was never captured");
+      }
+      void runnerPromise
+        .then(() => undefined)
+        .then(() => {
+          clock = start + 8_000;
+        });
+
+      const resolveRunner = deferred.resolve;
+      if (resolveRunner === null) {
+        throw new Error("runner was never started");
+      }
+      resolveRunner(provisionedOutcome());
+
+      const results = await Promise.all(joiners);
+      expect(results.filter((r) => r.kind === "provisioned")).toHaveLength(1);
+      const losers = results.filter((r) => r.kind === "pending-elsewhere");
+      expect(losers).toHaveLength(2);
+      for (const loser of losers) {
+        expect(loser).toEqual({
+          kind: "pending-elsewhere",
+          retryAfterMs: 52_000,
+        });
+      }
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it("generation-scopes an in-flight attempt across reset (sign-out) so it resolves unavailable, not handed to the next identity", async () => {
     const deferred: {
       resolve: ((outcome: HostCredentialMintOutcome) => void) | null;
