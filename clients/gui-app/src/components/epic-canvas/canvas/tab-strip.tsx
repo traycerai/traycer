@@ -107,7 +107,6 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
-import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
@@ -488,40 +487,22 @@ function TerminalTabItem(
     node: props.tab,
   });
   const rename = controller.rename;
-  const close = controller.close;
   const terminalId = props.tab.id;
-  const canClose =
+  const canMutate =
     controller.canMutate &&
     !controller.migrationPending &&
     controller.projection !== undefined;
-  useEffect(
-    () =>
-      registerEpicTerminalCloseAuthority({
-        instanceId: props.tab.instanceId,
-        hostId: props.tab.hostId,
-        terminalId,
-        capability: controller.capability,
-        canMutate: canClose,
-        close: async () => {
-          await close.mutateAsync({ terminalId });
-        },
-      }),
-    [
-      canClose,
-      close,
-      controller.capability,
-      props.tab.hostId,
-      props.tab.instanceId,
-      terminalId,
-    ],
-  );
   const control: TerminalTabControl = {
     mode: controller.capability,
     displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
-    canMutate: canClose,
+    canMutate,
     rename: (title) => {
       if (!controller.canMutate) return;
-      rename.mutate({ terminalId, manualTitle: title });
+      rename.mutate({
+        hostId: props.tab.hostId,
+        terminalId,
+        manualTitle: title,
+      });
     },
   };
   return <TabItemBody {...props} terminalControl={control} />;

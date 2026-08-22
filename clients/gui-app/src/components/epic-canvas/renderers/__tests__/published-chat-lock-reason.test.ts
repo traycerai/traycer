@@ -23,6 +23,7 @@ describe("publishedChatLockReason", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
       ownerIsThisHost: false,
+      ownedByViewer: true,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
@@ -37,6 +38,7 @@ describe("publishedChatLockReason", () => {
     const reason = publishedChatLockReason({
       ownerIsReachable: true,
       ownerIsThisHost: true,
+      ownedByViewer: true,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
       fidelityNotice: null,
@@ -60,6 +62,7 @@ describe("publishedChatLockReason", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: false,
         ownerIsThisHost,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -70,6 +73,51 @@ describe("publishedChatLockReason", () => {
     }
   });
 
+  it("says whose agent it is - and claims no liveness - for a collaborator's chat", () => {
+    // A collaborator's machine can never appear in this account's host
+    // directory, so it reads "unreachable" unconditionally - "which is
+    // offline" would assert liveness this device cannot observe, the label
+    // has fallen back to a raw host id, and "sending resumes" promises a
+    // composer this viewer does not get. The ownership arm outranks BOTH
+    // reachability arms for exactly that reason.
+    for (const ownerIsReachable of [false, true]) {
+      const reason = publishedChatLockReason({
+        ownerIsReachable,
+        ownerIsThisHost: false,
+        ownedByViewer: false,
+        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        unreadableCount: 0,
+        fidelityNotice: null,
+        publishedAt: null,
+      });
+      expect(reason).toContain("belongs to another collaborator");
+      expect(reason).toContain("last published copy");
+      expect(reason).not.toContain("which is offline");
+      expect(reason).not.toContain("085b919a-f0a6-42e5-b05e-241738d3dd6a");
+      expect(reason).not.toContain("Sending resumes");
+    }
+  });
+
+  it("keeps the published-at and unreadable tails on the collaborator sentence", () => {
+    const publishedAt = Date.parse("2026-08-14T12:00:00Z");
+    const reason = publishedChatLockReason({
+      ownerIsReachable: false,
+      ownerIsThisHost: false,
+      ownedByViewer: false,
+      ownerLabel: "some-host-id",
+      unreadableCount: 2,
+      fidelityNotice: null,
+      publishedAt,
+    });
+    expect(reason).toContain("belongs to another collaborator");
+    expect(reason).toContain(
+      `Published ${formatAbsoluteDateTime(publishedAt)}.`,
+    );
+    expect(reason).toContain(
+      "2 items need a newer version of Traycer to render.",
+    );
+  });
+
   it("still appends the unreadable-item and fidelity tails to the same-host sentence", () => {
     // The tails are appended to whichever base was chosen - the split must
     // not drop them for the new arm.
@@ -77,6 +125,7 @@ describe("publishedChatLockReason", () => {
       publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
@@ -87,6 +136,7 @@ describe("publishedChatLockReason", () => {
       publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
@@ -103,6 +153,7 @@ describe("publishedChatLockReason", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -120,6 +171,7 @@ describe("publishedChatLockReason", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: null,
@@ -138,6 +190,7 @@ describe("publishedChatLockReason", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 2,
         fidelityNotice: null,
@@ -159,6 +212,7 @@ describe("publishedChatLockReason", () => {
       const reason = publishedChatLockReason({
         ownerIsReachable: true,
         ownerIsThisHost: true,
+        ownedByViewer: true,
         ownerLabel: "Ada's Mac",
         unreadableCount: 0,
         fidelityNotice: "1 attachment is unavailable.",
@@ -180,6 +234,7 @@ describe("replicaChatLockReason", () => {
     const reason = replicaChatLockReason({
       ownerIsReachable: true,
       ownerIsThisHost: false,
+      ownedByViewer: true,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
     });
@@ -192,6 +247,7 @@ describe("replicaChatLockReason", () => {
     const reason = replicaChatLockReason({
       ownerIsReachable: true,
       ownerIsThisHost: true,
+      ownedByViewer: true,
       ownerLabel: "Ada's Mac",
       unreadableCount: 0,
     });
@@ -201,5 +257,21 @@ describe("replicaChatLockReason", () => {
     expect(reason).not.toContain("lives on");
     expect(reason).not.toContain("Ada's Mac");
     expect(reason).not.toContain("from this device");
+  });
+
+  it("says whose agent it is for a collaborator's chat, same precedence as the published arm", () => {
+    for (const ownerIsReachable of [false, true]) {
+      const reason = replicaChatLockReason({
+        ownerIsReachable,
+        ownerIsThisHost: false,
+        ownedByViewer: false,
+        ownerLabel: "085b919a-f0a6-42e5-b05e-241738d3dd6a",
+        unreadableCount: 0,
+      });
+      expect(reason).toContain("belongs to another collaborator");
+      expect(reason).toContain("synced copy");
+      expect(reason).not.toContain("which is offline");
+      expect(reason).not.toContain("085b919a-f0a6-42e5-b05e-241738d3dd6a");
+    }
   });
 });

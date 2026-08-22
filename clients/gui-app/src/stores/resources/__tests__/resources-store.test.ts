@@ -177,10 +177,12 @@ describe("createResourcesStore", () => {
     const state = handle.store.getState();
     expect(state.sampledAt).toBe(1_000);
     expect(
-      state.owners.get(resourceOwnerKey("terminal", "s1"))?.cpuPercent,
+      state.owners.get(resourceOwnerKey("terminal", "s1", "host-1"))
+        ?.cpuPercent,
     ).toBe(12);
     expect(
-      state.owners.get(resourceOwnerKey("terminal", "s1"))?.processes[0].name,
+      state.owners.get(resourceOwnerKey("terminal", "s1", "host-1"))
+        ?.processes[0].name,
     ).toBe("bash");
     expect(state.epic?.cpuPercent).toBe(12);
     handle.dispose();
@@ -201,7 +203,7 @@ describe("createResourcesStore", () => {
 
     const state = handle.store.getState();
     expect(
-      state.owners.get(resourceOwnerKey("terminal", "s1")),
+      state.owners.get(resourceOwnerKey("terminal", "s1", "host-1")),
     ).toBeUndefined();
     expect(state.owners.size).toBe(0);
     handle.dispose();
@@ -293,7 +295,7 @@ describe("createResourcesStore", () => {
       scope: { kind: "epic", epicId: "epic-1" },
       streamClientFactory: fake.factory,
     });
-    const key = resourceOwnerKey("terminal", "s1");
+    const key = resourceOwnerKey("terminal", "s1", "host-1");
 
     fake.callbacks().onSnapshot(
       projection({
@@ -325,6 +327,49 @@ describe("createResourcesStore", () => {
     const third = handle.store.getState().owners.get(key);
     expect(third).not.toBe(first);
     expect(third?.cpuPercent).toBe(55);
+    handle.dispose();
+  });
+
+  it("keeps same-id terminals on different hosts as distinct live owners", () => {
+    const fake = makeFakeClient();
+    const handle = createResourcesStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      streamClientFactory: fake.factory,
+    });
+    fake.callbacks().onSnapshot(
+      projection({
+        owners: [
+          makeOwner("terminal", "shared", {
+            owner: {
+              kind: "terminal",
+              hostId: "host-a",
+              epicId: "epic-1",
+              ownerId: "shared",
+            },
+            cpuPercent: 10,
+          }),
+          makeOwner("terminal", "shared", {
+            owner: {
+              kind: "terminal",
+              hostId: "host-b",
+              epicId: "epic-1",
+              ownerId: "shared",
+            },
+            cpuPercent: 90,
+          }),
+        ],
+      }),
+    );
+    const state = handle.store.getState();
+    expect(
+      state.owners.get(resourceOwnerKey("terminal", "shared", "host-a"))
+        ?.cpuPercent,
+    ).toBe(10);
+    expect(
+      state.owners.get(resourceOwnerKey("terminal", "shared", "host-b"))
+        ?.cpuPercent,
+    ).toBe(90);
+    expect(state.owners.size).toBe(2);
     handle.dispose();
   });
 

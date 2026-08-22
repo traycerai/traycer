@@ -7,9 +7,9 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type {
-  WorktreeHostEntryV15,
+  WorktreeHostEntryV16,
   WorktreeListAllForHostRequestV15,
-  WorktreeListAllForHostResponseV15,
+  WorktreeListAllForHostResponseV16,
 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -22,7 +22,7 @@ interface StubOwner {
   readonly updatedAt: number;
 }
 
-type StubEntry = WorktreeHostEntryV15;
+type StubEntry = WorktreeHostEntryV16;
 
 vi.mock("@/hooks/host/use-reactive-host-readiness", () => ({
   useReactiveHostReadiness: () => ({
@@ -57,6 +57,7 @@ function entry(over: Partial<StubEntry> & { worktreePath: string }): StubEntry {
     atBaseCommit: false,
     resolvedAt: 1,
     presence: "present",
+    gitUnreadable: false,
     ...over,
   };
 }
@@ -85,8 +86,8 @@ function forcedProbeParams(activityPaths: readonly string[]) {
 let worktreeHandler: (
   params: WorktreeListAllForHostRequestV15,
 ) =>
-  | Promise<WorktreeListAllForHostResponseV15>
-  | WorktreeListAllForHostResponseV15 = () => {
+  | Promise<WorktreeListAllForHostResponseV16>
+  | WorktreeListAllForHostResponseV16 = () => {
   throw new Error("no worktree handler configured for this test");
 };
 

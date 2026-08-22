@@ -36,7 +36,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
-import type { TerminalPlainSubscribeListServerFrame } from "@traycer/protocol/host/terminal/plain-subscribe-list";
+import type {
+  TerminalPlainSubscribeListServerFrame,
+  TerminalPlainSubscribeListServerFrameV10,
+} from "@traycer/protocol/host/terminal/plain-subscribe-list";
 import type { HostStreamClientBinding } from "@/hooks/host/use-host-stream-client-for";
 import { useLandingTerminalDurableLifecycle } from "@/components/home/terminal-panel/landing-terminal-durable-bootstrap";
 import { reconcileCapableLandingTerminals } from "@/components/home/terminal-panel/use-landing-terminal-reconciliation";
@@ -44,9 +47,10 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
   PLAIN_TERMINAL_RPC_METHODS,
+  getPlainTerminal,
   replacePlainTerminalSnapshot,
-  type PlainTerminalCollection,
   upsertPlainTerminal,
+  type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
@@ -60,6 +64,47 @@ import { usePlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-a
 const HOST_ID = "host-authority";
 const SCOPE = { kind: "epic", epicId: "epic-1" } as const;
 const INDEPENDENT_SCOPE = { kind: "independent" } as const;
+
+function stateFrame(
+  terminals: readonly PlainTerminalProjection[],
+): TerminalPlainSubscribeListServerFrame {
+  return {
+    kind: "state",
+    hasBinaryPayload: false,
+    state: {
+      coverage: "complete-fleet",
+      scope: SCOPE,
+      terminals: [...terminals],
+    },
+  };
+}
+
+function scopedStateFrame(
+  terminals: readonly PlainTerminalProjection[],
+  coverage: "partial-serving-host" | "complete-local",
+): TerminalPlainSubscribeListServerFrame {
+  if (coverage === "complete-local") {
+    return {
+      kind: "state",
+      hasBinaryPayload: false,
+      state: {
+        coverage,
+        scope: INDEPENDENT_SCOPE,
+        terminals: [...terminals],
+      },
+    };
+  }
+  return {
+    kind: "state",
+    hasBinaryPayload: false,
+    state: {
+      coverage,
+      scope: SCOPE,
+      servingHostId: HOST_ID,
+      terminals: [...terminals],
+    },
+  };
+}
 
 function terminal(
   revision: number,
@@ -101,6 +146,8 @@ class ControlledSession implements IStreamSession {
   private statusHandler: StatusChangeHandler | null = null;
   closeCount = 0;
 
+  constructor(private readonly negotiatedVersion: SchemaVersion) {}
+
   sendClientFrame(
     _envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
@@ -117,7 +164,7 @@ class ControlledSession implements IStreamSession {
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return { major: 1, minor: 0 };
+    return this.negotiatedVersion;
   }
 
   close(): void {
@@ -132,18 +179,20 @@ class ControlledSession implements IStreamSession {
     this.statusHandler?.(status, reason);
   }
 
-  emitFrame(frame: TerminalPlainSubscribeListServerFrame): void {
+  emitFrame(
+    frame:
+      | TerminalPlainSubscribeListServerFrame
+      | TerminalPlainSubscribeListServerFrameV10,
+  ): void {
     this.frameHandler?.(frame, null);
   }
 
-  emitInitialized(): void {
-    this.emitFrame({ kind: "initialized", hasBinaryPayload: false });
-  }
+  emitInitialized(): void {}
 }
 
 class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly sessions: ControlledSession[] = [];
-  private readonly negotiatedVersion: SchemaVersion = { major: 1, minor: 0 };
+  private negotiatedVersion: SchemaVersion = { major: 2, minor: 1 };
   private readonly supportListeners = new Set<() => void>();
   subscribeCount = 0;
 
@@ -177,7 +226,7 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     this.subscribeCount += 1;
-    const session = new ControlledSession();
+    const session = new ControlledSession(this.negotiatedVersion);
     this.sessions.push(session);
     return session;
   }
@@ -204,6 +253,10 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     for (const listener of this.supportListeners) listener();
   }
 
+  setNegotiatedVersion(version: SchemaVersion): void {
+    this.negotiatedVersion = version;
+  }
+
   get session(): ControlledSession {
     const session = this.sessions.at(-1);
     if (session === undefined) throw new Error("stream was not subscribed");
@@ -220,7 +273,7 @@ const logicalStreamPort: LogicalStreamPort = {
 /** Uses the production remote per-stream implementation and its frame/open order. */
 class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly sessions: LogicalStream[] = [];
-  private readonly negotiatedVersion: SchemaVersion = { major: 1, minor: 0 };
+  private readonly negotiatedVersion: SchemaVersion = { major: 2, minor: 1 };
 
   constructor() {
     super({
@@ -255,7 +308,7 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
       streamId: this.sessions.length + 1,
       method: "terminal.plain.subscribeList",
       paramsProvider: () => ({ scope: SCOPE }),
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 2, minor: 1 },
       qos: 1,
       port: logicalStreamPort,
     });
@@ -295,7 +348,18 @@ function fixture(list: readonly PlainTerminalProjection[]): {
     registry: hostRpcRegistry,
     requestId: () => "request-1",
     handlers: {
-      "terminal.plain.list": () => ({ terminals: [...list] }),
+      "terminal.plain.list": (params) =>
+        params.scope.kind === "independent"
+          ? {
+              coverage: "complete-local" as const,
+              scope: params.scope,
+              terminals: [...list],
+            }
+          : {
+              coverage: "complete-fleet" as const,
+              scope: params.scope,
+              terminals: [...list],
+            },
     },
   });
   // `bind()` was removed with the runtime slot (redesign P4.2); a requester
@@ -321,6 +385,16 @@ function fixture(list: readonly PlainTerminalProjection[]): {
 }
 
 function recordCapableManifest(): void {
+  const manifest: Record<string, SchemaVersion> = {
+    "host.status": { major: 1, minor: 0 },
+  };
+  for (const method of PLAIN_TERMINAL_RPC_METHODS) {
+    manifest[method] = { major: 2, minor: 1 };
+  }
+  recordNegotiatedHostManifest(HOST_ID, manifest);
+}
+
+function recordLocalCapableManifest(): void {
   const manifest: Record<string, SchemaVersion> = {
     "host.status": { major: 1, minor: 0 },
   };
@@ -552,7 +626,7 @@ describe("usePlainTerminalAuthority integration", () => {
     useLandingTerminalStore.getState().resetForTests();
   });
 
-  it("settles production LogicalStream snapshot-before-open ordering on initial connect and reconnect", async () => {
+  it("settles each production LogicalStream replacement after its open transition", async () => {
     recordCapableManifest();
     seedPresentationRefs();
     const test = fixture([terminal(1, null)]);
@@ -573,12 +647,9 @@ describe("usePlainTerminalAuthority integration", () => {
     );
 
     act(() => {
-      expect(
-        stream.session.deliverServerFrame(
-          { kind: "snapshot", hasBinaryPayload: false, terminals: [] },
-          null,
-        ),
-      ).toBe(true);
+      expect(stream.session.deliverServerFrame(stateFrame([]), null)).toBe(
+        true,
+      );
     });
     expect(
       test.queryClient.getQueryData<PlainTerminalCollection>(
@@ -586,15 +657,11 @@ describe("usePlainTerminalAuthority integration", () => {
       )?.streamStatus,
     ).toBe("open");
     expect(rendered.result.current.canMutate).toBe(false);
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
 
     act(() => {
       stream.session.deliverServerFrame(
-        {
-          kind: "upsert",
-          hasBinaryPayload: false,
-          terminal: terminal(2, "buffered initial winner"),
-        },
+        stateFrame([terminal(2, "buffered initial winner")]),
         null,
       );
       stream.session.deliverServerFrame(
@@ -603,14 +670,11 @@ describe("usePlainTerminalAuthority integration", () => {
       );
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
 
     act(() => {
       stream.session.notifyStatus("reconnecting", null);
-      stream.session.deliverServerFrame(
-        { kind: "snapshot", hasBinaryPayload: false, terminals: [] },
-        null,
-      );
+      stream.session.deliverServerFrame(stateFrame([]), null);
       stream.session.deliverServerFrame(
         { kind: "initialized", hasBinaryPayload: false },
         null,
@@ -654,65 +718,43 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       first.session.emitStatus("open", null);
-      first.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
-      first.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "terminal-1",
-        revision: 2,
-      });
+      first.session.emitFrame(stateFrame([terminal(1, null)]));
+      first.session.emitFrame(stateFrame([]));
     });
     expect(deferredDeletionRefsRemain()).toBe(true);
     expect(
-      test.queryClient.getQueryData<PlainTerminalCollection>(
-        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      )?.pendingPresentationDeletionRevisionById["terminal-1"],
-    ).toBe(2);
-    const sequenceAfterDelete =
-      test.queryClient.getQueryData<PlainTerminalCollection>(
-        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      )?.projectionSequence;
-
+      getPlainTerminal(
+        test.queryClient.getQueryData<PlainTerminalCollection>(
+          hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+        ),
+        HOST_ID,
+        "terminal-1",
+      ),
+    ).toBeUndefined();
     rendered.rerender({ streamClient: second });
     await waitFor(() => expect(second.subscribeCount).toBe(1));
     act(() => {
       first.session.emitStatus("open", null);
-      first.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(99, "late old generation"),
-      });
+      first.session.emitFrame(
+        stateFrame([terminal(99, "late old generation")]),
+      );
       first.session.emitInitialized();
       second.session.emitStatus("open", null);
-      second.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
-      second.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "terminal-1",
-        revision: 2,
-      });
+      second.session.emitFrame(stateFrame([]));
       second.session.emitInitialized();
       first.session.emitStatus("closed", { kind: "caller" });
     });
 
-    await waitFor(() => expect(deferredDeletionRefsRemain()).toBe(false));
-    expect(epicRemove).toHaveBeenCalledTimes(1);
-    expect(landingRemove).toHaveBeenCalledTimes(1);
+    expect(deferredDeletionRefsRemain()).toBe(true);
+    expect(epicRemove).not.toHaveBeenCalled();
+    expect(landingRemove).not.toHaveBeenCalled();
     expect(
-      rendered.result.current.collection
-        ?.pendingPresentationDeletionRevisionById["terminal-1"],
+      getPlainTerminal(
+        rendered.result.current.collection,
+        HOST_ID,
+        "terminal-1",
+      ),
     ).toBeUndefined();
-    expect(rendered.result.current.collection?.projectionSequence).toBe(
-      (sequenceAfterDelete ?? 0) + 1,
-    );
   });
 
   it("cancels a deferred deletion only for a genuinely higher accepted upsert", async () => {
@@ -737,58 +779,39 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
-      stream.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "terminal-1",
-        revision: 2,
-      });
+      stream.session.emitFrame(stateFrame([terminal(1, null)]));
       stream.session.emitStatus("reconnecting", null);
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
-      stream.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(2, "equal revision rejected"),
-      });
+      stream.session.emitFrame(stateFrame([]));
+      stream.session.emitFrame(stateFrame([terminal(2, "restored")]));
     });
-    expect(
-      test.queryClient.getQueryData<PlainTerminalCollection>(
-        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      )?.pendingPresentationDeletionRevisionById["terminal-1"],
-    ).toBe(2);
     expect(deferredDeletionRefsRemain()).toBe(true);
+    expect(
+      getPlainTerminal(
+        test.queryClient.getQueryData<PlainTerminalCollection>(
+          hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+        ),
+        HOST_ID,
+        "terminal-1",
+      )?.record.manualTitle,
+    ).toBe("restored");
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(3, "new lifecycle"),
-      });
+      stream.session.emitFrame(stateFrame([terminal(3, "new lifecycle")]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
     expect(
-      rendered.result.current.collection?.terminalsById["terminal-1"]?.record
-        .manualTitle,
+      getPlainTerminal(
+        rendered.result.current.collection,
+        HOST_ID,
+        "terminal-1",
+      )?.record.manualTitle,
     ).toBe("new lifecycle");
-    expect(
-      rendered.result.current.collection
-        ?.pendingPresentationDeletionRevisionById["terminal-1"],
-    ).toBeUndefined();
     expect(deferredDeletionRefsRemain()).toBe(true);
   });
 
-  it("settles snapshot initialization after its buffered upsert before classifying omission", async () => {
+  it("commits an omission from each settled replacement before a later upsert", async () => {
     recordCapableManifest();
     seedPresentationRefs();
     const test = fixture([terminal(1, null)]);
@@ -810,31 +833,26 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(stateFrame([]));
     });
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
     expect(rendered.result.current.canMutate).toBe(false);
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(2, "buffered winner"),
-      });
+      stream.session.emitFrame(stateFrame([terminal(2, "buffered winner")]));
       stream.session.emitInitialized();
     });
     await waitFor(() => {
       expect(rendered.result.current.canMutate).toBe(true);
       expect(
-        rendered.result.current.collection?.terminalsById["terminal-1"]?.record
-          .manualTitle,
+        getPlainTerminal(
+          rendered.result.current.collection,
+          HOST_ID,
+          "terminal-1",
+        )?.record.manualTitle,
       ).toBe("buffered winner");
     });
-    expect(presentationRefsRemain()).toBe(true);
+    expect(presentationRefsRemain()).toBe(false);
   });
 
   it("sweeps only acknowledged epic pointers on initial omission settlement", async () => {
@@ -859,11 +877,7 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(stateFrame([]));
       stream.session.emitInitialized();
     });
 
@@ -893,11 +907,7 @@ describe("usePlainTerminalAuthority integration", () => {
     );
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(scopedStateFrame([], "complete-local"));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -934,11 +944,7 @@ describe("usePlainTerminalAuthority integration", () => {
     act(() => {
       stream.session.emitStatus("reconnecting", null);
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(scopedStateFrame([], "complete-local"));
       stream.session.emitInitialized();
     });
     await waitFor(() =>
@@ -968,7 +974,7 @@ describe("usePlainTerminalAuthority integration", () => {
         landingPageId: "landing-page",
         capability: {
           status: "capable",
-          schemaVersion: { major: 1, minor: 0 },
+          schemaVersion: { major: 2, minor: 1 },
         },
         canMutate: true,
         closeTerminal: () => Promise.resolve(),
@@ -1019,22 +1025,11 @@ describe("usePlainTerminalAuthority integration", () => {
     bootstrap.unmount();
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "landing-legacy",
-        revision: 2,
-      });
-      stream.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "landing-pending",
-        revision: 2,
-      });
+      stream.session.emitFrame(scopedStateFrame([], "complete-local"));
     });
-    await waitFor(() =>
-      expect(useLandingTerminalStore.getState().tabs).toEqual([]),
-    );
+    expect(
+      useLandingTerminalStore.getState().tabs.map((tab) => tab.sessionId),
+    ).toEqual([]);
   });
 
   it("accepts initialization only for the current open episode's pending snapshot", async () => {
@@ -1065,11 +1060,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(presentationRefsRemain()).toBe(true);
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
+      stream.session.emitFrame(stateFrame([terminal(1, null)]));
       test.queryClient.setQueryData<PlainTerminalCollection>(
         hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
         (current) =>
@@ -1080,11 +1071,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(rendered.result.current.canMutate).toBe(false);
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(3, null)],
-      });
+      stream.session.emitFrame(stateFrame([terminal(3, null)]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1107,11 +1094,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(presentationRefsRemain()).toBe(true);
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(2, null)],
-      });
+      stream.session.emitFrame(stateFrame([terminal(2, null)]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1157,18 +1140,11 @@ describe("usePlainTerminalAuthority integration", () => {
 
       act(() => {
         stream.session.emitStatus("open", null);
-        stream.session.emitFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          terminals: scenario === "buffered delete" ? [terminal(1, null)] : [],
-        });
+        stream.session.emitFrame(
+          stateFrame(scenario === "buffered delete" ? [terminal(1, null)] : []),
+        );
         if (scenario === "buffered delete") {
-          stream.session.emitFrame({
-            kind: "deleted",
-            hasBinaryPayload: false,
-            terminalId: "terminal-1",
-            revision: 2,
-          });
+          stream.session.emitFrame(stateFrame([]));
         }
         stream.session.emitInitialized();
       });
@@ -1205,11 +1181,7 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
+      stream.session.emitFrame(stateFrame([terminal(1, null)]));
       stream.session.emitInitialized();
     });
     await waitFor(() => {
@@ -1217,11 +1189,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(2, "updated"),
-      });
+      stream.session.emitFrame(stateFrame([terminal(2, "updated")]));
     });
     await waitFor(() => {
       expect(rendered.result.current.terminals[0]?.record.manualTitle).toBe(
@@ -1231,11 +1199,7 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("reconnecting", null);
-      stream.session.emitFrame({
-        kind: "upsert",
-        hasBinaryPayload: false,
-        terminal: terminal(3, "buffered"),
-      });
+      stream.session.emitFrame(stateFrame([terminal(3, "buffered")]));
     });
     await waitFor(() => {
       expect(rendered.result.current.canMutate).toBe(false);
@@ -1243,17 +1207,7 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(4, "reconnected")],
-      });
-      stream.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "terminal-1",
-        revision: 5,
-      });
+      stream.session.emitFrame(stateFrame([]));
       stream.session.emitInitialized();
     });
     await waitFor(() => {
@@ -1286,11 +1240,7 @@ describe("usePlainTerminalAuthority integration", () => {
     );
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
+      stream.session.emitFrame(stateFrame([terminal(1, null)]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1331,6 +1281,51 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(rendered.result.current.capability).toEqual({ status: "legacy" });
     expect(rendered.result.current.query.fetchStatus).toBe("idle");
     expect(stream.subscribeCount).toBe(0);
+  });
+
+  it("uses the frozen local authority when a new client connects to an RC host", async () => {
+    recordLocalCapableManifest();
+    const test = fixture([terminal(1, null)]);
+    const stream = new ControlledStreamClient("supported");
+    stream.setNegotiatedVersion({ major: 1, minor: 0 });
+    const rendered = renderHook(
+      () =>
+        usePlainTerminalAuthority({
+          hostId: HOST_ID,
+          scope: SCOPE,
+          client: test.client,
+          streamClient: stream,
+          capabilityIncarnation: "rc-host",
+        }),
+      { wrapper: test.Wrapper },
+    );
+
+    await waitFor(() => expect(stream.subscribeCount).toBe(1));
+    act(() => {
+      stream.session.emitStatus("open", null);
+      stream.session.emitFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        terminals: [
+          {
+            ...terminal(1, null),
+            runtime: { status: "dormant" },
+          },
+        ],
+      });
+      stream.session.emitFrame({
+        kind: "initialized",
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
+    expect(rendered.result.current.capability).toEqual({
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    });
+    expect(rendered.result.current.coverage).toBe("partial-serving-host");
+    expect(rendered.result.current.terminals).toEqual([terminal(1, null)]);
   });
 
   it("starts when support becomes available without replacing the established session", async () => {
@@ -1430,11 +1425,7 @@ describe("usePlainTerminalAuthority integration", () => {
     act(() => {
       stream.setSupport("supported");
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(2, "upgraded")],
-      });
+      stream.session.emitFrame(stateFrame([terminal(2, "upgraded")]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1462,11 +1453,7 @@ describe("usePlainTerminalAuthority integration", () => {
     await waitFor(() => expect(first.subscribeCount).toBe(1));
     act(() => {
       first.session.emitStatus("open", null);
-      first.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
+      first.session.emitFrame(stateFrame([terminal(1, null)]));
     });
 
     rendered.rerender({ streamClient: second });
@@ -1479,11 +1466,7 @@ describe("usePlainTerminalAuthority integration", () => {
     });
     expect(rendered.result.current.canMutate).toBe(false);
     act(() => {
-      second.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(2, "new generation")],
-      });
+      second.session.emitFrame(stateFrame([terminal(2, "new generation")]));
       second.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1516,11 +1499,7 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(secondStream.subscribeCount).toBe(0);
     act(() => {
       firstStream.session.emitStatus("open", null);
-      firstStream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(1, null)],
-      });
+      firstStream.session.emitFrame(stateFrame([terminal(1, null)]));
       firstStream.session.emitInitialized();
     });
     await waitFor(() => {
@@ -1536,11 +1515,7 @@ describe("usePlainTerminalAuthority integration", () => {
     await waitFor(() => expect(second.result.current.canMutate).toBe(false));
     act(() => {
       firstStream.session.emitStatus("open", null);
-      firstStream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [terminal(2, "reconnected")],
-      });
+      firstStream.session.emitFrame(stateFrame([terminal(2, "reconnected")]));
       firstStream.session.emitInitialized();
     });
     await waitFor(() => expect(second.result.current.canMutate).toBe(true));
@@ -1622,11 +1597,9 @@ describe("usePlainTerminalAuthority integration", () => {
 
       act(() => {
         oldPanelStream.session.emitStatus("open", null);
-        oldPanelStream.session.emitFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          terminals: [terminal(1, "old-generation")],
-        });
+        oldPanelStream.session.emitFrame(
+          stateFrame([terminal(1, "old-generation")]),
+        );
         oldPanelStream.session.emitInitialized();
       });
       await waitFor(() => {
@@ -1650,11 +1623,9 @@ describe("usePlainTerminalAuthority integration", () => {
 
       act(() => {
         newPanelStream.session.emitStatus("open", null);
-        newPanelStream.session.emitFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          terminals: [terminal(2, "new-generation")],
-        });
+        newPanelStream.session.emitFrame(
+          stateFrame([terminal(2, "new-generation")]),
+        );
         newPanelStream.session.emitInitialized();
       });
       await waitFor(() => {
@@ -1672,11 +1643,9 @@ describe("usePlainTerminalAuthority integration", () => {
       });
       act(() => {
         newPanelStream.session.emitStatus("open", null);
-        newPanelStream.session.emitFrame({
-          kind: "snapshot",
-          hasBinaryPayload: false,
-          terminals: [terminal(3, "fresh-again")],
-        });
+        newPanelStream.session.emitFrame(
+          stateFrame([terminal(3, "fresh-again")]),
+        );
         newPanelStream.session.emitInitialized();
       });
       await waitFor(() => {
@@ -1724,28 +1693,23 @@ describe("usePlainTerminalAuthority integration", () => {
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(stateFrame([]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
 
     act(() => {
-      stream.session.emitFrame({
-        kind: "deleted",
-        hasBinaryPayload: false,
-        terminalId: "terminal-1",
-        revision: 2,
-      });
+      stream.session.emitFrame(stateFrame([]));
     });
     expect(
-      test.queryClient.getQueryData<PlainTerminalCollection>(
-        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      )?.deletedRevisionById["terminal-1"],
-    ).toBe(2);
+      getPlainTerminal(
+        test.queryClient.getQueryData<PlainTerminalCollection>(
+          hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+        ),
+        HOST_ID,
+        "terminal-1",
+      ),
+    ).toBeUndefined();
 
     act(() => {
       stream.session.emitStatus("reconnecting", null);
@@ -1858,21 +1822,15 @@ describe("usePlainTerminalAuthority integration", () => {
       }));
     });
 
-    await waitFor(() => {
-      expect(
-        useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
-          "late-legacy-live"
-        ],
-      ).toBeUndefined();
-    });
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        "late-legacy-live"
+      ],
+    ).toBeDefined();
 
     act(() => {
       stream.session.emitStatus("open", null);
-      stream.session.emitFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        terminals: [],
-      });
+      stream.session.emitFrame(stateFrame([]));
       stream.session.emitInitialized();
     });
     await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
@@ -1907,5 +1865,127 @@ describe("usePlainTerminalAuthority integration", () => {
         "late-other-id"
       ],
     ).toBeDefined();
+  });
+
+  it("keeps the same terminalId on two hosts distinct and exposes coverage", async () => {
+    recordCapableManifest();
+    const local = terminal(1, "local");
+    const remote = {
+      ...terminal(1, "remote"),
+      record: { ...terminal(1, "remote").record, hostId: "host-b" },
+    };
+    const test = fixture([local, remote]);
+    const stream = new ControlledStreamClient("supported");
+    const rendered = renderHook(
+      () =>
+        usePlainTerminalAuthority({
+          hostId: HOST_ID,
+          scope: SCOPE,
+          client: test.client,
+          streamClient: stream,
+          capabilityIncarnation: "fleet-identity",
+        }),
+      { wrapper: test.Wrapper },
+    );
+    await waitFor(() =>
+      expect(rendered.result.current.terminals).toHaveLength(2),
+    );
+    act(() => {
+      stream.session.emitStatus("open", null);
+      stream.session.emitFrame(stateFrame([local, remote]));
+    });
+    await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
+    expect(rendered.result.current.coverage).toBe("complete-fleet");
+    expect(
+      getPlainTerminal(
+        rendered.result.current.collection,
+        HOST_ID,
+        "terminal-1",
+      )?.record.manualTitle,
+    ).toBe("local");
+    expect(
+      getPlainTerminal(
+        rendered.result.current.collection,
+        "host-b",
+        "terminal-1",
+      )?.record.manualTitle,
+    ).toBe("remote");
+
+    act(() => {
+      stream.session.emitFrame(
+        scopedStateFrame([local], "partial-serving-host"),
+      );
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.coverage).toBe("partial-serving-host"),
+    );
+    expect(rendered.result.current.servingHostId).toBe(HOST_ID);
+    expect(
+      getPlainTerminal(
+        rendered.result.current.collection,
+        "host-b",
+        "terminal-1",
+      ),
+    ).toBeUndefined();
+
+    act(() => {
+      stream.session.emitFrame(stateFrame([remote]));
+    });
+    await waitFor(() =>
+      expect(rendered.result.current.coverage).toBe("complete-fleet"),
+    );
+    expect(
+      getPlainTerminal(
+        rendered.result.current.collection,
+        HOST_ID,
+        "terminal-1",
+      ),
+    ).toBeUndefined();
+    expect(
+      getPlainTerminal(
+        rendered.result.current.collection,
+        "host-b",
+        "terminal-1",
+      )?.record.manualTitle,
+    ).toBe("remote");
+  });
+
+  it("rejects stale frames from a closed session after replacement", async () => {
+    recordCapableManifest();
+    const test = fixture([terminal(1, null)]);
+    const first = new ControlledStreamClient("supported");
+    const second = new ControlledStreamClient("supported");
+    const rendered = renderHook(
+      ({ streamClient }) =>
+        usePlainTerminalAuthority({
+          hostId: HOST_ID,
+          scope: SCOPE,
+          client: test.client,
+          streamClient,
+          capabilityIncarnation: "stale-session",
+        }),
+      { initialProps: { streamClient: first }, wrapper: test.Wrapper },
+    );
+    await waitFor(() => expect(first.subscribeCount).toBe(1));
+    act(() => {
+      first.session.emitStatus("open", null);
+      first.session.emitFrame(stateFrame([terminal(1, "old")]));
+    });
+    rendered.rerender({ streamClient: second });
+    await waitFor(() => expect(second.subscribeCount).toBe(1));
+    act(() => {
+      second.session.emitStatus("open", null);
+      second.session.emitFrame(stateFrame([terminal(2, "new")]));
+      first.session.emitFrame(stateFrame([terminal(99, "stale")]));
+    });
+    await waitFor(() =>
+      expect(
+        getPlainTerminal(
+          rendered.result.current.collection,
+          HOST_ID,
+          "terminal-1",
+        )?.record.manualTitle,
+      ).toBe("new"),
+    );
   });
 });

@@ -137,6 +137,50 @@ const cursorStreamRegistry = defineVersionedStreamRpcRegistry({
     },
   },
 });
+const dualMajorCursorStreamRegistry = defineVersionedStreamRpcRegistry({
+  "cursor.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: defineStreamRpcContract({
+            method: "cursor.subscribe",
+            schemaVersion: { major: 1, minor: 0 },
+            openRequestSchema: z.object({ cursor: z.number().nullable() }),
+            serverFrameSchema: z.object({
+              kind: z.literal("snapshot"),
+              hasBinaryPayload: z.literal(false),
+            }),
+            clientFrameSchema: z.object({
+              kind: z.literal("noop"),
+              hasBinaryPayload: z.literal(false),
+            }),
+          }),
+        },
+      },
+    },
+    2: {
+      latestMinor: 1,
+      versions: {
+        1: {
+          contract: defineStreamRpcContract({
+            method: "cursor.subscribe",
+            schemaVersion: { major: 2, minor: 1 },
+            openRequestSchema: z.object({ cursor: z.number().nullable() }),
+            serverFrameSchema: z.object({
+              kind: z.literal("state"),
+              hasBinaryPayload: z.literal(false),
+            }),
+            clientFrameSchema: z.object({
+              kind: z.literal("noop"),
+              hasBinaryPayload: z.literal(false),
+            }),
+          }),
+        },
+      },
+    },
+  },
+});
 
 type OpenDecision =
   | { readonly kind: "ack" }
@@ -211,6 +255,8 @@ class FakeRelayHost {
   readonly openBearers: string[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
+  /** Schema version carried beside each logical subscribe. */
+  readonly subscribeSchemaVersions: unknown[] = [];
   /** streamId of every logical subscribe, index-aligned with `subscribeParams`. */
   readonly subscribeStreamIds: number[] = [];
   /** Every `credits` value from a CREDIT control frame the client sent. */
@@ -531,6 +577,7 @@ class FakeRelayHost {
   ): Promise<void> {
     if (message.type === MuxFrameType.SUBSCRIBE) {
       this.subscribeParams.push(message.json?.params);
+      this.subscribeSchemaVersions.push(message.json?.schemaVersion);
       this.subscribeStreamIds.push(message.streamId);
       return;
     }
@@ -1705,6 +1752,43 @@ describe("RemoteSession host_detached readiness evidence", () => {
 });
 
 describe("RemoteStreamClient dynamic subscribe params", () => {
+  it(
+    "selects an installed older stream major advertised by an RC host",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = {
+        "cursor.subscribe": { major: 1, minor: 0 },
+      };
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: dualMajorCursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof dualMajorCursorStreamRegistry
+      >(session);
+      const stream = streamClient.subscribe("cursor.subscribe", {
+        cursor: null,
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        expect(relay.subscribeSchemaVersions[0]).toEqual({
+          major: 1,
+          minor: 0,
+        });
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
   it(
     "re-reads the current params before a reconnect re-subscribes",
     async () => {

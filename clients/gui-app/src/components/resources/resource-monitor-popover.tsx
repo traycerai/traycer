@@ -42,7 +42,11 @@ import type {
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import { displayTitle } from "@/lib/display-title";
-import { useRegisteredEpicLiveArtifactTitles } from "@/lib/epic-selectors";
+import {
+  useRegisteredEpicLiveAgents,
+  type RegisteredEpicAgentRef,
+  type RegisteredEpicLiveAgent,
+} from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
 import {
@@ -1256,7 +1260,23 @@ function ResourceMonitorPanel(props: {
     void tombstoneEvidence;
     return buildCanvasResourceIndex(canvas);
   }, [canvas, tombstoneEvidence]);
-  const recordByOwner = useMemo(() => buildRecordByOwner(canvas), [canvas]);
+  // The live epic projection is what says an agent row EXISTS (and what it is
+  // called): the canvas's own record list only ever holds what this window
+  // created, so an agent created by another window, device or agent would
+  // otherwise render as a dead, unlinked row.
+  const liveAgentRefs = useMemo(
+    () => collectLiveAgentRefs(projection.entries),
+    [projection.entries],
+  );
+  const liveAgents = useRegisteredEpicLiveAgents(liveAgentRefs);
+  const liveAgentByOwner = useMemo(
+    () => indexLiveAgentsByOwner(liveAgentRefs, liveAgents),
+    [liveAgentRefs, liveAgents],
+  );
+  const recordByOwner = useMemo(
+    () => buildRecordByOwner(canvas, liveAgentByOwner),
+    [canvas, liveAgentByOwner],
+  );
   const epicTitleById = useMemo(() => buildEpicTitleById(tasks), [tasks]);
   const taskRows = useMemo(
     () =>
@@ -1277,32 +1297,15 @@ function ResourceMonitorPanel(props: {
       sortOption,
     ],
   );
-  const liveOwnerTitleEntries = useMemo(
-    () =>
-      taskRows.flatMap((task) =>
-        flattenOwnerRows(task.owners).map((owner) => ({
-          ownerKey: ownerRowKey(owner),
-          epicId: owner.snapshot.owner.epicId,
-          artifactId:
-            owner.snapshot.owner.kind === "terminal"
-              ? null
-              : owner.snapshot.owner.ownerId,
-        })),
-      ),
-    [taskRows],
-  );
-  const liveOwnerTitles = useRegisteredEpicLiveArtifactTitles(
-    liveOwnerTitleEntries,
-  );
   const liveOwnerTitleByKey = useMemo(
     () =>
       new Map(
-        liveOwnerTitleEntries.map((entry, index) => [
-          entry.ownerKey,
-          liveOwnerTitles[index],
+        [...liveAgentByOwner].map(([key, live]): [string, string | null] => [
+          key,
+          live.agent.title,
         ]),
       ),
-    [liveOwnerTitleEntries, liveOwnerTitles],
+    [liveAgentByOwner],
   );
   const search = useMemo(
     () =>
@@ -2535,6 +2538,7 @@ function buildRowActionTargetIndex(input: RowActionTargetIndexInput): {
       owner.owner.epicId,
       owner.owner.kind,
       owner.owner.ownerId,
+      owner.owner.hostId,
     );
     if (input.visibleKillKeys.has(key)) live.add(key);
     const ownerTarget = ownerSnapshotActionTarget(owner, key);
@@ -3243,6 +3247,7 @@ function buildOwnerRow(
     snapshot.owner.epicId,
     snapshot.owner.kind,
     snapshot.owner.ownerId,
+    snapshot.owner.hostId,
   );
   const location = input.canvasIndex.locationByOwner.get(key) ?? null;
   const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
@@ -3361,7 +3366,7 @@ function buildSyntheticAgentRow(
   if (creatorId.length === 0) return null;
   const epicId = shell.snapshot.owner.epicId;
   for (const kind of AGENT_OWNER_KINDS) {
-    const key = ownerKey(epicId, kind, creatorId);
+    const key = ownerKey(epicId, kind, creatorId, shell.snapshot.owner.hostId);
     const location = input.canvasIndex.locationByOwner.get(key) ?? null;
     const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
     const record = input.recordByOwner.get(key) ?? null;
@@ -3404,11 +3409,6 @@ function buildSyntheticAgentRow(
     };
   }
   return null;
-}
-
-/** A task section's rows in render order: each top-level row, then its shells. */
-function flattenOwnerRows(rows: readonly OwnerDisplayRow[]): OwnerDisplayRow[] {
-  return rows.flatMap((row) => [row, ...row.shells]);
 }
 
 /**
@@ -3965,12 +3965,13 @@ function plainTerminalTombstoneEvidence(): string {
     predicate: (query) => query.queryKey[2] === "terminal.plain.list",
   })) {
     if (collection === undefined) continue;
-    for (const [terminalId, revision] of Object.entries(
-      collection.deletedRevisionById,
+    for (const [identityKey, revision] of Object.entries(
+      collection.deletedRevisionByIdentity,
     )) {
-      const live = collection.terminalsById[terminalId]?.record.revision ?? -1;
+      const live =
+        collection.terminalsByIdentity[identityKey]?.record.revision ?? -1;
       parts.push(
-        `${String(queryKey[1])}:${terminalId}:${String(revision)}:${String(live)}`,
+        `${String(queryKey[1])}:${identityKey}:${String(revision)}:${String(live)}`,
       );
     }
   }
@@ -4018,7 +4019,7 @@ function buildCanvasResourceIndex(
         const ownerKind =
           ref === undefined ? null : resourceOwnerKindForRef(ref);
         if (ref === undefined || ownerKind === null) return [];
-        const key = ownerKey(tab.epicId, ownerKind, ref.id);
+        const key = ownerKey(tab.epicId, ownerKind, ref.id, ref.hostId);
         return [
           {
             key,
@@ -4070,7 +4071,7 @@ function buildCanvasResourceIndex(
       }
       const ownerKind = resourceOwnerKindForRef(node);
       if (ownerKind === null) continue;
-      const key = ownerKey(tab.epicId, ownerKind, node.id);
+      const key = ownerKey(tab.epicId, ownerKind, node.id, node.hostId);
       if (!closedTileByOwner.has(key)) {
         closedTileByOwner.set(key, { tabId, node });
       }
@@ -4080,19 +4081,121 @@ function buildCanvasResourceIndex(
   return { locationByOwner, closedTileByOwner, tabOrderByOwner };
 }
 
+/**
+ * Every agent the snapshot can name, for the live-projection lookup: each
+ * chat / terminal-agent owner, plus each shell's creator - a creator whose own
+ * program has exited has no owner row, and its Synthetic Agent Row needs the
+ * same lookup to exist and to open. A plain terminal is not an agent.
+ */
+function collectLiveAgentRefs(
+  entries: readonly GlobalResourceEpicEntry[],
+): readonly LiveAgentRef[] {
+  const byKey = new Map<string, LiveAgentRef>();
+  for (const entry of entries) {
+    for (const snapshot of entry.owners) {
+      const owner = snapshot.owner;
+      const agentId = liveAgentIdForSnapshot(snapshot);
+      if (agentId === null) continue;
+      const key = `${owner.epicId}\x1f${agentId}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          epicId: owner.epicId,
+          agentId,
+          processHostId: owner.hostId,
+        });
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+/** The agent a snapshot names: the owner itself, or the shell's creator. */
+function liveAgentIdForSnapshot(
+  snapshot: OwnerResourceSnapshotWireV14,
+): string | null {
+  const owner = snapshot.owner;
+  if (isAgentOwnerKind(owner.kind)) return owner.ownerId;
+  if (owner.kind !== "managed-command") return null;
+  const creatorId = snapshot.managedCommand?.createdByAgentId ?? "";
+  return creatorId.length === 0 ? null : creatorId;
+}
+
+interface LiveAgentRef extends RegisteredEpicAgentRef {
+  readonly agentId: string;
+  /** The host whose resource stream reported this agent's process. */
+  readonly processHostId: string;
+}
+
+interface LiveOwnerAgent {
+  readonly epicId: string;
+  readonly agentId: string;
+  readonly agent: RegisteredEpicLiveAgent;
+  readonly hostId: string;
+}
+
+/**
+ * Live agents keyed by owner key, the kind coming from the projection slice.
+ *
+ * An epic's projection spans hosts, and an agent id is host-minted rather than
+ * globally unique, so a projection entry only describes THIS row when it names
+ * the same host the process was reported from. A disagreement is dropped rather
+ * than reconciled: enabling the row on the projection's host would open a tile
+ * bound to a machine the process is not running on. A `null` projection host is
+ * the legacy pre-`hostId` chat record, which names no host to disagree with, so
+ * it keeps the wire owner's.
+ */
+function indexLiveAgentsByOwner(
+  refs: readonly LiveAgentRef[],
+  agents: readonly (RegisteredEpicLiveAgent | null)[],
+): ReadonlyMap<string, LiveOwnerAgent> {
+  const byOwner = new Map<string, LiveOwnerAgent>();
+  refs.forEach((ref, index) => {
+    const agent = agents[index] ?? null;
+    if (agent === null) return;
+    if (agent.hostId !== null && agent.hostId !== ref.processHostId) return;
+    byOwner.set(
+      ownerKey(ref.epicId, agent.kind, ref.agentId, ref.processHostId),
+      {
+        epicId: ref.epicId,
+        agentId: ref.agentId,
+        agent,
+        hostId: ref.processHostId,
+      },
+    );
+  });
+  return byOwner;
+}
+
+/**
+ * The record behind an agent row: the live projection first (it is the one
+ * source that knows about agents this window never created), the canvas's own
+ * record list as the legacy fallback.
+ */
 function buildRecordByOwner(
   canvas: CanvasResourceSnapshot,
+  liveAgentByOwner: ReadonlyMap<string, LiveOwnerAgent>,
 ): ReadonlyMap<string, EpicNodeRecord> {
-  return new Map(
+  const records = new Map<string, EpicNodeRecord>(
     Object.entries(canvas.artifactTreeByEpicId).flatMap(
       ([epicId, epicRecords]) =>
         (epicRecords ?? []).flatMap((record): [string, EpicNodeRecord][] => {
           const kind = resourceOwnerKindForNodeType(record.type);
           if (kind === null) return [];
-          return [[ownerKey(epicId, kind, record.id), record]];
+          return [[ownerKey(epicId, kind, record.id, record.hostId), record]];
         }),
     ),
   );
+  for (const [key, live] of liveAgentByOwner) {
+    // An untitled live agent keeps whatever name the legacy record had.
+    records.set(key, {
+      id: live.agentId,
+      parentId: null,
+      name: live.agent.title ?? records.get(key)?.name ?? "",
+      type: live.agent.kind,
+      hostId: live.hostId,
+    });
+  }
+  return records;
 }
 
 function sortTaskRows(
@@ -4264,7 +4367,10 @@ function openResourceOwner(args: {
   ) {
     return false;
   }
-  const record = findOwnerRecord(args.canvas, snapshot);
+  // The row's record is the live projection's agent when this window has the
+  // epic mounted (an agent created elsewhere has no other representation
+  // here), else the canvas's own legacy record.
+  const record = args.row.record;
   if (record === null) return false;
   const recordType = record.type;
   if (recordType !== "chat" && recordType !== "terminal-agent") return false;
@@ -4279,7 +4385,11 @@ function openResourceOwner(args: {
         id: record.id,
         instanceId: uuidv4(),
         type: recordType,
-        name: record.name,
+        // The tile's `name` is the fallback `useEpicTabDisplayTitle` lands on
+        // when the live doc has no title, and an untitled agent projects as
+        // `null` there - so an unnamed record has to carry the render-tier
+        // fallback itself, exactly as the palette's openers do.
+        name: displayTitle(record.name, "agent"),
         hostId: record.hostId,
       },
       preview: false,
@@ -4375,14 +4485,6 @@ function focusForOwner(snapshot: OwnerResourceSnapshotWireV14): EpicRouteFocus {
   };
 }
 
-function findOwnerRecord(
-  canvas: CanvasResourceSnapshot,
-  snapshot: OwnerResourceSnapshotWireV14,
-): EpicNodeRecord | null {
-  const records = canvas.artifactTreeByEpicId[snapshot.owner.epicId] ?? [];
-  return records.find((record) => record.id === snapshot.owner.ownerId) ?? null;
-}
-
 function taskLabel(
   epicId: string,
   canvas: CanvasResourceSnapshot,
@@ -4408,7 +4510,11 @@ function ownerKey(
   epicId: string,
   kind: ResourceOwnerKindWireV14,
   ownerId: string,
+  hostId: string,
 ): string {
+  if (kind === "terminal") {
+    return JSON.stringify([epicId, kind, hostId, ownerId]);
+  }
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
 }
 
@@ -4417,6 +4523,7 @@ function ownerRowKey(row: OwnerDisplayRow): string {
     row.snapshot.owner.epicId,
     row.snapshot.owner.kind,
     row.snapshot.owner.ownerId,
+    row.snapshot.owner.hostId,
   );
 }
 

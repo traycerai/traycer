@@ -80,6 +80,7 @@ describe("useHostTerminalBootstrap", () => {
 
     expect(ensureRunning.mutate).toHaveBeenCalledOnce();
     expect(ensureRunning.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
       terminalId: "terminal-1",
       cols: 132,
       rows: 41,

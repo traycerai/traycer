@@ -21,14 +21,22 @@ interface DurableRenameOptions {
   readonly onSuccess: () => void;
 }
 const durableCloseMutateAsync =
-  vi.fn<(request: { readonly terminalId: string }) => Promise<void>>();
-const durableRenameMutate =
   vi.fn<
-    (
-      request: { readonly terminalId: string; readonly manualTitle: string },
-      options: DurableRenameOptions,
-    ) => void
+    (request: {
+      readonly hostId: string;
+      readonly terminalId: string;
+    }) => Promise<void>
   >();
+const durableRenameMutate = vi.fn<
+  (
+    request: {
+      readonly hostId: string;
+      readonly terminalId: string;
+      readonly manualTitle: string;
+    },
+    options: DurableRenameOptions,
+  ) => void
+>();
 const legacyRenameMutate = vi.fn();
 const durableAuthority = vi.hoisted<{
   capability: "unknown" | "legacy" | "capable";
@@ -51,7 +59,11 @@ const hostRequest = vi.hoisted(() =>
   >(),
 );
 const terminalSessions = vi.hoisted<{
-  value: ReadonlyArray<CanonicalTerminalSessionInfo>;
+  value: ReadonlyArray<
+    CanonicalTerminalSessionInfo & {
+      readonly lifecycleOwner?: "registry" | "manager";
+    }
+  >;
 }>(() => ({ value: [] }));
 
 // The sidebar is outside every tile `TabHostProvider`, so its client and its
@@ -133,15 +145,32 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   }),
 }));
 
+vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
+  useResolvePlainTerminalOwnerHostClient: () => () => ({
+    request: hostRequest,
+  }),
+  resolvePlainTerminalOwnerHostClient: () => ({
+    request: hostRequest,
+  }),
+}));
+
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: "host-1",
     scope: { kind: "epic", epicId: "epic-1" },
-    capability: { status: durableAuthority.capability },
+    capability:
+      durableAuthority.capability === "capable"
+        ? {
+            status: "capable",
+            schemaVersion: { major: 2, minor: 1 },
+          }
+        : { status: durableAuthority.capability },
     canMutate: durableAuthority.canMutate,
     collection: {
-      terminalsById: durableAuthority.collectionIncludesSession
-        ? { [SESSION_ID]: DURABLE_PROJECTION }
+      terminalsByIdentity: durableAuthority.collectionIncludesSession
+        ? {
+            [JSON.stringify(["host-1", SESSION_ID])]: DURABLE_PROJECTION,
+          }
         : {},
     },
   }),
@@ -164,7 +193,10 @@ vi.mock(
           ...real,
           close: {
             ...real.close,
-            mutateAsync: async (request: { readonly terminalId: string }) => {
+            mutateAsync: async (request: {
+              readonly hostId: string;
+              readonly terminalId: string;
+            }) => {
               const pending = durableCloseMutateAsync(request);
               const result = await real.close.mutateAsync(request);
               await pending;
@@ -214,13 +246,17 @@ import {
 } from "@/stores/epics/canvas/store";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import {
-  recordProviderLoginTerminal,
-  useProviderLoginTerminalsStore,
-} from "@/stores/providers/provider-login-terminals";
+  acceptEpicTerminalDurableCreate,
+  peekEpicTerminalDurableCreate,
+  requestEpicTerminalDurableCreate,
+  resetEpicTerminalDurableCreatesForTests,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import {
-  recordSetupTerminal,
-  useSetupTerminalsStore,
-} from "@/stores/worktree/setup-terminals";
+  epicTerminalUiIdentityKey,
+  hasTerminalPendingCreate,
+} from "@/lib/terminals/pending-create-identity";
+import { useProviderLoginTerminalsStore } from "@/stores/providers/provider-login-terminals";
+import { useSetupTerminalsStore } from "@/stores/worktree/setup-terminals";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -286,18 +322,6 @@ function seedOpenCompatibilityTab(origin: "setup" | "provider-login"): void {
   useEpicCanvasStore.getState().openTileInTab(TAB_ID, ref);
 }
 
-function recordCompatibilityOrigin(origin: "setup" | "provider-login"): void {
-  if (origin === "setup") {
-    recordSetupTerminal({ hostId: "host-1", sessionId: SESSION_ID });
-    return;
-  }
-  recordProviderLoginTerminal({
-    hostId: "host-1",
-    sessionId: SESSION_ID,
-    providerId: "claude-code",
-  });
-}
-
 function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
   seedEmptyTab();
   let ref: EpicTerminalRef = {
@@ -343,9 +367,21 @@ function seedOpenTerminalTab(authority: "legacy" | "host" | "future"): void {
   useEpicCanvasStore.getState().openTileInTab(TAB_ID, ref);
 }
 
+function resetOriginStores(): void {
+  useSetupTerminalsStore.setState({
+    trackedBySessionKey: {},
+    recentKeys: [],
+  });
+  useProviderLoginTerminalsStore.setState({
+    providerBySessionKey: {},
+    recentKeys: [],
+  });
+}
+
 describe("terminal sidebar Close", () => {
   beforeEach(() => {
     testQueryClient = createTestQueryClient();
+    resetOriginStores();
     killMutate.mockClear();
     durableCloseMutateAsync.mockReset();
     durableCloseMutateAsync.mockResolvedValue();
@@ -365,22 +401,15 @@ describe("terminal sidebar Close", () => {
     durableAuthority.renamePending = false;
     durableAuthority.collectionIncludesSession = false;
     terminalSessions.value = [RUNNING_SESSION];
-    // Both origin registries are persisted module-level singletons, so an entry
-    // recorded by one test would otherwise outlive it.
-    useProviderLoginTerminalsStore.setState(
-      useProviderLoginTerminalsStore.getInitialState(),
-      true,
-    );
-    useSetupTerminalsStore.setState(
-      useSetupTerminalsStore.getInitialState(),
-      true,
-    );
+    resetEpicTerminalDurableCreatesForTests();
     seedOpenTerminalTab("legacy");
   });
 
   afterEach(() => {
     cleanup();
+    resetOriginStores();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    resetEpicTerminalDurableCreatesForTests();
   });
 
   it("highlights the terminal shown in the active canvas pane", () => {
@@ -478,6 +507,7 @@ describe("terminal sidebar Close", () => {
       expect(durableCloseMutateAsync).toHaveBeenCalledTimes(1),
     );
     expect(durableCloseMutateAsync.mock.calls[0]?.[0]).toEqual({
+      hostId: "host-1",
       terminalId: SESSION_ID,
     });
     expect(killMutate).not.toHaveBeenCalled();
@@ -522,53 +552,16 @@ describe("terminal sidebar Close", () => {
     expect(killMutate).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { origin: "setup", openRef: true },
-    { origin: "setup", openRef: false },
-    { origin: "provider-login", openRef: true },
-    { origin: "provider-login", openRef: false },
-  ] as const)(
-    "closes a capable host's $origin compatibility row through terminal.kill (open canvas ref: $openRef)",
-    ({ origin, openRef }) => {
-      // The durable close resolver needs an authorized persistent record.
-      // Setup and provider-login shells deliberately never enter the durable
-      // collection, so `terminal.plain.close` would answer terminal-not-found
-      // and strand the row behind a generic failure toast.
-      durableAuthority.capability = "capable";
-      durableAuthority.canMutate = true;
-      durableAuthority.collectionIncludesSession = false;
-      recordCompatibilityOrigin(origin);
-      if (openRef) {
-        seedOpenCompatibilityTab(origin);
-        expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
-      } else {
-        seedEmptyTab();
-        expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
-      }
-      const { getByRole } = render(
-        wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
-      );
-
-      const close = getByRole("button", { name: "Close" });
-      expect(close.getAttribute("disabled")).toBeNull();
-      fireEvent.click(close);
-
-      expect(killMutate).toHaveBeenCalledWith({ sessionId: SESSION_ID });
-      expect(durableCloseMutateAsync).not.toHaveBeenCalled();
-      // The legacy local canvas close stays synchronous for these rows.
-      expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).toBeNull();
-    },
-  );
-
-  it("disables close while capable-host support is unknown", () => {
+  it("does not render listed rows while capable-host support is unknown", () => {
     durableAuthority.capability = "unknown";
-    const { getByTestId } = render(
+    const { queryByTestId, getByText } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
-    const close = getByTestId(`epic-terminal-sidebar-kill-menu-${SESSION_ID}`);
 
-    expect(close.getAttribute("disabled")).not.toBeNull();
-    fireEvent.click(close);
+    expect(
+      queryByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    ).toBeNull();
+    expect(getByText("Loading terminals…")).not.toBeNull();
     expect(durableCloseMutateAsync).not.toHaveBeenCalled();
     expect(killMutate).not.toHaveBeenCalled();
     expect(findOpenArtifactInTab(TAB_ID, SESSION_ID)).not.toBeNull();
@@ -614,7 +607,9 @@ describe("terminal sidebar Close", () => {
       durableAuthority.closePending = closePending;
       durableAuthority.killPending = killPending;
       if (compatibilityRow) {
-        recordCompatibilityOrigin("setup");
+        terminalSessions.value = [
+          { ...RUNNING_SESSION, lifecycleOwner: "manager" },
+        ];
         seedOpenCompatibilityTab("setup");
       } else {
         seedOpenTerminalTab("host");
@@ -713,6 +708,7 @@ describe("terminal sidebar Close", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(durableRenameMutate.mock.calls[0]?.[0]).toEqual({
+      hostId: "host-1",
       terminalId: SESSION_ID,
       manualTitle: "Durable title",
     });
@@ -723,6 +719,9 @@ describe("terminal sidebar Close", () => {
     durableAuthority.capability = "capable";
     durableAuthority.canMutate = false;
     durableAuthority.collectionIncludesSession = false;
+    terminalSessions.value = [
+      { ...RUNNING_SESSION, lifecycleOwner: "manager" },
+    ];
     const { getByTestId, queryByTestId } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
@@ -747,6 +746,9 @@ describe("terminal sidebar Close", () => {
     durableAuthority.capability = "capable";
     durableAuthority.canMutate = true;
     durableAuthority.collectionIncludesSession = false;
+    terminalSessions.value = [
+      { ...RUNNING_SESSION, lifecycleOwner: "manager" },
+    ];
     const { getByTestId } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
@@ -794,13 +796,6 @@ describe("terminal sidebar Close", () => {
   });
 
   it.each([
-    {
-      name: "unknown capability",
-      capability: "unknown",
-      canMutate: false,
-      includesSession: true,
-      renamePending: false,
-    },
     {
       name: "stale capable authority",
       capability: "capable",
@@ -889,5 +884,222 @@ describe("terminal sidebar Close", () => {
     expect(getByTestId("epic-terminal-sidebar-empty")).not.toBeNull();
     expect(getByText("No terminals yet.")).not.toBeNull();
     expect(queryByTestId("epic-terminal-sidebar-list")).toBeNull();
+  });
+});
+
+describe("terminal sidebar failed headless create", () => {
+  beforeEach(() => {
+    testQueryClient = createTestQueryClient();
+    resetEpicTerminalDurableCreatesForTests();
+    terminalSessions.value = [];
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useEpicCanvasStore.setState({
+      tabsById: {
+        [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" },
+      },
+    });
+    durableAuthority.capability = "capable";
+    durableAuthority.canMutate = true;
+    durableAuthority.collectionIncludesSession = false;
+  });
+
+  afterEach(() => {
+    cleanup();
+    resetEpicTerminalDurableCreatesForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  async function seedFailedCreate(
+    hostId: string,
+    terminalId: string,
+  ): Promise<void> {
+    acceptEpicTerminalDurableCreate({
+      hostId,
+      terminalId,
+      epicId: "epic-1",
+      cwd: "/tmp/work",
+      cols: 80,
+      rows: 24,
+    });
+    useEpicCanvasStore.getState().markTerminalPendingCreate(hostId, terminalId);
+    await expect(
+      requestEpicTerminalDurableCreate({
+        hostId,
+        terminalId,
+        ready: true,
+        create: () => Promise.reject(new Error("host offline")),
+        onSuccess: () => undefined,
+        commit: undefined,
+        onCommit: undefined,
+        onFailure: undefined,
+      }),
+    ).rejects.toThrow("host offline");
+  }
+
+  function failedCreateTestId(hostId: string, terminalId: string): string {
+    return `epic-terminal-sidebar-failed-create-${epicTerminalUiIdentityKey(
+      "failed",
+      hostId,
+      terminalId,
+    )}`;
+  }
+
+  it("shows Retry and Discard for a failed headless create", async () => {
+    await seedFailedCreate("host-1", SESSION_ID);
+    const { getByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    const identityKey = epicTerminalUiIdentityKey(
+      "failed",
+      "host-1",
+      SESSION_ID,
+    );
+
+    expect(
+      getByTestId(failedCreateTestId("host-1", SESSION_ID)).textContent,
+    ).toContain("host offline");
+    fireEvent.click(
+      getByTestId(`epic-terminal-sidebar-failed-retry-${identityKey}`),
+    );
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)?.status).toBe(
+      "accepted",
+    );
+  });
+
+  it("Discard clears the failed job and pending-create marker", async () => {
+    await seedFailedCreate("host-1", SESSION_ID);
+    const { getByTestId, queryByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    const identityKey = epicTerminalUiIdentityKey(
+      "failed",
+      "host-1",
+      SESSION_ID,
+    );
+
+    fireEvent.click(
+      getByTestId(`epic-terminal-sidebar-failed-discard-${identityKey}`),
+    );
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)).toBeNull();
+    expect(
+      hasTerminalPendingCreate(
+        useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+        "host-1",
+        SESSION_ID,
+      ),
+    ).toBe(false);
+    expect(queryByTestId(failedCreateTestId("host-1", SESSION_ID))).toBeNull();
+  });
+
+  it("settles a lost-response create when the durable row appears", async () => {
+    await seedFailedCreate("host-1", SESSION_ID);
+    const view = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    expect(
+      view.getByTestId(failedCreateTestId("host-1", SESSION_ID)),
+    ).not.toBeNull();
+
+    durableAuthority.collectionIncludesSession = true;
+    view.rerender(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    await waitFor(() => {
+      expect(
+        view.queryByTestId(failedCreateTestId("host-1", SESSION_ID)),
+      ).toBeNull();
+    });
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)).toBeNull();
+    expect(
+      view.getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    ).not.toBeNull();
+    expect(
+      hasTerminalPendingCreate(
+        useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+        "host-1",
+        SESSION_ID,
+      ),
+    ).toBe(false);
+
+    durableAuthority.collectionIncludesSession = false;
+    view.rerender(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    expect(
+      view.queryByTestId(failedCreateTestId("host-1", SESSION_ID)),
+    ).toBeNull();
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)).toBeNull();
+  });
+
+  it("keeps Retry/Discard when a cached legacy list row is later patched locally", async () => {
+    durableAuthority.capability = "legacy";
+    durableAuthority.canMutate = false;
+    await seedFailedCreate("host-1", SESSION_ID);
+    terminalSessions.value = [RUNNING_SESSION];
+    const view = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    expect(
+      view.getByTestId(failedCreateTestId("host-1", SESSION_ID)),
+    ).not.toBeNull();
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)?.status).toBe(
+      "failed",
+    );
+    expect(
+      view.getByTestId(`epic-terminal-sidebar-item-${SESSION_ID}`),
+    ).not.toBeNull();
+
+    terminalSessions.value = [
+      { ...RUNNING_SESSION, title: "local-rename-patch" },
+    ];
+    view.rerender(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(
+      view.getByTestId(failedCreateTestId("host-1", SESSION_ID)),
+    ).not.toBeNull();
+    expect(peekEpicTerminalDurableCreate("host-1", SESSION_ID)?.status).toBe(
+      "failed",
+    );
+    expect(
+      hasTerminalPendingCreate(
+        useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+        "host-1",
+        SESSION_ID,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a failed create on another host independent of this session", async () => {
+    await seedFailedCreate("host-2", SESSION_ID);
+    const { queryByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(queryByTestId(failedCreateTestId("host-2", SESSION_ID))).toBeNull();
+    expect(queryByTestId(failedCreateTestId("host-1", SESSION_ID))).toBeNull();
+    expect(peekEpicTerminalDurableCreate("host-2", SESSION_ID)?.status).toBe(
+      "failed",
+    );
+  });
+
+  it("namespaces adversarial failed-create identities away from real rows", async () => {
+    const adversarialId = '","term-1';
+    await seedFailedCreate("host-1", adversarialId);
+    const { getByTestId, queryByTestId } = render(
+      wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
+    );
+
+    expect(
+      getByTestId(failedCreateTestId("host-1", adversarialId)),
+    ).not.toBeNull();
+    expect(
+      queryByTestId(`epic-terminal-sidebar-failed-create-${adversarialId}`),
+    ).toBeNull();
+    expect(queryByTestId(failedCreateTestId("host-1", SESSION_ID))).toBeNull();
   });
 });

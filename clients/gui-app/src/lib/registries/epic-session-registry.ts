@@ -73,6 +73,25 @@ export function getEpicSessionHandleHostId(
 }
 
 /**
+ * The session's host client, stamped by `epic-session-provider.tsx` from the
+ * same value it provides through {@link EpicSessionHostClientContext} - for
+ * the imperative callers (DnD commits) that run outside that subtree and
+ * address the host the session's records live on. A `null` entry means the
+ * session has no serving client right now; an absent entry, a handle the
+ * provider never saw (tests).
+ */
+export const handleHostClients = new WeakMap<
+  OpenEpicStoreHandle,
+  HostClient<HostRpcRegistry> | null
+>();
+
+export function getEpicSessionHandleHostClient(
+  handle: OpenEpicStoreHandle,
+): HostClient<HostRpcRegistry> | null {
+  return handleHostClients.get(handle) ?? null;
+}
+
+/**
  * Registry is module-scoped so background Epic tabs survive route transitions
  * - a tab that is navigated away from but kept open in the tab strip stays
  * live (within the MRU cap) so re-entering the route is instant.

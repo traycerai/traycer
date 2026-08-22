@@ -351,6 +351,14 @@ function LandingTerminalTabLabel(props: {
           · dormant
         </span>
       ) : null}
+      {props.viewModel?.isRuntimeUnknown === true ? (
+        <span
+          className="text-ui-xs text-muted-foreground"
+          data-testid={`landing-terminal-unavailable-${props.instanceId}`}
+        >
+          · status unavailable
+        </span>
+      ) : null}
     </>
   );
 }

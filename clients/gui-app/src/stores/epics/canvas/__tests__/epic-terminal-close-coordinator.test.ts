@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  registerEpicTerminalCloseAuthority,
+  requestEpicTerminalClose,
   requestEpicTerminalLifetimeClose,
-  type EpicTerminalCloseAuthority,
 } from "@/lib/terminals/epic-terminal-close-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
@@ -12,19 +11,19 @@ import type {
 
 const TAB_ID = "view-tab";
 const PANE_ID = "pane";
-const unregister: Array<() => void> = [];
 
 function terminal(
   id: string,
   instanceId: string,
   authority: "legacy" | "host",
+  hostId: string,
 ): EpicTerminalRef {
   const base = {
     id,
     instanceId,
     type: "terminal" as const,
     name: id,
-    hostId: "host-1",
+    hostId,
   };
   return authority === "host"
     ? {
@@ -85,24 +84,16 @@ function seed(refs: readonly EpicCanvasTileRef[], activeId: string): void {
   });
 }
 
-function register(
-  ref: EpicTerminalRef,
-  input: Pick<EpicTerminalCloseAuthority, "capability" | "canMutate" | "close">,
-): void {
-  unregister.push(
-    registerEpicTerminalCloseAuthority({
-      instanceId: ref.instanceId,
-      hostId: ref.hostId,
-      terminalId: ref.id,
-      ...input,
-    }),
-  );
-}
-
 function remainingIds(): readonly string[] {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[TAB_ID];
   if (canvas?.root?.kind !== "pane") return [];
   return canvas.root.tabInstanceIds;
+}
+
+function remainingTile(instanceId: string): EpicCanvasTileRef | undefined {
+  return useEpicCanvasStore.getState().canvasByTabId[TAB_ID]?.tilesByInstanceId[
+    instanceId
+  ];
 }
 
 function deferred(): {
@@ -125,98 +116,98 @@ function deferred(): {
 
 describe("epic terminal close coordination", () => {
   afterEach(() => {
-    unregister.splice(0).forEach((dispose) => dispose());
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   it.each([
-    ["unknown capability", "unknown", false],
-    ["capable but unreachable authority", "capable", false],
-  ] as const)("fails closed for %s", (_name, capability, canMutate) => {
-    const ref = terminal("durable", "durable-1", "host");
-    const close = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    "unknown capability before readiness",
+    "capable after PTY startup",
+  ] as const)("closes a %s tab as a local presentation only", () => {
+    const ref = terminal("durable", "durable-1", "host", "host-1");
     seed([ref], ref.instanceId);
-    register(ref, { capability, canMutate, close });
-
-    useEpicCanvasStore
-      .getState()
-      .closeCanvasTab(TAB_ID, PANE_ID, ref.instanceId);
-
-    expect(remainingIds()).toEqual([ref.instanceId]);
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it("closes an import-exempt ref registered as legacy even when canMutate is false", () => {
-    const ref = terminal("signin", "signin-1", "legacy");
-    const close = vi.fn<() => Promise<void>>(() => Promise.resolve());
-    seed([ref], ref.instanceId);
-    register(ref, { capability: "legacy", canMutate: false, close });
 
     useEpicCanvasStore
       .getState()
       .closeCanvasTab(TAB_ID, PANE_ID, ref.instanceId);
 
     expect(remainingIds()).toEqual([]);
-    expect(close).not.toHaveBeenCalled();
+    expect(remainingTile(ref.instanceId)).toBeUndefined();
   });
 
-  it("retains a durable ref when acknowledged close fails", async () => {
-    const ref = terminal("durable", "durable-1", "host");
-    const close = vi.fn<() => Promise<void>>(() =>
-      Promise.reject(new Error("offline")),
-    );
+  it("maps every tab-close ref to a local presentation close, including unreachable owners", () => {
+    const offline = terminal("durable", "offline-1", "host", "host-offline");
+    const unknown = terminal("durable", "unknown-1", "host", "host-missing");
+    const result = requestEpicTerminalClose([offline, unknown, spec("keep")]);
+    expect(result.localInstanceIds).toEqual([
+      offline.instanceId,
+      unknown.instanceId,
+      "keep",
+    ]);
+    expect(result.retainedInstanceIds).toEqual([]);
+  });
+
+  it("closes an unreachable-owner tab locally without a lifetime RPC", () => {
+    const ref = terminal("durable", "offline-1", "host", "host-offline");
+    const lifetimeClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
     seed([ref], ref.instanceId);
-    register(ref, { capability: "capable", canMutate: true, close });
+
+    expect(
+      requestEpicTerminalLifetimeClose({
+        hostId: ref.hostId,
+        terminalId: ref.id,
+        capability: "capable",
+        canMutate: false,
+        close: lifetimeClose,
+      }),
+    ).toBeNull();
+    useEpicCanvasStore
+      .getState()
+      .closeCanvasTab(TAB_ID, PANE_ID, ref.instanceId);
+
+    expect(remainingIds()).toEqual([]);
+    expect(remainingTile(ref.instanceId)).toBeUndefined();
+    expect(lifetimeClose).not.toHaveBeenCalled();
+  });
+
+  it("closes an unregistered terminal tab before authority mounts", () => {
+    const ref = terminal("durable", "durable-1", "host", "host-1");
+    seed([ref], ref.instanceId);
 
     useEpicCanvasStore
       .getState()
       .closeCanvasTab(TAB_ID, PANE_ID, ref.instanceId);
-    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
 
-    expect(remainingIds()).toEqual([ref.instanceId]);
+    expect(remainingIds()).toEqual([]);
+    expect(remainingTile(ref.instanceId)).toBeUndefined();
   });
 
-  it("closes a multi-ref durable terminal once and removes all refs only on authoritative deletion", async () => {
-    const first = terminal("durable", "durable-1", "host");
-    const second = terminal("durable", "durable-2", "host");
-    const firstClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
-    const secondClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
+  it("closes an import-exempt ref locally", () => {
+    const ref = terminal("signin", "signin-1", "legacy", "host-1");
+    seed([ref], ref.instanceId);
+
+    useEpicCanvasStore
+      .getState()
+      .closeCanvasTab(TAB_ID, PANE_ID, ref.instanceId);
+
+    expect(remainingIds()).toEqual([]);
+  });
+
+  it("removes every local presentation of a durable terminal without deleting it", () => {
+    const first = terminal("durable", "durable-1", "host", "host-1");
+    const second = terminal("durable", "durable-2", "host", "host-1");
     seed([first, second], second.instanceId);
-    register(first, {
-      capability: "capable",
-      canMutate: true,
-      close: firstClose,
-    });
-    register(second, {
-      capability: "capable",
-      canMutate: true,
-      close: secondClose,
-    });
 
     useEpicCanvasStore.getState().closeAllCanvasTabs(TAB_ID, PANE_ID);
-    expect(remainingIds()).toEqual([first.instanceId, second.instanceId]);
-    await vi.waitFor(() =>
-      expect(firstClose.mock.calls.length + secondClose.mock.calls.length).toBe(
-        1,
-      ),
-    );
 
-    useEpicCanvasStore.getState().removeHostTerminalRefs("host-1", "durable");
     expect(remainingIds()).toEqual([]);
   });
 
-  it("single-flights sidebar, overlay, and store closes by terminal lifetime", async () => {
-    const ref = terminal("durable", "durable-1", "host");
+  it("does not join an in-flight lifetime close when the canvas tab is closed", async () => {
+    const ref = terminal("durable", "durable-1", "host", "host-1");
     const closeResult = deferred();
     const sidebarClose = vi.fn<() => Promise<void>>(() => closeResult.promise);
     const overlayClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
-    const storeClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
     seed([ref], ref.instanceId);
-    register(ref, {
-      capability: "capable",
-      canMutate: true,
-      close: storeClose,
-    });
 
     const sidebarPending = requestEpicTerminalLifetimeClose({
       hostId: ref.hostId,
@@ -239,30 +230,25 @@ describe("epic terminal close coordination", () => {
     expect(overlayPending).toBe(sidebarPending);
     await vi.waitFor(() => expect(sidebarClose).toHaveBeenCalledTimes(1));
     expect(overlayClose).not.toHaveBeenCalled();
-    expect(storeClose).not.toHaveBeenCalled();
-    expect(remainingIds()).toEqual([ref.instanceId]);
+    expect(remainingIds()).toEqual([]);
 
     closeResult.resolve();
     await sidebarPending;
   });
 
   it("keeps a pending lifetime close across unmount and releases it after failure for retry", async () => {
-    const ref = terminal("durable", "durable-1", "host");
+    const ref = terminal("durable", "durable-1", "host", "host-1");
     const firstResult = deferred();
     const firstClose = vi.fn<() => Promise<void>>(() => firstResult.promise);
-    const mountedAuthority: EpicTerminalCloseAuthority = {
-      instanceId: ref.instanceId,
+    const mountedAuthority = {
       hostId: ref.hostId,
       terminalId: ref.id,
-      capability: "capable",
+      capability: "capable" as const,
       canMutate: true,
       close: firstClose,
     };
-    const unmount = registerEpicTerminalCloseAuthority(mountedAuthority);
-    unregister.push(unmount);
 
     const initial = requestEpicTerminalLifetimeClose(mountedAuthority);
-    unmount();
     const joinedAfterUnmount = requestEpicTerminalLifetimeClose({
       ...mountedAuthority,
       close: () => Promise.resolve(),
@@ -282,25 +268,64 @@ describe("epic terminal close coordination", () => {
     expect(retryClose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not join lifetime deletes whose NUL-delimited keys would collide", async () => {
+    const firstClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const secondClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const first = requestEpicTerminalLifetimeClose({
+      hostId: "a",
+      terminalId: "b\0c",
+      capability: "capable",
+      canMutate: true,
+      close: firstClose,
+    });
+    const second = requestEpicTerminalLifetimeClose({
+      hostId: "a\0b",
+      terminalId: "c",
+      capability: "capable",
+      canMutate: true,
+      close: secondClose,
+    });
+    expect(second).not.toBe(first);
+    await Promise.resolve();
+    expect(firstClose).toHaveBeenCalledTimes(1);
+    expect(secondClose).toHaveBeenCalledTimes(1);
+    await first;
+    await second;
+  });
+
+  it("still single-flights repeated deletes for the same composite identity", async () => {
+    const closeResult = deferred();
+    const firstClose = vi.fn<() => Promise<void>>(() => closeResult.promise);
+    const secondClose = vi.fn<() => Promise<void>>(() => Promise.resolve());
+    const first = requestEpicTerminalLifetimeClose({
+      hostId: "host-a",
+      terminalId: "term-a",
+      capability: "capable",
+      canMutate: true,
+      close: firstClose,
+    });
+    const second = requestEpicTerminalLifetimeClose({
+      hostId: "host-a",
+      terminalId: "term-a",
+      capability: "capable",
+      canMutate: true,
+      close: secondClose,
+    });
+    expect(second).toBe(first);
+    await vi.waitFor(() => expect(firstClose).toHaveBeenCalledTimes(1));
+    expect(secondClose).not.toHaveBeenCalled();
+    closeResult.resolve();
+    await first;
+  });
+
   it.each(["others", "right", "all", "group"] as const)(
-    "splits mixed %s close into durable, old-host, and terminal-agent behavior",
-    async (gesture) => {
+    "closes mixed %s gestures locally, including durable terminal presentations",
+    (gesture) => {
       const keep = spec("keep");
-      const durable = terminal("durable", "durable-1", "host");
-      const legacy = terminal("legacy", "legacy-1", "legacy");
+      const durable = terminal("durable", "durable-1", "host", "host-1");
+      const legacy = terminal("legacy", "legacy-1", "legacy", "host-1");
       const terminalAgent = agent("agent-1");
-      const close = vi.fn<() => Promise<void>>(() => Promise.resolve());
       seed([keep, durable, legacy, terminalAgent], terminalAgent.instanceId);
-      register(durable, {
-        capability: "capable",
-        canMutate: true,
-        close,
-      });
-      register(legacy, {
-        capability: "legacy",
-        canMutate: false,
-        close: () => Promise.resolve(),
-      });
 
       const store = useEpicCanvasStore.getState();
       if (gesture === "others") {
@@ -313,11 +338,8 @@ describe("epic terminal close coordination", () => {
         store.closeCanvasPane(TAB_ID, PANE_ID);
       }
 
-      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
       expect(remainingIds()).toEqual(
-        gesture === "all" || gesture === "group"
-          ? [durable.instanceId]
-          : [keep.instanceId, durable.instanceId],
+        gesture === "all" || gesture === "group" ? [] : [keep.instanceId],
       );
     },
   );

@@ -12,10 +12,13 @@ import {
   reconcileTurnSettled,
   sweepStalePendingActions,
   turnSettledFromStatus,
+  unrecoverableSendNotice,
+  NO_WORKTREE_SWEEP,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
   type ReconcileTurnSettledInput,
 } from "@/stores/chats/chat-queue-reconciler";
+import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
   PendingChatAction,
@@ -59,7 +62,8 @@ function createPendingAction(
     sender: isSendOrEdit ? SENDER : null,
     settings: isSendOrEdit ? SETTINGS : null,
     restoreWorktreeIntent: null,
-    restoreWorktreeStagingRevision: null,
+    accountContext: null,
+    deliveryPolicy: null,
     createdAt: 1000,
     connectionEpoch: 0,
   };
@@ -77,6 +81,13 @@ function createAcceptedAction(
     messageId: null,
     acceptedAt,
     restoreContent: null,
+    sender: null,
+    settings: null,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    connectionEpoch: 0,
+    confirmedByHost: false,
   };
 }
 
@@ -90,7 +101,10 @@ function createPendingUserMessage(
     content: CONTENT,
     sender: SENDER,
     settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: 1000,
+    restoreWorktreeIntent: null,
   };
 }
 
@@ -141,6 +155,7 @@ describe("chat-queue-reconciler", () => {
     it("returns unchanged state when no pending actions match queue", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: { status: "idle", items: [] },
@@ -158,6 +173,7 @@ describe("chat-queue-reconciler", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const pendingUser = createPendingUserMessage("action-1", "msg-1");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [pendingUser],
         queue: {
@@ -188,7 +204,8 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
-        restoreWorktreeStagingRevision: null,
+        accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -199,9 +216,13 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        accountContext: { type: "PERSONAL" },
+        deliveryPolicy: null,
         timestamp: 1000,
+        restoreWorktreeIntent: null,
       };
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": action1, "action-2": action2 },
         pendingUserMessages: [user1, user2],
         queue: {
@@ -220,6 +241,7 @@ describe("chat-queue-reconciler", () => {
     it("does not prune old accepted actions on queue change", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: {
@@ -246,12 +268,14 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
-        restoreWorktreeStagingRevision: null,
+        accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
       const action3 = createPendingAction("action-3", null, "stop");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": action1,
           "action-2": action2,
@@ -265,7 +289,10 @@ describe("chat-queue-reconciler", () => {
             content: CONTENT_2,
             sender: SENDER,
             settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            deliveryPolicy: null,
             timestamp: 1000,
+            restoreWorktreeIntent: null,
           },
         ],
         queue: {
@@ -304,6 +331,11 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -325,6 +357,11 @@ describe("chat-queue-reconciler", () => {
           items: [createQueueItem("msg-1", CONTENT)],
         },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -335,7 +372,7 @@ describe("chat-queue-reconciler", () => {
       expect(result.pendingUserMessages).toEqual([]);
     });
 
-    it("creates failedSendRestoration for unconfirmed send with restore content", () => {
+    it("creates failedSendRestoration for an unconfirmed send from an earlier connection", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileSnapshotInput = {
         pendingActions: { "action-1": pendingAction },
@@ -343,6 +380,11 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -354,11 +396,69 @@ describe("chat-queue-reconciler", () => {
       expect(result.failedSendRestoration?.content).toEqual(CONTENT);
     });
 
+    it("keeps an unconfirmed send from the snapshot's own connection pending, without restoration", () => {
+      // A steady-state refresh snapshot (turn finished, backlog backfill) built
+      // before the host processed the send lacks the message; the ack is still
+      // coming on this connection, so nothing is lost and nothing is restored.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const pendingUser = createPendingUserMessage("action-1", "msg-1");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [pendingUser],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.acceptedActions).toEqual({});
+      expect(result.pendingUserMessages).toEqual([pendingUser]);
+      expect(result.failedSendRestoration).toBeNull();
+      // Nothing was lost, so nothing is stated either.
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("keeps an unconfirmed editUserMessage from the snapshot's own connection pending", () => {
+      const pendingAction = createPendingAction(
+        "action-1",
+        "msg-1",
+        "editUserMessage",
+      );
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.failedSendRestoration).toBeNull();
+    });
+
     it("preserves existing failedSendRestoration and does not overwrite", () => {
       const existingRestore = {
         clientActionId: "action-0",
         content: CONTENT,
         reason: "Prior failure",
+        displacedReason: "Prior failure",
+        stated: false,
       };
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileSnapshotInput = {
@@ -367,12 +467,112 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: existingRestore,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
       const result = reconcileSnapshotChange(input);
 
       expect(result.failedSendRestoration).toEqual(existingRestore);
+      // First writer keeps the slot; the displaced send is SETTLED rather than
+      // parked - no pending action to re-state itself on the next snapshot or
+      // to re-claim the slot once it frees - and its text rides the statement,
+      // since dropping the row takes the last copy with it.
+      expect(result.appendedErrorNotices).toHaveLength(1);
+      expect(result.appendedErrorNotices[0]).toMatchObject({
+        code: "SEND_NOT_RECORDED",
+        severity: "warning",
+        clientActionId: "action-1",
+      });
+      expect(result.appendedErrorNotices[0].message).toContain("Hello");
+      expect(result.pendingActions).toEqual({});
+      expect(result.pendingUserMessages).toEqual([]);
+    });
+
+    it("emits no notice when the restoration claims a free slot", () => {
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.failedSendRestoration?.clientActionId).toBe("action-1");
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+
+    it("keeps a send dispatched on the snapshot's own connection", () => {
+      // Epoch 0 pending, epoch 0 snapshot: the frame was dispatched on THIS
+      // connection and simply outran the snapshot the host built. Its ack is
+      // still deliverable, so absence proves nothing yet.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({ "action-1": pendingAction });
+      expect(result.failedSendRestoration).toBeNull();
+      expect(result.appendedErrorNotices).toEqual([]);
+      expect(result.pendingUserMessages).toEqual(input.pendingUserMessages);
+    });
+
+    it("still settles a live-epoch send the snapshot CONFIRMS", () => {
+      // Presence is authoritative whatever connection dispatched it - the
+      // epoch bar guards conclusions drawn from absence, nothing else.
+      const pendingAction = createPendingAction("action-1", "msg-1", "send");
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const input: ReconcileSnapshotInput = {
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [confirmedMessage],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 0,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        nowMs: 5000,
+      };
+
+      const result = reconcileSnapshotChange(input);
+
+      expect(result.pendingActions).toEqual({});
+      expect(result.acceptedActions).toHaveProperty("action-1");
+      expect(result.appendedErrorNotices).toEqual([]);
     });
 
     it("ignores non-send actions during reconciliation", () => {
@@ -383,6 +583,11 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -403,7 +608,8 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
-        restoreWorktreeStagingRevision: null,
+        accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -428,12 +634,20 @@ describe("chat-queue-reconciler", () => {
             content: CONTENT_2,
             sender: SENDER,
             settings: SETTINGS,
+            accountContext: { type: "PERSONAL" },
+            deliveryPolicy: null,
             timestamp: 1000,
+            restoreWorktreeIntent: null,
           },
         ],
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -469,6 +683,11 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -488,7 +707,8 @@ describe("chat-queue-reconciler", () => {
         sender: SENDER,
         settings: SETTINGS,
         restoreWorktreeIntent: null,
-        restoreWorktreeStagingRevision: null,
+        accountContext: null,
+        deliveryPolicy: null,
         createdAt: 1000,
         connectionEpoch: 0,
       };
@@ -498,6 +718,11 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -527,6 +752,11 @@ describe("chat-queue-reconciler", () => {
         messages: [confirmedMessage],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -541,6 +771,7 @@ describe("chat-queue-reconciler", () => {
     it("never settles a pending send against a managed-command item", () => {
       const managedItem = createManagedCommandQueueItem("queue-managed");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": createPendingAction("action-1", "msg-1", "send"),
         },
@@ -564,6 +795,7 @@ describe("chat-queue-reconciler", () => {
       const managedItem = createManagedCommandQueueItem("queue-managed");
       const promptEcho = createQueueItem("msg-1", CONTENT);
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: {
           "action-1": createPendingAction("action-1", "msg-1", "send"),
         },
@@ -589,6 +821,11 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "running", items: [managedItem] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        connectionEpoch: 1,
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         nowMs: 5000,
       };
 
@@ -604,6 +841,7 @@ describe("chat-queue-reconciler", () => {
     it("prunes accepted actions older than 5 minutes on queue change", () => {
       const pendingAction = createPendingAction("action-1", "msg-1", "send");
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions: { "action-1": pendingAction },
         pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
         queue: {
@@ -636,6 +874,7 @@ describe("chat-queue-reconciler", () => {
         .map((user) => createQueueItem(user.messageId, CONTENT));
 
       const input: ReconcileQueueInput = {
+        acceptedActions: {},
         pendingActions,
         pendingUserMessages: pendingUsers,
         queue: {
@@ -777,6 +1016,10 @@ describe("chat-queue-reconciler", () => {
         messages: [],
         queue: { status: "idle", items: [] },
         failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" as const },
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
         ...overrides,
       };
     }
@@ -789,6 +1032,9 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         content: CONTENT,
         reason: "The message was not recorded before the turn stopped.",
+        displacedReason:
+          "The message was not recorded before the turn stopped.",
+        stated: false,
       });
     });
 
@@ -848,7 +1094,10 @@ describe("chat-queue-reconciler", () => {
         content: CONTENT_2,
         sender: SENDER,
         settings: SETTINGS,
+        accountContext: { type: "PERSONAL" },
+        deliveryPolicy: null,
         timestamp: 1000,
+        restoreWorktreeIntent: null,
       };
       const result = reconcileTurnSettled(
         true,
@@ -866,6 +1115,9 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         content: CONTENT_2,
         reason: "The message was not recorded before the turn stopped.",
+        displacedReason:
+          "The message was not recorded before the turn stopped.",
+        stated: false,
       });
     });
 
@@ -883,6 +1135,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-0",
         content: CONTENT_2,
         reason: "Message was not accepted.",
+        displacedReason: "Message was not accepted.",
+        stated: false,
       };
       const result = reconcileTurnSettled(
         true,
@@ -891,6 +1145,226 @@ describe("chat-queue-reconciler", () => {
 
       expect(result.pendingUserMessages).toEqual([]);
       expect(result.failedSendRestoration).toBe(occupied);
+      // The row is dropped and the slot is taken, so nothing else holds this
+      // send's text - the statement has to carry it.
+      expect(result.appendedErrorNotices).toHaveLength(1);
+      expect(result.appendedErrorNotices[0]).toMatchObject({
+        code: "SEND_NOT_RECORDED",
+        severity: "warning",
+        clientActionId: "action-1",
+      });
+      expect(result.appendedErrorNotices[0].message).toContain("Hello");
+    });
+
+    it("states nothing for a stranded entry already in the transcript", () => {
+      const confirmedMessage: Message = {
+        role: "user",
+        messageId: "msg-1",
+        sender: SENDER,
+        message: { kind: "user", content: CONTENT },
+        timestamp: 1000,
+        sessionAnchor: null,
+      };
+      const result = reconcileTurnSettled(
+        true,
+        settledInput({
+          messages: [confirmedMessage],
+          failedSendRestoration: {
+            clientActionId: "action-0",
+            content: CONTENT_2,
+            reason: "Message was not accepted.",
+            displacedReason: "Message was not accepted.",
+            stated: false,
+          },
+        }),
+      );
+
+      // Stale bookkeeping: the message reached the transcript, so dropping
+      // the row loses nothing and a notice would be pure noise.
+      expect(result.pendingUserMessages).toEqual([]);
+      expect(result.appendedErrorNotices).toEqual([]);
+    });
+  });
+
+  // R13 `-A8bJ`: everything the notice says ABOUT the draft has to be said
+  // before the draft, because the draft is the one part whose extent the
+  // notice does not control. It is verbatim user text of unbounded shape,
+  // rendered pre-wrapped, and the user's next gesture is to select it - so a
+  // clause after it is indistinguishable from a line the user typed.
+  describe("quoted body delimitation", () => {
+    const MULTI_LINE: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "first line" }] },
+        { type: "paragraph", content: [{ type: "text", text: "second line" }] },
+      ],
+    };
+
+    const PREAMBLE =
+      "A message was not recorded, and another unsent message is already " +
+      "waiting in the composer.";
+    const DRIFT =
+      " It was going to run with model gpt-5-codex; the chat uses different " +
+      "settings now, so a resend will not match unless you set them back.";
+    const MARKER = "\n\nCopy the message below to resend it:\n";
+
+    function noticeFor(
+      content: JsonContent,
+      currentSettings: typeof SETTINGS,
+    ): string {
+      return unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content,
+        circumstance: "A message was not recorded",
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          currentSettings,
+          sentAccountContext: null,
+          currentAccountContext: null,
+          sentDeliveryPolicy: null,
+        },
+      }).message;
+    }
+
+    // `-H2bA`: the send that WON the slot got its text back and was told
+    // nothing, while every DISPLACED send got explicit drift and delivery
+    // warnings. That is backwards - the winner's prompt is the one sitting in
+    // the composer ready to be resent, so it is the one that most needs to
+    // hear what changed underneath it. The founding invariant says restored
+    // or stated; drift is invisible under both arms unless spoken.
+    it("qualifies a snapshot-restored prompt with the drift it inherits", () => {
+      const pendingAction: PendingChatAction = {
+        ...createPendingAction("action-1", "msg-1", "send"),
+        connectionEpoch: 0,
+        accountContext: { type: "PERSONAL" },
+      };
+      const result = reconcileSnapshotChange({
+        pendingActions: { "action-1": pendingAction },
+        pendingUserMessages: [createPendingUserMessage("action-1", "msg-1")],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: { ...SETTINGS, model: "gpt-5.6" },
+        currentAccountContext: { type: "TEAM", teamId: "team-7" },
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+        connectionEpoch: 1,
+        nowMs: 5000,
+      });
+
+      const reason = result.failedSendRestoration?.reason ?? "";
+      expect(reason).toContain("Message was not confirmed after reconnect.");
+      expect(reason).toContain("model gpt-5-codex");
+      expect(reason).toContain("billing your personal account");
+    });
+
+    it("qualifies a turn-settled restored prompt with its delivery policy", () => {
+      const restorable: PendingUserMessage = {
+        ...createPendingUserMessage("action-1", "msg-1"),
+        deliveryPolicy: "after_safe_point",
+      };
+      const result = reconcileTurnSettled(true, {
+        pendingActions: {},
+        pendingUserMessages: [restorable],
+        messages: [],
+        queue: { status: "idle", items: [] },
+        failedSendRestoration: null,
+        currentSettings: SETTINGS,
+        currentAccountContext: { type: "PERSONAL" },
+        worktreePartition: (intent) => ({ survivors: intent, swept: null }),
+        acceptedActions: {},
+      });
+
+      const reason = result.failedSendRestoration?.reason ?? "";
+      expect(reason).toContain(
+        "The message was not recorded before the turn stopped.",
+      );
+      // Delivery dies with the action, so a resend takes whatever the submit
+      // gesture implies then - which can interrupt instead of waiting.
+      expect(reason).toContain("after the running turn reached a safe point");
+    });
+
+    // `-G8sh`: a NEW chat's `chat.settings` stays null until the first turn,
+    // and the drift guard short-circuited the WHOLE comparison on that null -
+    // including billing, which was perfectly comparable. So an initial send
+    // displaced while the user switched Personal -> Team said nothing about
+    // which account the resend would charge.
+    //
+    // Consistent with this module's own shape, not a redesign: the drift
+    // record is keyed `keyof ChatRunSettings | "accountContext"` precisely
+    // because billing is NOT a run setting, so it must not share their gate.
+    it("states billing drift even before the chat has any settings", () => {
+      const message = unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content: CONTENT,
+        circumstance: "A message was not recorded",
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          // The new-chat case: nothing has run yet, so there is no current tuple.
+          currentSettings: null,
+          sentAccountContext: { type: "PERSONAL" },
+          currentAccountContext: { type: "TEAM", teamId: "team-7" },
+          sentDeliveryPolicy: null,
+        },
+      }).message;
+
+      expect(message).toContain("billing your personal account");
+    });
+
+    // The other half of the split: run settings still need BOTH sides, because
+    // with one absent there is genuinely nothing to compare.
+    it("says nothing about run settings when the chat has none yet", () => {
+      const message = unrecoverableSendNotice({
+        clientActionId: "action-1",
+        content: CONTENT,
+        circumstance: "A message was not recorded",
+        account: {
+          worktree: NO_WORKTREE_SWEEP,
+          sentSettings: SETTINGS,
+          currentSettings: null,
+          sentAccountContext: { type: "PERSONAL" },
+          currentAccountContext: { type: "PERSONAL" },
+          sentDeliveryPolicy: null,
+        },
+      }).message;
+
+      expect(message).not.toContain("was going to run with");
+    });
+
+    it("ends with the draft, so nothing can be mistaken for it", () => {
+      const message = noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" });
+      const draft = recoveryTextFromContent(MULTI_LINE);
+
+      // The load-bearing assertion: the draft runs to the END. Select from the
+      // marker to the end of the notice and you have the message, exactly.
+      expect(message.endsWith(`${MARKER}${draft}`)).toBe(true);
+      // And the drift clause - the thing that used to trail the draft - is
+      // said ahead of it, where it cannot be read as a line the user typed.
+      expect(message.slice(0, -draft.length)).toContain("model gpt-5-codex");
+    });
+
+    it("puts every clause ahead of the draft in one exact shape", () => {
+      expect(noticeFor(MULTI_LINE, { ...SETTINGS, model: "gpt-5.6" })).toBe(
+        // `MULTI_LINE` is two PARAGRAPHS, so the blank line between them is
+        // `-CUdX`: the serializer separates top-level blocks with `\n\n` and
+        // the quote now does too. This expectation previously read
+        // `first line\nsecond line`, which was the defect - it made a
+        // paragraph break indistinguishable from a hard break in the copy.
+        `${PREAMBLE}${DRIFT}${MARKER}first line\n\nsecond line`,
+      );
+    });
+
+    it("says no more after a draft that needs no clauses", () => {
+      expect(noticeFor(CONTENT, SETTINGS)).toBe(`${PREAMBLE}${MARKER}Hello`);
+    });
+
+    it("omits the marker entirely when there is no draft to quote", () => {
+      const message = noticeFor({ type: "doc", content: [] }, SETTINGS);
+
+      expect(message).not.toContain("Copy the message below");
+      expect(message).toBe(`${PREAMBLE} It had no recoverable content.`);
     });
   });
 });

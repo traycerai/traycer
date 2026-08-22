@@ -3,6 +3,7 @@ export * from "./chat-attachment";
 export * from "./chat-publication-identity";
 export * from "./chat-backup-status";
 export * from "./chat-records";
+export * from "./tui-agent-records";
 export * from "./chat-replica-read";
 export * from "./cloud-chat";
 export * from "./communication-graph";

@@ -18,7 +18,7 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponseV22,
+  ListTerminalsResponseV23,
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -210,18 +210,22 @@ export function useTerminalSessionHandle(
       };
     };
 
-    const next = registry.acquire(args.instanceId, () => {
-      const creationConfig = creationConfigRef.current;
-      return createTerminalSessionStore({
-        scope,
-        sessionId: args.sessionId,
-        cols: creationConfig.cols,
-        rows: creationConfig.rows,
-        reattachMode: creationConfig.reattachMode,
-        kind: args.kind,
-        streamClientFactory: factory,
-      });
-    });
+    const next = registry.acquire(
+      args.instanceId,
+      () => {
+        const creationConfig = creationConfigRef.current;
+        return createTerminalSessionStore({
+          scope,
+          sessionId: args.sessionId,
+          cols: creationConfig.cols,
+          rows: creationConfig.rows,
+          reattachMode: creationConfig.reattachMode,
+          kind: args.kind,
+          streamClientFactory: factory,
+        });
+      },
+      args.hostId,
+    );
     handleHostIds.set(next, args.hostId);
     handleOwnerIdentityKeys.set(next, ownerIdentityKey);
     setHandle(next);
@@ -278,7 +282,7 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponseV22>(
+        queryClient.setQueriesData<ListTerminalsResponseV23>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;

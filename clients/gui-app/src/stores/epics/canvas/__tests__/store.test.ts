@@ -38,6 +38,15 @@ import {
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import { appLogger } from "@/lib/logger";
 import { isBlankTileRef } from "@/stores/epics/canvas/types";
+import {
+  acceptEpicTerminalDurableCreate,
+  peekEpicTerminalDurableCreate,
+  resetEpicTerminalDurableCreatesForTests,
+} from "@/lib/terminals/epic-terminal-durable-create-coordinator";
+import {
+  hasTerminalPendingCreate,
+  terminalPendingCreateMarker,
+} from "@/lib/terminals/pending-create-identity";
 import { epicCanvasKey } from "@/lib/persist";
 import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import type {
@@ -83,7 +92,16 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
+  resetEpicTerminalDurableCreatesForTests();
 });
+
+function hasPendingTerminal(hostId: string, terminalId: string): boolean {
+  return hasTerminalPendingCreate(
+    useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+    hostId,
+    terminalId,
+  );
+}
 
 function requireTab(tabId: string): EpicViewTab {
   const tab = useEpicCanvasStore.getState().tabsById[tabId];
@@ -1195,7 +1213,7 @@ describe("makeSelectIsActiveTile", () => {
     // never become `lastFocusedArtifactId`), which is exactly why the PR panel
     // cannot reuse it to light up its row.
     expect(makeSelectActiveEpicArtifactId(tabId)(state)).toBeNull();
-    expect(makeSelectIsActiveTile(tabId, tile.id)(state)).toBe(true);
+    expect(makeSelectIsActiveTile(tabId, tile.id, null)(state)).toBe(true);
   });
 
   it("is false for another tile, a null id, and an unknown tab", () => {
@@ -1220,10 +1238,14 @@ describe("makeSelectIsActiveTile", () => {
     store.openTileInTab(tabId, shown);
 
     const state = useEpicCanvasStore.getState();
-    expect(makeSelectIsActiveTile(tabId, hidden.id)(state)).toBe(false);
-    expect(makeSelectIsActiveTile(tabId, null)(state)).toBe(false);
-    expect(makeSelectIsActiveTile(undefined, shown.id)(state)).toBe(false);
-    expect(makeSelectIsActiveTile("tab-missing", shown.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(tabId, hidden.id, null)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(tabId, null, null)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(undefined, shown.id, null)(state)).toBe(
+      false,
+    );
+    expect(makeSelectIsActiveTile("tab-missing", shown.id, null)(state)).toBe(
+      false,
+    );
   });
 
   it("follows the ACTIVE pane, so a tile parked in the other pane is not active", () => {
@@ -1261,8 +1283,55 @@ describe("makeSelectIsActiveTile", () => {
     // user is looking at and `left` is parked beside it.
     expect(requireCanvas(tabId).activePaneId).toBe(otherPaneId);
     const state = useEpicCanvasStore.getState();
-    expect(makeSelectIsActiveTile(tabId, right.id)(state)).toBe(true);
-    expect(makeSelectIsActiveTile(tabId, left.id)(state)).toBe(false);
+    expect(makeSelectIsActiveTile(tabId, right.id, null)(state)).toBe(true);
+    expect(makeSelectIsActiveTile(tabId, left.id, null)(state)).toBe(false);
+  });
+
+  it("does not treat a same-id terminal on another host as the active tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-fleet-active", "Fleet");
+    const sharedId = "shared-term";
+    const hostA: EpicCanvasTileRef = {
+      id: sharedId,
+      instanceId: "inst-host-a",
+      type: "terminal",
+      name: "Host A shell",
+      hostId: "host-a",
+      authority: "host",
+      legacyFallback: {
+        name: "Host A shell",
+        titleSource: "manual",
+        cwd: "/a",
+      },
+    };
+    const hostB: EpicCanvasTileRef = {
+      id: sharedId,
+      instanceId: "inst-host-b",
+      type: "terminal",
+      name: "Host B shell",
+      hostId: "host-b",
+      authority: "host",
+      legacyFallback: {
+        name: "Host B shell",
+        titleSource: "manual",
+        cwd: "/b",
+      },
+    };
+    store.openTileInTab(tabId, hostA);
+    const sourcePaneId = requireCanvas(tabId).activePaneId;
+    if (sourcePaneId === null) throw new Error("expected an active pane");
+    const otherPaneId = useEpicCanvasStore
+      .getState()
+      .splitPaneEmptyRightInTab(tabId, sourcePaneId);
+    if (otherPaneId === null) throw new Error("expected a second pane");
+    useEpicCanvasStore.getState().openTileInPane(tabId, otherPaneId, hostB);
+
+    const state = useEpicCanvasStore.getState();
+    expect(makeSelectIsActiveTile(tabId, sharedId, "host-b")(state)).toBe(true);
+    expect(makeSelectIsActiveTile(tabId, sharedId, "host-a")(state)).toBe(
+      false,
+    );
+    expect(makeSelectIsActiveTile(tabId, sharedId, null)(state)).toBe(true);
   });
 });
 
@@ -1446,6 +1515,46 @@ describe("closedTilePayloadsByTabId", () => {
     ).toBeUndefined();
   });
 
+  it("preserves pending-create for an accepted durable terminal when the tab closes", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pending-terminal", "Pending Term");
+    const terminal: EpicCanvasTileRef = {
+      id: "term-pending-create",
+      instanceId: "inst-pending-create",
+      type: "terminal",
+      name: "Pending create",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Pending create",
+        titleSource: "default",
+        cwd: "/repo",
+      },
+    };
+    acceptEpicTerminalDurableCreate({
+      hostId: TEST_HOST_ID,
+      terminalId: terminal.id,
+      epicId: "epic-pending-terminal",
+      cwd: "/repo",
+      cols: 80,
+      rows: 24,
+    });
+    store.markTerminalPendingCreate(TEST_HOST_ID, terminal.id);
+    store.openTileInTab(tabId, terminal);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, terminal.instanceId);
+
+    expect(hasPendingTerminal(TEST_HOST_ID, terminal.id)).toBe(true);
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        terminal.instanceId
+      ],
+    ).toBeUndefined();
+  });
+
   it("keeps pending-create state with a cached tile until the create flow unmarks it", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-pending-payload", "Pending Payload");
@@ -1489,17 +1598,13 @@ describe("closedTilePayloadsByTabId", () => {
         cwd: "/repo",
       },
     };
-    store.markArtifactPendingCreate(terminal.id);
+    store.markTerminalPendingCreate(TEST_HOST_ID, terminal.id);
     store.openTileInTab(tabId, terminal);
-    expect(
-      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
-    ).toBe(true);
+    expect(hasPendingTerminal(TEST_HOST_ID, terminal.id)).toBe(true);
 
     store.removeHostTerminalRefs(TEST_HOST_ID, terminal.id);
 
-    expect(
-      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(terminal.id),
-    ).toBe(false);
+    expect(hasPendingTerminal(TEST_HOST_ID, terminal.id)).toBe(false);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
         terminal.instanceId
@@ -1613,6 +1718,297 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId],
     ).toBeUndefined();
+  });
+
+  it("scopes terminal pending-create and closed-payload recovery by owner host", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-host-scope", "Host Scope");
+    const sharedId = "term-shared";
+    const otherHostId = "host-other";
+    const terminalA: EpicCanvasTileRef = {
+      id: sharedId,
+      instanceId: "inst-shared-a",
+      type: "terminal",
+      name: "Host A",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Host A",
+        titleSource: "default",
+        cwd: "/repo-a",
+      },
+    };
+    const terminalB: EpicCanvasTileRef = {
+      id: sharedId,
+      instanceId: "inst-shared-b",
+      type: "terminal",
+      name: "Host B",
+      hostId: otherHostId,
+      authority: "host",
+      legacyFallback: {
+        name: "Host B",
+        titleSource: "default",
+        cwd: "/repo-b",
+      },
+    };
+    store.openTileInTab(tabId, SPEC_B);
+    store.openTileInTab(tabId, terminalA);
+    store.openTileInTab(tabId, terminalB);
+    acceptEpicTerminalDurableCreate({
+      hostId: TEST_HOST_ID,
+      terminalId: sharedId,
+      epicId: "epic-host-scope",
+      cwd: "/repo-a",
+      cols: 80,
+      rows: 24,
+    });
+    acceptEpicTerminalDurableCreate({
+      hostId: otherHostId,
+      terminalId: sharedId,
+      epicId: "epic-host-scope",
+      cwd: "/repo-b",
+      cols: 80,
+      rows: 24,
+    });
+    store.markTerminalPendingCreate(TEST_HOST_ID, sharedId);
+    store.markTerminalPendingCreate(otherHostId, sharedId);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, terminalA.instanceId);
+    store.closeCanvasTab(tabId, paneId, terminalB.instanceId);
+    store.unmarkTerminalPendingCreate(TEST_HOST_ID, sharedId);
+
+    expect(hasPendingTerminal(TEST_HOST_ID, sharedId)).toBe(false);
+    expect(hasPendingTerminal(otherHostId, sharedId)).toBe(true);
+    const afterUnmark = useEpicCanvasStore.getState();
+    expect(
+      afterUnmark.closedTilePayloadsByTabId[tabId]?.[terminalA.instanceId]
+        ?.pendingCreate,
+    ).toBe(false);
+    expect(
+      afterUnmark.closedTilePayloadsByTabId[tabId]?.[terminalB.instanceId]
+        ?.pendingCreate,
+    ).toBe(true);
+
+    store.restoreClosedTilePreview(tabId, paneId, terminalB);
+    expect(hasPendingTerminal(otherHostId, sharedId)).toBe(true);
+  });
+
+  it("purges durable-create jobs on closeTabsForEpics without touching another Epic", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabA = store.openEpicTab("epic-purge-a", "Purge A");
+    const tabB = store.openEpicTab("epic-purge-b", "Purge B");
+    const terminalA: EpicCanvasTileRef = {
+      id: "term-purge-a",
+      instanceId: "inst-purge-a",
+      type: "terminal",
+      name: "Purge A",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Purge A",
+        titleSource: "default",
+        cwd: "/repo-a",
+      },
+    };
+    const terminalB: EpicCanvasTileRef = {
+      id: "term-purge-b",
+      instanceId: "inst-purge-b",
+      type: "terminal",
+      name: "Purge B",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Purge B",
+        titleSource: "default",
+        cwd: "/repo-b",
+      },
+    };
+    acceptEpicTerminalDurableCreate({
+      hostId: TEST_HOST_ID,
+      terminalId: terminalA.id,
+      epicId: "epic-purge-a",
+      cwd: "/repo-a",
+      cols: 80,
+      rows: 24,
+    });
+    acceptEpicTerminalDurableCreate({
+      hostId: TEST_HOST_ID,
+      terminalId: terminalB.id,
+      epicId: "epic-purge-b",
+      cwd: "/repo-b",
+      cols: 80,
+      rows: 24,
+    });
+    store.markTerminalPendingCreate(TEST_HOST_ID, terminalA.id);
+    store.markTerminalPendingCreate(TEST_HOST_ID, terminalB.id);
+    store.openTileInTab(tabA, terminalA);
+    store.openTileInTab(tabB, terminalB);
+
+    store.closeTabsForEpics(["epic-purge-a"]);
+
+    expect(
+      peekEpicTerminalDurableCreate(TEST_HOST_ID, terminalA.id),
+    ).toBeNull();
+    expect(
+      peekEpicTerminalDurableCreate(TEST_HOST_ID, terminalB.id)?.status,
+    ).toBe("accepted");
+    expect(hasPendingTerminal(TEST_HOST_ID, terminalA.id)).toBe(false);
+    expect(hasPendingTerminal(TEST_HOST_ID, terminalB.id)).toBe(true);
+
+    acceptEpicTerminalDurableCreate({
+      hostId: TEST_HOST_ID,
+      terminalId: terminalA.id,
+      epicId: "epic-purge-a",
+      cwd: "/repo-a",
+      cols: 80,
+      rows: 24,
+    });
+    expect(
+      peekEpicTerminalDurableCreate(TEST_HOST_ID, terminalA.id)?.status,
+    ).toBe("accepted");
+  });
+
+  it("does not treat a chat/artifact pending id as a terminal pending identity", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-cross-kind", "Cross Kind");
+    const sharedId = "shared-kind-id";
+    const terminal: EpicCanvasTileRef = {
+      id: sharedId,
+      instanceId: "inst-cross-kind-term",
+      type: "terminal",
+      name: "Term",
+      hostId: TEST_HOST_ID,
+      authority: "host",
+      legacyFallback: {
+        name: "Term",
+        titleSource: "default",
+        cwd: "/repo",
+      },
+    };
+    store.markArtifactPendingCreate(sharedId);
+    store.markTerminalPendingCreate(TEST_HOST_ID, sharedId);
+    store.openTileInTab(tabId, terminal);
+    store.openTileInTab(tabId, {
+      id: sharedId,
+      instanceId: "inst-cross-kind-spec",
+      type: "spec",
+      name: "Spec",
+      hostId: TEST_HOST_ID,
+    });
+
+    expect(hasPendingTerminal(TEST_HOST_ID, sharedId)).toBe(true);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(sharedId),
+    ).toBe(true);
+
+    store.unmarkTerminalPendingCreate(TEST_HOST_ID, sharedId);
+    expect(hasPendingTerminal(TEST_HOST_ID, sharedId)).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(sharedId),
+    ).toBe(true);
+
+    store.unmarkArtifactPendingCreate(sharedId);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(sharedId),
+    ).toBe(false);
+    expect(hasPendingTerminal(TEST_HOST_ID, sharedId)).toBe(false);
+  });
+
+  it("does not claim a canonical terminal key stored as an artifact pending id", () => {
+    const store = useEpicCanvasStore.getState();
+    const canonical = terminalPendingCreateMarker(
+      TEST_HOST_ID,
+      "term-canonical",
+    );
+    store.markArtifactPendingCreate(canonical);
+    expect(hasPendingTerminal(TEST_HOST_ID, "term-canonical")).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(canonical),
+    ).toBe(true);
+    store.unmarkTerminalPendingCreate(TEST_HOST_ID, "term-canonical");
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(canonical),
+    ).toBe(true);
+  });
+
+  it("keeps NUL-containing host/terminal identities distinct through close, restore, and discard", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-nul-identity", "NUL identity");
+    const left: EpicCanvasTileRef = {
+      id: "c",
+      instanceId: "inst-nul-left",
+      type: "terminal",
+      name: "Left",
+      hostId: "a\u0000b",
+      authority: "host",
+      legacyFallback: {
+        name: "Left",
+        titleSource: "default",
+        cwd: "/left",
+      },
+    };
+    const right: EpicCanvasTileRef = {
+      id: "b\u0000c",
+      instanceId: "inst-nul-right",
+      type: "terminal",
+      name: "Right",
+      hostId: "a",
+      authority: "host",
+      legacyFallback: {
+        name: "Right",
+        titleSource: "default",
+        cwd: "/right",
+      },
+    };
+    acceptEpicTerminalDurableCreate({
+      hostId: left.hostId,
+      terminalId: left.id,
+      epicId: "epic-nul-identity",
+      cwd: "/left",
+      cols: 80,
+      rows: 24,
+    });
+    acceptEpicTerminalDurableCreate({
+      hostId: right.hostId,
+      terminalId: right.id,
+      epicId: "epic-nul-identity",
+      cwd: "/right",
+      cols: 80,
+      rows: 24,
+    });
+    store.openTileInTab(tabId, SPEC_B);
+    store.openTileInTab(tabId, left);
+    store.openTileInTab(tabId, right);
+    store.markTerminalPendingCreate(left.hostId, left.id);
+    store.markTerminalPendingCreate(right.hostId, right.id);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, left.instanceId);
+    store.closeCanvasTab(tabId, paneId, right.instanceId);
+    expect(hasPendingTerminal(left.hostId, left.id)).toBe(true);
+    expect(hasPendingTerminal(right.hostId, right.id)).toBe(true);
+
+    store.unmarkTerminalPendingCreate(left.hostId, left.id);
+    expect(hasPendingTerminal(left.hostId, left.id)).toBe(false);
+    expect(hasPendingTerminal(right.hostId, right.id)).toBe(true);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        left.instanceId
+      ]?.pendingCreate,
+    ).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        right.instanceId
+      ]?.pendingCreate,
+    ).toBe(true);
+
+    store.restoreClosedTilePreview(tabId, paneId, right);
+    expect(hasPendingTerminal(right.hostId, right.id)).toBe(true);
+    store.unmarkTerminalPendingCreate(right.hostId, right.id);
+    expect(hasPendingTerminal(right.hostId, right.id)).toBe(false);
   });
 
   it("FIFO-evicts the oldest closed-tile payload past the per-tab cap of 20", () => {

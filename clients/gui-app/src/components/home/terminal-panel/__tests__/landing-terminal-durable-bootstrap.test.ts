@@ -7,7 +7,7 @@ import {
   type LandingTerminalDurableBootstrapAction,
 } from "@/components/home/terminal-panel/landing-terminal-durable-bootstrap";
 
-type RuntimeStatus = "running" | "dormant" | "missing";
+type RuntimeStatus = "running" | "dormant" | "unknown" | "missing";
 
 function projection(status: "running" | "dormant"): PlainTerminalProjection {
   return {
@@ -61,6 +61,23 @@ describe("durable landing-terminal bootstrap", () => {
     expect(
       resolveLandingTerminalDurableBootstrapAction({
         projectionStatus: "dormant",
+        pendingCreate: false,
+        active: true,
+      }),
+    ).toBe("ensure-running");
+  });
+
+  it("treats unknown runtime state as unavailable rather than dormant and probes it when active", () => {
+    expect(
+      resolveLandingTerminalDurableBootstrapAction({
+        projectionStatus: "unknown",
+        pendingCreate: false,
+        active: false,
+      }),
+    ).toBe("none");
+    expect(
+      resolveLandingTerminalDurableBootstrapAction({
+        projectionStatus: "unknown",
         pendingCreate: false,
         active: true,
       }),

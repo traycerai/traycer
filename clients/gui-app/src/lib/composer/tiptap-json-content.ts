@@ -33,6 +33,31 @@ const LEADING_SLASH_COMMAND_REGEX =
 // one definition whether the indent shares the trigger's node or not.
 const INDENT_ONLY_REGEX = /^[ \t]*$/;
 
+/**
+ * Whether the leading-token scan reads THROUGH this node instead of settling
+ * its leading token on it.
+ *
+ * Every member projects to nothing the regex above would refuse in front of a
+ * trigger: an indent-only text node is the `[ \t]*` the regex itself accepts,
+ * and the attachment atoms project to `""` outright ({@link plainTextFromNode}
+ * returns the empty string for both). So passing over one cannot change what
+ * the prompt reads at its leading position - which is why the scan may, and
+ * must, keep going.
+ *
+ * Exported because `content-recovery` has to answer the same question about a
+ * slash chip - "is it in the position the converter rebuilds from?" - and
+ * answering it by hand-mirroring this scan has now drifted TWICE: a chip in a
+ * leading blockquote, then a chip behind an indent-only text node, which the
+ * classifier called lost while this scan happily chipped it. A mirror drifts;
+ * a shared predicate cannot. Consume this rather than restating it.
+ */
+export function isTransparentToLeadingScan(node: JsonContent): boolean {
+  if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
+    return true;
+  }
+  return node.type === "text" && INDENT_ONLY_REGEX.test(node.text ?? "");
+}
+
 const ARTIFACT_CONTEXT_TYPES: ReadonlyArray<EpicArtifactKind> = [
   "spec",
   "ticket",
@@ -97,7 +122,7 @@ export function extractPlainTextFromComposerJSONContent(
 ): string {
   return plainTextFromNodes(content.content ?? []);
 }
-function collectMentionAttachmentsFromJSONContent(
+export function collectMentionAttachmentsFromJSONContent(
   content: JsonContent,
 ): MentionAttachment[] {
   return dedupeMentions(
@@ -345,13 +370,11 @@ function textWithLeadingSlashCommandNode(
   node: JsonContent,
   state: LeadingSlashScanState,
 ): JsonContent[] {
+  // Indent-only text never reaches here - the caller reads through it via
+  // `isTransparentToLeadingScan`, which owns that rule for every node kind at
+  // once. So a text node arriving here carries something, and whatever it
+  // starts with IS the leading token.
   const text = node.text ?? "";
-  // Indent, not the leading token. Formatting splits a run, so a marked `"   "`
-  // can sit before the trigger; the editor and the host's prompt trim both read
-  // straight through those spaces, and ending the scan here would hide the
-  // trigger in the next node entirely. Same `[ \t]` the leading regex calls
-  // indent - a hard break is a different node type and still ends the line.
-  if (INDENT_ONLY_REGEX.test(text)) return [node];
   state.complete = true;
   const parsed = parseLeadingSlashCommand(text);
   if (parsed === null) return [node];
@@ -384,9 +407,10 @@ function nodeWithLeadingSlashCommandNode(
   state: LeadingSlashScanState,
 ): JsonContent[] {
   if (state.complete) return [node];
-  if (node.type === "imageAttachment" || node.type === "attachmentGroup") {
-    return [node];
-  }
+  // Read through, don't settle on. One predicate for both members - the atoms
+  // that project to nothing and the indent the regex accepts - so the text
+  // branch below never has to re-ask.
+  if (isTransparentToLeadingScan(node)) return [node];
   if (node.type === "slashCommand") {
     state.complete = true;
     return [node];

@@ -95,6 +95,41 @@ describe("toastFromHostError", () => {
     );
   });
 
+  // The host's epic role gates state the missing role in a fixed phrase
+  // (`auth-helpers.ts`: "User 'x' does not have editor|owner access to ...").
+  // Branching on it turns "You don't have permission to do that." - the toast
+  // a viewer got for clicking Clone on a shared agent, indistinguishable from
+  // a bug - into the reason. The raw ids in the host text stay out of the
+  // toast.
+  it("names view-only access when the host's editor gate refused", () => {
+    toastFromHostError(
+      makeError(
+        "FORBIDDEN",
+        "User 'user-2' does not have editor access to epic 'epic-1'",
+      ),
+      "Couldn't create agent.",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "You have view-only access to this task, so you can't make changes to it.",
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("user-2"),
+    );
+  });
+
+  it("names the owner requirement when the host's owner gate refused", () => {
+    toastFromHostError(
+      makeError(
+        "FORBIDDEN",
+        "User 'user-2' does not have owner access to epic 'epic-1'",
+      ),
+      "fallback",
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Only this task's owner can do that.",
+    );
+  });
+
   it("shows sign-in copy for UNAUTHORIZED", () => {
     toastFromHostError(makeError("UNAUTHORIZED", "test error"), "fallback");
     expect(toast.error).toHaveBeenCalledWith("Please sign in again.");

@@ -31,6 +31,8 @@ import {
   worktreeListAllForHostResponseSchemaV14,
   worktreeListAllForHostRequestSchemaV15,
   worktreeListAllForHostResponseSchemaV15,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
   worktreeListBindingsForEpicResponseSchemaV11,
   worktreeListBindingsForEpicResponseSchemaV12,
   worktreeListByWorkspacePathsRequestSchemaV11,
@@ -56,6 +58,7 @@ const V12 = { major: 1, minor: 2 } as const;
 const V13 = { major: 1, minor: 3 } as const;
 const V14 = { major: 1, minor: 4 } as const;
 const V15 = { major: 1, minor: 5 } as const;
+const V16 = { major: 1, minor: 6 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
 const listByWorkspacePathsRegistry =
@@ -896,8 +899,8 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     ).not.toHaveProperty("resolvedAt");
   });
 
-  it("exposes v1.5 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(5);
+  it("exposes v1.6 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(6);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
@@ -905,6 +908,7 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
       "3",
       "4",
       "5",
+      "6",
     ]);
   });
 
@@ -979,6 +983,52 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     expect(
       worktreeListAllForHostResponseSchemaV14.parse(upgraded).worktrees[0],
     ).not.toHaveProperty("presence");
+  });
+
+  it("upgrades v1.5 to v1.6 defaulting gitUnreadable to false", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V15, V16, request),
+    ).toEqual(request);
+    expect(worktreeListAllForHostRequestSchemaV16.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+          resolvedAt: 1_700_000_000_000,
+          presence: "present" as const,
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V15,
+      V16,
+      response,
+    );
+    expect(upgraded.worktrees[0].gitUnreadable).toBe(false);
+    expect(worktreeListAllForHostResponseSchemaV16.parse(upgraded)).toEqual(
+      upgraded,
+    );
+    expect(
+      worktreeListAllForHostResponseSchemaV15.parse(upgraded).worktrees[0],
+    ).not.toHaveProperty("gitUnreadable");
   });
 });
 

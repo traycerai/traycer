@@ -38,6 +38,16 @@ export function publishedChatLockReason(input: {
    * cross-host one.
    */
   readonly ownerIsThisHost: boolean;
+  /**
+   * Whether the chat belongs to the signed-in viewer. `false` is a
+   * collaborator's shared chat, and it outranks both reachability arms: the
+   * owner's machine can never appear in this account's host directory, so
+   * "which is offline" asserts liveness this device cannot observe,
+   * `ownerLabel` has fallen back to a raw host id, and "sending resumes"
+   * promises a composer this viewer does not get. `true` when the owner is
+   * unknown - only a positive mismatch may flip the sentence.
+   */
+  readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
   readonly fidelityNotice: string | null;
@@ -74,6 +84,8 @@ export function replicaChatLockReason(input: {
   readonly ownerIsReachable: boolean;
   /** Same fact, same reason, as `publishedChatLockReason`'s. */
   readonly ownerIsThisHost: boolean;
+  /** Same fact, same reason, as `publishedChatLockReason`'s. */
+  readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
   readonly unreadableCount: number;
 }): string {
@@ -112,8 +124,17 @@ export function replicaChatLockReason(input: {
 function publishedCopySentence(input: {
   readonly ownerIsReachable: boolean;
   readonly ownerIsThisHost: boolean;
+  readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
 }): string {
+  // A collaborator's chat, checked before either reachability arm: every
+  // clause below it is written for the viewer's own fleet (see the
+  // `ownedByViewer` doc above) and turns false for a machine this account
+  // cannot observe. Aligned with the dead-tile banner's foreign-owner
+  // sentence, which sits directly above this footer.
+  if (!input.ownedByViewer) {
+    return `This agent belongs to another collaborator — showing the last published copy. It isn't available live from here.`;
+  }
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing the last published copy. Sending resumes when that host is back.`;
   }
@@ -127,8 +148,13 @@ function publishedCopySentence(input: {
 function replicaCopySentence(input: {
   readonly ownerIsReachable: boolean;
   readonly ownerIsThisHost: boolean;
+  readonly ownedByViewer: boolean;
   readonly ownerLabel: string;
 }): string {
+  // Same precedence, same reason, as `publishedCopySentence`'s foreign arm.
+  if (!input.ownedByViewer) {
+    return `This agent belongs to another collaborator — showing this device's synced copy. It isn't available live from here.`;
+  }
   if (!input.ownerIsReachable) {
     return `This agent lives on ${input.ownerLabel}, which is offline — showing this device's synced copy. Sending resumes when that host is back.`;
   }

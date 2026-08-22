@@ -10,6 +10,18 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 
+/**
+ * Presentation-only stale window for the title/context readers of
+ * `epic.getTaskContexts`. These callers render a Task title next to an id;
+ * nothing they show is destructive and nothing they show is time-critical, so
+ * a fetch per mount buys nothing. Deliberately much longer than the existence
+ * reconciler's window (`epic-tab-existence-reconciler.tsx`), which is the one
+ * consumer whose freshness has consequences. A rename still lands promptly:
+ * the epic's own Y.Doc drives every surface that shows a live title, and this
+ * batch only backfills ids no cloud-tasks page has cached.
+ */
+export const TASK_CONTEXT_TITLE_STALE_TIME_MS = 5 * 60_000;
+
 export interface EpicTaskContexts {
   readonly tasksById: ReadonlyMap<string, ListTaskLight>;
   readonly isFetching: boolean;
@@ -45,7 +57,10 @@ export function useEpicGetTaskContexts(
     client,
     requests,
     cacheKeyIdentity: userId === null ? undefined : userId,
-    options: { enabled: userId !== null && taskIds.length > 0 },
+    options: {
+      enabled: userId !== null && taskIds.length > 0,
+      staleTime: TASK_CONTEXT_TITLE_STALE_TIME_MS,
+    },
     combine: combineTaskContextResults,
   });
 }

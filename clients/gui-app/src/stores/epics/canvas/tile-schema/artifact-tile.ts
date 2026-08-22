@@ -43,6 +43,36 @@ function isDesktopJsonValue(value: unknown): value is DesktopJsonValue {
 // exact `"provider-login"` marker suppresses the tile's own `terminal.create`.
 // `"setup"` skips durable import but may still recreate as an ordinary shell.
 // An unrecognized future value degrades to the safe, existing behaviour.
+function parseTerminalLifecycleOwner(
+  value: unknown,
+): EpicTerminalRef["lifecycleOwner"] {
+  if (value === "registry" || value === "manager") return value;
+  return undefined;
+}
+
+function terminalProvenanceFields(
+  value: Record<string, unknown>,
+): Pick<EpicTerminalRef, "origin" | "originProviderId" | "lifecycleOwner"> {
+  const lifecycleOwner = parseTerminalLifecycleOwner(value.lifecycleOwner);
+  return {
+    origin: parseTerminalOrigin(value.origin),
+    originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+    ...(lifecycleOwner === undefined ? {} : { lifecycleOwner }),
+  };
+}
+
+function serializeTerminalProvenance(node: EpicTerminalRef): {
+  readonly origin: string | null;
+  readonly originProviderId: string | null;
+  readonly lifecycleOwner: string | null;
+} {
+  return {
+    origin: node.origin ?? null,
+    originProviderId: node.originProviderId ?? null,
+    lifecycleOwner: node.lifecycleOwner ?? null,
+  };
+}
+
 function parseTerminalOrigin(value: unknown): EpicTerminalRef["origin"] {
   if (value === "shell" || value === "provider-login" || value === "setup") {
     return value;
@@ -121,8 +151,7 @@ function parseEpicTerminalNodeRef(
       hostId: identity.hostId,
       authority: "host",
       legacyFallback,
-      origin: parseTerminalOrigin(value.origin),
-      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+      ...terminalProvenanceFields(value),
     };
   }
   // Only a genuinely absent discriminator is legacy import evidence. A future
@@ -143,8 +172,7 @@ function parseEpicTerminalNodeRef(
       authority: "unsupported",
       rawAuthority: value.authority,
       legacyFallback: compatibleFallback,
-      origin: parseTerminalOrigin(value.origin),
-      originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+      ...terminalProvenanceFields(value),
     };
   }
   return {
@@ -155,8 +183,7 @@ function parseEpicTerminalNodeRef(
     titleSource: compatibleFallback.titleSource,
     hostId: identity.hostId,
     cwd: compatibleFallback.cwd,
-    origin: parseTerminalOrigin(value.origin),
-    originProviderId: parseTerminalOriginProviderId(value.originProviderId),
+    ...terminalProvenanceFields(value),
   };
 }
 
@@ -241,8 +268,7 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
           shellCommand: node.legacyFallback.shellCommand ?? null,
           shellArgs: node.legacyFallback.shellArgs ?? null,
         },
-        origin: node.origin ?? null,
-        originProviderId: node.originProviderId ?? null,
+        ...serializeTerminalProvenance(node),
       };
     }
     if (node.authority === "unsupported") {
@@ -264,8 +290,7 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
           shellCommand: node.legacyFallback.shellCommand ?? null,
           shellArgs: node.legacyFallback.shellArgs ?? null,
         },
-        origin: node.origin ?? null,
-        originProviderId: node.originProviderId ?? null,
+        ...serializeTerminalProvenance(node),
       };
     }
     return {
@@ -280,8 +305,7 @@ function serializeEpicNodeRef(node: EpicNodeRef): DesktopJsonValue {
       // serializer does not name, so omitting this here would silently turn
       // every sign-in tile back into a plain shell tile across a reload - the
       // exact failure the marker exists to prevent.
-      origin: node.origin ?? null,
-      originProviderId: node.originProviderId ?? null,
+      ...serializeTerminalProvenance(node),
     };
   }
   return {

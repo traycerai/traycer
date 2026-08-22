@@ -226,17 +226,51 @@ const liveArtifactTitleMock = vi.hoisted(() => ({
   title: null as string | null,
 }));
 
+interface LiveAgentMockEntry {
+  readonly kind: "chat" | "terminal-agent";
+  readonly title: string | null;
+  readonly hostId: string | null;
+}
+
+const liveAgentsMock = vi.hoisted(() => {
+  const byAgentId: Record<string, LiveAgentMockEntry> = {};
+  return { byAgentId };
+});
+
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicLiveArtifactTitle: (
     _epicId: string,
     artifactId: string | null,
   ) => (artifactId === "chat-1" ? liveArtifactTitleMock.title : null),
-  useRegisteredEpicLiveArtifactTitles: (
-    refs: readonly { readonly artifactId: string | null }[],
+  useRegisteredEpicLiveAgents: (
+    refs: readonly {
+      readonly epicId: string;
+      readonly agentId: string | null;
+    }[],
   ) =>
-    refs.map((ref) =>
-      ref.artifactId === "chat-1" ? liveArtifactTitleMock.title : null,
-    ),
+    refs.map((ref) => {
+      if (
+        ref.agentId !== null &&
+        Object.hasOwn(liveAgentsMock.byAgentId, ref.agentId)
+      ) {
+        return liveAgentsMock.byAgentId[ref.agentId];
+      }
+      // `null` stands for "this window has no live projection for the epic",
+      // the state the canvas-record path exists to cover. An EMPTY title is a
+      // live agent that is merely untitled, and the real hook normalizes that
+      // to `title: null` - not to an absent agent.
+      if (ref.agentId === "chat-1" && liveArtifactTitleMock.title !== null) {
+        return {
+          kind: "chat" as const,
+          title:
+            liveArtifactTitleMock.title === ""
+              ? null
+              : liveArtifactTitleMock.title,
+          hostId: null,
+        };
+      }
+      return null;
+    }),
 }));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
@@ -392,7 +426,7 @@ const canvasMock = vi.hoisted(() => {
             hostId: "host-1",
             cwd: "/work",
           },
-        },
+        } as Record<string, Record<string, unknown>>,
         sizesByGroupId: {},
       },
       "tab-2": {
@@ -792,14 +826,21 @@ afterEach(() => {
   navigateNestedMock.mockClear();
   historyNavAvailableMock.enabled = true;
   liveArtifactTitleMock.title = null;
-  canvasMock.state.canvasByTabId["tab-1"].tilesByInstanceId["tile-term-1"] = {
-    id: "term-1",
-    instanceId: "tile-term-1",
-    type: "terminal",
-    name: "Terminal Alpha",
-    titleSource: "manual",
-    hostId: "host-1",
-    cwd: "/work",
+  liveAgentsMock.byAgentId = {};
+  const tab1Canvas = canvasMock.state.canvasByTabId["tab-1"];
+  tab1Canvas.root.tabInstanceIds = ["tile-term-1"];
+  tab1Canvas.root.activeTabId = "tile-term-1";
+  tab1Canvas.root.activationHistory = ["tile-term-1"];
+  tab1Canvas.tilesByInstanceId = {
+    "tile-term-1": {
+      id: "term-1",
+      instanceId: "tile-term-1",
+      type: "terminal",
+      name: "Terminal Alpha",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/work",
+    },
   };
   canvasMock.state.artifactTreeByEpicId["epic-1"][0] = {
     ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
@@ -2396,7 +2437,9 @@ describe("ResourceMonitorPopover", () => {
       }),
       {
         ...emptyPlainTerminalCollection(),
-        deletedRevisionById: { "term-tombstoned": 2 },
+        deletedRevisionByIdentity: {
+          [JSON.stringify(["host-1", "term-tombstoned"])]: 2,
+        },
         projectionSequence: 1,
       },
     );
@@ -2611,6 +2654,242 @@ describe("ResourceMonitorPopover", () => {
     expect(input.preparation.node.type).toBe("chat");
     expect(input.preparation.node.hostId).toBe("host-1");
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens an untitled live-only agent under the untitled-agent fallback, not a blank tile", async () => {
+    // `useEpicTabDisplayTitle` projects an untitled agent's live title as
+    // `null` and lands on the tile's own `name`, so an unnamed record has to
+    // carry the render-tier fallback itself or the tab strip renders blank.
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-untitled"] = {
+      kind: "chat",
+      title: null,
+      hostId: "host-1",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-untitled",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Untitled agent/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.name).toBe("Untitled agent");
+  });
+
+  it("links an agent row that only the live epic projection knows (no tile, no canvas record)", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-live"] = {
+      kind: "chat",
+      title: "Live Agent",
+      hostId: null,
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Live Agent/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledTimes(1);
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    expect(isRecord(input)).toBe(true);
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    expect(input.epicId).toBe("epic-1");
+    expect(input.tabId).toBeNull();
+    expect(isRecord(input.preparation)).toBe(true);
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    expect(input.preparation.kind).toBe("open-tile");
+    expect(isRecord(input.preparation.node)).toBe(true);
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.id).toBe("chat-live");
+    expect(input.preparation.node.type).toBe("chat");
+    expect(input.preparation.node.name).toBe("Live Agent");
+    // Falls back to the wire owner's host: the live chat's own hostId is null.
+    expect(input.preparation.node.hostId).toBe("host-1");
+  });
+
+  it("ignores a live agent whose projection names a different host than the process", async () => {
+    // An epic's projection spans hosts and agent ids are host-minted, so a
+    // same-id entry from another host must not enable this row - opening it
+    // would bind the tile to a machine the process is not running on.
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-live"] = {
+      kind: "chat",
+      title: "Live Agent",
+      hostId: "host-other",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    expect(screen.queryByText("Live Agent")).toBeNull();
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Untitled agent/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+  });
+
+  it("links a live agent whose projection host matches the process host", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    liveAgentsMock.byAgentId["chat-live"] = {
+      kind: "chat",
+      title: "Live Agent",
+      hostId: "host-1",
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Live Agent/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.hostId).toBe("host-1");
+  });
+
+  it("cannot open an agent row when the epic is not mounted in this window (no live projection, no tile, no canvas record)", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "chat",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "chat-live",
+              },
+              harnessId: "claude",
+              activeProcessName: null,
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Untitled agent/,
+    });
+    expect(row.disabled).toBe(true);
+    fireEvent.click(row);
+
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
+    expect(navigateNestedMock).not.toHaveBeenCalled();
   });
 
   it("does not carry a prepared nested focus target on browser builds (no persistent history)", async () => {
@@ -4111,5 +4390,151 @@ describe("ResourceMonitorPopover · host picker", () => {
       screen.queryByTestId("resource-monitor-host-incompatible"),
     ).toBeNull();
     expect(screen.getByText("Waiting for host-b…")).not.toBeNull();
+  });
+
+  it("activates the matching live tile when two hosts share a terminal id", async () => {
+    const tab1 = canvasMock.state.canvasByTabId["tab-1"];
+    tab1.root.tabInstanceIds = ["tile-term-1", "tile-term-1-b"];
+    tab1.tilesByInstanceId["tile-term-1-b"] = {
+      id: "term-1",
+      instanceId: "tile-term-1-b",
+      type: "terminal",
+      name: "Terminal Bravo",
+      titleSource: "manual",
+      hostId: "host-b",
+      cwd: "/work-b",
+    };
+    canvasMock.prepareSetActiveTileTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-1-b",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "term-1",
+              },
+              activeProcessName: "alpha",
+            }),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-b",
+                epicId: "epic-1",
+                ownerId: "term-1",
+              },
+              activeProcessName: "bravo",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(await screen.findByText("Terminal Bravo"));
+
+    expect(navigateNestedMock).toHaveBeenCalledWith(
+      "epic-1",
+      "tab-1",
+      expect.any(Function),
+    );
+    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      "pane-1",
+      "tile-term-1-b",
+    );
+    expect(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalledWith("tab-1", "pane-1", "tile-term-1");
+  });
+
+  it("reopens the matching closed tile when two hosts share a terminal id", async () => {
+    canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
+      "tile-term-shared-a": {
+        node: {
+          id: "term-shared",
+          instanceId: "tile-term-shared-a",
+          type: "terminal",
+          name: "Closed Alpha",
+          titleSource: "manual",
+          hostId: "host-a",
+          cwd: "/work-a",
+        },
+        pendingCreate: false,
+      },
+      "tile-term-shared-b": {
+        node: {
+          id: "term-shared",
+          instanceId: "tile-term-shared-b",
+          type: "terminal",
+          name: "Closed Bravo",
+          titleSource: "manual",
+          hostId: "host-b",
+          cwd: "/work-b",
+        },
+        pendingCreate: false,
+      },
+    };
+    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-shared-b",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-a",
+                epicId: "epic-1",
+                ownerId: "term-shared",
+              },
+              activeProcessName: "alpha",
+            }),
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-b",
+                epicId: "epic-1",
+                ownerId: "term-shared",
+              },
+              activeProcessName: "bravo",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    const row = await screen.findByRole<HTMLButtonElement>("button", {
+      name: /^Closed Bravo/,
+    });
+    expect(row.disabled).toBe(false);
+    fireEvent.click(row);
+
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      expect.objectContaining({
+        id: "term-shared",
+        instanceId: "tile-term-shared-b",
+        hostId: "host-b",
+      }),
+    );
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalledWith(
+      "tab-1",
+      expect.objectContaining({ instanceId: "tile-term-shared-a" }),
+    );
   });
 });

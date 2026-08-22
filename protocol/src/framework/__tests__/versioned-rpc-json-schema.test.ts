@@ -537,6 +537,279 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     );
   });
 
+  it("allows a schema-compatible major when the registry declares a semantic break", () => {
+    const localV10 = defineRpcContract({
+      method: "semanticAuthority",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV20 = defineRpcContract({
+      method: "semanticAuthority",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const upgrade = defineUpgradePath<typeof localV10, typeof fleetV20>({
+      from: localV10.schemaVersion,
+      to: fleetV20.schemaVersion,
+      upgradeRequest: (request) => request,
+      upgradeResponse: (response) => response,
+    });
+
+    const registry = {
+      semanticAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: localV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: fleetV20,
+              upgradeFromPreviousVersion: upgrade,
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("reads a semantic-major annotation from the first installed minor", () => {
+    const localV10 = defineRpcContract({
+      method: "evolvingSemanticAuthority",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV20 = defineRpcContract({
+      method: "evolvingSemanticAuthority",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV21 = defineRpcContract({
+      method: "evolvingSemanticAuthority",
+      schemaVersion: { major: 2, minor: 1 } as const,
+      requestSchema: z.object({
+        terminalId: z.string(),
+        includeRuntime: z.boolean().optional(),
+      }),
+      responseSchema: z.object({
+        ok: z.boolean(),
+        runtimeKnown: z.boolean().optional(),
+      }),
+    });
+    const upgradeToV20 = defineUpgradePath<
+      typeof localV10,
+      typeof fleetV20
+    >({
+      from: localV10.schemaVersion,
+      to: fleetV20.schemaVersion,
+      upgradeRequest: (request) => request,
+      upgradeResponse: (response) => response,
+    });
+    const upgradeToV21 = defineUpgradePath<
+      typeof fleetV20,
+      typeof fleetV21
+    >({
+      from: fleetV20.schemaVersion,
+      to: fleetV21.schemaVersion,
+      upgradeRequest: (request) => request,
+      upgradeResponse: (response) => response,
+    });
+
+    const registry = {
+      evolvingSemanticAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: localV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: fleetV20,
+              upgradeFromPreviousVersion: upgradeToV20,
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+            1: {
+              contract: fleetV21,
+              upgradeFromPreviousVersion: upgradeToV21,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
+  it("rejects a semantic-major annotation on a later minor", () => {
+    const localV10 = defineRpcContract({
+      method: "misplacedSemanticAuthority",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV20 = defineRpcContract({
+      method: "misplacedSemanticAuthority",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV21 = defineRpcContract({
+      method: "misplacedSemanticAuthority",
+      schemaVersion: { major: 2, minor: 1 } as const,
+      requestSchema: z.object({
+        terminalId: z.string(),
+        includeRuntime: z.boolean().optional(),
+      }),
+      responseSchema: z.object({
+        ok: z.boolean(),
+        runtimeKnown: z.boolean().optional(),
+      }),
+    });
+
+    const registry = {
+      misplacedSemanticAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: localV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 1,
+          versions: {
+            0: {
+              contract: fleetV20,
+              upgradeFromPreviousVersion: defineUpgradePath<
+                typeof localV10,
+                typeof fleetV20
+              >({
+                from: localV10.schemaVersion,
+                to: fleetV20.schemaVersion,
+                upgradeRequest: (request) => request,
+                upgradeResponse: (response) => response,
+              }),
+            },
+            1: {
+              contract: fleetV21,
+              upgradeFromPreviousVersion: defineUpgradePath<
+                typeof fleetV20,
+                typeof fleetV21
+              >({
+                from: fleetV20.schemaVersion,
+                to: fleetV21.schemaVersion,
+                upgradeRequest: (request) => request,
+                upgradeResponse: (response) => response,
+              }),
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "the annotation must be on the first installed minor 2.0",
+    );
+  });
+
+  it("rejects a semantic-major annotation on the first installed major", () => {
+    const registry = {
+      semanticAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: defineRpcContract({
+                method: "semanticAuthority",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                requestSchema: z.object({ terminalId: z.string() }),
+                responseSchema: z.object({ ok: z.boolean() }),
+              }),
+              upgradeFromPreviousVersion: null,
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "there is no previous installed major",
+    );
+  });
+
+  it("rejects a semantic-major annotation when the schemas already break structurally", () => {
+    const localV10 = defineRpcContract({
+      method: "structuralAuthority",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV20 = defineRpcContract({
+      method: "structuralAuthority",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string(), hostId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean(), revision: z.number() }),
+    });
+    const registry = {
+      structuralAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: localV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: fleetV20,
+              upgradeFromPreviousVersion: defineUpgradePath<
+                typeof localV10,
+                typeof fleetV20
+              >({
+                from: localV10.schemaVersion,
+                to: fleetV20.schemaVersion,
+                upgradeRequest: (request) => ({
+                  ...request,
+                  hostId: "host-1",
+                }),
+                upgradeResponse: (response) => ({ ...response, revision: 0 }),
+              }),
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).toThrow(
+      "already has a structural breaking change",
+    );
+  });
+
   it("does not let the discriminator STAMP alone justify a major bump", () => {
     // `x-traycer-discriminator` is metadata this framework writes onto the
     // emitted schema so arm identity can be resolved; it constrains no value.

@@ -10,10 +10,24 @@ import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connect
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
+import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
 
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
   chatBackupStatus: null as EpicChatBackupStatus | null,
+  presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
+  terminalCoverage: null as
+    "partial-serving-host" | "complete-fleet" | "complete-local" | null,
+  terminalCapability: {
+    status: "capable",
+    schemaVersion: { major: 2, minor: 1 },
+  },
+  commGraphFeedHealth: null as CommGraphFeedHealth | null,
+}));
+
+vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
+  useAgentActivityPresenceDegraded: () => mocks.presenceDegraded,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -36,6 +50,22 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
   useEpicChatBackupStatus: () => mocks.chatBackupStatus,
+}));
+vi.mock(
+  "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health",
+  () => ({
+    useCommGraphFeedHealth: () => mocks.commGraphFeedHealth,
+  }),
+);
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host-a",
+}));
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    hostId: "host-a",
+    coverage: mocks.terminalCoverage,
+    capability: mocks.terminalCapability,
+  }),
 }));
 
 const OFFLINE_COPY =
@@ -80,6 +110,13 @@ describe("<EpicConnectionPill />", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     mocks.chatBackupStatus = null;
+    mocks.presenceDegraded = null;
+    mocks.terminalCoverage = null;
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 2, minor: 1 },
+    };
+    mocks.commGraphFeedHealth = null;
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -315,6 +352,56 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip("Chat backup failing · 1 chat not backed up");
   });
 
+  it("turns amber for sustained remote-terminal catalog degradation without flashing during the local-first frame", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    renderPill("hostPending");
+
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("terminal-catalog");
+    expect(pill.textContent).toContain("Remote terminals unavailable");
+    expect(pill.className).toContain("bg-amber-500/10");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
+  });
+
+  it("does not report a fleet outage for a local-only RC host", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    };
+    renderPill("hostPending");
+
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).not.toContain("Remote terminals unavailable");
+  });
+
   it("shows the highest severity across artifact sync and chat backup", async () => {
     mocks.chatBackupStatus = {
       severity: "warning",
@@ -343,6 +430,45 @@ describe("<EpicConnectionPill />", () => {
     expect(pill.dataset.source).toBe("artifact");
     expect(pill.textContent).toContain("Connecting…");
     await expectTooltip("Connecting to server");
+  });
+
+  const COMM_GRAPH_HEALTH: CommGraphFeedHealth = {
+    severity: "warning",
+    tooltip: "Communication graph feed: reconnecting…",
+    ariaLabel: "Communication graph feed: reconnecting…",
+  };
+
+  it("shows the comm-graph feed health as a quiet amber dot when nothing else is degraded", async () => {
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("comm-graph");
+    expect(pill.getAttribute("aria-label")).toBe(COMM_GRAPH_HEALTH.tooltip);
+    expect(pill.innerHTML).toContain("bg-amber-500");
+    expect(pill.textContent).toBe("");
+    await expectTooltip(COMM_GRAPH_HEALTH.tooltip);
+  });
+
+  it("keeps the artifact indicator when it is danger and the comm-graph feed is only a warning", () => {
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("offline");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+  });
+
+  it("keeps chat backup when it ties with the comm-graph feed - the earlier source wins", () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("syncing");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("chat-backup");
   });
 
   it("shows the unsafe overlap warning immediately without a durability claim", async () => {
@@ -567,5 +693,88 @@ describe("<EpicConnectionPill />", () => {
         ).toBe(nextState);
       },
     );
+  });
+
+  describe("agent-activity presence degraded", () => {
+    const PRESENCE_DEGRADED_ARIA =
+      "Live agent activity is unavailable. Agent status may be stale or unknown until it reconnects.";
+    const CLOUD_DOWN_ARIA =
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.";
+
+    it("shows the amber agent-activity warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Agent status may be stale");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(
+        PRESENCE_DEGRADED_ARIA,
+      );
+    });
+
+    it("loses to an artifact-sync warning like reconnecting", () => {
+      mocks.presenceDegraded = "stream-down";
+      renderPill("reconnecting");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+    });
+
+    it("loses to a chat-backup warning", () => {
+      mocks.presenceDegraded = "stream-down";
+      mocks.chatBackupStatus = {
+        severity: "warning",
+        tooltip: "Chat backup failing · 1 chat not backed up",
+        ariaLabel: "Chat backup failing · 1 chat not backed up",
+      };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("chat-backup");
+    });
+
+    it("surfaces the presence-degraded message through the tooltip", async () => {
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      await expectTooltip(PRESENCE_DEGRADED_ARIA);
+    });
+
+    it("shows the cloud-down amber warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Remote agent status unavailable");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(CLOUD_DOWN_ARIA);
+    });
+
+    it("surfaces the cloud-down message through the tooltip", async () => {
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      await expectTooltip(CLOUD_DOWN_ARIA);
+    });
   });
 });
