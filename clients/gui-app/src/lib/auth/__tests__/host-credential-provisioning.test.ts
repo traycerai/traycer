@@ -217,28 +217,43 @@ describe("appHostCredentialMintFlow adoption claim", () => {
   it("refuses a second mint while a freshly minted credential is still in flight", async () => {
     const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
     setHostCredentialMintRunner(runner);
+    const realNow = Date.now;
+    try {
+      const start = realNow();
+      Date.now = () => start;
 
-    // Transport 1 mints and receives the credential; the host has NOT adopted
-    // it yet, so it is still reporting `needs-reauth` on any ack in flight.
-    const first = await appHostCredentialMintFlow({
-      hostId: "host-adopting",
-      reason: "needs-reauth",
-    });
-    expect(first.kind).toBe("provisioned");
-    expect(runner).toHaveBeenCalledTimes(1);
+      // Transport 1 mints and receives the credential; the host has NOT adopted
+      // it yet, so it is still reporting `needs-reauth` on any ack in flight.
+      const first = await appHostCredentialMintFlow({
+        hostId: "host-adopting",
+        reason: "needs-reauth",
+      });
+      expect(first.kind).toBe("provisioned");
+      expect(runner).toHaveBeenCalledTimes(1);
 
-    // A DIFFERENT transport - fresh instance, empty per-instance bookkeeping -
-    // sees that same stale `needs-reauth` and asks.
-    const second = await appHostCredentialMintFlow({
-      hostId: "host-adopting",
-      reason: "needs-reauth",
-    });
+      // A DIFFERENT transport - fresh instance, empty per-instance bookkeeping -
+      // sees that same stale `needs-reauth` a second into the claim and asks.
+      Date.now = () => start + 1_000;
+      const second = await appHostCredentialMintFlow({
+        hostId: "host-adopting",
+        reason: "needs-reauth",
+      });
 
-    // `pending-elsewhere`, NOT `unavailable`: the second transport has not
-    // spent its one attempt on this, because nothing was attempted and nothing
-    // failed - a delivery is simply already in flight.
-    expect(second).toMatchObject({ kind: "pending-elsewhere" });
-    expect(runner).toHaveBeenCalledTimes(1);
+      // `pending-elsewhere`, NOT `unavailable`: the second transport has not
+      // spent its one attempt on this, because nothing was attempted and nothing
+      // failed - a delivery is simply already in flight. retryAfterMs is what
+      // is LEFT of the 60s claim (59s) - a caller trusting the full TTL here
+      // would idle a host through a claim that is already partly spent, and
+      // one trusting a stray 0 would spin before delivery had any chance to
+      // land.
+      expect(second).toEqual({
+        kind: "pending-elsewhere",
+        retryAfterMs: 59_000,
+      });
+      expect(runner).toHaveBeenCalledTimes(1);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it("allows the next mint once the claim's TTL has passed", async () => {
@@ -296,18 +311,29 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     // burns its attempt on a claim it had no part in.
     const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
     setHostCredentialMintRunner(runner);
-    await appHostCredentialMintFlow({
-      hostId: "host-held",
-      reason: "needs-reauth",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
+    const realNow = Date.now;
+    try {
+      const start = realNow();
+      Date.now = () => start;
+      await appHostCredentialMintFlow({
+        hostId: "host-held",
+        reason: "needs-reauth",
+      });
+      expect(runner).toHaveBeenCalledTimes(1);
 
-    for (const reason of ["missing", "needs-reauth"] as const) {
-      expect(
-        await appHostCredentialMintFlow({ hostId: "host-held", reason }),
-      ).toMatchObject({ kind: "pending-elsewhere" });
+      // Both reasons probe the SAME held claim at the SAME instant, so both
+      // owe the SAME remainder of the 60s claim (10s elapsed -> 50s left) -
+      // the reason on the ask does not reset or extend someone else's claim.
+      Date.now = () => start + 10_000;
+      for (const reason of ["missing", "needs-reauth"] as const) {
+        expect(
+          await appHostCredentialMintFlow({ hostId: "host-held", reason }),
+        ).toEqual({ kind: "pending-elsewhere", retryAfterMs: 50_000 });
+      }
+      expect(runner).toHaveBeenCalledTimes(1);
+    } finally {
+      Date.now = realNow;
     }
-    expect(runner).toHaveBeenCalledTimes(1);
   });
 
   it("an active report does NOT release the claim - only the TTL does", async () => {
@@ -319,20 +345,31 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     // With nothing on the report to correlate against, it is not trusted.
     const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
     setHostCredentialMintRunner(runner);
-    await appHostCredentialMintFlow({
-      hostId: "host-stale-active",
-      reason: "needs-reauth",
-    });
-
-    noteHostCredentialState("host-stale-active", "active");
-
-    expect(
+    const realNow = Date.now;
+    try {
+      const start = realNow();
+      Date.now = () => start;
       await appHostCredentialMintFlow({
         hostId: "host-stale-active",
         reason: "needs-reauth",
-      }),
-    ).toMatchObject({ kind: "pending-elsewhere" });
-    expect(runner).toHaveBeenCalledTimes(1);
+      });
+
+      noteHostCredentialState("host-stale-active", "active");
+
+      // retryAfterMs still tracks the ORIGINAL claim's remainder (60s minus
+      // the 5s elapsed) - the stale `active` neither released the claim nor
+      // re-armed it with a fresh 60s.
+      Date.now = () => start + 5_000;
+      expect(
+        await appHostCredentialMintFlow({
+          hostId: "host-stale-active",
+          reason: "needs-reauth",
+        }),
+      ).toEqual({ kind: "pending-elsewhere", retryAfterMs: 55_000 });
+      expect(runner).toHaveBeenCalledTimes(1);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it("expires the claim after the TTL so a stalled delivery cannot strand the host", async () => {
@@ -482,10 +519,14 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       // completedMints is now 2: the ladder's NEXT wait is 120s
       // (60_000 * 2 ** (2 - 1)).
 
+      // One millisecond short of the ladder opening, so retryAfterMs is 1 -
+      // the LADDER's remainder, not the adoption claim's, which expired
+      // 60s ago. Pinning the number is what tells those two apart; a bare
+      // `kind` check reads the same either way.
       vi.setSystemTime(60_001 + 120_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 1 });
       expect(runner).toHaveBeenCalledTimes(2);
 
       vi.setSystemTime(60_001 + 120_000);
@@ -501,7 +542,10 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(thirdMintAt + 150_000);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
+        // 240s wait, 150s of it spent: 90s left. A regression handing back
+        // the FULL rung wait here would idle the caller for another 240s,
+        // and one handing back 0 would spin it against a closed ladder.
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 90_000 });
       expect(runner).toHaveBeenCalledTimes(3);
 
       vi.setSystemTime(thirdMintAt + 240_000);
@@ -585,7 +629,11 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(sixthMintAt + 1_800_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
+        // Rung 6's UNDECAYED wait (1_920_000) minus the 1_799_999 elapsed.
+        // This is the one of the three that reads the pre-decay entry, so
+        // it is also the one that would silently change if decay ever fired
+        // a millisecond early.
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 120_001 });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Exactly at the decay window: one rung decays (6 -> 5), but the
@@ -594,14 +642,26 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(sixthMintAt + 1_800_000);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
+        // The FULL 960_000 of the decayed rung, because `mintInBackoff`
+        // rewrites the entry's clock to the decay boundary before
+        // `remainingBackoffMs` reads it - so the decayed rung's wait starts
+        // here rather than being partly spent. This number is the sharpest
+        // statement of "decaying is not admission": had decay doubled as
+        // admission the call would not be `pending-elsewhere` at all, and
+        // had it left the clock alone the remainder would be 0.
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 960_000 });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Still short of the decayed rung's own 960_000ms wait.
       vi.setSystemTime(sixthMintAt + 1_800_000 + 960_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
+        // 1ms left of the decayed rung. Note this depends on the assertion
+        // ABOVE having already run: that call is what persisted the decayed
+        // entry, so the remainder here is measured from the decay boundary
+        // rather than from the sixth mint. Reordering these two would change
+        // this number, which is the point of writing it down.
+      ).resolves.toEqual({ kind: "pending-elsewhere", retryAfterMs: 1 });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Now the decayed rung's own wait has elapsed too: admitted. This is
