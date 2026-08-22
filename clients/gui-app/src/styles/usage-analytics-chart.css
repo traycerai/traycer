@@ -1,7 +1,7 @@
 /**
- * Categorical palette for the Usage surfaces' harness breakdown. Scoped
- * locally under `.usage-chart-root` rather than on `:root` - these eight
- * hues carry ONE meaning (harness identity) and must not leak into the
+ * Categorical palette for the Usage surfaces' harness/model breakdown.
+ * Scoped locally under `.usage-chart-root` rather than on `:root` - these
+ * hues carry ONE meaning (series identity) and must not leak into the
  * app's general token space.
  *
  * Every consumer of `UsageSeriesScale.colorVar` must therefore render
@@ -9,7 +9,7 @@
  * chart owns it for its standalone use in the epic dialog, and the Settings
  * dashboard puts it on the ancestor it shares with `UsageHarnessSplit`.
  *
- * Values are the dataviz skill's validated default palette (see
+ * Slots 1-8 are the dataviz skill's validated default palette (see
  * `references/palette.md`), re-validated against this app's actual card
  * surfaces (`--card: #ffffff` light, `~#292929` dark) with
  * `scripts/validate_palette.js`: both modes clear every hard gate (worst
@@ -18,6 +18,15 @@
  * contrast WARN band - the breakdown table beneath the chart is the
  * relief channel the skill requires for that band (every value is also
  * reachable there, not gated behind the fill's contrast).
+ *
+ * Slots 9-16 are a second, deliberately weaker ring: slot N+8 is the
+ * shade (light mode) / tint (dark mode) cousin of slot N's hue. Sixteen
+ * categorical hues cannot all be CVD-distinct - the skill's own guidance
+ * stops at eight - so the scale ranks series by total cost and only the
+ * cheapest series ever land here, where a narrow band sits between the
+ * legend label and the table row that name it. Each ring-2 value clears
+ * the validator's hard gates (contrast floor + lightness band) on its
+ * surface; the per-pair CVD separation is WARN-level by construction.
  *
  * Dark override rides this app's actual mechanism (`.dark` class on
  * `<html>`, set by `theme-applier.ts`) - not `[data-theme="dark"]`, which
@@ -33,6 +42,14 @@
   --usage-series-6: #008300; /* green */
   --usage-series-7: #4a3aa7; /* violet */
   --usage-series-8: #e34948; /* red */
+  --usage-series-9: #1e3a8a; /* blue, shade */
+  --usage-series-10: #9a3412; /* orange, shade */
+  --usage-series-11: #0f766e; /* aqua, shade */
+  --usage-series-12: #854d0e; /* yellow, shade */
+  --usage-series-13: #9d174d; /* magenta, shade */
+  --usage-series-14: #14532d; /* green, shade */
+  --usage-series-15: #312e81; /* violet, shade */
+  --usage-series-16: #991b1b; /* red, shade */
   --usage-series-other: var(--muted-foreground);
   /* Sequential ramp for the activity heatmap (dataviz skill blue ramp,
      steps 150/300/450/650 light): one hue, light→dark, monotonic
@@ -61,6 +78,14 @@
   --usage-series-6: #008300;
   --usage-series-7: #9085e9;
   --usage-series-8: #e66767;
+  --usage-series-9: #93c5fd; /* blue, tint */
+  --usage-series-10: #fdba74; /* orange, tint */
+  --usage-series-11: #6ee7b7; /* aqua, tint */
+  --usage-series-12: #fde047; /* yellow, tint */
+  --usage-series-13: #f9a8d4; /* magenta, tint */
+  --usage-series-14: #86efac; /* green, tint */
+  --usage-series-15: #c4b5fd; /* violet, tint */
+  --usage-series-16: #fca5a5; /* red, tint */
   --usage-series-other: var(--muted-foreground);
   --usage-heat-0: color-mix(in oklab, var(--foreground) 8%, transparent);
   --usage-heat-1: #104281;

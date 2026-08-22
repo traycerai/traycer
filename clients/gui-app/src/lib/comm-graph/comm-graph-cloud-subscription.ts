@@ -230,6 +230,11 @@ export class CommGraphCloudSubscriptionManager {
     return this.snapshot;
   }
 
+  /** See `CommGraphSubscriptionManager.isAttached`. */
+  isAttached(): boolean {
+    return this.attached;
+  }
+
   isInitialHistoryCaughtUp(): boolean {
     return this.historyCaughtUp;
   }
