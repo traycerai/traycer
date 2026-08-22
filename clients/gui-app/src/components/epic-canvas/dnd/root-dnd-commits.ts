@@ -55,9 +55,13 @@ import {
   type LeftPanelId,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { canReparent } from "@/lib/epic-y-mutations";
-import { resolveReparentNode } from "@/lib/reparent-rules";
+import {
+  getEpicSessionHandleHostClient,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
+import { canReparentProjected } from "@/lib/reparent-projection-rules";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
 import { copyEpicSidebarTabState } from "@/lib/epics/copy-epic-sidebar-tab-state";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
@@ -591,22 +595,56 @@ export function commitSidebarReparentDrop(
 ): void {
   const handle = getOpenEpicRegistry().peek(input.epicId);
   if (handle === null) return;
-  const doc = handle.store.getState().doc;
-  if (!canReparent(doc, input.sourceNodeId, input.newParentId).ok) return;
-  // A root (un-nest) drop is family-agnostic at the doc level, so `canReparent`
-  // alone permits it. Mirror the preview's panel-family gate here too so a
-  // cross-panel empty-space drop is a silent no-op (matching the no-highlight
-  // preview), not an un-nest into the wrong panel.
+  // Evaluated against the PROJECTED tree, not the doc maps: a registry-backed
+  // chat or terminal agent has no doc entry, and the doc evaluator would call
+  // a row the user is plainly dragging `missing-node`. See
+  // `reparent-projection-rules.ts`.
+  const tree = handle.store.getState().tree;
+  const evaluation = canReparentProjected(
+    tree,
+    input.sourceNodeId,
+    input.newParentId,
+  );
+  if (!evaluation.ok) return;
+  // A root (un-nest) drop is family-agnostic at the tree level, so the
+  // evaluation alone permits it. Mirror the preview's panel-family gate here
+  // too so a cross-panel empty-space drop is a silent no-op (matching the
+  // no-highlight preview), not an un-nest into the wrong panel.
   if (
     input.newParentId === null &&
-    resolveReparentNode(doc, input.sourceNodeId)?.family !==
-      PANEL_NODE_FAMILY[input.panelId]
+    evaluation.node.family !== PANEL_NODE_FAMILY[input.panelId]
   ) {
     return;
   }
-  handle.store
-    .getState()
-    .reparentArtifact(input.sourceNodeId, input.newParentId);
+  if (evaluation.node.family === "agent") {
+    // The agent family's parent pointer lives on the HOST's record (chat
+    // registry row, or the terminal agent's tenant row), not on the doc: a
+    // doc write would land on an entry that no longer exists or, for a
+    // pre-migration entry, lose to the row in the union. `epic.reparentChat`
+    // routes by id on the host - a chat or a terminal agent alike - and the
+    // record channel (push delta, else the poll) brings the moved pointer
+    // back into the tree. Refusals (`E_AGENT_NOT_LOCAL` for a row another
+    // host owns) are the host's answer and are surfaced as a toast, the same
+    // way the hook-based chat mutations surface theirs.
+    const client = getEpicSessionHandleHostClient(handle);
+    if (client === null) return;
+    void client
+      .request("epic.reparentChat", {
+        epicId: input.epicId,
+        chatId: input.sourceNodeId,
+        newParentId: input.newParentId,
+      })
+      .catch((error: unknown) => {
+        toastFromHostError(
+          toHostRpcError(error, "epic.reparentChat"),
+          "Couldn't move this agent.",
+        );
+      });
+  } else {
+    handle.store
+      .getState()
+      .reparentArtifact(input.sourceNodeId, input.newParentId);
+  }
   // Reveal the moved node under its new parent: a quick drop onto a collapsed
   // or previously-leaf row only flips `parentId`, and spring-load only fires
   // after a 450ms hover on rows that already had children - so without this the
