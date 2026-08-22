@@ -3,11 +3,13 @@ import {
   ChatRecordsStreamClient,
   type ChatRecordsStreamDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
+import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
+  useStreamHostId,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import {
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
@@ -35,6 +37,17 @@ import {
  * same arm covers a reconnect gap - deltas missed while the socket was down are
  * repaired by the next poll rather than by a replay no host retains a log for.
  *
+ * ## Terminal closes reopen on the host's lane
+ *
+ * The transport's bounded UNAUTHORIZED give-up (and any other terminal close)
+ * disposes the session, and a disposed session ignores `requestReconnect` and
+ * wake-time `forceReconnect` alike. This mount used to swallow connection
+ * status entirely, so one terminal close left the push plane dead until
+ * reload - new agents stopped appearing in the canvas until the 20s poll's
+ * next success, and not at all while the poll was failing too. A reopen lane
+ * on the host's shared reconnect engine rebuilds the client on the same
+ * backoff every notification-family stream uses.
+ *
  * ## A delta for an epic with no live session is DROPPED, deliberately
  *
  * The registry is peeked, not acquired: constructing an epic session because a
@@ -60,15 +73,23 @@ import {
  * A skipped delta costs latency only - the session's own 20s list read against
  * its own host is the backup for every dropped frame, as above.
  */
+/**
+ * A session that stayed open at least this long before closing counts as
+ * healthy, resetting the reopen lane's backoff even if it carried no deltas.
+ * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
+ */
+const HEALTHY_SESSION_RESET_MS = 30_000;
+
 export function ChatRecordsStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("host.chatRecords.subscribe");
-  // Not read by the effect body - it is the REBUILD key. The stream is bound to
-  // whichever host the app-wide client is dialling, and the open-epic sessions
-  // it feeds are rebuilt on a host change too (`EpicSessionProvider`'s session
-  // key), so the subscription has to be torn down and reopened with them rather
-  // than keep pushing a previous host's rows into fresh stores.
-  const hostId = useAddressableHostId();
+  // Both the rebuild key AND the identity `acquireHostConnection` below binds
+  // the reopen lane to - so it MUST come off the same `StreamRuntimeBinding`
+  // as `wsStreamClient`, not a separately-updating resolver
+  // (`useAddressableHostId` reads `readiness.hostId`, which the runtime's own
+  // doc warns can name a different machine during a swap). One binding, one
+  // answer: the lane always belongs to the host the client is dialling.
+  const hostId = useStreamHostId();
 
   useEffect(() => {
     if (
@@ -78,6 +99,9 @@ export function ChatRecordsStreamMount(): ReactNode {
     ) {
       return;
     }
+    // Narrowed capture: the guard above does not narrow `wsStreamClient`
+    // inside the nested `openClient` function declaration.
+    const streamClient = wsStreamClient;
     const applyDelta = (delta: ChatRecordsStreamDelta): void => {
       // Peek, not acquire, for every delta kind - a record change must never
       // construct an epic session or reorder the MRU (see the doc above).
@@ -96,15 +120,65 @@ export function ChatRecordsStreamMount(): ReactNode {
       }
       handle.store.getState().applyChatRecordDelta(delta);
     };
-    const stream = new ChatRecordsStreamClient({
-      wsStreamClient,
-      callbacks: {
-        onDelta: applyDelta,
-        onConnectionStatus: () => undefined,
-      },
-    });
+    const hostConnection = acquireHostConnection(hostId);
+    let disposed = false;
+    let currentClient: ChatRecordsStreamClient | null = null;
+    const reopenScheduler = hostConnection.reconnect.openReopenLane(() => {
+      const client = currentClient;
+      currentClient = null;
+      client?.close();
+      openClient();
+    }, isReopenableHostStreamClose);
+
+    function openClient(): void {
+      if (disposed) return;
+      let client: ChatRecordsStreamClient | null = null;
+      let openedAtMs = 0;
+      client = new ChatRecordsStreamClient({
+        wsStreamClient: streamClient,
+        callbacks: {
+          onDelta: (delta) => {
+            if (currentClient !== client) return;
+            // A delivered delta is the usable-session proof for this stream
+            // (it has no initial state frame to reset on).
+            reopenScheduler.resetBackoff();
+            applyDelta(delta);
+          },
+          onConnectionStatus: (status, reason) => {
+            if (currentClient !== client) return;
+            if (status === "open") {
+              openedAtMs = Date.now();
+              return;
+            }
+            if (status === "closed") {
+              // Deltas are the only frame this stream carries, so a healthy
+              // but QUIET session would otherwise never reset the lane and
+              // the backoff would ratchet one-way across the client's
+              // lifetime. A session that stayed open past the healthy-dwell
+              // is evidence enough (same shape as the engine's rebuild
+              // pacer's healthy-lifetime reset).
+              if (
+                openedAtMs !== 0 &&
+                Date.now() - openedAtMs >= HEALTHY_SESSION_RESET_MS
+              ) {
+                reopenScheduler.resetBackoff();
+              }
+              reopenScheduler.scheduleAfterClose(reason);
+            }
+          },
+        },
+      });
+      currentClient = client;
+    }
+
+    openClient();
     return () => {
-      stream.close();
+      disposed = true;
+      reopenScheduler.dispose();
+      const client = currentClient;
+      currentClient = null;
+      client?.close();
+      hostConnection.release();
     };
   }, [hostId, support, wsStreamClient]);
 

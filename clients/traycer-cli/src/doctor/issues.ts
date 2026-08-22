@@ -81,6 +81,37 @@ export const DOCTOR_ISSUE_CODES = {
   // login. A policy applied after install is invisible to install-time
   // verification, so doctor is the surface that has to say it.
   WINDOWS_SCRIPT_HOST_DISABLED: "WINDOWS_SCRIPT_HOST_DISABLED",
+  // The host held its own delegated credential, the cloud refused it in a way
+  // refreshing cannot repair, and it burned it - leaving a sticky marker and
+  // falling back to whatever bearer a connected client carries.
+  //
+  // Every symptom of this state points AWAY from it. Epic opens, notifications
+  // and artifact rooms fail with sign-in-flavoured errors that reloading and
+  // re-logging-in cannot change (the host, not the renderer, chooses what to
+  // spend), the service is running, the port answers, and every other probe
+  // here reads healthy. That is exactly the gap doctor exists to close: the
+  // marker is the one durable trace, and it is on disk the whole time.
+  //
+  // Error rather than warning: work the user asked for is failing right now.
+  // It clears itself the moment the app re-provisions the host, so it can only
+  // be reported while genuinely true.
+  HOST_CREDENTIAL_NEEDS_REAUTH: "HOST_CREDENTIAL_NEEDS_REAUTH",
+  // The credential probe could not reach a verdict, because the directory the
+  // marker lives in cannot be inspected at all.
+  //
+  // A THIRD answer, and it exists because the other two are both assertions.
+  // `HOST_CREDENTIAL_NEEDS_REAUTH` says "your credential was burned" and
+  // silence says "it was not"; an unsearchable auth directory supports
+  // neither, and the probe used to resolve it as the first - a confident,
+  // wrong error naming a repair (open the app, let it re-provision) that does
+  // nothing about the real fault, which is a permission on a directory. The
+  // rule it broke is narrower than it looks: "only ENOENT is clean" was right
+  // about the MARKER, and wrong to assume the marker's parent is always
+  // probeable.
+  //
+  // Warning rather than error: nothing is known to be broken. Nothing is known
+  // to be WORKING either, which is why it is not silence.
+  HOST_AUTH_DIR_INACCESSIBLE: "HOST_AUTH_DIR_INACCESSIBLE",
 } as const;
 
 export type DoctorIssueCode =

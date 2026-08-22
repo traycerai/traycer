@@ -1,7 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { access, lstat, readlink, stat } from "node:fs/promises";
+import { access, lstat, readFile, readlink, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
-import { cliCredentialsPath } from "../store/paths";
+import {
+  cliCredentialsPath,
+  hostCredentialPath,
+  hostNeedsReauthPath,
+} from "../store/paths";
 import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
@@ -473,6 +479,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // repair is the app's own cli-reconcile at its next successful launch.
   const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
   if (cliSlotIssue !== null) issues.push(cliSlotIssue);
+
+  // ---- 4c. Host delegated-credential health ----
+  // Local, cheap, and the only surface that reports this at all: the host
+  // reports `needs-reauth` to CLIENTS on every stream open, but a user whose
+  // client cannot get far enough to see that has nothing else to look at.
+  const credentialIssue = await probeHostCredentialNeedsReauth(
+    opts.environment,
+  );
+  if (credentialIssue !== null) issues.push(credentialIssue);
 
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
@@ -962,6 +977,216 @@ export function routeIncompatibleRecovery(
         ? "traycer host restart"
         : null;
   return { fixAction, terminalCommand, plan };
+}
+
+// Reads the host's sticky needs-reauth marker.
+//
+// PRESENCE of the marker is the verdict, on its own. The tempting stronger
+// test - marker AND credential file - is nearly unsatisfiable and would make
+// this probe dead code: the host DELETES the credential and then writes the
+// marker, so the two coexist only when that delete failed, which the host
+// already self-repairs at its next startup. In the state this probe is for,
+// the credential file is gone and the marker is the only thing left.
+//
+// The marker's own lifecycle is what makes reporting it safe: it is cleared by
+// every successful adopt/refresh, so it can only be found set while the host
+// genuinely still needs a fresh provisioning.
+//
+// PRESENT-BUT-UNREADABLE IS STILL PRESENT. Tolerating a truncated, hand-edited
+// or permission-denied marker means "do not crash", not "report clean" - the
+// file existing is the verdict, and its contents are only diagnostics. Reading
+// a malformed marker as absent inverted exactly the contract stated above and
+// hid the fault it exists to surface, so only ENOENT is clean; anything else
+// present reports the issue with `unknown` diagnostics.
+//
+// Never throws - doctor probes are advisory and must not take the whole report
+// down.
+async function probeHostCredentialNeedsReauth(
+  environment: Environment,
+): Promise<DoctorIssue | null> {
+  const markerPath = hostNeedsReauthPath(environment);
+  let raw: string | null;
+  try {
+    raw = await readFile(markerPath, "utf8");
+  } catch (err) {
+    if (isFileNotFoundError(err)) {
+      // The only clean answer: this host has no burn on record.
+      return null;
+    }
+    // A read that failed for some reason OTHER than "not there" used to be
+    // read as "present but unreadable", i.e. as a burn. That inference needs
+    // the marker's PARENT to have been inspectable, and it silently assumed
+    // so: on a host whose auth directory is unsearchable, `readFile` answers
+    // EACCES whether or not the file exists, so doctor asserted a burned
+    // credential over a directory that may well be empty - and pointed the
+    // reader at re-provisioning, which cannot fix a permission.
+    const parent = await probeAuthDirectory(dirname(markerPath));
+    if (parent === "absent") {
+      // No directory, so no marker inside it. Clean, for the same reason
+      // ENOENT on the file itself is.
+      return null;
+    }
+    if (parent === "unprobeable") {
+      return authDirectoryInaccessibleIssue(dirname(markerPath));
+    }
+    // Parent is a directory we can search, so the failure really is about
+    // this file: something is there and we cannot read it. Report the burn.
+    raw = null;
+  }
+  try {
+    const marker = parseMarkerFields(raw);
+    const reason = marker.reason;
+    const recordedAt = marker.recordedAt;
+    const credentialPresent = await access(
+      hostCredentialPath(environment),
+    ).then(
+      () => true,
+      () => false,
+    );
+    return {
+      code: DOCTOR_ISSUE_CODES.HOST_CREDENTIAL_NEEDS_REAUTH,
+      severity: "error",
+      title: "Host credential needs re-authorization",
+      message:
+        `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
+        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix. " +
+        "To replace it, open the Traycer desktop app while signed in as this host's owner and let it connect: a connected owner client provisions a new credential on its own, with nothing to confirm and nothing to run here.",
+      // NEITHER a fix action NOR a terminal command, and for the same reason:
+      // nothing on a command line repairs this. A connected owner client mints
+      // the replacement silently, so the instruction has to live in the
+      // MESSAGE - which is why the message carries it explicitly. With both
+      // action fields null, this text is the entire recovery path the CLI
+      // report and Desktop's issue card have to offer; a message that only
+      // rules out signing in again leaves the reader with a dead end.
+      //
+      // `terminalCommand` was `traycer login`, which reads as a repair and is
+      // not one: signing the HUMAN in again does not provision the HOST's
+      // delegated credential, which is the whole distinction this issue
+      // exists to draw. Desktop's failure card renders "Open in Terminal"
+      // whenever this is non-null (`host-doctor-issue-card.tsx`), so leaving
+      // it set offered a button that could only look like it had failed.
+      fixAction: null,
+      terminalCommand: null,
+      details: {
+        markerPath,
+        reason,
+        recordedAt,
+        // True only in the delete-failed shape above. Carried because a
+        // support bundle wants to know which of the two it is looking at.
+        credentialFilePresent: credentialPresent,
+        // Distinguishes "the host told us why" from "a marker is there and we
+        // could not read it" - the two lead to the same verdict but not to the
+        // same support conversation.
+        markerReadable: raw !== null && reason !== UNKNOWN_MARKER_FIELD,
+      },
+    };
+  } catch {
+    // Nothing above should throw, but a probe that cannot answer must not be
+    // the reason `doctor` fails.
+    return null;
+  }
+}
+
+const UNKNOWN_MARKER_FIELD = "unknown";
+
+/**
+ * Whether the directory holding the needs-reauth marker can be inspected at
+ * all, which is the precondition the marker probe's verdict rests on.
+ *
+ * `R_OK | X_OK` because the two failures are different and both matter: a
+ * directory without SEARCH permission makes every `readFile` inside it EACCES
+ * regardless of what it contains, which is exactly the state that turns
+ * "unreadable file" into a false burn. The `isDirectory` check is not
+ * ceremony either - a regular file standing where the auth directory belongs
+ * passes `access` happily while every path under it is ENOTDIR, so access
+ * alone would call that state probeable and re-create the same wrong verdict
+ * through a different door.
+ *
+ * Never throws.
+ */
+async function probeAuthDirectory(
+  dirPath: string,
+): Promise<"ok" | "absent" | "unprobeable"> {
+  try {
+    await access(dirPath, fsConstants.R_OK | fsConstants.X_OK);
+  } catch (err) {
+    return isFileNotFoundError(err) ? "absent" : "unprobeable";
+  }
+  try {
+    const info = await stat(dirPath);
+    return info.isDirectory() ? "ok" : "unprobeable";
+  } catch (err) {
+    return isFileNotFoundError(err) ? "absent" : "unprobeable";
+  }
+}
+
+/**
+ * The INDETERMINATE answer: doctor could not look, and says so.
+ *
+ * Deliberately not `HOST_CREDENTIAL_NEEDS_REAUTH`. That code asserts a burn
+ * and names a repair - open the app and let it re-provision - which does
+ * nothing for a directory the host cannot read. Reporting it here would send
+ * someone to fix a credential over a filesystem permission, and the fix they
+ * were told to apply would appear not to work.
+ */
+function authDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_AUTH_DIR_INACCESSIBLE,
+    severity: "warning",
+    title: "Cannot inspect this host's credential state",
+    message:
+      `This host's auth directory (${dirPath}) could not be read, so doctor cannot tell whether the host's own delegated credential is healthy or was burned. ` +
+      "Check the directory's ownership and permissions - it should be readable and searchable by the user the host runs as. " +
+      "This is not itself a credential fault; it means this one check could not run.",
+    fixAction: null,
+    terminalCommand: null,
+    details: { authDirPath: dirPath },
+  };
+}
+
+/**
+ * Best-effort read of the marker's diagnostic fields. A `null` body (unreadable
+ * file) or unparseable/incomplete JSON yields `unknown` rather than changing
+ * the verdict - the verdict was already decided by the file existing.
+ */
+function parseMarkerFields(raw: string | null): {
+  readonly reason: string;
+  readonly recordedAt: string;
+} {
+  if (raw === null) {
+    return { reason: UNKNOWN_MARKER_FIELD, recordedAt: UNKNOWN_MARKER_FIELD };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { reason: UNKNOWN_MARKER_FIELD, recordedAt: UNKNOWN_MARKER_FIELD };
+  }
+  const marker = isRecord(parsed) ? parsed : {};
+  return {
+    reason:
+      typeof marker.reason === "string" && marker.reason.length > 0
+        ? marker.reason
+        : UNKNOWN_MARKER_FIELD,
+    recordedAt:
+      typeof marker.recordedAt === "string" && marker.recordedAt.length > 0
+        ? marker.recordedAt
+        : UNKNOWN_MARKER_FIELD,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** ENOENT - the file genuinely is not there, as opposed to unreadable. */
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 // Detects the "file is both there and not found" field shape: the CLI
