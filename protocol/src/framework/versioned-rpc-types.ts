@@ -136,6 +136,11 @@ export type RpcErrorFor<Contract> = Contract extends AnyRpcContract
 export type RpcResultFor<Contract> =
   RpcSuccessFor<Contract> | RpcErrorFor<Contract>;
 
+export type RpcResponseUpgradeContext<Request> = {
+  readonly request: Request;
+  readonly hostId: string;
+};
+
 type SameMethodPair<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
@@ -145,18 +150,42 @@ type SameMethodPair<
     : false
   : false;
 
+type UpgradePathBase<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> = {
+  from: From["schemaVersion"];
+  to: To["schemaVersion"];
+  upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
+};
+
+export type ContextlessUpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> = SameMethodPair<From, To> extends true
+  ? UpgradePathBase<From, To> & {
+      upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
+    }
+  : never;
+
+export type ContextualUpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+> = SameMethodPair<From, To> extends true
+  ? UpgradePathBase<From, To> & {
+      upgradeResponse: (
+        response: ResponseOf<From>,
+        context: RpcResponseUpgradeContext<RequestOf<From>> | undefined,
+      ) => ResponseOf<To>;
+    }
+  : never;
+
 export type UpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
 > =
-  SameMethodPair<From, To> extends true
-    ? {
-        from: From["schemaVersion"];
-        to: To["schemaVersion"];
-        upgradeRequest: (request: RequestOf<From>) => RequestOf<To>;
-        upgradeResponse: (response: ResponseOf<From>) => ResponseOf<To>;
-      }
-    : never;
+  | ContextlessUpgradePath<From, To>
+  | ContextualUpgradePath<From, To>;
 
 export type DowngradeResult<Value> =
   { ok: true; value: Value } | { ok: false; error: RpcErrorDetails };
@@ -239,7 +268,10 @@ export type AnyUpgradePath = {
   from: SchemaVersion;
   to: SchemaVersion;
   upgradeRequest: (request: never) => object;
-  upgradeResponse: (response: never) => object;
+  upgradeResponse: (
+    response: never,
+    context: RpcResponseUpgradeContext<never> | undefined,
+  ) => object;
 };
 
 /**
@@ -276,6 +308,13 @@ export type VersionEntry<
    * cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
+  /**
+   * Declares that the first contract in a new major changes semantics even
+   * when its isolated request/response schemas remain structurally
+   * compatible. Use only when the method belongs to a coherently negotiated
+   * family whose authority or topology changed across the major boundary.
+   */
+  readonly semanticMajorBreakFromPreviousMajor?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<
@@ -707,6 +746,9 @@ export type RuntimeUpgradePath<Registry extends MethodVersionRegistry> = {
   ) => RegistryRequestValue<Registry>;
   upgradeResponse: (
     response: RegistryResponseValue<Registry>,
+    context:
+      | RpcResponseUpgradeContext<RegistryRequestValue<Registry>>
+      | undefined,
   ) => RegistryResponseValue<Registry>;
 };
 

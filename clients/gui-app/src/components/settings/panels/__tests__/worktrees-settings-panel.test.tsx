@@ -21,7 +21,7 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import type { WorktreeDeleteStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { WorktreeDeleteBatchStreamCallbacks } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV15 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/index";
 import type {
   WorktreeEntryScripts,
   WorktreeSubmoduleMergeFactV12,
@@ -330,12 +330,12 @@ type WorktreeSubmoduleMergeFactInput = Omit<
   >;
 
 function entry(
-  over: Partial<Omit<WorktreeHostEntryV15, "submodules">> & {
+  over: Partial<Omit<WorktreeHostEntryV16, "submodules">> & {
     worktreePath: string;
     branch: string;
     submodules?: readonly WorktreeSubmoduleMergeFactInput[];
   },
-): WorktreeHostEntryV15 {
+): WorktreeHostEntryV16 {
   const { submodules, ...rest } = over;
   return {
     repoLabel: "acme/app",
@@ -363,11 +363,12 @@ function entry(
     atBaseCommit: false,
     resolvedAt: 1,
     presence: "present",
+    gitUnreadable: false,
     ...rest,
   };
 }
 
-const WORKTREES: WorktreeHostEntryV15[] = [
+const WORKTREES: WorktreeHostEntryV16[] = [
   entry({
     worktreePath: "/wt/clean",
     branch: "feat-clean",
@@ -424,17 +425,17 @@ afterEach(() => {
 // entry) - the default the behavioural tests want, so tiers classify immediately.
 // Tests that exercise the pending/lazy path pass their own partial overlay.
 function fullyEnriched(
-  worktrees: readonly WorktreeHostEntryV15[],
-): ReadonlyMap<string, WorktreeHostEntryV15> {
+  worktrees: readonly WorktreeHostEntryV16[],
+): ReadonlyMap<string, WorktreeHostEntryV16> {
   return new Map(worktrees.map((entry) => [entry.worktreePath, entry]));
 }
 
 function renderList(args: {
   readonly hostId: string;
   readonly queryClient: QueryClient;
-  readonly worktrees: readonly WorktreeHostEntryV15[];
+  readonly worktrees: readonly WorktreeHostEntryV16[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV15> | undefined;
+    ReadonlyMap<string, WorktreeHostEntryV16> | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
@@ -829,6 +830,74 @@ describe("WorktreesList delete flow", () => {
         .getByRole("button", { name: /status is still being checked/i })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("lets a settled-Unknown unresolved row be selected and deleted through unknown-risk confirmation", () => {
+    const unresolvedUnknown = entry({
+      worktreePath: "/wt/dangling",
+      branch: "feat-dangling",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: false,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolvedUnknown],
+      enrichedByPath: new Map(),
+      erroredPaths: new Set([unresolvedUnknown.worktreePath]),
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByText(
+      "Couldn't verify this worktree with git. Refresh to retry, or delete it.",
+    );
+    expect(screen.queryByText("Waiting for host verification…")).toBeNull();
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-dangling",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree feat-dangling" }),
+    );
+    screen.getByText("Delete worktree with unknown status?");
+    expect(screen.getByTestId("confirm-action").textContent).toContain(
+      "Delete anyway",
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/dangling"]);
+  });
+
+  it("names the real reason on a checking row's non-selectable checkbox", () => {
+    const unresolved = entry({
+      worktreePath: "/wt/checking",
+      branch: "feat-checking",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolved],
+      enrichedByPath: new Map(),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-checking",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("true");
+    expect(checkbox.getAttribute("aria-description")).toBe(
+      "Status is still being checked",
+    );
   });
 
   it("keeps an unresolved base authoritative for deletion while displaying its cached tier", () => {
@@ -2322,7 +2391,7 @@ describe("WorktreesList confirm-time re-check", () => {
     toastMock.messages = [];
   });
 
-  function merged(path: string, branch: string): WorktreeHostEntryV15 {
+  function merged(path: string, branch: string): WorktreeHostEntryV16 {
     return entry({
       worktreePath: path,
       branch,
@@ -2332,7 +2401,7 @@ describe("WorktreesList confirm-time re-check", () => {
 
   function renderWith(
     queryClient: QueryClient,
-    worktrees: readonly WorktreeHostEntryV15[],
+    worktrees: readonly WorktreeHostEntryV16[],
   ) {
     return (
       <QueryClientProvider client={queryClient}>
@@ -2421,7 +2490,7 @@ describe("WorktreesList confirm-time re-check", () => {
     expect(streamMock.paths).toEqual(["/wt/merged"]);
   });
 
-  function atBase(path: string, branch: string): WorktreeHostEntryV15 {
+  function atBase(path: string, branch: string): WorktreeHostEntryV16 {
     return entry({ worktreePath: path, branch, atBaseCommit: true });
   }
 
@@ -3714,8 +3783,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
   });
 
   function listElement(args: {
-    readonly worktrees: readonly WorktreeHostEntryV15[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
+    readonly worktrees: readonly WorktreeHostEntryV16[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV16>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
       ((paths: readonly string[]) => void) | undefined;
@@ -3739,7 +3808,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     );
   }
 
-  function manyWorktrees(count: number): WorktreeHostEntryV15[] {
+  function manyWorktrees(count: number): WorktreeHostEntryV16[] {
     return Array.from({ length: count }, (_unused, index) =>
       entry({
         worktreePath: `/wt/w${index}`,
@@ -3977,7 +4046,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
       resolvedAt: 10,
     });
-    const unresolvedBase: WorktreeHostEntryV15 = {
+    const unresolvedBase: WorktreeHostEntryV16 = {
       ...lastKnown,
       branch: null,
       gitRemovable: false,
@@ -4279,7 +4348,7 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
       branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
       resolvedAt: 10,
     });
-    const detached: WorktreeHostEntryV15 = {
+    const detached: WorktreeHostEntryV16 = {
       ...oldActivity,
       branch: null,
       branchStatus: null,
@@ -4379,8 +4448,8 @@ describe("WorktreesList status-aware delete safety", () => {
   // `pendingDeleteTargets`) instead of remounting the whole subtree.
   function statusAwareElement(args: {
     readonly queryClient: QueryClient;
-    readonly worktrees: readonly WorktreeHostEntryV15[];
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
+    readonly worktrees: readonly WorktreeHostEntryV16[];
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV16>;
     readonly erroredPaths: ReadonlySet<string>;
   }): ReactNode {
     return (
@@ -4486,6 +4555,149 @@ describe("WorktreesList status-aware delete safety", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(streamMock.paths).toEqual(["/wt/errored"]);
+  });
+
+  it("classifies a resolved gitUnreadable row as Review with unknown-risk delete", () => {
+    const unreadable = {
+      ...entry({
+        worktreePath: "/wt/unreadable",
+        branch: "feat-unreadable",
+        gitRemovable: false,
+      }),
+      branch: null,
+      gitUnreadable: true,
+    };
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unreadable],
+      enrichedByPath: new Map([[unreadable.worktreePath, unreadable]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("review");
+    screen.getByText("unreadable");
+    screen.getByText(
+      "Git can't read this worktree — its main repository is missing or was moved",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree unreadable" }),
+    );
+    screen.getByText("Delete worktree with unknown status?");
+    expect(screen.getByTestId("confirm-action").textContent).toContain(
+      "Delete anyway",
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/unreadable"]);
+  });
+
+  it("names a gitUnreadable row as unreadable in the bulk summary, never as a detached HEAD", () => {
+    // The host reports `branch: null` / `uncommittedCount: 0` for a worktree it
+    // could not read, so handing the row to the loss sub-classifier would make
+    // the confirmation claim "1 detached HEAD" - a git state nobody observed.
+    const unreadable = {
+      ...entry({
+        worktreePath: "/wt/unreadable",
+        branch: "feat-unreadable",
+        gitRemovable: false,
+      }),
+      branch: null,
+      gitUnreadable: true,
+    };
+    const clean = entry({
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unreadable, clean],
+      enrichedByPath: new Map([
+        [unreadable.worktreePath, unreadable],
+        [clean.worktreePath, clean],
+      ]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+
+    screen.getByText(/1 unreadable \(git can't read the worktree\)/u);
+    expect(screen.queryByText(/detached HEAD/u)).toBeNull();
+  });
+
+  it("gives a mid-delete row no select description, never an in-use claim", () => {
+    // A backgrounded delete makes the row unselectable with NO disabled reason
+    // (it is neither in-use nor checking). A default would announce "In use by
+    // an active agent" to assistive tech for a row nobody is using.
+    renderDefault();
+    confirmDelete("feat-dirty");
+    act(() => {
+      streamMock.callbacks?.onStarted(true);
+      streamMock.callbacks?.onPhase("teardown");
+    });
+    fireEvent.click(screen.getByTestId("worktree-delete-close-button"));
+
+    const deleting = screen.getByRole("checkbox", {
+      name: "Select worktree feat-dirty",
+    });
+    expect(deleting.getAttribute("aria-disabled")).toBe("true");
+    expect(deleting.getAttribute("aria-description")).toBeNull();
+    // The in-use row still names its own real reason.
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-busy" })
+        .getAttribute("aria-description"),
+    ).toBe("In use by an active agent");
+  });
+
+  it("keeps a gitUnreadable row in the Review filter and out of Orphaned", () => {
+    const unreadable = {
+      ...entry({
+        worktreePath: "/wt/unreadable",
+        branch: "feat-unreadable",
+        gitRemovable: false,
+      }),
+      branch: null,
+      gitUnreadable: true,
+    };
+    const orphan = entry({
+      worktreePath: "/wt/orphan",
+      branch: "feat-orphan",
+      gitRemovable: false,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unreadable, orphan],
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-review"));
+    screen.getByRole("button", { name: "Delete worktree unreadable" });
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree feat-orphan" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByTestId("worktrees-filter-all"));
+    fireEvent.click(screen.getByTestId("worktrees-filter-orphaned"));
+    screen.getByRole("button", { name: "Delete worktree feat-orphan" });
+    expect(
+      screen.queryByRole("button", { name: "Delete worktree unreadable" }),
+    ).toBeNull();
   });
 
   it("includes an unknown-risk caveat in the bulk summary when selected rows include an Unknown row", () => {
@@ -4716,7 +4928,7 @@ describe("WorktreesList PR-number search", () => {
   // every row (see `worktree-setup-orchestrator`'s base shape). PR facts do not
   // exist here - they only arrive on the enrichment overlay below. Building the
   // fixture this way is what makes the un-enriched cases honest.
-  const PR_BASE: readonly WorktreeHostEntryV15[] = [
+  const PR_BASE: readonly WorktreeHostEntryV16[] = [
     entry({ worktreePath: "/wt/super-pr", branch: "feat-super-pr" }),
     entry({ worktreePath: "/wt/sub-pr", branch: "feat-sub-pr" }),
     entry({ worktreePath: "/wt/no-pr", branch: "feat-no-pr" }),
@@ -4724,7 +4936,7 @@ describe("WorktreesList PR-number search", () => {
 
   // What those rows resolve to once probed: a superproject PR, a submodule-only
   // PR, and a row that genuinely has none.
-  const PR_ENRICHED: readonly WorktreeHostEntryV15[] = [
+  const PR_ENRICHED: readonly WorktreeHostEntryV16[] = [
     entry({
       worktreePath: "/wt/super-pr",
       branch: "feat-super-pr",
@@ -4754,7 +4966,7 @@ describe("WorktreesList PR-number search", () => {
   // The overlay with the named paths held back - i.e. still awaiting their probe.
   function enrichedExcept(
     unprobedPaths: readonly string[],
-  ): ReadonlyMap<string, WorktreeHostEntryV15> {
+  ): ReadonlyMap<string, WorktreeHostEntryV16> {
     return new Map(
       PR_ENRICHED.filter(
         (worktree) => !unprobedPaths.includes(worktree.worktreePath),
@@ -4770,7 +4982,7 @@ describe("WorktreesList PR-number search", () => {
   }
 
   function renderPrList(args: {
-    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV15>;
+    readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV16>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
   }): void {
     renderList({

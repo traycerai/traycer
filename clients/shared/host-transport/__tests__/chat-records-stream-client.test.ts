@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   IStreamSession,
@@ -23,7 +24,7 @@ import type {
 } from "../i-stream-session";
 import {
   ChatRecordsStreamClient,
-  type ChatRecordDelta,
+  type ChatRecordsStreamDelta,
 } from "../chat-records-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
@@ -110,6 +111,36 @@ function row(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
+function tuiRow(
+  overrides: Partial<TuiAgentRecordSummary>,
+): TuiAgentRecordSummary {
+  return {
+    tuiAgentId: "tui-1",
+    ownerUserId: "user-a",
+    hostId: "host-1",
+    harnessId: "claude",
+    harnessSessionId: "sess-1",
+    parentId: null,
+    title: "A terminal agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: ["/repo"],
+    workspaceMode: null,
+    model: "opus",
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 3,
+    ...overrides,
+  };
+}
+
 interface StatusCall {
   readonly status: StreamConnectionStatus;
   readonly reason: StreamCloseReason | null;
@@ -117,7 +148,7 @@ interface StatusCall {
 
 interface Harness {
   readonly session: StubSession;
-  readonly deltas: ChatRecordDelta[];
+  readonly deltas: ChatRecordsStreamDelta[];
   readonly client: ChatRecordsStreamClient;
   readonly statuses: StatusCall[];
   readonly wsStreamClient: WsStreamClient<typeof hostStreamRpcRegistry>;
@@ -126,7 +157,7 @@ interface Harness {
 function harness(): Harness {
   const session = new StubSession();
   const wsStreamClient = makeWsStreamClient(session);
-  const deltas: ChatRecordDelta[] = [];
+  const deltas: ChatRecordsStreamDelta[] = [];
   const statuses: StatusCall[] = [];
   const client = new ChatRecordsStreamClient({
     wsStreamClient,
@@ -176,6 +207,84 @@ describe("ChatRecordsStreamClient", () => {
         reason: "revoked",
       },
     ]);
+    h.client.close();
+  });
+
+  it("delivers the @1.1 terminal-agent kinds as typed deltas, each naming its epic", () => {
+    const h = harness();
+    const record = tuiRow({ tuiAgentId: "tui-a", revision: 9 });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 9,
+      record,
+    });
+    h.session.emitFrame({
+      kind: "tuiRemove",
+      hasBinaryPayload: false,
+      epicId: "epic-2",
+      tuiAgentId: "tui-b",
+      reason: "deleted",
+    });
+
+    expect(h.deltas).toEqual([
+      { kind: "tuiUpsert", epicId: "epic-1", record },
+      {
+        kind: "tuiRemove",
+        epicId: "epic-2",
+        tuiAgentId: "tui-b",
+        reason: "deleted",
+      },
+    ]);
+    h.client.close();
+  });
+
+  it("drops a tuiUpsert whose envelope disagrees with the row it carries", () => {
+    // The contract's envelope invariant, exercised through this client: a
+    // frame addressing one agent while carrying another's row (or ordering by
+    // a revision the row does not hold) is refused outright, not guessed at.
+    const h = harness();
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-OTHER",
+      revision: 9,
+      record: tuiRow({ tuiAgentId: "tui-a", revision: 9 }),
+    });
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 1,
+      record: tuiRow({ tuiAgentId: "tui-a", revision: 9 }),
+    });
+    expect(h.deltas).toEqual([]);
+    h.client.close();
+  });
+
+  it("drops a malformed terminal-agent frame instead of guessing at it", () => {
+    const h = harness();
+    // A removal reason from a later, widened minor.
+    h.session.emitFrame({
+      kind: "tuiRemove",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      reason: "quarantined",
+    });
+    // An upsert with no row.
+    h.session.emitFrame({
+      kind: "tuiUpsert",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      tuiAgentId: "tui-a",
+      revision: 1,
+    });
+    expect(h.deltas).toEqual([]);
     h.client.close();
   });
 

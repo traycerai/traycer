@@ -632,6 +632,7 @@ function TuiAgentTileLive(
           measureProbe={
             <TerminalGridMeasureProbe
               sessionId={sessionId}
+              hostId={hostId}
               instanceId={instanceId}
               tileKind="terminal-agent"
               chrome="padded"
@@ -1248,6 +1249,7 @@ interface TerminalAgentLiveProps {
 
 function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const { handle } = props;
+  const hostId = useTabHostId();
   const effectiveCols = useStore(handle.store, (s) => s.effectiveCols);
   const effectiveRows = useStore(handle.store, (s) => s.effectiveRows);
   const status = useStore(handle.store, (s) => s.status);
@@ -1401,6 +1403,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       <Suspense fallback={<TerminalLoadingSkeleton />}>
         <TerminalXtermHost
           sessionId={handle.sessionId}
+          hostId={hostId}
           tileKind="terminal-agent"
           chrome="padded"
           instanceId={props.instanceId}

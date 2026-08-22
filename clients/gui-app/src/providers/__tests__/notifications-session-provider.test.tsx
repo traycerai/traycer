@@ -1626,6 +1626,7 @@ describe("<NotificationsSessionProvider />", () => {
         },
       },
       "local",
+      "connected",
     );
     emitTerminalCrashedNotification({
       instanceId: "terminal-before-user-switch",

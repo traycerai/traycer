@@ -15,7 +15,11 @@ import type {
   ChatRecordRemovalReason,
   ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  ChatRecordDelta,
+  TuiAgentRecordDelta,
+} from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicSubscribeClientSeedOffer } from "@traycer/protocol/host/epic/subscribe";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
@@ -50,11 +54,15 @@ import {
   EMPTY_ARTIFACT_ROOMS_SLICE,
   EMPTY_CHATS_SLICE,
   EMPTY_PROJECTED_SLICES,
+  EMPTY_TERMINAL_AGENTS_SLICE,
 } from "./types";
 import {
   chatRecordsSlice,
   chatSlicesEq,
   isChatVisibleToUser,
+  isTerminalAgentVisibleToUser,
+  terminalAgentSlicesEq,
+  tuiAgentRecordsSlice,
   getArtifactEntry,
   getArtifactsMap,
   getChatEntry,
@@ -348,6 +356,34 @@ export interface OpenEpicState {
    */
   readonly chatRetractions: Readonly<Record<string, ChatRecordRemovalReason>>;
   readonly chats: ChatsSlice;
+  /**
+   * The Y.Doc's own terminal-agent entries - the projector's working state,
+   * NOT a component-facing slice. Read {@link OpenEpicState.tuiAgents}, which
+   * is this unioned with the host's registry rows. Kept separate for the same
+   * reason as {@link OpenEpicState.docChats}: a doc-side removal (a migrated
+   * host sweeping its own entries) must reconcile against the doc's history,
+   * not against the union, or it would take a live registry row with it.
+   */
+  readonly docTuiAgents: TerminalAgentsSlice;
+  /**
+   * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`), as
+   * last served. Empty in doc-only mode: an older host that lacks the method
+   * (and therefore still writes the doc's `tuiAgents` map), or before the
+   * first response lands.
+   */
+  readonly tuiAgentRecords: TerminalAgentsSlice;
+  /**
+   * Terminal agents the record plane RETRACTED while this session was open,
+   * and why - the terminal twin of {@link OpenEpicState.chatRetractions},
+   * written only by {@link OpenEpicState.applyTuiAgentRecordDelta}'s
+   * `tuiRemove` arm and ABSORBING for the session's life for the same reason:
+   * an in-flight `epic.listTuiAgents` answer issued before the retraction must
+   * not resurrect the row seconds after its tab said it was gone.
+   */
+  readonly tuiAgentRetractions: Readonly<
+    Record<string, ChatRecordRemovalReason>
+  >;
+  /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
@@ -515,14 +551,55 @@ export interface OpenEpicState {
    */
   applyChatRecordDelta: (delta: ChatRecordDelta) => void;
   /**
-   * Rebuilds the record slice for the CURRENTLY signed-in user from the raw
-   * rows this session has retained.
+   * Publishes the host's `epic.listTuiAgents` answer into the terminal-agent
+   * record table - the terminal twin of {@link OpenEpicState.applyChatRecords},
+   * with the same contract: idempotent, change-gated, and never called in
+   * doc-only mode (an older host answers `E_HOST_UNSUPPORTED`, the record
+   * slice stays empty, and `tuiAgents` is the doc projection by reference).
+   *
+   * MERGED against what the push has already delivered, not clear-and-replace:
+   * a served row is revision-guarded exactly as a `tuiUpsert` is, and a row the
+   * answer omits is retracted only if it was already held when the answer was
+   * ISSUED. A list read issued before an agent was committed would otherwise
+   * delete the `tuiUpsert` that announced it.
+   *
+   * `issuedAtSeq` is where {@link OpenEpicState.peekTuiAgentIngestSeq} stood
+   * when the request was dispatched - the caller captures it immediately
+   * before the RPC and hands it back with the answer. `null` (no session to
+   * read at dispatch) falls back to the previous answer's watermark, which
+   * holds an omitted row for one extra pass instead.
+   */
+  applyTuiAgentRecords: (
+    records: readonly TuiAgentRecordSummary[],
+    issuedAtSeq: number | null,
+  ) => void;
+  /**
+   * The terminal-agent ingest counter as it stands now - the value a list
+   * request captures at dispatch and passes back to
+   * {@link OpenEpicState.applyTuiAgentRecords} as `issuedAtSeq`. Monotonic,
+   * per session; every accepted row write advances it.
+   */
+  peekTuiAgentIngestSeq: () => number;
+  /**
+   * Applies ONE `host.chatRecords.subscribe@1.1` terminal-agent delta - the
+   * push half of the table {@link OpenEpicState.applyTuiAgentRecords} fills
+   * from the poll, with {@link OpenEpicState.applyChatRecordDelta}'s exact
+   * rules: `tuiUpsert` is revision-guarded (strictly-exceeds or dropped),
+   * `tuiRemove` is unconditional, idempotent and remembered in
+   * {@link OpenEpicState.tuiAgentRetractions}. Callers route by `delta.epicId`
+   * first; the subscription is host-scoped.
+   */
+  applyTuiAgentRecordDelta: (delta: TuiAgentRecordDelta) => void;
+  /**
+   * Rebuilds the record slices for the CURRENTLY signed-in user from the raw
+   * rows this session has retained - both tables, chats and terminal agents,
+   * since each is built for one owner at ingest.
    *
    * Internal, and driven by exactly one caller: the auth subscription, on a
-   * user switch. The slice is keyed on `chatId` alone and so can only ever
-   * represent one owner's rows, which means a user switch has to REBUILD it -
-   * re-projecting alone would keep serving the previous identity's selection.
-   * Retained rows make that lossless; see `applyChatRecords`.
+   * user switch. The slice is keyed on the record id alone and so can only
+   * ever represent one owner's rows, which means a user switch has to REBUILD
+   * it - re-projecting alone would keep serving the previous identity's
+   * selection. Retained rows make that lossless; see `applyChatRecords`.
    */
   republishChatRecordsForCurrentUser: () => void;
   /**
@@ -1826,6 +1903,49 @@ export function createOpenEpicStore(
     return dropped;
   };
 
+  /**
+   * The terminal-agent halves of the same record layer, mirroring the three
+   * chat structures above. The raw-row table is keyed by `tuiAgentId` ALONE,
+   * unlike `chatRecordRows`: the host serves the CALLER'S OWN rows only
+   * (terminal agents are structurally owner-private, per the
+   * `epic.listTuiAgents` contract), so within one viewer's answer the id is
+   * unambiguous. Rows are still retained regardless of owner - a delta could
+   * in principle carry another identity's row after an account switch - and
+   * the publish below re-selects for the current user, so the keying only has
+   * to be safe for what the host actually serves.
+   */
+  let tuiAgentRecords: TerminalAgentsSlice = EMPTY_TERMINAL_AGENTS_SLICE;
+  const tuiAgentRecordRows = new Map<string, TuiAgentRecordSummary>();
+  /** See `OpenEpicState.tuiAgentRetractions` - absorbing for the session. */
+  const tuiAgentRetractions = new Map<string, ChatRecordRemovalReason>();
+  /**
+   * Local ingest order for the terminal-agent rows, and the watermark the last
+   * `epic.listTuiAgents` answer left behind.
+   *
+   * `revision` orders two versions of ONE row; it says nothing about a row the
+   * snapshot simply does not contain. That omission is the ambiguous case: a
+   * list read issued before an agent was committed cannot carry it, and the
+   * `tuiUpsert` that announced it can land while that read is still in flight.
+   * Applying such a snapshot as clear-and-replace deletes the row it never had
+   * a chance to see - precisely the A2A-created agent this whole channel exists
+   * to surface - until the next 20s poll.
+   *
+   * So an omission is only allowed to retract a row that was already held
+   * when the answer was issued. `tuiAgentRowSeq` stamps every accepted write
+   * with a monotonic counter; the list hook reads that counter at dispatch
+   * (`peekTuiAgentIngestSeq`) and hands it back with the answer as the fence,
+   * so a row ingested past it survives that answer and an answer issued after
+   * the row landed retracts it at once - a deletion missed while the stream
+   * was down is collected by the very next read, not one read later.
+   * `tuiAgentSnapshotFence` (where the counter stood after the previous
+   * answer) is the fallback for an answer dispatched with no session to read;
+   * it holds an omitted row for one extra pass. Retractions are unaffected:
+   * `tuiRemove` is the explicit signal and stays absorbing.
+   */
+  const tuiAgentRowSeq = new Map<string, number>();
+  let tuiAgentIngestSeq = 0;
+  let tuiAgentSnapshotFence = 0;
+
   // The projector hides chats owned by a different signed-in user. The owner
   // id is the canonical `profile.userId`, read LIVE rather than off the
   // store's `userId` option: that option is the same canonical id today (it
@@ -1835,6 +1955,7 @@ export function createOpenEpicStore(
   const projector: EpicProjector = createEpicProjector(
     getCurrentChatProjectionUserId,
     () => chatRecords,
+    () => tuiAgentRecords,
   );
 
   const handleDocUpdate = (updateBytes: Uint8Array, origin: unknown) => {
@@ -2085,6 +2206,48 @@ export function createOpenEpicStore(
                 // attach-time projection folds them in through the same
                 // getter. Writing EMPTY slices here would erase the store.
                 { chatRecords: nextSlice, ...extra },
+          );
+        };
+
+        /**
+         * The terminal-agent twin of {@link publishChatRecords}: the ONE
+         * writer of the terminal-agent record slice, shared by the poll
+         * (`applyTuiAgentRecords`) and the push (`applyTuiAgentRecordDelta`),
+         * with the same ingest-time owner selection (retained rows make a user
+         * switch lossless), the same {@link terminalAgentSlicesEq} change gate,
+         * the same retraction-driven gate bypass, and the same full
+         * re-projection - `tuiAgents` feeds the tree and role-claim slices
+         * exactly as `chats` does.
+         */
+        const publishTuiAgentRecords = (
+          extra: Pick<OpenEpicState, "tuiAgentRetractions"> | null,
+        ): void => {
+          const currentUserId = getCurrentChatProjectionUserId();
+          const visible: TuiAgentRecordSummary[] = [];
+          for (const row of tuiAgentRecordRows.values()) {
+            if (!isTerminalAgentVisibleToUser(row.ownerUserId, currentUserId)) {
+              continue;
+            }
+            visible.push(row);
+          }
+          const next = tuiAgentRecordsSlice(visible);
+          const nextSlice =
+            next.allIds.length === 0 ? EMPTY_TERMINAL_AGENTS_SLICE : next;
+          if (
+            extra === null &&
+            terminalAgentSlicesEq(tuiAgentRecords, nextSlice)
+          ) {
+            return;
+          }
+          tuiAgentRecords = nextSlice;
+          set(
+            projector.isAttached()
+              ? {
+                  tuiAgentRecords: nextSlice,
+                  ...extra,
+                  ...projector.projectFull(),
+                }
+              : { tuiAgentRecords: nextSlice, ...extra },
           );
         };
 
@@ -3073,6 +3236,11 @@ export function createOpenEpicStore(
           chatRecords: EMPTY_CHATS_SLICE,
           chatRecordListAuthoritative: false,
           chatRetractions: EMPTY_CHAT_RETRACTIONS,
+          tuiAgentRecords: EMPTY_TERMINAL_AGENTS_SLICE,
+          // The same shared "nothing retracted" identity as the chats': one
+          // frozen empty object serves both, so neither table's quiet state
+          // ever hands subscribers a fresh reference.
+          tuiAgentRetractions: EMPTY_CHAT_RETRACTIONS,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
           artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
           rootDirty: null,
@@ -3271,9 +3439,95 @@ export function createOpenEpicStore(
             publishChatRecords(null);
           },
 
+          peekTuiAgentIngestSeq: () => tuiAgentIngestSeq,
+
+          applyTuiAgentRecords: (records, issuedAtSeq) => {
+            if (disposed) return;
+            const served = new Map<string, TuiAgentRecordSummary>();
+            for (const row of records) {
+              // A retracted agent never comes back through the poll: the list
+              // read is a snapshot of the host's registry and the host applies
+              // a removal before it emits one, so a response still carrying
+              // the row was issued before the retraction. See
+              // `OpenEpicState.tuiAgentRetractions`.
+              if (tuiAgentRetractions.has(row.tuiAgentId)) continue;
+              served.set(row.tuiAgentId, row);
+            }
+            // Omissions first, against the fence - see `tuiAgentRowSeq`. A
+            // row this answer does not carry is dropped only if it was already
+            // held when the answer was ISSUED; anything ingested since then is
+            // newer than the snapshot by construction and survives it. The
+            // request-time counter is the exact fence; the previous answer's
+            // watermark is the fallback when none was captured.
+            const fence = issuedAtSeq ?? tuiAgentSnapshotFence;
+            for (const id of [...tuiAgentRecordRows.keys()]) {
+              if (served.has(id)) continue;
+              if ((tuiAgentRowSeq.get(id) ?? 0) > fence) continue;
+              tuiAgentRecordRows.delete(id);
+              tuiAgentRowSeq.delete(id);
+            }
+            for (const [id, row] of served) {
+              const held = tuiAgentRecordRows.get(id);
+              // The same monotonic-`revision` test the delta path applies, for
+              // the same reason and in the same direction: a snapshot row that
+              // does not strictly exceed what is held is an older version of
+              // that row, and overwriting with it would regress a push the
+              // client has already shown.
+              if (held !== undefined && row.revision <= held.revision) continue;
+              tuiAgentRecordRows.set(id, row);
+              tuiAgentIngestSeq += 1;
+              tuiAgentRowSeq.set(id, tuiAgentIngestSeq);
+            }
+            tuiAgentSnapshotFence = tuiAgentIngestSeq;
+            publishTuiAgentRecords(null);
+          },
+
+          applyTuiAgentRecordDelta: (delta) => {
+            if (disposed) return;
+            if (delta.kind === "tuiRemove") {
+              const hadRow = tuiAgentRecordRows.delete(delta.tuiAgentId);
+              tuiAgentRowSeq.delete(delta.tuiAgentId);
+              // Idempotent: a redelivered removal for the same reason is not a
+              // state change, and re-publishing on it would re-project the
+              // epic for nothing.
+              if (
+                tuiAgentRetractions.get(delta.tuiAgentId) === delta.reason &&
+                !hadRow
+              ) {
+                return;
+              }
+              tuiAgentRetractions.set(delta.tuiAgentId, delta.reason);
+              // The retraction map bypasses the change gate for the same
+              // reason the chats' does: a removal that changes no slice (a row
+              // this session never held) still has to reach an open tab that
+              // is rendering the agent.
+              publishTuiAgentRecords({
+                tuiAgentRetractions: Object.fromEntries(tuiAgentRetractions),
+              });
+              return;
+            }
+            const { record } = delta;
+            // Removal is TERMINAL AND ABSORBING - no later upsert resurrects
+            // the row here.
+            if (tuiAgentRetractions.has(record.tuiAgentId)) return;
+            const held = tuiAgentRecordRows.get(record.tuiAgentId);
+            // The staleness test: `revision` is per-record monotonic and the
+            // only ordering fact on a row, so a delta that does not strictly
+            // exceed what is held is a replay, a reorder or a duplicate.
+            if (held !== undefined && record.revision <= held.revision) return;
+            tuiAgentRecordRows.set(record.tuiAgentId, record);
+            // Past the fence the last snapshot left: an `epic.listTuiAgents`
+            // answer already in flight cannot carry this row, so its omission
+            // must not delete it. See `tuiAgentRowSeq`.
+            tuiAgentIngestSeq += 1;
+            tuiAgentRowSeq.set(record.tuiAgentId, tuiAgentIngestSeq);
+            publishTuiAgentRecords(null);
+          },
+
           republishChatRecordsForCurrentUser: () => {
             if (disposed) return;
             publishChatRecords(null);
+            publishTuiAgentRecords(null);
           },
 
           beginPendingChatCreation: (pending) => {

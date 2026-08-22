@@ -12,9 +12,14 @@ import {
   capturePlainTerminalProjectionBarrier,
   deletePlainTerminal,
   emptyPlainTerminalCollection,
+  getPlainTerminal,
+  plainTerminalHostScopeIdentityKey,
+  plainTerminalMigrationIdentityKey,
   markPlainTerminalStreamIncompatible,
+  plainTerminalActionAuthorized,
   plainTerminalAuthorityCanMutate,
   replacePlainTerminalSnapshot,
+  replacePlainTerminalState,
   resolvePlainTerminalCapability,
   seedPlainTerminalList,
   selectPlainTerminalViewModel,
@@ -22,15 +27,70 @@ import {
   settlePlainTerminalSnapshot,
   upsertPlainTerminal,
   type LegacyPlainTerminalMigrationAdapter,
+  type PlainTerminalCollection,
   type PlainTerminalCapability,
   type PlainTerminalMigrationAuthority,
 } from "@/lib/terminals/plain-terminal-authority";
 
 const HOST_ID = "host-1";
-const SCOPE: PlainTerminalScope = { kind: "epic", epicId: "epic-1" };
+const SCOPE = {
+  kind: "epic",
+  epicId: "epic-1",
+} as const satisfies PlainTerminalScope;
+
+function lookup(
+  collection: PlainTerminalCollection,
+  terminalId: string,
+): PlainTerminalProjection | undefined {
+  return getPlainTerminal(collection, HOST_ID, terminalId);
+}
+
+function lookupForHost(
+  collection: PlainTerminalCollection,
+  terminalId: string,
+  hostId: string,
+): PlainTerminalProjection | undefined {
+  return getPlainTerminal(collection, hostId, terminalId);
+}
+
+function runningProcessName(
+  projection: PlainTerminalProjection | undefined,
+): string | null {
+  return projection?.runtime.status === "running"
+    ? projection.runtime.activeProcessName
+    : null;
+}
+
+function fleetState(terminals: readonly PlainTerminalProjection[]) {
+  return {
+    coverage: "complete-fleet" as const,
+    scope: SCOPE,
+    terminals: [...terminals],
+  };
+}
+
+function fleetStateWithCoverage(
+  terminals: readonly PlainTerminalProjection[],
+  coverage: "partial-serving-host" | "complete-local",
+) {
+  if (coverage === "complete-local") {
+    return {
+      coverage,
+      scope: { kind: "independent" as const },
+      terminals: [...terminals],
+    };
+  }
+  return {
+    coverage,
+    scope: SCOPE,
+    servingHostId: HOST_ID,
+    terminals: [...terminals],
+  };
+}
 
 function terminal(overrides: {
   readonly terminalId?: string;
+  readonly hostId?: string;
   readonly revision?: number;
   readonly manualTitle?: string | null;
   readonly status?: "running" | "dormant";
@@ -55,7 +115,7 @@ function terminal(overrides: {
   return {
     record: {
       terminalId,
-      hostId: HOST_ID,
+      hostId: overrides.hostId ?? HOST_ID,
       scope: SCOPE,
       launch: {
         cwd: "/work/launch",
@@ -84,39 +144,50 @@ function capability(
 const V1_FAMILY = Object.fromEntries(
   PLAIN_TERMINAL_RPC_METHODS.map((method) => [method, { major: 1, minor: 0 }]),
 );
+const V2_FAMILY = Object.fromEntries(
+  PLAIN_TERMINAL_RPC_METHODS.map((method) => [method, { major: 2, minor: 1 }]),
+);
+const V2_DRAFT_FAMILY = Object.fromEntries(
+  PLAIN_TERMINAL_RPC_METHODS.map((method) => [method, { major: 2, minor: 0 }]),
+);
 
 describe("plain terminal capability negotiation", () => {
-  it("distinguishes unknown, partial/old, and complete v1 families", () => {
+  it("recognizes frozen local v1 and fleet v2 only as complete families", () => {
     expect(capability({}, false)).toEqual({ status: "unknown" });
     expect(
-      capability({ "terminal.plain.list": { major: 1, minor: 0 } }, true),
-    ).toEqual({ status: "legacy" });
-    expect(
-      capability(
-        {
-          ...V1_FAMILY,
-          "terminal.plain.rename": { major: 2, minor: 0 },
-        },
-        true,
-      ),
+      capability({ "terminal.plain.list": { major: 2, minor: 0 } }, true),
     ).toEqual({ status: "legacy" });
     expect(capability(V1_FAMILY, true)).toEqual({
       status: "capable",
       schemaVersion: { major: 1, minor: 0 },
     });
+    expect(capability(V2_DRAFT_FAMILY, true)).toEqual({ status: "legacy" });
+    expect(
+      capability(
+        {
+          ...V2_FAMILY,
+          "terminal.plain.rename": { major: 1, minor: 0 },
+        },
+        true,
+      ),
+    ).toEqual({ status: "legacy" });
+    expect(capability(V2_FAMILY, true)).toEqual({
+      status: "capable",
+      schemaVersion: { major: 2, minor: 1 },
+    });
   });
 
-  it("keeps old hosts on local authority and makes a stale capable host view-only", () => {
+  it("keeps hosts without a durable family on legacy authority and makes a stale capable host view-only", () => {
     const oldHost = capability({}, true);
     const stale = seedPlainTerminalList(
       undefined,
-      [terminal({})],
+      fleetState([terminal({})]),
       capturePlainTerminalProjectionBarrier(undefined),
     );
     expect(plainTerminalAuthorityCanMutate(oldHost, stale)).toBe(false);
-    expect(stale.terminalsById["terminal-1"]).toBeDefined();
+    expect(lookup(stale, "terminal-1")).toBeDefined();
 
-    const capable = capability(V1_FAMILY, true);
+    const capable = capability(V2_FAMILY, true);
     expect(plainTerminalAuthorityCanMutate(capable, stale)).toBe(false);
     const fresh = setPlainTerminalStreamStatus(
       settlePlainTerminalSnapshot(
@@ -132,10 +203,10 @@ describe("plain terminal collection convergence", () => {
   it("seeds from list, buffers reconnect updates, then converges to the next snapshot", () => {
     const seeded = seedPlainTerminalList(
       undefined,
-      [terminal({})],
+      fleetState([terminal({})]),
       capturePlainTerminalProjectionBarrier(undefined),
     );
-    expect(seeded.terminalsById["terminal-1"]?.record.revision).toBe(1);
+    expect(lookup(seeded, "terminal-1")?.record.revision).toBe(1);
     expect(seeded.streamSnapshotFresh).toBe(false);
 
     const initial = setPlainTerminalStreamStatus(
@@ -152,11 +223,7 @@ describe("plain terminal collection convergence", () => {
       terminal({ revision: 2, activeProcessName: "vitest" }),
     );
     expect(buffered.streamSnapshotFresh).toBe(false);
-    expect(
-      buffered.terminalsById["terminal-1"]?.runtime.status === "running"
-        ? buffered.terminalsById["terminal-1"].runtime.activeProcessName
-        : null,
-    ).toBe("vitest");
+    expect(runningProcessName(lookup(buffered, "terminal-1"))).toBe("vitest");
 
     const converged = setPlainTerminalStreamStatus(
       settlePlainTerminalSnapshot(
@@ -167,11 +234,11 @@ describe("plain terminal collection convergence", () => {
       "open",
     );
     expect(converged.streamSnapshotFresh).toBe(true);
-    expect(converged.terminalsById["terminal-1"]?.record.revision).toBe(3);
+    expect(lookup(converged, "terminal-1")?.record.revision).toBe(3);
   });
 
   it("preserves an existing fresh snapshot across an accepted list refetch", () => {
-    const capable = capability(V1_FAMILY, true);
+    const capable = capability(V2_FAMILY, true);
     const fresh = setPlainTerminalStreamStatus(
       settlePlainTerminalSnapshot(
         replacePlainTerminalSnapshot(undefined, [terminal({})]),
@@ -181,7 +248,7 @@ describe("plain terminal collection convergence", () => {
     const barrier = capturePlainTerminalProjectionBarrier(fresh);
     const refetched = seedPlainTerminalList(
       fresh,
-      [terminal({ revision: 2 })],
+      fleetState([terminal({ revision: 2 })]),
       barrier,
     );
     expect(refetched.streamSnapshotFresh).toBe(true);
@@ -191,7 +258,7 @@ describe("plain terminal collection convergence", () => {
   it("keeps an initial list unfresh until the stream supplies a snapshot", () => {
     const listed = seedPlainTerminalList(
       undefined,
-      [terminal({})],
+      fleetState([terminal({})]),
       capturePlainTerminalProjectionBarrier(undefined),
     );
     expect(listed.streamSnapshotFresh).toBe(false);
@@ -202,7 +269,7 @@ describe("plain terminal collection convergence", () => {
     const incompatible = markPlainTerminalStreamIncompatible(fresh);
     const listed = seedPlainTerminalList(
       incompatible,
-      [terminal({})],
+      fleetState([terminal({})]),
       capturePlainTerminalProjectionBarrier(incompatible),
     );
     expect(listed.streamCompatibility).toBe("incompatible");
@@ -218,35 +285,43 @@ describe("plain terminal collection convergence", () => {
       newer,
       terminal({ revision: 3, manualTitle: "older" }),
     );
-    expect(delayedOlder.terminalsById["terminal-1"]?.record.manualTitle).toBe(
+    expect(lookup(delayedOlder, "terminal-1")?.record.manualTitle).toBe(
       "newer",
     );
 
-    const deleted = deletePlainTerminal(delayedOlder, "terminal-1", 5);
-    expect(deleted.terminalsById["terminal-1"]).toBeUndefined();
+    const deleted = deletePlainTerminal(
+      delayedOlder,
+      { hostId: HOST_ID, terminalId: "terminal-1" },
+      5,
+    );
+    expect(lookup(deleted, "terminal-1")).toBeUndefined();
     const staleUpsert = upsertPlainTerminal(
       deleted,
       terminal({ revision: 5, manualTitle: "resurrected" }),
     );
-    expect(staleUpsert.terminalsById["terminal-1"]).toBeUndefined();
+    expect(lookup(staleUpsert, "terminal-1")).toBeUndefined();
     expect(
-      upsertPlainTerminal(
-        staleUpsert,
-        terminal({ revision: 6, manualTitle: "new logical revision" }),
-      ).terminalsById["terminal-1"],
+      lookup(
+        upsertPlainTerminal(
+          staleUpsert,
+          terminal({ revision: 6, manualTitle: "new logical revision" }),
+        ),
+        "terminal-1",
+      ),
     ).toBeDefined();
   });
 
   it("treats equal-revision stream and unary deletion evidence as idempotent", () => {
     const initial = replacePlainTerminalSnapshot(undefined, [terminal({})]);
     const barrier = capturePlainTerminalProjectionBarrier(initial);
-    const deleted = deletePlainTerminal(initial, "terminal-1", 4);
+    const identity = { hostId: HOST_ID, terminalId: "terminal-1" };
+    const deleted = deletePlainTerminal(initial, identity, 4);
     const sequence = deleted.projectionSequence;
 
-    expect(deletePlainTerminal(deleted, "terminal-1", 4)).toBe(deleted);
-    expect(
-      adoptPlainTerminalDeletionUnary(deleted, "terminal-1", 4, barrier),
-    ).toBe(deleted);
+    expect(deletePlainTerminal(deleted, identity, 4)).toBe(deleted);
+    expect(adoptPlainTerminalDeletionUnary(deleted, identity, 4, barrier)).toBe(
+      deleted,
+    );
     expect(deleted.projectionSequence).toBe(sequence);
   });
 
@@ -256,7 +331,8 @@ describe("plain terminal collection convergence", () => {
       terminal({ terminalId: "terminal-2" }),
     ]);
     const next = replacePlainTerminalSnapshot(initial, [terminal({})]);
-    expect(Object.keys(next.terminalsById)).toEqual(["terminal-1"]);
+    expect(lookup(next, "terminal-1")).toBeDefined();
+    expect(lookup(next, "terminal-2")).toBeUndefined();
   });
 
   it("keeps equal-revision stream runtime newer than a delayed unary result", () => {
@@ -271,11 +347,7 @@ describe("plain terminal collection convergence", () => {
       terminal({ revision: 1, activeProcessName: "zsh" }),
       barrier,
     );
-    expect(
-      delayed.terminalsById["terminal-1"]?.runtime.status === "running"
-        ? delayed.terminalsById["terminal-1"].runtime.activeProcessName
-        : null,
-    ).toBe("vitest");
+    expect(runningProcessName(lookup(delayed, "terminal-1"))).toBe("vitest");
   });
 
   it("lets reconnect snapshots and deletes dominate requests that began earlier", () => {
@@ -284,18 +356,30 @@ describe("plain terminal collection convergence", () => {
     const reconnecting = setPlainTerminalStreamStatus(initial, "reconnecting");
     const absent = replacePlainTerminalSnapshot(reconnecting, []);
     expect(
-      adoptPlainTerminalUnary(absent, terminal({ revision: 2 }), barrier)
-        .terminalsById["terminal-1"],
+      lookup(
+        adoptPlainTerminalUnary(absent, terminal({ revision: 2 }), barrier),
+        "terminal-1",
+      ),
     ).toBeUndefined();
 
     const restored = replacePlainTerminalSnapshot(absent, [
       terminal({ revision: 3 }),
     ]);
     const deleteBarrier = capturePlainTerminalProjectionBarrier(restored);
-    const deleted = deletePlainTerminal(restored, "terminal-1", 4);
+    const deleted = deletePlainTerminal(
+      restored,
+      { hostId: HOST_ID, terminalId: "terminal-1" },
+      4,
+    );
     expect(
-      adoptPlainTerminalUnary(deleted, terminal({ revision: 4 }), deleteBarrier)
-        .terminalsById["terminal-1"],
+      lookup(
+        adoptPlainTerminalUnary(
+          deleted,
+          terminal({ revision: 4 }),
+          deleteBarrier,
+        ),
+        "terminal-1",
+      ),
     ).toBeUndefined();
   });
 
@@ -312,9 +396,95 @@ describe("plain terminal collection convergence", () => {
       terminal({ revision: 3, manualTitle: "newer" }),
       postSnapshotBarrier,
     );
-    expect(higher.terminalsById["terminal-1"]?.record.manualTitle).toBe(
-      "newer",
+    expect(lookup(higher, "terminal-1")?.record.manualTitle).toBe("newer");
+  });
+
+  it("keeps the same terminalId on two hosts as distinct fleet identities", () => {
+    const next = replacePlainTerminalState(
+      undefined,
+      fleetState([
+        terminal({ terminalId: "shared", hostId: "host-a" }),
+        terminal({ terminalId: "shared", hostId: "host-b" }),
+      ]),
     );
+    expect(lookupForHost(next, "shared", "host-a")).toBeDefined();
+    expect(lookupForHost(next, "shared", "host-b")).toBeDefined();
+    expect(Object.keys(next.terminalsByIdentity)).toHaveLength(2);
+  });
+
+  it("replaces the whole collection and drops omitted rows", () => {
+    const initial = replacePlainTerminalState(
+      undefined,
+      fleetState([
+        terminal({ terminalId: "keep" }),
+        terminal({ terminalId: "drop" }),
+      ]),
+    );
+    const replaced = replacePlainTerminalState(
+      initial,
+      fleetState([terminal({ terminalId: "keep", revision: 2 })]),
+    );
+    expect(lookup(replaced, "keep")?.record.revision).toBe(2);
+    expect(lookup(replaced, "drop")).toBeUndefined();
+    expect(replaced.coverage).toBe("complete-fleet");
+  });
+
+  it("drops remote rows on partial coverage and restores only the later complete state", () => {
+    const complete = replacePlainTerminalState(
+      undefined,
+      fleetState([
+        terminal({ terminalId: "local" }),
+        terminal({ terminalId: "remote", hostId: "host-b" }),
+      ]),
+    );
+    expect(plainTerminalActionAuthorized(complete, "host-b", "remote")).toBe(
+      true,
+    );
+    const partial = replacePlainTerminalState(
+      complete,
+      fleetStateWithCoverage(
+        [terminal({ terminalId: "local", revision: 2 })],
+        "partial-serving-host",
+      ),
+    );
+    expect(partial.coverage).toBe("partial-serving-host");
+    expect(partial.servingHostId).toBe(HOST_ID);
+    expect(lookup(partial, "local")?.record.revision).toBe(2);
+    expect(lookupForHost(partial, "remote", "host-b")).toBeUndefined();
+    expect(plainTerminalActionAuthorized(partial, "host-b", "remote")).toBe(
+      false,
+    );
+    const restored = replacePlainTerminalState(
+      partial,
+      fleetState([terminal({ terminalId: "other-remote", hostId: "host-b" })]),
+    );
+    expect(restored.coverage).toBe("complete-fleet");
+    expect(lookupForHost(restored, "remote", "host-b")).toBeUndefined();
+    expect(lookupForHost(restored, "other-remote", "host-b")).toBeDefined();
+    expect(lookup(restored, "local")).toBeUndefined();
+  });
+
+  it("keeps independent complete-local replacement isolated from fleet coverage", () => {
+    const local = replacePlainTerminalState(
+      undefined,
+      fleetStateWithCoverage(
+        [
+          terminal({
+            terminalId: "home",
+            hostId: HOST_ID,
+          }),
+        ],
+        "complete-local",
+      ),
+    );
+    expect(local.coverage).toBe("complete-local");
+    expect(local.servingHostId).toBeNull();
+    const ignoredFleet = seedPlainTerminalList(
+      local,
+      fleetState([terminal({ terminalId: "fleet" })]),
+      capturePlainTerminalProjectionBarrier(local),
+    );
+    expect(ignoredFleet).toBe(local);
   });
 });
 
@@ -413,7 +583,7 @@ describe("legacy terminal migration coordination", () => {
     return {
       hostId: HOST_ID,
       scope: SCOPE,
-      capability: overrides.capability ?? capability(V1_FAMILY, true),
+      capability: overrides.capability ?? capability(V2_FAMILY, true),
       canMutate: overrides.canMutate ?? true,
       importLegacy:
         overrides.importLegacy ??
@@ -588,5 +758,63 @@ describe("legacy terminal migration coordination", () => {
     });
     expect(importLegacy).toHaveBeenCalledTimes(1);
     expect(secondAdapter.adoptCanonical).toHaveBeenCalledWith(winner);
+  });
+});
+
+describe("plain terminal JSON tuple identity keys", () => {
+  it("does not collide host/scope stream keys on NUL, quotes, or backslashes", () => {
+    const pairs: readonly (readonly [
+      readonly [string, PlainTerminalScope],
+      readonly [string, PlainTerminalScope],
+    ])[] = [
+      [
+        ["a", { kind: "epic", epicId: "b\u0000independent" }],
+        ["a\u0000epic:b", { kind: "independent" }],
+      ],
+      [
+        ["a", { kind: "epic", epicId: 'b","independent' }],
+        ['a","epic:b', { kind: "independent" }],
+      ],
+      [
+        ["a\\", { kind: "epic", epicId: "b" }],
+        ["a", { kind: "epic", epicId: "\\b" }],
+      ],
+    ];
+    for (const [left, right] of pairs) {
+      expect(plainTerminalHostScopeIdentityKey(left[0], left[1])).not.toBe(
+        plainTerminalHostScopeIdentityKey(right[0], right[1]),
+      );
+    }
+  });
+
+  it("does not collide migration keys when NUL splits host, scope, or terminal", () => {
+    const pairs: readonly (readonly [
+      readonly [string, PlainTerminalScope, string],
+      readonly [string, PlainTerminalScope, string],
+    ])[] = [
+      [
+        ["a", { kind: "epic", epicId: "b" }, "c\u0000d"],
+        ["a", { kind: "epic", epicId: "b\u0000c" }, "d"],
+      ],
+      [
+        ["a", { kind: "epic", epicId: "b\u0000independent" }, "term"],
+        ["a\u0000epic:b", { kind: "independent" }, "term"],
+      ],
+      [
+        ["a", { kind: "epic", epicId: 'b","c' }, "d"],
+        ["a", { kind: "epic", epicId: "b" }, 'c","d'],
+      ],
+      [
+        ["a\\", { kind: "epic", epicId: "b" }, "c"],
+        ["a", { kind: "epic", epicId: "\\b" }, "c"],
+      ],
+    ];
+    for (const [left, right] of pairs) {
+      expect(
+        plainTerminalMigrationIdentityKey(left[0], left[1], left[2]),
+      ).not.toBe(
+        plainTerminalMigrationIdentityKey(right[0], right[1], right[2]),
+      );
+    }
   });
 });

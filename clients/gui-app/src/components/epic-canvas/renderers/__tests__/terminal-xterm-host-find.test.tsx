@@ -272,6 +272,7 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
     >
       <TerminalXtermHost
         sessionId={props.sessionId}
+        hostId="host-1"
         tileKind={props.tileKind}
         instanceId={props.instanceId}
         effectiveCols={80}
@@ -361,6 +362,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     const rendered = render(
       <TerminalGridMeasureProbe
         sessionId={sessionId}
+        hostId="host-1"
         instanceId={instanceId}
         tileKind="terminal"
         chrome="flush"
@@ -376,6 +378,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     rendered.rerender(
       <TerminalXtermHost
         sessionId={sessionId}
+        hostId="host-1"
         tileKind="terminal"
         instanceId={instanceId}
         effectiveCols={80}
@@ -406,6 +409,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <StrictMode>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -444,6 +448,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -475,6 +480,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
   it("clears the glyph atlas before refreshing when a hidden pane becomes visible", () => {
     const hostProps = {
       sessionId: "test-session",
+      hostId: "host-1",
       tileKind: "terminal",
       instanceId: "test-instance",
       effectiveCols: 80,
@@ -528,6 +534,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           <PaneVisibilityContext value>
             <TerminalXtermHost
               sessionId="split-left"
+              hostId="host-1"
               tileKind="terminal"
               instanceId="split-left-instance"
               effectiveCols={80}
@@ -550,6 +557,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           <PaneVisibilityContext value>
             <TerminalXtermHost
               sessionId="split-right"
+              hostId="host-1"
               tileKind="terminal"
               instanceId="split-right-instance"
               effectiveCols={80}
@@ -589,6 +597,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -628,6 +637,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1050,6 +1060,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1078,6 +1089,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1136,6 +1148,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session-reset"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance-reset"
         effectiveCols={80}
@@ -1205,6 +1218,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session-reset-binary"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance-reset-binary"
         effectiveCols={80}
@@ -1267,6 +1281,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <PaneVisibilityContext.Provider value={false}>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -1293,6 +1308,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       <PaneVisibilityContext.Provider value>
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind="terminal"
           instanceId="test-instance"
           effectiveCols={80}
@@ -1319,6 +1335,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1345,6 +1362,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     const { rerender } = render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1369,6 +1387,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     rerender(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1410,6 +1429,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           </button>
           <TerminalXtermHost
             sessionId="test-session"
+            hostId="host-1"
             tileKind="terminal"
             instanceId="test-instance"
             effectiveCols={80}
@@ -1462,6 +1482,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           </button>
           <TerminalXtermHost
             sessionId="test-session"
+            hostId="host-1"
             tileKind="terminal"
             instanceId="test-instance"
             effectiveCols={80}
@@ -1505,6 +1526,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1563,6 +1585,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       render(
         <TerminalXtermHost
           sessionId="test-session"
+          hostId="host-1"
           tileKind={tileKind}
           instanceId="test-instance"
           effectiveCols={80}
@@ -1613,6 +1636,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}
@@ -1660,6 +1684,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     render(
       <TerminalXtermHost
         sessionId="test-session"
+        hostId="host-1"
         tileKind="terminal"
         instanceId="test-instance"
         effectiveCols={80}

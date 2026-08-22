@@ -203,7 +203,11 @@ export function useEpicSharingPanelController(
     });
 
     if (result.succeededNewInvites.length > 0) {
-      toast.success(`Invited ${result.succeededNewInvites.length} people`);
+      const invitedNoun =
+        result.succeededNewInvites.length === 1 ? "person" : "people";
+      toast.success(
+        `Invited ${result.succeededNewInvites.length} ${invitedNoun}`,
+      );
     }
 
     result.succeededReInvites.forEach((invite) => {

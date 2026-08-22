@@ -28,9 +28,22 @@ export const PLAIN_TERMINAL_RELEASE_LINGER_MS = 10 * 60 * 1000;
  */
 export const MAX_LINGERING_PLAIN_TERMINALS = 6;
 
+/**
+ * Owner-scoped identity for warm-presentation lookup. Terminal sessions
+ * always carry the bound owner `hostId`. `hostId: null` is the explicit
+ * hostless/non-terminal compatibility path — never inferred from the
+ * active or serving host.
+ */
+export type TerminalWarmSessionIdentity = {
+  readonly hostId: string | null;
+  readonly sessionId: string;
+};
+
 interface RegistryEntry {
   readonly instanceId: string;
   readonly handle: TerminalSessionStoreHandle;
+  /** Bound owner host. `null` is the explicit hostless path. */
+  readonly hostId: string | null;
   readonly unsubscribeStatus: () => void;
   leases: number;
   /** Pending timed eviction for a lease-free, still-running plain terminal. */
@@ -119,6 +132,7 @@ export class TerminalSessionRegistry {
   acquire(
     instanceId: string,
     factory: () => TerminalSessionStoreHandle,
+    hostId: string | null,
   ): TerminalSessionStoreHandle {
     const existing = this.entries.get(instanceId);
     if (existing !== undefined) {
@@ -130,6 +144,7 @@ export class TerminalSessionRegistry {
     const entry: RegistryEntry = {
       instanceId,
       handle,
+      hostId,
       unsubscribeStatus: this.watchDefunct(instanceId, handle),
       leases: 1,
       lingerTimer: null,
@@ -180,12 +195,13 @@ export class TerminalSessionRegistry {
    * new id is already registered (remount, StrictMode second pass).
    */
   findAdoptableInstanceId(
-    sessionId: string,
+    identity: TerminalWarmSessionIdentity,
     newInstanceId: string,
   ): string | null {
     if (this.entries.has(newInstanceId)) return null;
     for (const entry of this.entries.values()) {
-      if (entry.handle.sessionId !== sessionId) continue;
+      if (entry.handle.sessionId !== identity.sessionId) continue;
+      if (entry.hostId !== identity.hostId) continue;
       if (entry.leases > 0) continue;
       return entry.instanceId;
     }
@@ -209,6 +225,7 @@ export class TerminalSessionRegistry {
     const rekeyed: RegistryEntry = {
       instanceId: newInstanceId,
       handle: entry.handle,
+      hostId: entry.hostId,
       unsubscribeStatus: this.watchDefunct(newInstanceId, entry.handle),
       leases: 0,
       lingerTimer: null,
