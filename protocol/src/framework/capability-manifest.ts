@@ -47,3 +47,34 @@ export function mergeConnectionManifests(
   }
   return { ...manifest, ...optionalManifest };
 }
+
+/**
+ * Selects the newest installed minor on the major offered by this peer.
+ *
+ * Connection manifests expose one canonical version per method, so a host
+ * that installs multiple majors must tailor its open acknowledgement to the
+ * connecting peer. When the offered major is not installed we retain the
+ * host's canonical version and let the ordinary compatibility checker report
+ * the missing bridge. Methods outside `hostManifest` are never added.
+ */
+export function selectConnectionManifestForPeer(
+  registry: ManifestRegistry,
+  hostManifest: ConnectionManifest,
+  peerManifest: ConnectionManifest,
+): ConnectionManifest {
+  const selected: Record<string, SchemaVersion> = {};
+
+  for (const [method, hostCanonical] of Object.entries(hostManifest)) {
+    const peerCanonical = peerManifest[method];
+    const line =
+      peerCanonical === undefined
+        ? undefined
+        : registry[method]?.[peerCanonical.major];
+    selected[method] =
+      line === undefined
+        ? hostCanonical
+        : { major: peerCanonical.major, minor: line.latestMinor };
+  }
+
+  return selected;
+}

@@ -22,6 +22,7 @@ import {
   type LandingTerminalAuthorityEntry,
 } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
 import { terminalSessionKey } from "@/stores/home/landing-terminal-store";
+import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 const CAPABLE_CLOSE_RETRY_MAX_MS = 8_000;
@@ -105,8 +106,11 @@ function scheduleCapableCloseRetry(args: {
     args.refs.dialable.current.get(args.pending.hostId) !== true ||
     currentEntry?.authority.capability.status !== "capable" ||
     !currentEntry.authority.canMutate ||
-    currentEntry.authority.collection?.terminalsById[args.pending.sessionId] ===
-      undefined
+    getPlainTerminal(
+      currentEntry.authority.collection,
+      args.pending.hostId,
+      args.pending.sessionId,
+    ) === undefined
   ) {
     return;
   }
@@ -140,8 +144,11 @@ function dispatchCapableClose(args: {
   readonly signalRetry: () => void;
 }): void {
   if (
-    args.entry.authority.collection?.terminalsById[args.pending.sessionId] ===
-    undefined
+    getPlainTerminal(
+      args.entry.authority.collection,
+      args.pending.hostId,
+      args.pending.sessionId,
+    ) === undefined
   ) {
     useLandingTerminalStore
       .getState()
@@ -155,7 +162,10 @@ function dispatchCapableClose(args: {
     args.key,
   ]);
   void args.entry.mutations.close
-    .mutateAsync({ terminalId: args.pending.sessionId })
+    .mutateAsync({
+      hostId: args.pending.hostId,
+      terminalId: args.pending.sessionId,
+    })
     .then(
       () => {
         useLandingTerminalStore

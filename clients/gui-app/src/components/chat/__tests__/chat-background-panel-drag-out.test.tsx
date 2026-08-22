@@ -62,6 +62,7 @@ import {
   type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { BackgroundItemsPanel } from "@/components/chat/chat-background-items-panel";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
@@ -128,37 +129,46 @@ function stubPaneGeometry(): void {
   );
 }
 
+/**
+ * The root DnD provider reads the app's query client (a sidebar reparent
+ * committed over RPC invalidates the moved row's record query), so the harness
+ * supplies one the way the app shell does.
+ */
+const queryClient = new QueryClient();
+
 function Harness(props: { readonly paneId: string }): ReactNode {
   return (
     <EpicSessionContext.Provider value={epicHandle}>
       <TabHostProvider hostId={HOST_ID}>
         <TooltipProvider>
-          <RootDndProvider>
-            <div data-testid="drag-harness" />
-            <BackgroundItemsPanel
-              items={[]}
-              epicId={EPIC_ID}
-              chatId={CHAT_ID}
-              viewTabId={TAB_ID}
-              canAct
-              readOnly={false}
-              pendingStopTaskIds={new Set()}
-              stopAllPending={false}
-              sessionStopPending={false}
-              turnActive={false}
-              scrollRegionMaxHeightClass="max-h-96"
-              separated={false}
-              onItemClick={() => undefined}
-              onStopItem={() => null}
-              onStopAll={() => null}
-              onStopSession={() => null}
-            />
-            <PaneDropZone
-              paneId={props.paneId}
-              viewTabId={TAB_ID}
-              tabCount={1}
-            />
-          </RootDndProvider>
+          <QueryClientProvider client={queryClient}>
+            <RootDndProvider>
+              <div data-testid="drag-harness" />
+              <BackgroundItemsPanel
+                items={[]}
+                epicId={EPIC_ID}
+                chatId={CHAT_ID}
+                viewTabId={TAB_ID}
+                canAct
+                readOnly={false}
+                pendingStopTaskIds={new Set()}
+                stopAllPending={false}
+                sessionStopPending={false}
+                turnActive={false}
+                scrollRegionMaxHeightClass="max-h-96"
+                separated={false}
+                onItemClick={() => undefined}
+                onStopItem={() => null}
+                onStopAll={() => null}
+                onStopSession={() => null}
+              />
+              <PaneDropZone
+                paneId={props.paneId}
+                viewTabId={TAB_ID}
+                tabCount={1}
+              />
+            </RootDndProvider>
+          </QueryClientProvider>
         </TooltipProvider>
       </TabHostProvider>
     </EpicSessionContext.Provider>

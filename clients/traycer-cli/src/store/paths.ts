@@ -75,6 +75,22 @@ const HOST_LOG_FILENAME = "host.log";
 // an archive (see `host-log-rotation.ts`).
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_PID_FILENAME = "pid.json";
+// The host's delegated-credential store, under the host runtime root. Spelled
+// out here rather than imported: the host owns these names, and this repo has
+// no import path to it - the same arrangement as every other host-written
+// contract read below.
+const HOST_CREDENTIAL_SUBDIR = "auth";
+const HOST_CREDENTIAL_FILENAME = "credentials.json";
+const HOST_NEEDS_REAUTH_FILENAME = "needs-reauth.json";
+// The host's IDENTITY subtree - a different plane from `auth/` above, holding
+// the coordination keypair, the enrollment record, and its own sticky
+// needs-reauth marker, which happens to share the auth marker's filename.
+// Spelled out here for the same reason: host-owned names, no import path.
+const HOST_IDENTITY_SUBDIR = "identity";
+// The dev identity pool's root (`~/.traycer/host/dev/identities/<name>`), the
+// ONLY thing that can make a host's identity home differ from its host home.
+const HOST_DEV_SUBDIR = "dev";
+const HOST_DEV_IDENTITIES_SUBDIR = "identities";
 const HOST_UPDATE_PROGRESS_FILENAME = "update-progress.json";
 const HOST_SUBSTRATE_FILENAME = "substrate.json";
 const HOST_TRANSITION_FILENAME = "transition.json";
@@ -187,6 +203,89 @@ export function hostLogBackupPath(
   environment: Environment | undefined,
 ): string {
   return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
+}
+/**
+ * The host's OWN delegated credential - the one a connected owner client mints
+ * FOR the host so it can keep working after that client disconnects. Not the
+ * signed-in human's credentials (`~/.traycer/cli/credentials`), which the CLI
+ * owns and this one is deliberately separate from.
+ *
+ * Read here by string path, like every other host-written on-disk contract in
+ * this module: the host is an external component, and its store module is not
+ * importable from this repo at all.
+ */
+export function hostCredentialPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_CREDENTIAL_SUBDIR,
+    HOST_CREDENTIAL_FILENAME,
+  );
+}
+/**
+ * The host's sticky "this credential family is dead and refreshing cannot fix
+ * it - ask the next connected owner" marker.
+ *
+ * Written when the host burns a credential and removed by the next successful
+ * adopt/refresh, so its PRESENCE is the whole verdict; the contents are
+ * diagnostics. Doctor reads only whether it is there and, when it is, the
+ * `reason`/`recordedAt` it carries.
+ */
+export function hostNeedsReauthPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_CREDENTIAL_SUBDIR,
+    HOST_NEEDS_REAUTH_FILENAME,
+  );
+}
+/**
+ * The host's IDENTITY-plane sticky re-auth marker, in the DEFAULT identity
+ * home - and the qualifier is the whole point of this function's existence.
+ *
+ * The host resolves its identity home as `devIdentityHomeOverride ?? <host
+ * home>`. That override is installed IN THE HOST PROCESS by the dev identity
+ * pool walk and roots under {@link hostDevIdentityPoolRoot}; nothing the CLI
+ * can read says which identity a given host acquired, or whether it acquired
+ * one at all. So this path is right for every host that is not a pool
+ * participant and simply looks elsewhere for one that is - which is why the
+ * probe reading it is never allowed to report the identity plane "clean", and
+ * defers to the host's own `host.doctor` (see `doctor/engine.ts`).
+ *
+ * Distinct from {@link hostNeedsReauthPath}, which is the AUTH plane's marker
+ * of the same filename under `auth/`. Different plane, different recovery.
+ */
+export function hostIdentityNeedsReauthPath(
+  environment: Environment | undefined,
+): string {
+  return join(
+    hostHomeDir(environment),
+    HOST_IDENTITY_SUBDIR,
+    HOST_NEEDS_REAUTH_FILENAME,
+  );
+}
+/**
+ * Root of the dev identity pool (`~/.traycer/host/dev/identities`), whose
+ * per-identity subdirectories are the identity homes a dev host can acquire in
+ * place of its own host home.
+ *
+ * Deliberately NOT `hostHomeDir("dev")`-derived: that resolves a dev-desktop
+ * RUN slot (`host/dev-runs/<slot>`) when one is configured, while the pool is
+ * one per machine and always sits at the plain `dev` home. Reading it through
+ * the slot-aware helper would look for the pool inside a single run's tree and
+ * conclude there is none - the failure direction that turns "cannot verify"
+ * back into a false "clean".
+ *
+ * Read for EXISTENCE only. What it can establish is narrow and negative: with
+ * no pool on this machine, no host here can have an overridden identity home,
+ * so the default one is the only one and silence is honest. Its contents are
+ * never attributed to a host - which identity a running host holds is
+ * knowledge that exists only inside that process.
+ */
+export function hostDevIdentityPoolRoot(): string {
+  return join(HOST_HOME, HOST_DEV_SUBDIR, HOST_DEV_IDENTITIES_SUBDIR);
 }
 /** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
 export function hostSubstratePath(

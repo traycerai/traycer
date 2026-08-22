@@ -49,6 +49,7 @@ import {
   installManagedCommandChatSession,
   type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import { PaneDropZone } from "@/components/epic-canvas/dnd/pane-drop-zone";
@@ -186,6 +187,8 @@ function restartCard(): ReactNode {
   );
 }
 
+const queryClient = new QueryClient();
+
 function Harness(props: {
   readonly paneId: string;
   /** `false` renders the card outside any `EpicViewTabContext`, the way a
@@ -193,12 +196,17 @@ function Harness(props: {
   readonly withViewTab: boolean;
   readonly card: ReactNode;
 }): ReactNode {
+  // The root DnD provider reads the app's query client (an RPC-committed
+  // sidebar reparent invalidates the moved row's record query), so the
+  // harness supplies one the way the app shell does.
   const canvas = (
-    <RootDndProvider>
-      <div data-testid="drag-harness" />
-      {props.card}
-      <PaneDropZone paneId={props.paneId} viewTabId={TAB_ID} tabCount={1} />
-    </RootDndProvider>
+    <QueryClientProvider client={queryClient}>
+      <RootDndProvider>
+        <div data-testid="drag-harness" />
+        {props.card}
+        <PaneDropZone paneId={props.paneId} viewTabId={TAB_ID} tabCount={1} />
+      </RootDndProvider>
+    </QueryClientProvider>
   );
   return (
     <ChatTranscriptProvider value={{ chatId: CHAT_ID, hostId: HOST_ID }}>

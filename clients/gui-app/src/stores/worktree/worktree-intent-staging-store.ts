@@ -309,6 +309,89 @@ interface WorktreeIntentStagingStore {
    * flight in this renderer session.
    */
   readonly revisionByKey: Readonly<Record<string, number | undefined>>;
+  /**
+   * Whether this slot is empty *because a dispatch consumed it*, with nothing
+   * touching it since.
+   *
+   * A send takes the staged pick at dispatch and may need to hand it back
+   * (rejected ack, or a restored prompt after a reconnect). "Can I hand it
+   * back?" is not answerable from the revision counter: a SECOND send staging
+   * and consuming its own pick advances the counter twice and leaves the slot
+   * empty, which is indistinguishable from the user deliberately clearing it -
+   * yet the first case has nothing to protect and the second is a choice that
+   * must be respected. Every user mutation below clears this flag; only
+   * {@link WorktreeIntentStagingState.consumeForDispatch} sets it.
+   */
+  readonly consumedForDispatchByKey: Readonly<
+    Record<string, DispatchConsumptionMark | undefined>
+  >;
+  /**
+   * Worktree refs swept while a consumption was outstanding, accumulated per
+   * slot.
+   *
+   * The sweep cannot test the right entries by itself: a hand-back stages the
+   * ACTION'S OWN pick, and several dispatches can have taken different picks
+   * from this slot over time, so the mark's entries describe only the latest.
+   * Testing those would clear a mark whose survivor is irrelevant, or spare
+   * one whose own worktree is gone. So the sweep records WHAT was removed and
+   * each hand-back tests its own intent against it - the restore is the moment
+   * the correct entries are in hand, the same move the mark itself uses one
+   * level down.
+   *
+   * LIFETIME: dropped exactly when the mark is, by every mutation that
+   * resolves the slot. No outstanding consumption means nothing left to refuse,
+   * so a key cannot accrete sweep history.
+   */
+  readonly sweptRefsByKey: Readonly<
+    Record<string, RemovedWorktreeRefs | undefined>
+  >;
+  /** Take the staged intent for a dispatch, marking the slot as consumed. */
+  readonly consumeForDispatch: (
+    key: WorktreeStagingKey,
+    clientActionId: string,
+  ) => void;
+  /**
+   * Put this slot back exactly as a dispatch that never left the client found
+   * it: its pick, and everything its consume DISPLACED.
+   *
+   * {@link WorktreeIntentStagingState.consumeForDispatch} is unconditional - a
+   * dispatch is the slot's current state whether or not it took a pick - so
+   * its rollback has to be unconditional too. Restoring only the PICK leaves
+   * the intent-free case marked for an action that never became pending, and
+   * nothing can ever resolve such a mark: no ack, sweep or restoration names
+   * it. It stands until some unrelated user mutation, refusing every
+   * owner-matched hand-back in the meantime against a phantom owner.
+   *
+   * `mark` is what the consume displaced, NOT a clear. A send that never
+   * reached the host supersedes nothing, so an earlier dispatch that really
+   * did take this slot is still its owner. Dropping the mark instead would be
+   * the opposite lie from the phantom - it reports the slot as "empty because
+   * the user chose to send without a pick", which both strands that
+   * dispatch's own hand-back and sends a restored prompt back UNBOUND, since
+   * {@link stagedWorktreeIntentAwaitsDispatchOutcome} is the gate the
+   * prompt-restore path checks.
+   *
+   * The SUSPENDED PATHS ride along for the same reason, and their loss fails
+   * OPEN rather than merely losing a pick. `consumeForDispatch` drops them
+   * too, but `stagedWorktreeIntentIsSuspended` - the gate that refuses to
+   * dispatch a staged create against a workspace whose metadata never
+   * resolved - only bites when the suspended set INTERSECTS the staged
+   * intent. So a slot routinely carries suspended paths the gate ignores (the
+   * workspace selector records every unresolved folder, staged or not), the
+   * refused dispatch takes them with it, and the retry of the very draft left
+   * in the composer sails past a gate that has nothing left to test.
+   *
+   * {@link WorktreeIntentStagingState.setIntent} cannot serve here: it drops
+   * the mark only on its non-empty branch, and a `null` intent takes the
+   * delete-and-bump path that leaves the mark exactly where it was.
+   */
+  readonly rollBackDispatch: (
+    key: WorktreeStagingKey,
+    restore: {
+      readonly intent: WorktreeIntent | null;
+      readonly displaced: DisplacedDispatchState;
+    },
+  ) => void;
   /** Merge one folder's intent into the staged intent for `key`. */
   readonly stageEntry: (
     key: WorktreeStagingKey,
@@ -323,6 +406,43 @@ interface WorktreeIntentStagingStore {
   readonly setIntent: (
     key: WorktreeStagingKey,
     intent: WorktreeIntent | null,
+  ) => void;
+  /**
+   * Stage a pick handed back by a DEAD dispatch, rather than chosen by the
+   * user.
+   *
+   * The difference is what it may clear. {@link setIntent} drops the dispatch
+   * mark and the swept-refs record with the write, because a fresh user pick
+   * supersedes whatever a dispatch left behind - "one lifetime, one drop".
+   * A hand-back supersedes nothing: the gate it passes
+   * ({@link stagedWorktreeIntentAwaitsDispatchOutcome}) is deliberately
+   * ownership-blind, so the mark it would clear routinely belongs to a
+   * DIFFERENT, still-pending dispatch. Clearing that dispatch's swept-refs
+   * destroys the evidence its own rejection needs, and the rejection then
+   * names a deleted worktree as re-pickable or drops the warning entirely.
+   *
+   * So this clears the mark and swept refs only when they are `clientActionId`'s
+   * own, and otherwise leaves the other dispatch's records standing.
+   */
+  /**
+   * Take back a pick this dispatch's hand-back staged, when its prompt could
+   * not reach the composer after all.
+   *
+   * Scoped by REVISION rather than by a blanket clear: every mutation of this
+   * slot bumps `revisionByKey`, so an expectation that still matches proves
+   * nothing has touched the slot since the hand-back wrote it - not the user,
+   * not a newer dispatch's consume, not a purge. Anything else and this is a
+   * no-op, which is the fail-closed direction. A blind clear here would
+   * destroy a pick that another dispatch legitimately owns.
+   */
+  readonly releaseIntentForDispatch: (
+    key: WorktreeStagingKey,
+    expectedRevision: number,
+  ) => void;
+  readonly restoreIntentForDispatch: (
+    key: WorktreeStagingKey,
+    intent: WorktreeIntent,
+    clientActionId: string,
   ) => void;
   /** Drop a single workspace's staged entry; clears the key once empty. */
   readonly unstageEntry: (
@@ -413,6 +533,225 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
+/**
+ * Why a consumed slot is in the state it is in.
+ *
+ * `"awaiting"` - a dispatch took the pick and may hand it back.
+ * `"purged"` - a worktree sweep ran while that dispatch was in flight, so the
+ * pick may name a worktree that no longer exists. The hand-back refuses, and
+ * unlike a user's own newer choice this one is worth SAYING: the prompt comes
+ * back unbound through no decision of theirs.
+ */
+/**
+ * The one outstanding dispatch for a slot: which action took it.
+ *
+ * THE STATE MACHINE, in full, because three defects came from parts of it
+ * living in different heads:
+ *
+ *  - A dispatch RECORDS a mark, whether or not it took a pick. An intent-free
+ *    send is still this slot's current state, and skipping it left an earlier
+ *    action's mark standing so that action could hand back a choice the user
+ *    had already superseded. (Same rule as a restored prompt's terminal claim:
+ *    having nothing to give back is a state, not an absence of one.)
+ *  - Any USER mutation drops the mark - and the swept refs with it, one
+ *    lifetime. A new pick, a clear, an unstage: all of them make whatever a
+ *    dead dispatch was holding irrelevant.
+ *  - A REJECTION may hand its pick back only if the mark is still ITS OWN: the
+ *    pick has an owner. A RESTORATION may not match on owner - it hands back a
+ *    prompt, and the action whose prompt returns is not necessarily the one
+ *    that consumed last.
+ *  - Whether the pick is still VALID is not the mark's business: sweeps record
+ *    what they removed (`sweptRefsByKey`) and each hand-back tests its own
+ *    intent, because the mark describes only the latest consumption.
+ */
+export interface DispatchConsumptionMark {
+  readonly clientActionId: string;
+}
+
+/**
+ * Record WHAT a sweep removed, per consumed slot, for the hand-backs that have
+ * not happened yet.
+ *
+ * Slots CONSUMED by an in-flight dispatch are invisible to the intent loop -
+ * they hold no intent to filter, because the dispatch took it. And this store
+ * cannot do the intersection test itself: the pick lives on the pending
+ * action, and several dispatches may have taken DIFFERENT picks from one slot
+ * over time, so the mark describes only the latest. What it can record is that
+ * a sweep happened while a dispatch was out. So every host-matching consumed
+ * slot accumulates the removed refs, and each hand-back tests its OWN intent
+ * against them later ({@link partitionSweptIntent}) - the moment
+ * the correct entries are actually in hand.
+ *
+ * No filtering here, and no "purged" state on the mark: an earlier design
+ * decided at PURGE time and either refused a hand-back whose worktree
+ * survived, or spared one whose worktree was gone. Deciding at hand-back time
+ * is what makes the refusal - and the statement that now accompanies it -
+ * true of the intent it is about.
+ *
+ * A slot whose host segment is EMPTY is the unresolved-host bucket, which no
+ * host can claim and any host's sweep may concern, so it accumulates from
+ * every sweep rather than being skipped.
+ *
+ * Extracted so the purge updater stays under its complexity budget.
+ */
+function accumulateSweptRefs(
+  swept: Readonly<Record<string, RemovedWorktreeRefs | undefined>>,
+  marks: Readonly<Record<string, DispatchConsumptionMark | undefined>>,
+  sweptSegment: string,
+  removed: RemovedWorktreeRefs,
+): Readonly<Record<string, RemovedWorktreeRefs | undefined>> {
+  const next: Record<string, RemovedWorktreeRefs | undefined> = { ...swept };
+  let changed = false;
+  for (const id of Object.keys(marks)) {
+    if (marks[id] === undefined) continue;
+    const slotSegment = serializedStagingKeyHostSegment(id);
+    if (slotSegment !== "" && slotSegment !== sweptSegment) continue;
+    const prior = next[id];
+    next[id] = {
+      worktreePaths: new Set([
+        ...(prior?.worktreePaths ?? []),
+        ...removed.worktreePaths,
+      ]),
+      branches: [...(prior?.branches ?? []), ...removed.branches],
+    };
+    changed = true;
+  }
+  return changed ? next : swept;
+}
+
+/**
+ * Split a hand-back into what a mid-dispatch sweep took and what it left.
+ *
+ * `WorktreeIntent` permits one entry PER WORKSPACE FOLDER, so a multi-repo
+ * staging is several independent bindings that happen to travel together.
+ * Answering "was this swept" for the whole intent - an any-match boolean, as
+ * this once was - made one removed worktree forfeit every surviving folder's
+ * binding, and then told the user "its staged worktree no longer exists" as
+ * though there had been one. Every caller NAMES folders, so no caller can use
+ * the coarser answer; the boolean is gone rather than left as a second way to
+ * ask. The ordinary purge loop has always filtered
+ * per entry; this is the same granularity for the hand-back.
+ *
+ * Both halves are returned because the founding invariant is now per ENTRY:
+ * each binding is either restored or stated, and a partial sweep produces one
+ * of each from a single intent. `null` on either side means that half is
+ * empty - a `WorktreeIntent` with no entries is not a thing the rest of the
+ * system expects.
+ */
+export interface SweptIntentPartition {
+  readonly survivors: WorktreeIntent | null;
+  readonly swept: WorktreeIntent | null;
+}
+
+export function partitionSweptIntent(
+  key: WorktreeStagingKey,
+  intent: WorktreeIntent,
+): SweptIntentPartition {
+  const swept =
+    useWorktreeIntentStagingStore.getState().sweptRefsByKey[
+      worktreeStagingKeyString(key)
+    ];
+  if (swept === undefined) return { survivors: intent, swept: null };
+  const gone = intent.entries.filter((entry) =>
+    worktreeFolderIntentReferencesRemoved(entry, swept),
+  );
+  if (gone.length === 0) return { survivors: intent, swept: null };
+  const kept = intent.entries.filter(
+    (entry) => !worktreeFolderIntentReferencesRemoved(entry, swept),
+  );
+  return {
+    survivors: kept.length === 0 ? null : { entries: kept },
+    swept: { entries: gone },
+  };
+}
+
+/** Shared by the mark and its swept-refs companion - one lifetime, one drop. */
+function withoutDispatchMark<T>(
+  marks: Readonly<Record<string, T | undefined>>,
+  id: string,
+): Readonly<Record<string, T | undefined>> {
+  if (marks[id] === undefined) return marks;
+  const next = { ...marks };
+  delete next[id];
+  return next;
+}
+
+/**
+ * Whether the slot is empty because THIS action's dispatch took it and nothing
+ * has touched it since - the only state in which it may hand its pick back.
+ *
+ * It deliberately does NOT record which action consumed the slot. The last
+ * consumer is not the one owed a hand-back: two sends can each consume a pick
+ * and die, and the one whose PROMPT comes back to the composer is the one
+ * whose binding must come with it, whichever consumed last. Precedence between
+ * several dead claimants is decided by the caller (see the snapshot handler),
+ * not by ownership of the mark.
+ */
+export function stagedWorktreeIntentAwaitsDispatchOutcome(
+  key: WorktreeStagingKey,
+): boolean {
+  const id = worktreeStagingKeyString(key);
+  const state = useWorktreeIntentStagingStore.getState();
+  return (
+    state.intentByKey[id] === undefined &&
+    state.consumedForDispatchByKey[id] !== undefined
+  );
+}
+
+/**
+ * Whether a hand-back is being refused because a sweep removed worktrees while
+ * the dispatch was in flight, rather than because the user made a newer
+ * choice. Only the former is worth stating - telling someone their worktree
+ * was deleted when they simply re-picked would be a lie.
+ */
+/**
+ * The slot state a consume DISPLACES rather than reads - everything
+ * {@link WorktreeIntentStagingState.consumeForDispatch} drops that the pick
+ * itself does not carry.
+ *
+ * Captured as one value so the rollback cannot restore a proper subset of it:
+ * the first version of this restored the mark alone and left the suspended
+ * paths behind, which fails the dispatch gate open.
+ */
+export interface DisplacedDispatchState {
+  readonly mark: DispatchConsumptionMark | undefined;
+  readonly suspendedWorkspacePaths: readonly string[] | undefined;
+}
+
+/**
+ * What a dispatch is about to displace, captured so a dispatch that never
+ * leaves the client can put it back. See
+ * {@link WorktreeIntentStagingState.rollBackDispatch}.
+ */
+export function stagedDispatchDisplacement(
+  key: WorktreeStagingKey,
+): DisplacedDispatchState {
+  const state = useWorktreeIntentStagingStore.getState();
+  const id = worktreeStagingKeyString(key);
+  return {
+    mark: state.consumedForDispatchByKey[id],
+    suspendedWorkspacePaths: state.suspendedWorkspacePathsByKey[id],
+  };
+}
+
+/**
+ * Whether the slot is awaiting THIS action's outcome specifically - the bar a
+ * hand-back of the PICK has to clear. See {@link DispatchConsumptionMark}.
+ */
+export function stagedWorktreeIntentAwaitsDispatchFrom(
+  key: WorktreeStagingKey,
+  clientActionId: string,
+): boolean {
+  const mark =
+    useWorktreeIntentStagingStore.getState().consumedForDispatchByKey[
+      worktreeStagingKeyString(key)
+    ];
+  return (
+    stagedWorktreeIntentAwaitsDispatchOutcome(key) &&
+    mark?.clientActionId === clientActionId
+  );
+}
+
 function incrementStagingRevision(
   revisionByKey: Readonly<Record<string, number | undefined>>,
   id: string,
@@ -430,6 +769,8 @@ export const useWorktreeIntentStagingStore =
         intentByKey: {},
         suspendedWorkspacePathsByKey: {},
         revisionByKey: {},
+        consumedForDispatchByKey: {},
+        sweptRefsByKey: {},
         stageEntry: (key, entry) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -440,6 +781,11 @@ export const useWorktreeIntentStagingStore =
                 [id]: mergeWorktreeIntentEntry(existing, entry),
               },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         stageIntent: (key, intent) =>
@@ -453,6 +799,44 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: merged },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
+            };
+          }),
+        releaseIntentForDispatch: (key, expectedRevision) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            if ((state.revisionByKey[id] ?? 0) !== expectedRevision) {
+              return state;
+            }
+            const intentByKey = { ...state.intentByKey };
+            delete intentByKey[id];
+            return {
+              intentByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+            };
+          }),
+        restoreIntentForDispatch: (key, intent, clientActionId) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            // Only this dispatch's own records go with the write. Another
+            // dispatch's mark - and, critically, its accumulated swept refs -
+            // outlive a hand-back that was never about it.
+            const ownsMark =
+              state.consumedForDispatchByKey[id]?.clientActionId ===
+              clientActionId;
+            return {
+              intentByKey: { ...state.intentByKey, [id]: intent },
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: ownsMark
+                ? withoutDispatchMark(state.consumedForDispatchByKey, id)
+                : state.consumedForDispatchByKey,
+              sweptRefsByKey: ownsMark
+                ? withoutDispatchMark(state.sweptRefsByKey, id)
+                : state.sweptRefsByKey,
             };
           }),
         setIntent: (key, intent) =>
@@ -479,6 +863,11 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: next,
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         unstageEntry: (key, workspacePath) =>
@@ -518,6 +907,11 @@ export const useWorktreeIntentStagingStore =
               intentByKey,
               suspendedWorkspacePathsByKey,
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         migrateKeyForAllHosts: (fromKey, toKey) =>
@@ -573,6 +967,11 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         stageBranchName: (key, workspacePath, name) =>
@@ -588,6 +987,11 @@ export const useWorktreeIntentStagingStore =
             return {
               intentByKey: { ...state.intentByKey, [id]: next ?? undefined },
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
             };
           }),
         setSuspendedWorkspacePaths: (key, workspacePaths) =>
@@ -626,6 +1030,71 @@ export const useWorktreeIntentStagingStore =
               // An explicit clear after a send consumes the slot is still a
               // newer user choice. Record it so a rejected send cannot put the
               // old selection back.
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              consumedForDispatchByKey: withoutDispatchMark(
+                state.consumedForDispatchByKey,
+                id,
+              ),
+              sweptRefsByKey: withoutDispatchMark(state.sweptRefsByKey, id),
+            };
+          }),
+        consumeForDispatch: (key, clientActionId) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const next = { ...state.intentByKey };
+            delete next[id];
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            delete suspendedWorkspacePathsByKey[id];
+            return {
+              intentByKey: next,
+              suspendedWorkspacePathsByKey,
+              revisionByKey: incrementStagingRevision(state.revisionByKey, id),
+              // NOT a user choice - the send took it, and may hand it back.
+              consumedForDispatchByKey: {
+                ...state.consumedForDispatchByKey,
+                [id]: { clientActionId },
+              },
+            };
+          }),
+        rollBackDispatch: (key, restore) =>
+          set((state) => {
+            const id = worktreeStagingKeyString(key);
+            const intentByKey = { ...state.intentByKey };
+            if (
+              restore.intent === null ||
+              restore.intent.entries.length === 0
+            ) {
+              delete intentByKey[id];
+            } else {
+              intentByKey[id] = restore.intent;
+            }
+            const consumedForDispatchByKey = {
+              ...state.consumedForDispatchByKey,
+            };
+            if (restore.displaced.mark === undefined) {
+              delete consumedForDispatchByKey[id];
+            } else {
+              consumedForDispatchByKey[id] = restore.displaced.mark;
+            }
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            if (restore.displaced.suspendedWorkspacePaths === undefined) {
+              delete suspendedWorkspacePathsByKey[id];
+            } else {
+              suspendedWorkspacePathsByKey[id] =
+                restore.displaced.suspendedWorkspacePaths;
+            }
+            return {
+              intentByKey,
+              consumedForDispatchByKey,
+              suspendedWorkspacePathsByKey,
+              // The dispatch is undone, but the counter is monotonic by
+              // construction and nothing compares it - the mark is the only
+              // discriminator. Bumping keeps that invariant rather than
+              // pretending the attempt never touched the slot.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
           }),
@@ -701,8 +1170,30 @@ export const useWorktreeIntentStagingStore =
               // action can't restore the just-purged selection.
               revisionByKey = incrementStagingRevision(revisionByKey, id);
             }
+            // Slots CONSUMED by an in-flight dispatch are invisible to the
+            // loop above - they hold no intent to filter, because the dispatch
+            // took it. Their pick lives on the pending action, so this store
+            // cannot tell whether it names a removed worktree; what it CAN
+            // tell is that a sweep happened while that dispatch was out. So it
+            // records WHAT was removed against each such slot, and the
+            // hand-back tests its own intent against that record - refusing
+            // only when the pick it is actually holding was swept, and giving
+            // the refusal something true to STATE instead of the prompt coming
+            // back silently unbound.
+            const sweptRefsByKey = accumulateSweptRefs(
+              state.sweptRefsByKey,
+              state.consumedForDispatchByKey,
+              sweptSegment,
+              removed,
+            );
+            if (sweptRefsByKey !== state.sweptRefsByKey) changed = true;
             return changed
-              ? { intentByKey, suspendedWorkspacePathsByKey, revisionByKey }
+              ? {
+                  intentByKey,
+                  suspendedWorkspacePathsByKey,
+                  revisionByKey,
+                  sweptRefsByKey,
+                }
               : state;
           }),
         resetForTests: () =>
@@ -710,6 +1201,8 @@ export const useWorktreeIntentStagingStore =
             intentByKey: {},
             suspendedWorkspacePathsByKey: {},
             revisionByKey: {},
+            consumedForDispatchByKey: {},
+            sweptRefsByKey: {},
           }),
       }),
       {

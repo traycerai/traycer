@@ -22,7 +22,14 @@ import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activati
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicCanvasTileRef, TilePane } from "@/stores/epics/canvas/types";
+import {
+  WORKSPACE_FILE_TAB_KIND,
+  type EpicCanvasTileRef,
+  type TilePane,
+  type WorkspaceFileRef,
+} from "@/stores/epics/canvas/types";
+import { useFileTreeRevealStore } from "@/stores/file-tree/file-tree-reveal-store";
+import { useEpicLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -292,7 +299,17 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
   ChatDeadTileBannerContainer: (props: {
     readonly testId: string;
     readonly reason: string;
-  }) => <div data-testid={props.testId} data-reason={props.reason} />,
+    readonly sourceOwnerUserId?: string;
+  }) => (
+    <div
+      data-testid={props.testId}
+      data-reason={props.reason}
+      // Surfaced so the substitution arm's owner threading is assertable:
+      // the banner must receive the owner the OPENING ROW resolved, not be
+      // left to re-derive it from a second cloud lookup.
+      data-source-owner={props.sourceOwnerUserId}
+    />
+  ),
 }));
 
 vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
@@ -1333,6 +1350,10 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
     // one state of the three that is allowed to tell the reader to go wake a
     // machine (ticket 47/48's copy split).
     expect(banner?.getAttribute("data-reason")).toBe("host-offline");
+    // The owner the opening row resolved rides into the banner - the ref in
+    // PUBLISHED_COPY_TILE_ID names user-1, and the banner's ownership
+    // verdict must come from that same row rather than a second lookup.
+    expect(banner?.getAttribute("data-source-owner")).toBe("user-1");
     // The live chat body must NOT render alongside the copy.
     expect(
       container.querySelector(`[data-testid="tile-${CHAT.id}"]`),
@@ -2066,5 +2087,76 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
     expect(
       container.querySelector(`[data-testid="chat-dead-tile-${CHAT.id}"]`),
     ).toBeNull();
+  });
+});
+
+describe("<TabGroupView /> Reveal in Sidebar", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mounts.clear();
+    testState.unmounts.clear();
+    testState.missingArtifactIds.clear();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useEpicLeftPanelStore.setState(
+      useEpicLeftPanelStore.getInitialState(),
+      true,
+    );
+  });
+
+  const WORKSPACE_FILE_TAB: WorkspaceFileRef = {
+    id: "workspace-file:host-A:%2Frepo:src%2Flib%2Fa.ts",
+    instanceId: "inst-file-1",
+    type: WORKSPACE_FILE_TAB_KIND,
+    name: "a.ts",
+    hostId: "host-A",
+    workspacePath: "/repo",
+    filePath: "src/lib/a.ts",
+  };
+
+  it("writes a reveal request and switches to the Files panel for a workspace-file tab", () => {
+    // The spec tab stays ACTIVE so it is the one mounted body - the
+    // workspace-file tab's own tile renderer is heavy and must not mount
+    // just to exercise its tab-strip context menu.
+    const tabs = [SPEC, WORKSPACE_FILE_TAB];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${WORKSPACE_FILE_TAB.instanceId}`),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toEqual({
+      hostId: "host-A",
+      workspacePath: "/repo",
+      filePath: "src/lib/a.ts",
+      nonce: 1,
+    });
+    expect(
+      useEpicLeftPanelStore.getState().activePanelIdByTabId[VIEW_TAB_ID],
+    ).toBe("file-tree");
+  });
+
+  it("writes no reveal request for a non-file tab and switches to its own panel", () => {
+    const tabs = [SPEC, WORKSPACE_FILE_TAB];
+    seedCanvas(tabs, SPEC.instanceId);
+    render(groupView(tabs, SPEC.instanceId, true));
+
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${SPEC.instanceId}`));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Reveal in Sidebar" }),
+    );
+
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[VIEW_TAB_ID],
+    ).toBeUndefined();
+    expect(
+      useEpicLeftPanelStore.getState().activePanelIdByTabId[VIEW_TAB_ID],
+    ).toBe("artifacts");
   });
 });

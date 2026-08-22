@@ -6,8 +6,15 @@ import {
   __resetCommGraphRegistryForTests,
   acquireCommGraphSubscription,
   getCommGraphSubscriptionManager,
+  observeCommGraphSubscription,
+  releaseCommGraphObserver,
   releaseCommGraphSubscription,
 } from "@/lib/comm-graph/comm-graph-registry";
+import {
+  __resetCommGraphCloudRegistryForTests,
+  observeCommGraphCloudSubscription,
+  releaseCommGraphCloudObserver,
+} from "@/lib/comm-graph/comm-graph-cloud-registry";
 import type {
   CommGraphSubscriptionManager,
   CommGraphSubscriptionRequest,
@@ -75,6 +82,7 @@ afterEach(() => {
   // Always restore real timers so a fake-timer test cannot leak into neighbors.
   vi.useRealTimers();
   __resetCommGraphRegistryForTests();
+  __resetCommGraphCloudRegistryForTests();
 });
 
 describe("comm-graph subscription registry", () => {
@@ -523,5 +531,97 @@ describe("comm-graph host-set reconcile with a failed host", () => {
     expect(recovering.dials.map((request) => request.hostId)).toContain(
       "host-a",
     );
+  });
+});
+
+/**
+ * Claim-free OBSERVERS (`observeCommGraphSubscription` /
+ * `releaseCommGraphObserver`), which back the Epic header's feed-health dot.
+ * An observer never dials, so its own release is the only thing that can
+ * ever retire an entry that was never claimed - see the ownership contract
+ * documented on `releaseCommGraphObserver`.
+ */
+describe("comm-graph registry claim-free observers", () => {
+  it("disposes and removes an epic that was only ever observed once its last observer releases", () => {
+    const epicId = "epic-observed-only";
+    const observer = {};
+
+    const first = observeCommGraphSubscription(epicId, observer);
+    releaseCommGraphObserver(epicId, observer);
+
+    // Proof by identity: a live entry would hand back the SAME manager. A
+    // fresh call after disposal must construct a brand-new one.
+    const second = observeCommGraphSubscription(epicId, {});
+    expect(second).not.toBe(first);
+    expect(first.isDisposed()).toBe(true);
+  });
+
+  it("keeps the entry alive when one of two observers releases", () => {
+    const epicId = "epic-two-observers";
+    const observerA = {};
+    const observerB = {};
+
+    const manager = observeCommGraphSubscription(epicId, observerA);
+    observeCommGraphSubscription(epicId, observerB);
+    releaseCommGraphObserver(epicId, observerA);
+
+    expect(manager.isDisposed()).toBe(false);
+    expect(observeCommGraphSubscription(epicId, observerB)).toBe(manager);
+  });
+
+  it("does not dispose an epic with a live claim when an observer releases", () => {
+    const epicId = "epic-live-claim";
+    const observer = {};
+    const claim = {};
+
+    const manager = getCommGraphSubscriptionManager(epicId);
+    acquireCommGraphSubscription(epicId, claim, recordedOpener().opener, [
+      "host-a",
+    ]);
+    observeCommGraphSubscription(epicId, observer);
+    releaseCommGraphObserver(epicId, observer);
+
+    expect(manager.isDisposed()).toBe(false);
+    expect(getCommGraphSubscriptionManager(epicId)).toBe(manager);
+
+    // The claim still owns the lifecycle - clean up so it does not leak into
+    // other tests via the detached MRU.
+    releaseCommGraphSubscription(epicId, claim);
+  });
+
+  it("does not dispose a detached-but-retained epic when a later observer releases", () => {
+    const epicId = "epic-detached-retained";
+    const claim = {};
+    const opener = recordedOpener();
+
+    const manager = getCommGraphSubscriptionManager(epicId);
+    acquireCommGraphSubscription(epicId, claim, opener.opener, ["host-a"]);
+    opener.dials[0].handlers.onSnapshot([row(1, 100)], 1);
+    releaseCommGraphSubscription(epicId, claim);
+    expect(__commGraphSubscriptionRetainedForTests(epicId)).toBe(true);
+
+    const observer = {};
+    observeCommGraphSubscription(epicId, observer);
+    releaseCommGraphObserver(epicId, observer);
+
+    // Still in the MRU, still the same manager, and its retained events and
+    // cursor are untouched - a detached entry is a genuinely subscribed one
+    // and the observer release must not evict it early.
+    expect(__commGraphSubscriptionRetainedForTests(epicId)).toBe(true);
+    expect(manager.isDisposed()).toBe(false);
+    expect(getCommGraphSubscriptionManager(epicId)).toBe(manager);
+    expect(manager.getSnapshot().events.map((event) => event.id)).toEqual([1]);
+  });
+
+  it("cloud registry: disposes and removes an epic that was only ever observed once its last observer releases", () => {
+    const epicId = "epic-cloud-observed-only";
+    const observer = {};
+
+    const first = observeCommGraphCloudSubscription(epicId, observer);
+    releaseCommGraphCloudObserver(epicId, observer);
+
+    const second = observeCommGraphCloudSubscription(epicId, {});
+    expect(second).not.toBe(first);
+    expect(first.isDisposed()).toBe(true);
   });
 });

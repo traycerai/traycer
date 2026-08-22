@@ -318,6 +318,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Copilot sign-in",
           cwd: "~",
+          lifecycleOwner: "manager",
         },
         {
           sessionId: "term-setup",
@@ -326,6 +327,16 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Setup: traycer feature",
           cwd: "/work/repo",
+          lifecycleOwner: "manager",
+        },
+        {
+          sessionId: "term-registry",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "durable shadow",
+          cwd: "/work/repo",
+          lifecycleOwner: "registry",
         },
       ],
     },
@@ -850,6 +861,43 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal");
     }
     expect(plainOpened.ref.origin).toBeUndefined();
+  });
+
+  it("carries manager lifecycleOwner from the list without origin-store evidence", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-setup");
+    const setupOpened = lastTileOpen();
+    if (setupOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(setupOpened.ref.lifecycleOwner).toBe("manager");
+    expect(setupOpened.ref.origin).toBeUndefined();
+    expect(setupOpened.ref.hostId).toBe("default-host");
+    expect(isHostEpicTerminalRef(setupOpened.ref)).toBe(false);
+
+    runById(items, "open:terminals:term-signin");
+    const loginOpened = lastTileOpen();
+    if (loginOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(loginOpened.ref.lifecycleOwner).toBe("manager");
+    expect(loginOpened.ref.origin).toBeUndefined();
+  });
+
+  it("keeps a registry listed row as an import candidate even with a stale origin cache", () => {
+    recordSetupTerminal({
+      hostId: "default-host",
+      sessionId: "term-registry",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-registry");
+    const opened = lastTileOpen();
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(opened.ref.lifecycleOwner).toBe("registry");
+    expect(opened.ref.origin).toBe("setup");
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(false);
   });
 });
 

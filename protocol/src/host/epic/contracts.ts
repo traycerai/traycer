@@ -894,6 +894,13 @@ export const epicGetChatRunSettingsV10 = defineRpcContract({
   responseSchema: getChatRunSettingsResponseSchema,
 });
 
+// The terminal-agent RECORD read (`epic.listTuiAgents@1.0`) lives in
+// `tui-agent-records.ts` beside its schemas - the TUI eviction's sibling of
+// the chat record channel above, optional and host-local for the same
+// reason, and owner-rows-only always (terminal agents are private by user
+// ruling). Exported from there via the epic index, not re-exported here,
+// so `export *` consumers see exactly one binding.
+
 export {
   epicSubscribeV10,
   epicSubscribeV11,

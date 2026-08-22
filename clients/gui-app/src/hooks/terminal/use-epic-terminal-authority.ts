@@ -3,7 +3,7 @@ import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/pl
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import {
   isHostEpicTerminalRef,
-  isImportExemptEpicTerminalOrigin,
+  isImportExemptEpicTerminalRef,
   isLegacyEpicTerminalRef,
   isUnsupportedEpicTerminalRef,
   legacyEpicTerminalEvidence,
@@ -16,6 +16,7 @@ import {
 } from "@/hooks/terminal/use-plain-terminal-mutations";
 import {
   PlainTerminalMigrationCoordinator,
+  getPlainTerminal,
   selectPlainTerminalViewModel,
   type PlainTerminalViewModel,
 } from "@/lib/terminals/plain-terminal-authority";
@@ -72,10 +73,10 @@ export function useEpicTerminalAuthority(args: {
   const isUnsupported = isUnsupportedEpicTerminalRef(args.node);
   const isLegacy = isLegacyEpicTerminalRef(args.node);
   const isCanonical = isHostEpicTerminalRef(args.node);
-  const importExempt = isImportExemptEpicTerminalOrigin(args.node.origin);
+  const importExempt = isImportExemptEpicTerminalRef(args.node);
   const projection = isUnsupported
     ? undefined
-    : (authority.collection?.terminalsById[args.node.id] ?? undefined);
+    : getPlainTerminal(authority.collection, args.node.hostId, args.node.id);
   const migrationPending =
     isLegacy &&
     !importExempt &&

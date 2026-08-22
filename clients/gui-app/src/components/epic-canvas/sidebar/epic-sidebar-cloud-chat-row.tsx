@@ -121,6 +121,7 @@ export function EpicSidebarCloudChatRow(
   const isActivePublished = useIsActiveTile(
     props.tabId,
     publishedChatTileId(chat.identity),
+    null,
   );
   const isActive = isActiveLive || isActivePublished;
 

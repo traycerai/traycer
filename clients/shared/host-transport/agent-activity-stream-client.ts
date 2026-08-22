@@ -1,6 +1,7 @@
 import {
   agentActivitySubscribeServerFrameSchema,
   type AgentActivityByEpic,
+  type AgentActivityCloudSyncStatus,
   type AgentActivityServedBy,
 } from "@traycer/protocol/host/agent/activity";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -13,9 +14,15 @@ import type {
 import type { IHostStreamClient } from "./host-stream-client";
 
 export interface AgentActivityStreamCallbacks {
+  /**
+   * `cloudSyncStatus` is the host's cloud-link status when it built the union;
+   * `null` is no claim (local plane, or a `1.0` host that predates the field -
+   * the live schema defaults the absent key to `null`).
+   */
   readonly onState: (
     servedBy: AgentActivityServedBy,
     byEpic: AgentActivityByEpic,
+    cloudSyncStatus: AgentActivityCloudSyncStatus | null,
   ) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
@@ -61,7 +68,11 @@ export class AgentActivityStreamClient {
     if (!parsed.success) return;
     const frame = parsed.data;
     if (frame.kind === "state") {
-      this.options.callbacks.onState(frame.servedBy, frame.byEpic);
+      this.options.callbacks.onState(
+        frame.servedBy,
+        frame.byEpic,
+        frame.cloudSyncStatus,
+      );
     }
   }
 }

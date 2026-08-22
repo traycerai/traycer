@@ -141,6 +141,14 @@ interface EpicTerminalRefBase {
    * provider it is standing in for.
    */
   readonly originProviderId?: ProviderId;
+  /**
+   * Host-authoritative lifetime owner from `terminal.list@2.3`. `manager`
+   * means this presentation must stay on the live-session path and never
+   * enter `terminal.plain.importLegacy`. `registry` is a durable/plain
+   * shadow. Absent on pre-v2.3 persisted tiles and on refs that did not
+   * come from an updated-host list.
+   */
+  readonly lifecycleOwner?: "registry" | "manager";
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
@@ -212,6 +220,19 @@ export function isImportExemptEpicTerminalOrigin(
   origin: EpicTerminalRef["origin"],
 ): boolean {
   return origin === "provider-login" || origin === "setup";
+}
+
+/**
+ * Import exemption for one presentation. Wire `lifecycleOwner` is the
+ * authority when present: a manager row stays manager-owned even with an
+ * empty origin cache, and a registry row still imports even if a stale
+ * setup/provider-login cache would otherwise mark it exempt. Absent
+ * lifecycleOwner falls back to origin enrichment for pre-v2.3 tiles.
+ */
+export function isImportExemptEpicTerminalRef(ref: EpicTerminalRef): boolean {
+  if (ref.lifecycleOwner === "manager") return true;
+  if (ref.lifecycleOwner === "registry") return false;
+  return isImportExemptEpicTerminalOrigin(ref.origin);
 }
 
 export function existingSessionOriginFields(

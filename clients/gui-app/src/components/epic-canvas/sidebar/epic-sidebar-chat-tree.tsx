@@ -2882,6 +2882,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
               epicId={epicId}
               kind={resourceOwnerKind}
               ownerId={nodeId}
+              hostId={null}
               className={undefined}
             />
           )}

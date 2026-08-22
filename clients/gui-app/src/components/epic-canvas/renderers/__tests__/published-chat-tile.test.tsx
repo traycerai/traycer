@@ -44,6 +44,7 @@ interface DeadTileBannerContainerProps {
   readonly sourceHostId: string;
   readonly hostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
+  readonly showsPublishedCopy: boolean;
   readonly testId: string;
   readonly sourceOwnerUserId?: string;
 }
@@ -103,6 +104,15 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
         <ChatDeadTileBanner
           hostLabel={props.hostLabel}
           reason={props.reason}
+          // The real container resolves these from the signed-in identity
+          // and the epic role; this suite mounts neither, and what it owns
+          // is the tile→container prop threading, so the banner renders the
+          // pre-collaborator defaults. `showsPublishedCopy` IS threading, so
+          // it forwards. The ownership wiring itself is pinned by
+          // `dead-tile-banner-container.test.tsx` against the real container.
+          ownedByViewer
+          cloneAllowed
+          showsPublishedCopy={props.showsPublishedCopy}
           onClone={() => undefined}
           cloning={false}
           className={undefined}
@@ -564,6 +574,9 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
       sourceHostId: "owner-host-1",
       hostLabel: "Ada's Mac",
       reason: "host-offline",
+      // This tile really does render a copy under the banner, so the
+      // foreign-owner sentence may claim one.
+      showsPublishedCopy: true,
       testId: "published-chat-dead-tile-chat-1",
       // Off the ref - a post-restart host with swept registry facts cannot
       // answer the lookup, and the ref knew the owner the whole time.

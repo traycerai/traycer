@@ -61,6 +61,18 @@ const durableCollection = vi.hoisted(() => ({
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
+  useHostRuntimeClient: () => ({
+    resolveHostById: () => null,
+    getRequestContext: () => null,
+    getRequestContextUserId: () => null,
+    createRequester: () => null,
+  }),
+}));
+
+vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
+  useResolvePlainTerminalOwnerHostClient: () => () => ({
+    request: vi.fn(),
+  }),
 }));
 
 // The sidebar reads the Epic SESSION's host (it sits outside every tile's
@@ -97,9 +109,13 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: "host-1",
     scope: { kind: "epic", epicId: "epic-1" },
-    capability: { status: "capable" },
+    capability: {
+      status: "capable",
+      schemaVersion: { major: 2, minor: 1 },
+    },
     canMutate: true,
     collection: durableCollection.value,
+    coverage: durableCollection.value?.coverage ?? null,
   }),
 }));
 

@@ -51,6 +51,7 @@ import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconcilia
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { useLandingTerminalDurableLifecycle } from "./landing-terminal-durable-bootstrap";
 import {
+  getPlainTerminal,
   selectPlainTerminalViewModel,
   type PlainTerminalViewModel,
 } from "@/lib/terminals/plain-terminal-authority";
@@ -235,6 +236,7 @@ export function LandingTerminalLegacyBootstrap(
         <div className="relative min-h-0 flex-1">
           <TerminalGridMeasureProbe
             sessionId={props.tab.sessionId}
+            hostId={props.tab.hostId}
             instanceId={props.tab.instanceId}
             tileKind="terminal"
             chrome="flush"
@@ -264,8 +266,11 @@ function LandingTerminalDurableBootstrap(
 ): ReactNode {
   const entry = props.authorityEntry;
   const reachability = useHostReachability(props.tab.hostId);
-  const projection =
-    entry.authority.collection?.terminalsById[props.tab.sessionId];
+  const projection = getPlainTerminal(
+    entry.authority.collection,
+    props.tab.hostId,
+    props.tab.sessionId,
+  );
   const [measuredGrid, setMeasuredGrid] = useState<{
     readonly cols: number;
     readonly rows: number;
@@ -287,7 +292,10 @@ function LandingTerminalDurableBootstrap(
   const gridReady = measuredGrid !== null || measureTimedOut;
   const openingGrid = measuredGrid ??
     peekXtermHostGrid(props.tab.instanceId) ??
-    peekXtermHostGridForSession(props.tab.sessionId) ?? {
+    peekXtermHostGridForSession({
+      hostId: props.tab.hostId,
+      sessionId: props.tab.sessionId,
+    }) ?? {
       cols: TERMINAL_DEFAULT_COLS,
       rows: TERMINAL_DEFAULT_ROWS,
     };
@@ -312,6 +320,7 @@ function LandingTerminalDurableBootstrap(
               rows: openingGrid.rows,
             })
           : await ensureTerminalRunning({
+              hostId: props.tab.hostId,
               terminalId: props.tab.sessionId,
               cols: openingGrid.cols,
               rows: openingGrid.rows,
@@ -324,6 +333,7 @@ function LandingTerminalDurableBootstrap(
       openingGrid.cols,
       openingGrid.rows,
       props.tab.cwd,
+      props.tab.hostId,
       props.tab.sessionId,
     ],
   );
@@ -347,8 +357,11 @@ function LandingTerminalDurableBootstrap(
   });
 
   useEffect(() => {
-    adoptWarmSessionInstance(props.tab.sessionId, props.tab.instanceId);
-  }, [props.tab.instanceId, props.tab.sessionId]);
+    adoptWarmSessionInstance(
+      { hostId: props.tab.hostId, sessionId: props.tab.sessionId },
+      props.tab.instanceId,
+    );
+  }, [props.tab.hostId, props.tab.instanceId, props.tab.sessionId]);
 
   const handle = useTerminalSessionHandle({
     hostId: props.tab.hostId,
@@ -429,6 +442,7 @@ function LandingTerminalDurableState(props: {
         <div className="relative min-h-0 flex-1">
           <TerminalGridMeasureProbe
             sessionId={props.tab.sessionId}
+            hostId={props.tab.hostId}
             instanceId={props.tab.instanceId}
             tileKind="terminal"
             chrome="flush"
@@ -529,6 +543,7 @@ function LandingTerminalTileLive(props: {
         <Suspense fallback={<TerminalLoadingSkeleton />}>
           <TerminalXtermHost
             sessionId={handle.sessionId}
+            hostId={tab.hostId}
             tileKind="terminal"
             chrome="flush"
             instanceId={tab.instanceId}

@@ -6,7 +6,7 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { WorktreeHostEntryV15 } from "@traycer/protocol/host/worktree-schemas";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/worktree-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
@@ -36,7 +36,7 @@ const PAGE_LIMIT = SETTINGS_WORKTREE_LIST_PAGE_LIMIT;
 function listedEntry(
   worktreePath: string,
   branch: string,
-): WorktreeHostEntryV15 {
+): WorktreeHostEntryV16 {
   return {
     worktreePath,
     branch,
@@ -58,10 +58,11 @@ function listedEntry(
     atBaseCommit: false,
     resolvedAt: 1,
     presence: "present",
+    gitUnreadable: false,
   };
 }
 
-function fleet(count: number, prefix: string): WorktreeHostEntryV15[] {
+function fleet(count: number, prefix: string): WorktreeHostEntryV16[] {
   return Array.from({ length: count }, (_, i) =>
     listedEntry(`/wt/${prefix}-${String(i)}`, `feat-${prefix}-${String(i)}`),
   );
@@ -82,7 +83,7 @@ function deferred(): { readonly promise: Promise<void>; resolve: () => void } {
 // test mutates it to model the fleet changing between runs), with an optional
 // per-request gate so a test can hold pages in flight.
 function createFixture(
-  liveEntries: () => readonly WorktreeHostEntryV15[],
+  liveEntries: () => readonly WorktreeHostEntryV16[],
   onRequest: ((cursor: string | null) => void) | null,
   requestGate: ((cursor: string | null) => Promise<void>) | null,
 ) {
@@ -133,7 +134,7 @@ describe("listing snapshot sentinel guard (cold-host clobber regression)", () =>
   // branch). Persisting those replaced a good snapshot with a fleet of
   // "detached HEAD" rows, which then restored on the next launch - the failure
   // seen live, where all 54 rows went unknown and stayed that way.
-  function sentinelEntry(worktreePath: string): WorktreeHostEntryV15 {
+  function sentinelEntry(worktreePath: string): WorktreeHostEntryV16 {
     return {
       ...listedEntry(worktreePath, "feat"),
       branch: null,
@@ -273,7 +274,7 @@ describe("useWorktreeListing (warm-open listing snapshot)", () => {
     expect(result.current.worktrees).toHaveLength(PAGE_LIMIT + 8);
     const seeded = fixture.queryClient.getQueryData<{
       readonly pages: ReadonlyArray<{
-        readonly worktrees: readonly WorktreeHostEntryV15[];
+        readonly worktrees: readonly WorktreeHostEntryV16[];
       }>;
     }>(listingQueryKeyFor(HOST_ID));
     expect(seeded?.pages.map((page) => page.worktrees.length)).toEqual([

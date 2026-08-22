@@ -15,6 +15,8 @@ interface CloudRegistryEntry {
     CommGraphCloudSubscriptionOpener
   >;
   claimByRelayHostId: Map<string, CommGraphCloudSubscriptionClaim>;
+  /** Claim-free readers - see the local registry's `observers`. */
+  readonly observers: Set<object>;
 }
 
 const entriesByEpicId = new Map<string, CloudRegistryEntry>();
@@ -60,9 +62,36 @@ export function getCommGraphCloudSubscriptionManager(
     ),
     openersByClaim: new Map(),
     claimByRelayHostId: new Map(),
+    observers: new Set(),
   };
   entriesByEpicId.set(epicId, entry);
   return entry.manager;
+}
+
+/** Registers a claim-free reader. See the local registry's equivalent. */
+export function observeCommGraphCloudSubscription(
+  epicId: string,
+  observer: object,
+): CommGraphCloudSubscriptionManager {
+  const manager = getCommGraphCloudSubscriptionManager(epicId);
+  entriesByEpicId.get(epicId)?.observers.add(observer);
+  return manager;
+}
+
+/** Drops a reader, disposing the entry when it was ONLY ever watched. */
+export function releaseCommGraphCloudObserver(
+  epicId: string,
+  observer: object,
+): void {
+  const entry = entriesByEpicId.get(epicId);
+  if (entry === undefined) return;
+  entry.observers.delete(observer);
+  if (entry.observers.size > 0) return;
+  if (entry.openersByClaim.size > 0) return;
+  if (detachedEpicIds.includes(epicId)) return;
+  pendingEvictionsByEpicId.delete(epicId);
+  entry.manager.dispose();
+  entriesByEpicId.delete(epicId);
 }
 
 export function acquireCommGraphCloudSubscription(
@@ -110,7 +139,16 @@ export function releaseCommGraphCloudSubscription(
       }
       pendingEvictionsByEpicId.delete(evictedEpicId);
       const evicted = entriesByEpicId.get(evictedEpicId);
-      if (evicted === undefined || evicted.openersByClaim.size > 0) return;
+      // An observed entry is live even with no claim: the header's feed-health
+      // dot is reading it, and disposing underneath that reader would strand it
+      // on a dead manager.
+      if (
+        evicted === undefined ||
+        evicted.openersByClaim.size > 0 ||
+        evicted.observers.size > 0
+      ) {
+        return;
+      }
       evicted.manager.dispose();
       entriesByEpicId.delete(evictedEpicId);
     });

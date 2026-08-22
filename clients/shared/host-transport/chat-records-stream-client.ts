@@ -1,8 +1,9 @@
 import {
-  hostChatRecordsSubscribeServerFrameSchemaV10,
+  hostChatRecordsSubscribeServerFrameSchemaV11,
   type ChatRecordRemovalReason,
   type ChatRecordSummary,
 } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -41,13 +42,48 @@ export type ChatRecordDelta =
       readonly reason: ChatRecordRemovalReason;
     };
 
+/**
+ * One terminal-agent record delta, the `@1.1` addition riding the same
+ * host-scoped stream (`tuiUpsert` / `tuiRemove`).
+ *
+ * A SEPARATE union rather than two more members on {@link ChatRecordDelta},
+ * because the two grammars address different record tables: the consumer's
+ * chat reducer switches on `upsert`/`remove` and its terminal-agent reducer on
+ * these two, and a single union would force every reducer to carry dead
+ * branches for the other kind. The stream callback speaks the sum of both
+ * ({@link ChatRecordsStreamDelta}); routing them apart is the mount's job.
+ */
+export type TuiAgentRecordDelta =
+  | {
+      readonly kind: "tuiUpsert";
+      readonly epicId: string;
+      /**
+       * The row, complete. Same envelope invariant as the chat upsert: the
+       * frame repeats `tuiAgentId`/`revision` and the contract refuses a frame
+       * where they disagree, so only the row's own copy travels here.
+       */
+      readonly record: TuiAgentRecordSummary;
+    }
+  | {
+      readonly kind: "tuiRemove";
+      readonly epicId: string;
+      readonly tuiAgentId: string;
+      readonly reason: ChatRecordRemovalReason;
+    };
+
+/**
+ * Everything `host.chatRecords.subscribe@1.1` can deliver. An old host
+ * negotiates @1.0 and simply never sends the terminal-agent kinds.
+ */
+export type ChatRecordsStreamDelta = ChatRecordDelta | TuiAgentRecordDelta;
+
 export interface ChatRecordsStreamCallbacks {
   /**
    * A record delta, already parsed and narrowed. Frames name their epic
    * (the subscription is HOST-scoped, covering every epic that host has open
    * plus its own-row changes), so per-epic routing is the consumer's.
    */
-  readonly onDelta: (delta: ChatRecordDelta) => void;
+  readonly onDelta: (delta: ChatRecordsStreamDelta) => void;
   readonly onConnectionStatus: (
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
@@ -121,8 +157,12 @@ export class ChatRecordsStreamClient {
   }
 
   private handleServerFrame(envelope: StreamFrameEnvelope): void {
+    // Parsed against the @1.1 superset: the handshake negotiates the method
+    // version per session, and @1.1 accepts every @1.0 frame verbatim, so one
+    // schema serves both negotiated outcomes - an old host just never produces
+    // the terminal-agent kinds.
     const parsed =
-      hostChatRecordsSubscribeServerFrameSchemaV10.safeParse(envelope);
+      hostChatRecordsSubscribeServerFrameSchemaV11.safeParse(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // removal-reason enum is CLOSED for exactly this reason: a widened reason
     // arrives as an unparseable frame, and the poll - which still sees the row
@@ -143,6 +183,23 @@ export class ChatRecordsStreamClient {
           kind: "remove",
           epicId: frame.epicId,
           chatId: frame.chatId,
+          reason: frame.reason,
+        });
+        return;
+      }
+      case "tuiUpsert": {
+        this.callbacks.onDelta({
+          kind: "tuiUpsert",
+          epicId: frame.epicId,
+          record: frame.record,
+        });
+        return;
+      }
+      case "tuiRemove": {
+        this.callbacks.onDelta({
+          kind: "tuiRemove",
+          epicId: frame.epicId,
+          tuiAgentId: frame.tuiAgentId,
           reason: frame.reason,
         });
         return;
