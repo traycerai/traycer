@@ -4596,6 +4596,70 @@ describe("WorktreesList status-aware delete safety", () => {
     expect(streamMock.paths).toEqual(["/wt/unreadable"]);
   });
 
+  it("names a gitUnreadable row as unreadable in the bulk summary, never as a detached HEAD", () => {
+    // The host reports `branch: null` / `uncommittedCount: 0` for a worktree it
+    // could not read, so handing the row to the loss sub-classifier would make
+    // the confirmation claim "1 detached HEAD" - a git state nobody observed.
+    const unreadable = {
+      ...entry({
+        worktreePath: "/wt/unreadable",
+        branch: "feat-unreadable",
+        gitRemovable: false,
+      }),
+      branch: null,
+      gitUnreadable: true,
+    };
+    const clean = entry({
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unreadable, clean],
+      enrichedByPath: new Map([
+        [unreadable.worktreePath, unreadable],
+        [clean.worktreePath, clean],
+      ]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+
+    screen.getByText(/1 unreadable \(git can't read the worktree\)/u);
+    expect(screen.queryByText(/detached HEAD/u)).toBeNull();
+  });
+
+  it("gives a mid-delete row no select description, never an in-use claim", () => {
+    // A backgrounded delete makes the row unselectable with NO disabled reason
+    // (it is neither in-use nor checking). A default would announce "In use by
+    // an active agent" to assistive tech for a row nobody is using.
+    renderDefault();
+    confirmDelete("feat-dirty");
+    act(() => {
+      streamMock.callbacks?.onStarted(true);
+      streamMock.callbacks?.onPhase("teardown");
+    });
+    fireEvent.click(screen.getByTestId("worktree-delete-close-button"));
+
+    const deleting = screen.getByRole("checkbox", {
+      name: "Select worktree feat-dirty",
+    });
+    expect(deleting.getAttribute("aria-disabled")).toBe("true");
+    expect(deleting.getAttribute("aria-description")).toBeNull();
+    // The in-use row still names its own real reason.
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-busy" })
+        .getAttribute("aria-description"),
+    ).toBe("In use by an active agent");
+  });
+
   it("keeps a gitUnreadable row in the Review filter and out of Orphaned", () => {
     const unreadable = {
       ...entry({

@@ -3005,7 +3005,12 @@ function WorktreeSelectionControl(props: {
   readonly selectDisabledReason: "in-use" | "checking" | null;
   readonly onToggleSelection: () => void;
 }): ReactNode {
-  const selectDisabledReason = props.selectDisabledReason ?? "in-use";
+  // NO default reason. A row can also be unselectable because a backgrounded
+  // delete is already running it, and that carries no `selectDisabledReason` -
+  // it is neither in-use nor checking. Defaulting would announce "In use by an
+  // active agent" to assistive tech for a row nobody is using. Absent reason =>
+  // no description and no tooltip; the row's own "Deleting…" status says why.
+  const selectDisabledReason = props.selectDisabledReason;
   const checkbox = (
     <button
       type="button"
@@ -3014,7 +3019,7 @@ function WorktreeSelectionControl(props: {
       aria-disabled={!props.canSelect}
       aria-label={`Select worktree ${branchLabel(props.entry)}`}
       aria-description={
-        props.canSelect
+        props.canSelect || selectDisabledReason === null
           ? undefined
           : WORKTREE_DELETE_DISABLED_COPY[selectDisabledReason].selectTooltip
       }
@@ -3038,7 +3043,9 @@ function WorktreeSelectionControl(props: {
       <Check className="size-3" />
     </button>
   );
-  if (props.canSelect || props.deleting) return checkbox;
+  if (props.canSelect || props.deleting || selectDisabledReason === null) {
+    return checkbox;
+  }
   return (
     <TooltipWrapper
       label={WORKTREE_DELETE_DISABLED_COPY[selectDisabledReason].selectTooltip}
@@ -3593,6 +3600,7 @@ type WorktreeDeleteClass =
   | "unmerged"
   | "detached"
   | "orphaned"
+  | "unreadable"
   | "dirty";
 
 function worktreeDeleteClass(entry: WorktreeHostEntryV14): WorktreeDeleteClass {
@@ -3608,6 +3616,13 @@ function worktreeDeleteClass(entry: WorktreeHostEntryV14): WorktreeDeleteClass {
   if (tier === "at-base-commit") return "at-base";
   if (tier === "unreferenced") return "clean";
   if (tier === "orphaned") return "orphaned";
+  // An unreadable row reaches `review` through the classifier's own
+  // gitUnreadable rule, but its git facts are FABRICATED (the host reports
+  // `branch: null` and `uncommittedCount: 0` for a worktree it could not read).
+  // Handing it to the loss sub-classifier would bucket it as `detached` and the
+  // confirmation would report a git state nobody observed - the exact
+  // false-precision this row exists to avoid. Name the unknown instead.
+  if (gitUnreadableOf(entry)) return "unreadable";
   return worktreeReviewLossClass(entry);
 }
 
@@ -3641,6 +3656,7 @@ const WORKTREE_DELETE_CLASS_LABEL: Record<WorktreeDeleteClass, string> = {
   unmerged: "unmerged (local-only commits)",
   detached: "detached HEAD",
   orphaned: "orphaned",
+  unreadable: "unreadable (git can't read the worktree)",
   dirty: "dirty",
 };
 
@@ -3654,12 +3670,14 @@ const WORKTREE_DELETE_SUMMARY_ORDER: readonly WorktreeDeleteClass[] = [
   "unmerged",
   "detached",
   "orphaned",
+  "unreadable",
   "dirty",
   "in-use",
 ];
 const WORKTREE_EXCLUSION_ORDER: readonly WorktreeDeleteClass[] = [
   "in-use",
   "dirty",
+  "unreadable",
   "unmerged",
   "detached",
   "orphaned",
