@@ -764,6 +764,12 @@ export class WsStreamClient<
       if (mint === null) {
         return;
       }
+      if (this.handedOffHostIds.has(hostId)) {
+        // We carried a credential to this host ourselves and it has not asked
+        // again since. Nothing to re-ask for, and this is the one form of
+        // "recovered" that does not depend on believing a report.
+        return;
+      }
       if (this.provisionAttemptedHostIds.has(hostId)) {
         // An `openAck` beat the timer to it and an attempt is already running
         // or spent. Re-asking here would double-mint the very host the claim

@@ -3897,17 +3897,31 @@ describe("WsStreamClient host credential provisioning", () => {
     // The one thing allowed to cancel the timer - see
     // `WsStreamClient.armProvisionRetry`'s doc comment. A delivery this
     // client performed has provenance an `active` report does not, so unlike
-    // the test above it IS correct for this to be read as recovery.
+    // the regression above it IS correct for this to be read as recovery.
+    //
+    // The setup below is deliberately roundabout so that `handedOffHostIds`
+    // is the ONLY thing standing between the armed retry and a third mint
+    // call. If call B's credential were instead delivered straight off the
+    // ack that minted it (the simpler shape), `provisionAttemptedHostIds`
+    // would still be set from that same ack - since only a `pending-
+    // elsewhere` outcome or a re-arm transition ever gives it back - and
+    // would ALSO block a third call, hiding a regression in the
+    // `handedOffHostIds` check specifically. Routing the handoff through a
+    // credential that was already pending when a re-arm transition (the
+    // "burn" below) delivered it keeps the marker clear: that transition's
+    // own top-of-function flush runs and returns before the attempt-marker
+    // code could set it again.
+    const deferredB: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
     const mint = vi
       .fn<HostCredentialMintFlow>()
       .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
-      .mockResolvedValueOnce(
-        provisioned({
-          token: "tok-cancels-retry",
-          refreshToken: "refresh-cancels-retry",
-          familyId: "family-cancels-retry",
-          provisionedAt: "2026-07-08T17:00:00.000Z",
-        }),
+      .mockImplementationOnce(
+        () =>
+          new Promise<Provisioned>((resolve) => {
+            deferredB.resolve = resolve;
+          }),
       )
       .mockResolvedValue({ kind: "unavailable" });
     const { factory, sockets } = makeFactory();
@@ -3920,14 +3934,15 @@ describe("WsStreamClient host credential provisioning", () => {
     const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
     await flush();
 
+    // Call A: arms the retry and gives the attempt marker back.
     completeProvisionHandshake(sockets[0].socket, "needs-reauth");
     await flush();
     expect(mint).toHaveBeenCalledTimes(1);
 
-    // Same state on reconnect - no transition, so this does not re-arm on
-    // its own; it is the client giving its attempt marker back after
-    // `pending-elsewhere` that lets this ask again and actually deliver.
-    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    // Call B: same state, no transition - only the marker being clear lets
+    // this ask again. Left deferred so it can resolve with nothing
+    // subscribed to receive it.
+    sockets[0].socket.fireClose(1000, "drop", false);
     await wait(30);
     completeProvisionHandshake(
       sockets[sockets.length - 1].socket,
@@ -3935,11 +3950,38 @@ describe("WsStreamClient host credential provisioning", () => {
     );
     await flush();
     expect(mint).toHaveBeenCalledTimes(2);
+
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop-again", false);
+    await wait(30);
+    const resolveB = deferredB.resolve;
+    if (resolveB === null) {
+      throw new Error("mint call B was never started");
+    }
+    resolveB(
+      provisioned({
+        token: "tok-cancels-retry",
+        refreshToken: "refresh-cancels-retry",
+        familyId: "family-cancels-retry",
+        provisionedAt: "2026-07-08T17:00:00.000Z",
+      }),
+    );
+    await flush();
+    // Nothing is subscribed yet, so call B's credential sits pending rather
+    // than being delivered here.
+    expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
+
+    // The burn: a transition ack. It clears the (already-clear) attempt
+    // marker and `handedOffHostIds`, then its own top-of-function flush
+    // delivers call B's pending credential before the attempt gate can run
+    // again - so the handoff lands with the marker still clear.
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(2);
     expect(provisionFrames(sockets[sockets.length - 1].socket)).toHaveLength(1);
 
-    // Past the floor + jitter ceiling: the retry the FIRST call armed must
-    // not fire a third mint, because this client already carried a
-    // credential to this host.
+    // Past the floor + jitter ceiling: call A's retry - armed long before any
+    // of this and untouched by it - must not fire a third mint now that this
+    // client has actually delivered.
     await wait(1_600);
     expect(mint).toHaveBeenCalledTimes(2);
 
