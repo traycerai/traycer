@@ -26,6 +26,13 @@ vi.mock("@/hooks/chats/use-epic-chat-records", () => ({
   useEpicSyncChatRecords: useEpicSyncChatRecordsMock,
   invalidateEpicChatRecords: () => undefined,
 }));
+// The terminal-agent twin of the record sync above: same subtree, same
+// reason to stub it - it reaches the session host client, which this
+// harness does not provide.
+vi.mock("@/hooks/chats/use-epic-tui-agent-records", () => ({
+  useEpicSyncTuiAgentRecords: () => undefined,
+  invalidateEpicTuiAgentRecords: () => undefined,
+}));
 
 vi.mock("@/providers/epic-session-gate", () => ({
   EpicSessionGate: (props: { readonly children: ReactNode }) => props.children,

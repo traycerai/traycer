@@ -2,8 +2,8 @@ import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostQuery } from "@/hooks/host/use-host-query";
-import { useHostClient } from "@/lib/host/runtime";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 
@@ -42,10 +42,12 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
  * poll-bound.
  */
 export function useEpicSyncTuiAgentRecords(epicId: string): void {
-  // The app-wide active host, matching the epic session itself - same
-  // rationale as the chat-record sync hook: any other host's registry is not
-  // the one this session is projecting.
-  const client = useHostClient();
+  // The SESSION's host, not the app-wide one - same rationale as the
+  // chat-record sync hook: a pinned or retried session runs on a host the
+  // app-wide client may no longer answer for, and any other host's registry
+  // is not the one this session is projecting. `null` (no serving client
+  // yet) gates the query off through `useHostQuery`'s own null handling.
+  const client = useEpicSessionHostClient();
   const handle = useMaybeOpenEpicHandle();
   const params = useMemo(() => ({ epicId }), [epicId]);
   // Viewer-scoped: the response is one identity's own terminal agents, so two
