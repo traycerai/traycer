@@ -44,6 +44,21 @@ const SHIPPED_ENVIRONMENTS = {
   },
 } as const;
 
+/**
+ * Per-lane sign-in return scheme. The iOS release workflow stamps the staging
+ * app into a SEPARATE identity (bundle id `ai.traycer.app.ios.staging` + this
+ * URL scheme) so both lanes install side by side and the browser's sign-in
+ * return reopens the right app; the baked value and the stamped scheme move
+ * together - change one, change both (release-mobile-ios.yaml, "Stamp staging
+ * app identity"). A staging bundle built locally in Xcode keeps the
+ * checked-in `traycer` scheme, so its sign-in return cannot come back - use
+ * the dev loop for local work.
+ */
+const SHIPPED_RETURN_SCHEMES = {
+  staging: "traycer-staging",
+  production: "traycer",
+} as const;
+
 type MobileEnvironment = "dev" | keyof typeof SHIPPED_ENVIRONMENTS;
 
 function resolveMobileEnvironment(): MobileEnvironment {
@@ -70,6 +85,7 @@ function shippedConfig(
     relayBaseUrl: backends.relayBaseUrl,
     // Authn shows this on the device-flow approval page as who is asking.
     hostLabel: "Traycer Mobile",
+    returnScheme: SHIPPED_RETURN_SCHEMES[environment],
     // No loopback host to dial: the shipped client discovers hosts through
     // the registry (`remoteFetcher={null}` → gui-app's default fetcher).
     devHost: null,
@@ -209,6 +225,9 @@ async function guiAppDevConfig(): Promise<TraycerMobileBakedConfig> {
       process.env,
     ),
     hostLabel: slot,
+    // The checked-in scheme both native projects register; dev builds are
+    // never re-stamped.
+    returnScheme: "traycer",
     devHost: {
       devHostPath: DEV_HOST_PATH,
       host: {

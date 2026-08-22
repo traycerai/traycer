@@ -22,8 +22,11 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
   the selected dev slot; never hard-code ports.
 - Sign-in is the OAuth device flow. The return signal is payload-free
   (`visibilitychange` resume edge via `IRunnerHost.onAuthCallback`); polling
-  must complete sign-in even with no signal. `traycer://` scheme registered in
-  both native projects.
+  must complete sign-in even with no signal. The return scheme comes from the
+  baked config (`returnScheme`): `traycer://` as checked into both native
+  projects, re-stamped to `traycer-staging://` (with bundle id
+  `ai.traycer.app.ios.staging`) by the iOS staging release lane so the two
+  lanes coexist on one device.
 - Native HTTP (CapacitorHttp) keeps auth requests out of WKWebView CORS — and
   replaces the transport User-Agent, so anything identifying the device must be
   self-reported in a request body, not read from headers.

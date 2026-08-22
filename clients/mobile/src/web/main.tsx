@@ -159,12 +159,15 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
-  // APNs addressing follows code signing, not the Vite mode: dev and staging
-  // installs are debug-signed (`aps-environment: development`), so only a
-  // production bundle registers against the production gateway.
+  // APNs addressing follows code signing, not the backend set: staging and
+  // production both ship distribution-signed (TestFlight / App Store rewrite
+  // `aps-environment` to "production" at export), so only `dev` - the one
+  // debug-signed path - registers against the sandbox gateway. A staging
+  // bundle built locally in Xcode is debug-signed and mismatches; use the
+  // dev loop for local work.
   const pushRegistration = buildPushRegistration(
     config.authnBaseUrl,
-    config.environment !== "production",
+    config.environment === "dev",
   );
   // Started FIRST, before anything else in bootstrap: a QR scanned by the
   // system camera launches this app, and that launch URL is readable exactly
@@ -183,11 +186,11 @@ function bootstrap(): void {
     pushRegistration,
     openPushSettings: buildOpenPushSettings(),
     // The scheme registration ships with the NATIVE shell (Info.plist /
-    // AndroidManifest), so platform - not Vite environment - decides: any
-    // native install of this app answers `traycer://`, while the dev web
-    // entry registers nothing and must not name a scheme some other installed
-    // app would answer.
-    returnScheme: Capacitor.isNativePlatform() ? "traycer" : null,
+    // AndroidManifest; the iOS staging release lane re-stamps its own), and
+    // the baked config names that same scheme. Platform still decides whether
+    // ANY scheme exists: the dev web entry registers nothing and must not
+    // name a scheme some other installed app would answer.
+    returnScheme: Capacitor.isNativePlatform() ? config.returnScheme : null,
     // The selection authority's fleet rides the same dev-slot source the
     // directory's fetcher uses, so a loopback dev host (never registered in
     // the cloud) is still a derivation candidate. `null` = registry list.

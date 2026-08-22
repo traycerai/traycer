@@ -22,8 +22,10 @@ interface TraycerMobileDevHost {
 interface TraycerMobileBakedConfig {
   /**
    * Which backend set this bundle is baked against. Also decides APNs
-   * addressing: a non-`production` build is debug-signed (`aps-environment:
-   * development`), so its push tokens are only valid on the sandbox gateway.
+   * addressing: only `dev` builds are debug-signed (`aps-environment:
+   * development`, tokens valid on the sandbox gateway alone) - staging and
+   * production both ship distribution-signed through TestFlight / the App
+   * Store and register against the production gateway.
    */
   readonly environment: "dev" | "staging" | "production";
   readonly authnBaseUrl: string;
@@ -32,6 +34,13 @@ interface TraycerMobileBakedConfig {
   readonly relayBaseUrl: string;
   /** Device-flow display label authn shows on the sign-in approval page. */
   readonly hostLabel: string;
+  /**
+   * Custom URL scheme the OS routes back to THIS app after browser sign-in.
+   * Must equal the scheme the native shell actually registers: the checked-in
+   * Info.plist value for dev and production, the CI-stamped one for staging
+   * (`vite.config.ts` SHIPPED_RETURN_SCHEMES has the pairing rules).
+   */
+  readonly returnScheme: string;
   /** Dev host scaffolding, or `null` in shipped (staging/production) builds. */
   readonly devHost: TraycerMobileDevHost | null;
 }
