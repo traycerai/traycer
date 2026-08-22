@@ -236,7 +236,7 @@ describe("CommGraphTile", () => {
     expect(archived.className).toContain("opacity-50");
   });
 
-  it("keeps a legacy chat's host unresolved without captioning the node", async () => {
+  it("keeps a legacy chat's host unresolved and captions the node as such", async () => {
     await renderTile();
 
     await waitFor(() => {
@@ -246,18 +246,21 @@ describe("CommGraphTile", () => {
     });
     // Rendered, marked, and NOT attributed to the app's active host - which
     // would otherwise move the node (and reset that host's subscription,
-    // events and cursor) every time the user switched hosts elsewhere. The
-    // fact is exposed only through `data-host-status` for tests/tooling; the
-    // node itself no longer captions it (that read now rolls up into the
-    // Epic header's feed-health dot instead).
+    // events and cursor) every time the user switched hosts elsewhere.
+    // `host-unknown` is a property of the agent's OWN record (a legacy chat
+    // predating `Chat.hostId`), never a subscription status, so it can never
+    // reach `snapshot.hosts` and the header's feed-health dot has no way to
+    // roll it up - the node is the only place this can ever be surfaced, and
+    // it stays captioned here even though the transport statuses do not.
     expect(
       screen
         .getByTestId(`comm-graph-node-${LEGACY_CHAT_ID}`)
         .getAttribute("data-host-status"),
     ).toBe("host-unknown");
-    expect(
-      screen.queryByTestId(`comm-graph-node-notice-${LEGACY_CHAT_ID}`),
-    ).toBeNull();
+    const notice = screen.getByTestId(
+      `comm-graph-node-notice-${LEGACY_CHAT_ID}`,
+    );
+    expect(notice.textContent).toBe("Host unknown");
     // No third subscription: an unresolved host is not a host to dial.
     expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
   });

@@ -17,6 +17,7 @@ import type {
 import {
   __resetCommGraphRegistryForTests,
   acquireCommGraphSubscription,
+  getCommGraphSubscriptionManager,
   releaseCommGraphSubscription,
 } from "@/lib/comm-graph/comm-graph-registry";
 import { __resetCommGraphCloudRegistryForTests } from "@/lib/comm-graph/comm-graph-cloud-registry";
@@ -151,5 +152,24 @@ describe("useCommGraphFeedHealth", () => {
       releaseCommGraphSubscription(epicId, claim);
     });
     expect(result.current).toBeNull();
+  });
+
+  it("leaves no registry entry for an epic whose graph was never opened, once the hook unmounts", () => {
+    // The hook is claim-free (see the module doc) - it registers as an
+    // OBSERVER, not a claimant, so it must not strand a registry entry for
+    // every epic a header was ever rendered for. Proof by identity: a
+    // manager fetched after unmount for the same epic id must be a
+    // DIFFERENT instance, and the original must report itself disposed.
+    const epicId = "epic-feed-health-unmount-only";
+    const before = getCommGraphSubscriptionManager(epicId);
+
+    const { unmount } = renderHook(() => useCommGraphFeedHealth(epicId));
+    act(() => {
+      unmount();
+    });
+
+    const after = getCommGraphSubscriptionManager(epicId);
+    expect(after).not.toBe(before);
+    expect(before.isDisposed()).toBe(true);
   });
 });

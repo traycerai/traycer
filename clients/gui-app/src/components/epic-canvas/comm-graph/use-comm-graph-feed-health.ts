@@ -8,23 +8,44 @@
  * problem. It is a fact about the feed, not about an agent, so it now rolls up
  * here: the header dot goes amber and the tooltip says what is degraded.
  *
- * CLAIM-FREE. The registries' getters are idempotent and hold no claim, so
- * reading through them neither opens a socket nor keeps one open; the dot only
- * ever reports a subscription some OPEN surface (the graph tile) is holding.
- * `isAttached` is the gate: a detached manager retains the last statuses it saw,
- * and reporting those would show a stale warning for a tile that is closed.
+ * CLAIM-FREE, BUT OWNED. Reading through the registries opens no socket - the
+ * dot only ever reports a subscription some OPEN surface (the graph tile) is
+ * holding, and `isAttached` is the gate, because a detached manager retains the
+ * last statuses it saw and reporting those would show a stale warning for a
+ * tile that is closed.
+ *
+ * Resolving a manager nevertheless CREATES a registry entry, and only a claim's
+ * release ever removes one - so a header that merely resolved would strand an
+ * entry for every epic the user visited, whether or not its graph was ever
+ * opened. This registers as an OBSERVER instead: an owner with no opener, whose
+ * release disposes the entry when nothing else ever wanted it. See
+ * `releaseCommGraphObserver`.
  *
  * The authority choice mirrors `useCommGraphSnapshot` exactly - cloud hosts
  * while the cloud feed is available, local hosts otherwise - so the dot and the
  * canvas can never describe two different subscriptions.
  */
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type {
   CommGraphHostState,
   CommGraphHostStatus,
 } from "@/lib/comm-graph/comm-graph-events";
-import { getCommGraphCloudSubscriptionManager } from "@/lib/comm-graph/comm-graph-cloud-registry";
-import { getCommGraphSubscriptionManager } from "@/lib/comm-graph/comm-graph-registry";
+import {
+  getCommGraphCloudSubscriptionManager,
+  observeCommGraphCloudSubscription,
+  releaseCommGraphCloudObserver,
+} from "@/lib/comm-graph/comm-graph-cloud-registry";
+import {
+  getCommGraphSubscriptionManager,
+  observeCommGraphSubscription,
+  releaseCommGraphObserver,
+} from "@/lib/comm-graph/comm-graph-registry";
 import { selectCommGraphAuthoritativeSnapshot } from "@/lib/comm-graph/comm-graph-cloud-subscription";
 
 export interface CommGraphFeedHealth {
@@ -100,6 +121,13 @@ function feedHealthKey(
 export function useCommGraphFeedHealth(
   epicId: string,
 ): CommGraphFeedHealth | null {
+  // This surface's ownership identity, stable for its lifetime - the same
+  // convention the graph tile's claim uses, and for the same reason: two
+  // headers must count as two owners.
+  const [observer] = useState<object>(() => ({}));
+  // Resolving during render is what `useSyncExternalStore` needs, and both
+  // getters are idempotent, so a StrictMode double render cannot double-own.
+  // The EFFECT below is what takes ownership, so its cleanup balances it.
   const manager = useMemo(
     () => getCommGraphSubscriptionManager(epicId),
     [epicId],
@@ -108,6 +136,14 @@ export function useCommGraphFeedHealth(
     () => getCommGraphCloudSubscriptionManager(epicId),
     [epicId],
   );
+  useEffect(() => {
+    observeCommGraphSubscription(epicId, observer);
+    observeCommGraphCloudSubscription(epicId, observer);
+    return () => {
+      releaseCommGraphObserver(epicId, observer);
+      releaseCommGraphCloudObserver(epicId, observer);
+    };
+  }, [epicId, observer]);
   const subscribe = useCallback(
     (listener: () => void) => {
       const unsubscribeLocal = manager.subscribe(listener);

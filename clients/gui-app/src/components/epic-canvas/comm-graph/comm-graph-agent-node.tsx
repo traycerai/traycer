@@ -73,13 +73,22 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
   props: NodeProps<CommGraphAgentFlowNode>,
 ) {
   const { data } = props;
-  // The host's FEED status is deliberately not painted on the node. It is a
-  // fact about a subscription, not about this agent: the cloud relay stamps one
-  // relay status onto every origin host, so a single wobbly socket used to
-  // caption every node "Reconnecting…" at once. It is exposed as
-  // `data-host-status` for tests and tooling, and the user-facing report lives
-  // in the Epic header's status dot (`useCommGraphFeedHealth`), amber with the
-  // detail in its tooltip.
+  // A node reports what is true of THIS AGENT, and nothing about a socket.
+  //
+  // The transport statuses (`reconnecting`, `unreachable`, `failed`,
+  // `unsupported`) are facts about a SUBSCRIPTION, and the cloud relay stamps
+  // one relay status onto every origin host - so captioning them here read
+  // "Reconnecting…" under every agent at once for a single wobbly socket. They
+  // now roll up to the Epic header's status dot (`useCommGraphFeedHealth`) and
+  // survive here only as `data-host-status` for tests and tooling.
+  //
+  // `host-unknown` is the exception, and stays: it is a property of the agent's
+  // own record (a legacy chat predating `Chat.hostId`), not of any subscription.
+  // It is deliberately unattributed rather than guessed at, so it has no host to
+  // dial and therefore CANNOT appear in either manager's `snapshot.hosts` - the
+  // header has no way to learn about it. Dropping it here would leave such a
+  // node looking healthy while it can never receive an edge.
+  const unattributedHost = data.hostStatus === "host-unknown";
   // Read from the epic selectors, exactly as the sidebar row does - the node's
   // own `data` carries only what the CANVAS needs, and duplicating hover facts
   // into it is how the two surfaces would drift apart.
@@ -103,6 +112,7 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       className={cn(
         "flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left text-ui-xs shadow-sm hover:border-primary/50",
         data.archived && "border-dashed opacity-50",
+        unattributedHost && "opacity-60",
         data.activityTier === "turn" && "border-primary ring-2 ring-primary/30",
         data.activityTier === "background" && "border-primary/50",
         data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
@@ -135,9 +145,17 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
         />
         <span className="min-w-0 flex-1 truncate font-medium">{data.name}</span>
       </div>
-      {data.archived ? (
+      {data.archived || unattributedHost ? (
         <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
-          <span>Archived</span>
+          {data.archived ? <span>Archived</span> : null}
+          {unattributedHost ? (
+            <span
+              className="truncate"
+              data-testid={`comm-graph-node-notice-${data.agentId}`}
+            >
+              Host unknown
+            </span>
+          ) : null}
         </div>
       ) : null}
       <Handle
