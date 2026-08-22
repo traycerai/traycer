@@ -1,5 +1,6 @@
 import {
   bucketMetricValue,
+  totalTokensForBucket,
   type UsageBucket,
   type UsageMetric,
 } from "@/lib/usage-analytics/usage-chart-data";
@@ -7,7 +8,14 @@ import {
 /** One calendar tile. `level` 0 = no activity, 1-4 = intensity quartile. */
 export interface UsageActivityCell {
   readonly day: string;
+  /** The selected metric's total for the day - what sets `level`. */
   readonly value: number;
+  /**
+   * Both metrics, regardless of which one is selected: the tile's hover
+   * states the day's cost AND tokens, not just the one coloring it.
+   */
+  readonly costUsd: number;
+  readonly tokens: number;
   /**
    * Turns recorded that day, independent of `value`. A day can hold real
    * work whose cost could not be priced: under the Cost metric its `value`
@@ -79,11 +87,21 @@ export function buildUsageActivityCalendar(
   metric: UsageMetric,
 ): UsageActivityCalendar {
   const valueByDay = new Map<string, number>();
+  const costByDay = new Map<string, number>();
+  const tokensByDay = new Map<string, number>();
   const factsByDay = new Map<string, number>();
   for (const bucket of buckets) {
     valueByDay.set(
       bucket.day,
       (valueByDay.get(bucket.day) ?? 0) + bucketMetricValue(bucket, metric),
+    );
+    costByDay.set(
+      bucket.day,
+      (costByDay.get(bucket.day) ?? 0) + bucket.knownCostUsd,
+    );
+    tokensByDay.set(
+      bucket.day,
+      (tokensByDay.get(bucket.day) ?? 0) + totalTokensForBucket(bucket),
     );
     factsByDay.set(
       bucket.day,
@@ -93,6 +111,8 @@ export function buildUsageActivityCalendar(
   const cells = days.map((day) => ({
     day,
     value: valueByDay.get(day) ?? 0,
+    costUsd: costByDay.get(day) ?? 0,
+    tokens: tokensByDay.get(day) ?? 0,
     factCount: factsByDay.get(day) ?? 0,
   }));
   const thresholds = quartileThresholds(
