@@ -831,6 +831,74 @@ describe("WorktreesList delete flow", () => {
     ).toBe(true);
   });
 
+  it("lets a settled-Unknown unresolved row be selected and deleted through unknown-risk confirmation", () => {
+    const unresolvedUnknown = entry({
+      worktreePath: "/wt/dangling",
+      branch: "feat-dangling",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: false,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolvedUnknown],
+      enrichedByPath: new Map(),
+      erroredPaths: new Set([unresolvedUnknown.worktreePath]),
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    screen.getByText(
+      "Couldn't verify this worktree with git. Refresh to retry, or delete it.",
+    );
+    expect(screen.queryByText("Waiting for host verification…")).toBeNull();
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-dangling",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree feat-dangling" }),
+    );
+    screen.getByText("Delete worktree with unknown status?");
+    expect(screen.getByTestId("confirm-action").textContent).toContain(
+      "Delete anyway",
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/dangling"]);
+  });
+
+  it("names the real reason on a checking row's non-selectable checkbox", () => {
+    const unresolved = entry({
+      worktreePath: "/wt/checking",
+      branch: "feat-checking",
+      resolvedAt: null,
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+    });
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unresolved],
+      enrichedByPath: new Map(),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    const checkbox = screen.getByRole("checkbox", {
+      name: "Select worktree feat-checking",
+    });
+    expect(checkbox.getAttribute("aria-disabled")).toBe("true");
+    expect(checkbox.getAttribute("aria-description")).toBe(
+      "Status is still being checked",
+    );
+  });
+
   it("keeps an unresolved base authoritative for deletion while displaying its cached tier", () => {
     const unresolvedBase = entry({
       worktreePath: "/wt/regressed",
@@ -4486,6 +4554,45 @@ describe("WorktreesList status-aware delete safety", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
     expect(streamMock.paths).toEqual(["/wt/errored"]);
+  });
+
+  it("classifies a resolved gitUnreadable row as Review with unknown-risk delete", () => {
+    const unreadable = {
+      ...entry({
+        worktreePath: "/wt/unreadable",
+        branch: "feat-unreadable",
+        gitRemovable: false,
+      }),
+      branch: null,
+      gitUnreadable: true,
+    };
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: [unreadable],
+      enrichedByPath: new Map([[unreadable.worktreePath, unreadable]]),
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    expect(
+      screen.getByTestId("worktree-tier-pill").getAttribute("data-tier"),
+    ).toBe("review");
+    screen.getByText("unreadable");
+    screen.getByText(
+      "Git can't read this worktree — its main repository is missing or was moved",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete worktree unreadable" }),
+    );
+    screen.getByText("Delete worktree with unknown status?");
+    expect(screen.getByTestId("confirm-action").textContent).toContain(
+      "Delete anyway",
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/unreadable"]);
   });
 
   it("includes an unknown-risk caveat in the bulk summary when selected rows include an Unknown row", () => {

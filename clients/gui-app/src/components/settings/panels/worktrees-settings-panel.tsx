@@ -57,6 +57,7 @@ import {
   classifyWorktreeTier,
   describeReviewReasons,
   provenRemovable,
+  type WorktreeClassification,
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -997,7 +998,7 @@ export function WorktreesList(props: {
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
     for (const entry of classificationEntryByPath.values()) {
-      present.add(classifyWorktreeTier(entry));
+      present.add(listedWorktreeTier(entry));
     }
     // A persisted/selected tier remains visible even when it currently has no
     // matches. Otherwise its trigger would silently read "All" and broaden the
@@ -1172,10 +1173,18 @@ export function WorktreesList(props: {
     () =>
       visibleWorktrees
         .filter((entry) =>
-          worktreeCanBeSelected(entry, backgroundedDeleteStatusByPath),
+          worktreeCanBeSelected(
+            entry,
+            backgroundedDeleteStatusByPath,
+            deleteEnrichmentStateFor(entry.worktreePath),
+          ),
         )
         .map((entry) => entry.worktreePath),
-    [backgroundedDeleteStatusByPath, visibleWorktrees],
+    [
+      backgroundedDeleteStatusByPath,
+      deleteEnrichmentStateFor,
+      visibleWorktrees,
+    ],
   );
   const selectablePathSet = useMemo(
     () => new Set(selectableWorktreePaths),
@@ -2169,15 +2178,15 @@ const WorktreeRepoHeader = memo(function WorktreeRepoHeader(props: {
  * tier isn't known yet, so its delete confirmation can't be trusted). An
  * `Unknown` row (settled enrichment error) is NOT disabled here - it is still
  * deletable, just through the unknown-risk confirmation instead of the
- * generic one.
+ * generic one, even when the host never stamped `resolvedAt`.
  */
 function worktreeDeleteDisabledReason(
   entry: WorktreeHostEntryV14,
   enrichment: WorktreeEnrichmentState,
 ): "in-use" | "checking" | null {
   if (entry.inUse) return "in-use";
-  if (entry.resolvedAt === null) return "checking";
-  if (enrichment === "pending") return "checking";
+  if (enrichment === "unknown") return null;
+  if (entry.resolvedAt === null || enrichment === "pending") return "checking";
   return null;
 }
 
@@ -2262,13 +2271,19 @@ const WorktreeRow = memo(function WorktreeRow(
   } = props;
   const deleting = deleteStatus !== null;
   const selectedForDelete = selected && canSelect;
+  const deleteDisabledReason = worktreeDeleteDisabledReason(
+    entry,
+    deleteEnrichment,
+  );
   // An unresolved row carries schema-safe placeholders only. Do not classify
   // those placeholders: the isGitRepo/dirty-count cliff makes an unresolved
   // row look clean enough to delete when it is actually still unknown.
   const classification =
-    entry.resolvedAt === null ? null : classifyWorktree(entry);
+    entry.resolvedAt === null ? null : classifyListedWorktree(entry);
   const tierClassification =
-    classificationEntry === null ? null : classifyWorktree(classificationEntry);
+    classificationEntry === null
+      ? null
+      : classifyListedWorktree(classificationEntry);
   const displayEntry = classificationEntry ?? entry;
   const navigate = useNavigate();
   const openTask = useCallback(
@@ -2320,6 +2335,7 @@ const WorktreeRow = memo(function WorktreeRow(
           selected={selected}
           canSelect={canSelect}
           deleting={deleting}
+          selectDisabledReason={deleteDisabledReason}
           onToggleSelection={toggleSelection}
         />
       </div>
@@ -2339,7 +2355,7 @@ const WorktreeRow = memo(function WorktreeRow(
         </div>
         {classification === null ? (
           <span className="text-ui-xs text-muted-foreground">
-            Waiting for host verification…
+            {unresolvedWorktreeSecondaryCopy(enrichment)}
           </span>
         ) : (
           <WorktreeSecondaryFacts
@@ -2368,10 +2384,7 @@ const WorktreeRow = memo(function WorktreeRow(
       ) : null}
       {!deleting ? (
         <WorktreeRowActions
-          deleteDisabledReason={worktreeDeleteDisabledReason(
-            entry,
-            deleteEnrichment,
-          )}
+          deleteDisabledReason={deleteDisabledReason}
           onCopyPath={copyPath}
           onManageScripts={manageScripts}
           onDelete={deleteWorktree}
@@ -2452,10 +2465,7 @@ function WorktreeTierPill(props: {
   }
   const unavailable = props.state === "unavailable";
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
-  const reviewReasons =
-    props.tier === "review" && props.entry.branchStatus !== null
-      ? describeReviewReasons(props.entry)
-      : [];
+  const reviewReasons = reviewReasonsFor(props.entry, props.tier);
   const tierTooltip =
     reviewReasons.length === 0 ? (
       WORKTREE_TIER_TOOLTIP[props.tier]
@@ -2976,13 +2986,29 @@ function WorktreesRepoExpansionControl(props: {
   );
 }
 
+const WORKTREE_DELETE_DISABLED_COPY: Record<
+  "in-use" | "checking",
+  { readonly ariaLabel: string; readonly selectTooltip: string }
+> = {
+  "in-use": {
+    ariaLabel: "Delete worktree (in use by an active agent)",
+    selectTooltip: "In use by an active agent",
+  },
+  checking: {
+    ariaLabel: "Delete worktree (status is still being checked)",
+    selectTooltip: "Status is still being checked",
+  },
+};
+
 function WorktreeSelectionControl(props: {
   readonly entry: WorktreeHostEntry;
   readonly selected: boolean;
   readonly canSelect: boolean;
   readonly deleting: boolean;
+  readonly selectDisabledReason: "in-use" | "checking" | null;
   readonly onToggleSelection: () => void;
 }): ReactNode {
+  const selectDisabledReason = props.selectDisabledReason ?? "in-use";
   const checkbox = (
     <button
       type="button"
@@ -2990,6 +3016,11 @@ function WorktreeSelectionControl(props: {
       aria-checked={props.selected && props.canSelect ? "true" : "false"}
       aria-disabled={!props.canSelect}
       aria-label={`Select worktree ${branchLabel(props.entry)}`}
+      aria-description={
+        props.canSelect
+          ? undefined
+          : WORKTREE_DELETE_DISABLED_COPY[selectDisabledReason].selectTooltip
+      }
       data-testid="worktree-row-select"
       className={cn(
         "flex size-4 items-center justify-center rounded-sm border transition-[border-color,background-color,color,opacity] outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -3013,7 +3044,7 @@ function WorktreeSelectionControl(props: {
   if (props.canSelect || props.deleting) return checkbox;
   return (
     <TooltipWrapper
-      label="In use by an active agent"
+      label={WORKTREE_DELETE_DISABLED_COPY[selectDisabledReason].selectTooltip}
       side="top"
       sideOffset={undefined}
       align="start"
@@ -3022,18 +3053,6 @@ function WorktreeSelectionControl(props: {
     </TooltipWrapper>
   );
 }
-
-const WORKTREE_DELETE_DISABLED_COPY: Record<
-  "in-use" | "checking",
-  { readonly ariaLabel: string }
-> = {
-  "in-use": {
-    ariaLabel: "Delete worktree (in use by an active agent)",
-  },
-  checking: {
-    ariaLabel: "Delete worktree (status is still being checked)",
-  },
-};
 
 /**
  * Persistent row-end actions: one quiet overflow trigger at rest. Utilities and
@@ -3327,7 +3346,13 @@ function worktreeSearchHaystack(
     const title = taskTitlesByEpicId.get(owner.epicId);
     return title === undefined ? [] : [title];
   });
-  return [entry.repoLabel, entry.branch ?? "", entry.worktreePath, ...titles]
+  return [
+    entry.repoLabel,
+    entry.branch ?? "",
+    gitUnreadableOf(entry) ? "unreadable" : "",
+    entry.worktreePath,
+    ...titles,
+  ]
     .join("\n")
     .toLowerCase();
 }
@@ -3510,7 +3535,9 @@ function singleWorktreeDeleteDialogCopy(
   readonly description: string;
   readonly actionLabel: string;
 } {
-  if (enrichment === "unknown") return unknownRiskDeleteDialogCopy(entry);
+  if (enrichment === "unknown" || gitUnreadableOf(entry)) {
+    return unknownRiskDeleteDialogCopy(entry);
+  }
   return deleteDialogCopy(entry);
 }
 
@@ -3700,8 +3727,8 @@ function summarizeBulkWorktreeDelete(
   const unverifiedCaveat = hasUnverified
     ? "For the worktrees with unverified branch status: branch status was unavailable, the branch refs are expected to remain, and unpushed work is not proven. Commit, stash, or push anything you want to keep first."
     : null;
-  const unknownTargets = targets.filter((entry) =>
-    unknownPaths.has(entry.worktreePath),
+  const unknownTargets = targets.filter(
+    (entry) => unknownPaths.has(entry.worktreePath) || gitUnreadableOf(entry),
   );
   const unknownRiskCaveat =
     unknownTargets.length === 0
@@ -3736,9 +3763,10 @@ function summarizeBulkWorktreeDelete(
 function worktreeCanBeSelected(
   entry: WorktreeHostEntryV14,
   deleteStatusByPath: ReadonlyMap<string, WorktreeRowDeleteStatus>,
+  deleteEnrichment: WorktreeEnrichmentState,
 ): boolean {
   return (
-    entry.resolvedAt !== null &&
+    (entry.resolvedAt !== null || deleteEnrichment === "unknown") &&
     !entry.inUse &&
     !deleteStatusByPath.has(entry.worktreePath)
   );
@@ -3784,7 +3812,55 @@ function worktreeSelectionCheckboxVisibility(args: {
 }
 
 function branchLabel(entry: WorktreeHostEntry): string {
+  if (gitUnreadableOf(entry)) return "unreadable";
   return entry.branch ?? "detached HEAD";
+}
+
+const GIT_UNREADABLE_REASON =
+  "Git can't read this worktree — its main repository is missing or was moved";
+
+function gitUnreadableOf(entry: WorktreeHostEntry): boolean {
+  return (
+    "gitUnreadable" in entry &&
+    typeof entry.gitUnreadable === "boolean" &&
+    entry.gitUnreadable
+  );
+}
+
+function listedWorktreeTier(entry: WorktreeHostEntryV14): WorktreeTier {
+  return gitUnreadableOf(entry) ? "review" : classifyWorktreeTier(entry);
+}
+
+function classifyListedWorktree(
+  entry: WorktreeHostEntryV14,
+): WorktreeClassification {
+  if (!gitUnreadableOf(entry)) return classifyWorktree(entry);
+  return {
+    tier: "review",
+    label: WORKTREE_TIER_LABEL.review,
+    facts: [GIT_UNREADABLE_REASON],
+    prFacts: [],
+    nonPrFacts: [GIT_UNREADABLE_REASON],
+  };
+}
+
+function unresolvedWorktreeSecondaryCopy(
+  enrichment: WorktreeEnrichmentState,
+): string {
+  if (enrichment === "unknown") {
+    return "Couldn't verify this worktree with git. Refresh to retry, or delete it.";
+  }
+  return "Waiting for host verification…";
+}
+
+function reviewReasonsFor(
+  entry: WorktreeHostEntryV14,
+  tier: WorktreeTier,
+): readonly string[] {
+  if (tier !== "review") return [];
+  if (gitUnreadableOf(entry)) return [GIT_UNREADABLE_REASON];
+  if (entry.branchStatus === null) return [];
+  return describeReviewReasons(entry);
 }
 
 function invalidateWorktreeDeleteCaches(
