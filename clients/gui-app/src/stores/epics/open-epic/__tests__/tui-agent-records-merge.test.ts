@@ -153,37 +153,65 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     // from the table the instant the stale answer lands.
     signedInAs(USER);
     const handle = newSession();
-    handle.store.getState().applyTuiAgentRecords([row({ tuiAgentId: "old" })]);
+    const state = handle.store.getState();
+    state.applyTuiAgentRecords([row({ tuiAgentId: "old" })], null);
 
-    handle.store.getState().applyTuiAgentRecordDelta({
+    // The read is dispatched HERE - the hook captures the counter before the
+    // RPC - and the push lands while it is in flight.
+    const issuedAt = state.peekTuiAgentIngestSeq();
+    state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
       epicId: "epic-test",
       record: row({ tuiAgentId: "pushed" }),
     });
     // The stale answer: issued before `pushed` existed, so it names only `old`.
-    handle.store.getState().applyTuiAgentRecords([row({ tuiAgentId: "old" })]);
+    state.applyTuiAgentRecords([row({ tuiAgentId: "old" })], issuedAt);
 
     expect(ids(handle)).toEqual(["old", "pushed"]);
   });
 
-  it("collects a genuinely deleted agent on the answer after the next", () => {
+  it("collects a deleted agent on the first answer issued after it landed", () => {
     // The other half of the same rule: holding an omitted row forever would
     // turn a missed `tuiRemove` (a delta lost to a disconnect) into a row that
-    // outlives the session. The grace is exactly one answer - the following
-    // read is necessarily issued after the fence moved, so an omission there is
-    // evidence.
+    // outlives the session. An answer issued AFTER the push is evidence - the
+    // host had the row when it answered - so the omission retracts it at once,
+    // not one read later.
+    //
+    // Ablation: fence on the previous answer's watermark instead of the
+    // request-time counter and `doomed` survives this answer, staying
+    // actionable until the 20s poll after a mutation's own refetch.
     signedInAs(USER);
     const handle = newSession();
-    handle.store.getState().applyTuiAgentRecordDelta({
+    const state = handle.store.getState();
+    state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
       epicId: "epic-test",
       record: row({ tuiAgentId: "doomed" }),
     });
 
-    handle.store.getState().applyTuiAgentRecords([]);
+    // Stream drops; the agent is deleted on the host; a mutation-triggered
+    // refetch is dispatched now and answers without it.
+    state.applyTuiAgentRecords([], state.peekTuiAgentIngestSeq());
+    expect(ids(handle)).toEqual([]);
+  });
+
+  it("falls back to a one-answer grace when no fence was captured", () => {
+    // `null` is the dispatch-with-no-session case: the answer cannot say
+    // whether it was issued before or after the push, so the previous
+    // answer's watermark stands in and the row survives exactly one answer.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "doomed" }),
+    });
+
+    state.applyTuiAgentRecords([], null);
     expect(ids(handle)).toEqual(["doomed"]);
 
-    handle.store.getState().applyTuiAgentRecords([]);
+    state.applyTuiAgentRecords([], null);
     expect(ids(handle)).toEqual([]);
   });
 
@@ -197,7 +225,10 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const handle = newSession();
     handle.store
       .getState()
-      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", title: "Before" })]);
+      .applyTuiAgentRecords(
+        [row({ tuiAgentId: "tui-1", title: "Before" })],
+        null,
+      );
 
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
@@ -206,9 +237,10 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     });
     handle.store
       .getState()
-      .applyTuiAgentRecords([
-        row({ tuiAgentId: "tui-1", title: "Before", revision: 1 }),
-      ]);
+      .applyTuiAgentRecords(
+        [row({ tuiAgentId: "tui-1", title: "Before", revision: 1 })],
+        null,
+      );
 
     expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
       "After",
@@ -223,12 +255,16 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const handle = newSession();
     handle.store
       .getState()
-      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", title: "Before" })]);
+      .applyTuiAgentRecords(
+        [row({ tuiAgentId: "tui-1", title: "Before" })],
+        null,
+      );
     handle.store
       .getState()
-      .applyTuiAgentRecords([
-        row({ tuiAgentId: "tui-1", title: "After", revision: 2 }),
-      ]);
+      .applyTuiAgentRecords(
+        [row({ tuiAgentId: "tui-1", title: "After", revision: 2 })],
+        null,
+      );
 
     expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
       "After",
@@ -242,7 +278,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const handle = newSession();
     handle.store
       .getState()
-      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1" })]);
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1" })], null);
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiRemove",
       epicId: "epic-test",
@@ -252,7 +288,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
 
     handle.store
       .getState()
-      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 9 })]);
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 9 })], null);
 
     expect(ids(handle)).toEqual([]);
   });

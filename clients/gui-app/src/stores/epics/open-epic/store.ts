@@ -559,11 +559,27 @@ export interface OpenEpicState {
    *
    * MERGED against what the push has already delivered, not clear-and-replace:
    * a served row is revision-guarded exactly as a `tuiUpsert` is, and a row the
-   * answer omits is retracted only once a later answer could have carried it.
-   * A list read issued before an agent was committed would otherwise delete the
-   * `tuiUpsert` that announced it.
+   * answer omits is retracted only if it was already held when the answer was
+   * ISSUED. A list read issued before an agent was committed would otherwise
+   * delete the `tuiUpsert` that announced it.
+   *
+   * `issuedAtSeq` is where {@link OpenEpicState.peekTuiAgentIngestSeq} stood
+   * when the request was dispatched - the caller captures it immediately
+   * before the RPC and hands it back with the answer. `null` (no session to
+   * read at dispatch) falls back to the previous answer's watermark, which
+   * holds an omitted row for one extra pass instead.
    */
-  applyTuiAgentRecords: (records: readonly TuiAgentRecordSummary[]) => void;
+  applyTuiAgentRecords: (
+    records: readonly TuiAgentRecordSummary[],
+    issuedAtSeq: number | null,
+  ) => void;
+  /**
+   * The terminal-agent ingest counter as it stands now - the value a list
+   * request captures at dispatch and passes back to
+   * {@link OpenEpicState.applyTuiAgentRecords} as `issuedAtSeq`. Monotonic,
+   * per session; every accepted row write advances it.
+   */
+  peekTuiAgentIngestSeq: () => number;
   /**
    * Applies ONE `host.chatRecords.subscribe@1.1` terminal-agent delta - the
    * push half of the table {@link OpenEpicState.applyTuiAgentRecords} fills
@@ -1914,15 +1930,17 @@ export function createOpenEpicStore(
    * a chance to see - precisely the A2A-created agent this whole channel exists
    * to surface - until the next 20s poll.
    *
-   * So an omission is only allowed to retract a row that was already settled
+   * So an omission is only allowed to retract a row that was already held
    * when the answer was issued. `tuiAgentRowSeq` stamps every accepted write
-   * with a monotonic counter, `tuiAgentSnapshotFence` records where the counter
-   * stood after the previous snapshot, and a row ingested past that fence
-   * survives exactly one snapshot. The following read is necessarily issued
-   * after that fence moved - and therefore after the host committed the row -
-   * so a genuine deletion is still collected on the next pass rather than
-   * lingering for the session. Retractions are unaffected: `tuiRemove` is the
-   * explicit signal and stays absorbing.
+   * with a monotonic counter; the list hook reads that counter at dispatch
+   * (`peekTuiAgentIngestSeq`) and hands it back with the answer as the fence,
+   * so a row ingested past it survives that answer and an answer issued after
+   * the row landed retracts it at once - a deletion missed while the stream
+   * was down is collected by the very next read, not one read later.
+   * `tuiAgentSnapshotFence` (where the counter stood after the previous
+   * answer) is the fallback for an answer dispatched with no session to read;
+   * it holds an omitted row for one extra pass. Retractions are unaffected:
+   * `tuiRemove` is the explicit signal and stays absorbing.
    */
   const tuiAgentRowSeq = new Map<string, number>();
   let tuiAgentIngestSeq = 0;
@@ -3421,7 +3439,9 @@ export function createOpenEpicStore(
             publishChatRecords(null);
           },
 
-          applyTuiAgentRecords: (records) => {
+          peekTuiAgentIngestSeq: () => tuiAgentIngestSeq,
+
+          applyTuiAgentRecords: (records, issuedAtSeq) => {
             if (disposed) return;
             const served = new Map<string, TuiAgentRecordSummary>();
             for (const row of records) {
@@ -3433,12 +3453,13 @@ export function createOpenEpicStore(
               if (tuiAgentRetractions.has(row.tuiAgentId)) continue;
               served.set(row.tuiAgentId, row);
             }
-            // Omissions first, against the PREVIOUS fence - see
-            // `tuiAgentRowSeq`. A row this answer does not carry is dropped
-            // only if it was already settled when the answer was issued;
-            // anything ingested since then is newer than the snapshot by
-            // construction and is held for one more pass.
-            const fence = tuiAgentSnapshotFence;
+            // Omissions first, against the fence - see `tuiAgentRowSeq`. A
+            // row this answer does not carry is dropped only if it was already
+            // held when the answer was ISSUED; anything ingested since then is
+            // newer than the snapshot by construction and survives it. The
+            // request-time counter is the exact fence; the previous answer's
+            // watermark is the fallback when none was captured.
+            const fence = issuedAtSeq ?? tuiAgentSnapshotFence;
             for (const id of [...tuiAgentRecordRows.keys()]) {
               if (served.has(id)) continue;
               if ((tuiAgentRowSeq.get(id) ?? 0) > fence) continue;

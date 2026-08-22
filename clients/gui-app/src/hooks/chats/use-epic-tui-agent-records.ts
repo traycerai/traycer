@@ -3,9 +3,23 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+
+/**
+ * What the cache holds for one `epic.listTuiAgents` answer: the rows, plus
+ * where the session's terminal-agent ingest counter stood when the request
+ * was DISPATCHED. The store merges omissions against that fence - a row the
+ * answer does not carry is retracted only if the answer was issued after the
+ * row landed - so the fence has to be captured before the RPC, not when the
+ * answer is applied. `null` when no session existed to read at dispatch.
+ */
+interface TuiAgentListAnswer {
+  readonly tuiAgents: readonly TuiAgentRecordSummary[];
+  readonly issuedAtSeq: number | null;
+}
 
 /**
  * Feeds the epic session's terminal-agent record table from the host's
@@ -53,7 +67,13 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // Viewer-scoped: the response is one identity's own terminal agents, so two
   // users on one installation must never share a cache slot.
   const viewerUserId = useCloudChatViewerId();
-  const query = useHostQuery<HostRpcRegistry, "epic.listTuiAgents">({
+  const store = handle?.store ?? null;
+  const query = useHostQueryWithResponseMap<
+    HostRpcRegistry,
+    "epic.listTuiAgents",
+    TuiAgentListAnswer,
+    number | null
+  >({
     cacheKeyIdentity: [viewerUserId],
     client,
     method: "epic.listTuiAgents",
@@ -68,14 +88,23 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
       retry: (failureCount, error) =>
         error.code !== "E_HOST_UNSUPPORTED" && failureCount < 2,
     },
+    // Runs immediately before the RPC is dispatched - see
+    // `TuiAgentListAnswer`. A push delta that lands while this request is
+    // in flight advances the counter past this value, which is exactly how
+    // the store knows the answer could not have carried that row.
+    captureRequestContext: () =>
+      store === null ? null : store.getState().peekTuiAgentIngestSeq(),
+    mapResponse: ({ response, requestContext }) => ({
+      tuiAgents: response.tuiAgents,
+      issuedAtSeq: requestContext ?? null,
+    }),
   });
 
-  const tuiAgents = query.data?.tuiAgents ?? null;
-  const store = handle?.store ?? null;
+  const answer = query.data ?? null;
   useEffect(() => {
-    if (tuiAgents === null || store === null) return;
-    store.getState().applyTuiAgentRecords(tuiAgents);
-  }, [tuiAgents, store]);
+    if (answer === null || store === null) return;
+    store.getState().applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);
+  }, [answer, store]);
 }
 
 /**

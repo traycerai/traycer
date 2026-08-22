@@ -490,6 +490,7 @@ function createDirtyEpicHandle(
     markChatRecordListAuthoritative: () => undefined,
     applyChatRecordDelta: () => undefined,
     applyTuiAgentRecords: () => undefined,
+    peekTuiAgentIngestSeq: () => 0,
     applyTuiAgentRecordDelta: () => undefined,
     republishChatRecordsForCurrentUser: () => undefined,
     beginPendingChatCreation: () => undefined,
