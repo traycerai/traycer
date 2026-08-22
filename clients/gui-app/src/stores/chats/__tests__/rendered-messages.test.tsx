@@ -2148,6 +2148,88 @@ describe("useRenderedMessages", () => {
     expect(child.command).toBe("rg TODO");
   });
 
+  it("keeps a subagent-parented interview top-level and pausing, never folded into the subagent card", () => {
+    // A child's interview arrives tagged with the owning card's parentBlockId
+    // (the nesting helper tags every child event), but interviews are not
+    // subagent children: the card renders top-level in the owning row and the
+    // global pending state still finds it by blockId.
+    const activeTurn: ChatActiveTurn = {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "m1",
+      startedAt: 10_000,
+      updatedAt: 20_000,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      liveAssistantMessage: {
+        turnId: "turn-1",
+        sender: ASSISTANT_SENDER,
+        blocks: [
+          {
+            type: "subagent",
+            agentType: null,
+            blockId: "agent-1",
+            name: "explorer",
+            task: "Investigate the bug.",
+            progressUpdates: [],
+            result: null,
+            status: "streaming",
+            timestamp: 12_000,
+            startedAt: 12_000,
+            spawnToolCallId: null,
+            stopped: false,
+            workflowMeta: null,
+          },
+          {
+            type: "interview",
+            blockId: "question-1",
+            parentBlockId: "agent-1",
+            status: "streaming",
+            timestamp: 16_000,
+            toolName: "AskUserQuestion",
+            title: null,
+            description: null,
+            questions: [],
+            answers: [],
+            error: null,
+            metadata: null,
+          },
+        ],
+        startedAt: 10_000,
+        blocksVersion: 2,
+        imageResolutions: [],
+        imageResolutionsVersion: 0,
+        timestamp: 20_000,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+      activeTurn,
+      pendingInterviews: [{ blockId: "question-1", requestedAt: 16_000 }],
+      runStatus: "running",
+    });
+
+    const row = result.current.find((message) => message.role === "assistant");
+    expect(row?.segments.map((segment) => segment.kind)).toEqual([
+      "subagent",
+      "interview",
+    ]);
+    const subagent = row?.segments[0];
+    if (subagent?.kind !== "subagent") {
+      throw new Error("expected a subagent segment");
+    }
+    expect(subagent.children).toEqual([]);
+    expect(row?.pausedSinceMs).toBe(16_000);
+  });
+
   it("keeps a nested image generation visible as a top-level card", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),

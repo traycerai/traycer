@@ -888,6 +888,46 @@ describe("<SubagentSegment /> promoted feed", () => {
     expect(screen.getByText("callsite-sweeper")).toBeTruthy();
   });
 
+  it("renders a stopped nested agent with the neutral stopped badge once expanded", () => {
+    // The host's root-terminal cascade terminalizes a nested child as
+    // `status: "errored"` + `stopped: true`; as a row it must read "stopped",
+    // not as a failure.
+    render(
+      <SubagentSegment
+        id="test-parent-stopped-child"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        workflowMeta={null}
+        nested={[
+          nestedAgentFixture({
+            id: "nested-stopped",
+            name: "stopped-child",
+            isStreaming: false,
+            endState: null,
+            stopped: true,
+            startedAt: 1_000,
+            durationMs: 2_000,
+          }),
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("stopped")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("stopped-child")).toBeTruthy();
+    expect(screen.getByText("stopped")).toBeTruthy();
+  });
+
   it("does not render a Sub-agents section when there are no nested agent children", () => {
     render(
       <SubagentSegment
