@@ -1,3 +1,4 @@
+import type { HostCredentialState } from "@traycer/protocol/framework/stream-ws-protocol";
 import type {
   HostCredentialMintFlow,
   HostCredentialMintOutcome,
@@ -247,7 +248,7 @@ const awaitingAdoptionByHostId = new Map<
  */
 export function noteHostCredentialState(
   _hostId: string,
-  _state: "missing" | "active" | "needs-reauth",
+  _state: HostCredentialState,
 ): void {
   // Intentionally empty. See above.
 }
@@ -395,7 +396,17 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
       // undeliverable credential outright - leaving a joiner that was told
       // `unavailable` as the only survivor, permanently unable to ask again
       // because its own state never transitions.
-      return { kind: "pending-elsewhere" };
+      // The winner registered its adoption claim before this closure runs
+      // (`settled` sets it, and the claim gate is a `.then` on `settled`), so
+      // the wait to hand back is that claim's remainder - the same answer the
+      // stale-ask branch gives, for the same reason. This is the case that
+      // wait exists for: if the winner closes before delivering, nothing else
+      // wakes this joiner, and re-asking as the claim lapses is the only
+      // thing that keeps the last surviving transport from stranding.
+      return {
+        kind: "pending-elsewhere",
+        retryAfterMs: remainingAdoptionClaimMs(hostId),
+      };
     }
     claimed = true;
     return outcome;

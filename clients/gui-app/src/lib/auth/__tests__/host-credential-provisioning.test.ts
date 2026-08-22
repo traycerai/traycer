@@ -269,7 +269,10 @@ describe("appHostCredentialMintFlow adoption claim", () => {
 
   it("does not release the claim on a repeated needs-reauth ack", async () => {
     // A host still asking is not proof of delivery - its ask may simply
-    // predate the credential now on its way. Only `active` counts.
+    // predate the credential now on its way. Under the TTL-only design NO
+    // report releases a claim (`noteHostCredentialState` is inert); `active`
+    // is pinned separately below because it is the one report that looks like
+    // proof of delivery and still is not.
     const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
     setHostCredentialMintRunner(runner);
 
