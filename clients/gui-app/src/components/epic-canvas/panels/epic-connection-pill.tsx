@@ -24,6 +24,7 @@ import {
 } from "@/hooks/agent/use-agent-activity-presence-degraded";
 import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
 import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { plainTerminalCapabilityTopology } from "@/lib/terminals/plain-terminal-authority";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
@@ -71,7 +72,8 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     scope: { kind: "epic", epicId: props.epicId },
   });
   const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
-    terminalAuthority.coverage === "partial-serving-host",
+    plainTerminalCapabilityTopology(terminalAuthority.capability) === "fleet" &&
+      terminalAuthority.coverage === "partial-serving-host",
     JSON.stringify([terminalAuthority.hostId, props.epicId]),
   );
   const presenceDegraded = useAgentActivityPresenceDegraded();

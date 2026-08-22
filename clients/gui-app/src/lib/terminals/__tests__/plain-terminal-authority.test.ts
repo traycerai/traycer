@@ -152,12 +152,15 @@ const V2_DRAFT_FAMILY = Object.fromEntries(
 );
 
 describe("plain terminal capability negotiation", () => {
-  it("distinguishes unknown, partial/old, and complete v2 families", () => {
+  it("recognizes frozen local v1 and fleet v2 only as complete families", () => {
     expect(capability({}, false)).toEqual({ status: "unknown" });
     expect(
       capability({ "terminal.plain.list": { major: 2, minor: 0 } }, true),
     ).toEqual({ status: "legacy" });
-    expect(capability(V1_FAMILY, true)).toEqual({ status: "legacy" });
+    expect(capability(V1_FAMILY, true)).toEqual({
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    });
     expect(capability(V2_DRAFT_FAMILY, true)).toEqual({ status: "legacy" });
     expect(
       capability(
@@ -174,7 +177,7 @@ describe("plain terminal capability negotiation", () => {
     });
   });
 
-  it("keeps old hosts on local authority and makes a stale capable host view-only", () => {
+  it("keeps hosts without a durable family on legacy authority and makes a stale capable host view-only", () => {
     const oldHost = capability({}, true);
     const stale = seedPlainTerminalList(
       undefined,

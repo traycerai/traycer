@@ -630,6 +630,93 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("selects an installed older major before subscribing to an RC host", async () => {
+    const openRequestSchema = z.object({ id: z.string() });
+    const clientFrameSchema = z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("noop"),
+        hasBinaryPayload: z.literal(false),
+      }),
+    ]);
+    const registry = defineVersionedStreamRpcRegistry({
+      "dual-major.subscribe": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: defineStreamRpcContract({
+                method: "dual-major.subscribe",
+                schemaVersion: { major: 1, minor: 0 } as const,
+                openRequestSchema,
+                serverFrameSchema: z.object({
+                  kind: z.literal("snapshot"),
+                  hasBinaryPayload: z.literal(false),
+                  id: z.string(),
+                }),
+                clientFrameSchema,
+              }),
+            },
+          },
+        },
+        2: {
+          latestMinor: 1,
+          versions: {
+            1: {
+              contract: defineStreamRpcContract({
+                method: "dual-major.subscribe",
+                schemaVersion: { major: 2, minor: 1 } as const,
+                openRequestSchema,
+                serverFrameSchema: z.object({
+                  kind: z.literal("state"),
+                  hasBinaryPayload: z.literal(false),
+                  id: z.string(),
+                }),
+                clientFrameSchema,
+              }),
+            },
+          },
+        },
+      },
+    });
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      hostCredentialMint: null,
+      onHostCredentialState: null,
+      evidence: NO_TRANSPORT_EVIDENCE,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("dual-major.subscribe", { id: "item-1" });
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(
+        { "dual-major.subscribe": { major: 1, minor: 0 } },
+        undefined,
+      ),
+    );
+
+    expect(parseText(stub.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "dual-major.subscribe",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { id: "item-1" },
+    });
+
+    session.close();
+  });
+
   it("pushes a credentialUpdate frame on bearer rotation when the host advertises support", async () => {
     const { factory, sockets } = makeFactory();
     const { client, ctx } = makeRotatableClient(factory, "token-1");

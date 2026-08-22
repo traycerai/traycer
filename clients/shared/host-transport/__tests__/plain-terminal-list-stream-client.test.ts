@@ -117,6 +117,7 @@ function harness() {
   const onConnectionStatus = vi.fn();
   const client = new PlainTerminalListStreamClient({
     wsStreamClient,
+    servingHostId: "host-1",
     scope: { kind: "epic", epicId: "epic-1" },
     callbacks: {
       onState,
@@ -171,6 +172,53 @@ describe("PlainTerminalListStreamClient", () => {
     expect(h.onState).toHaveBeenCalledTimes(2);
     expect(h.onState).toHaveBeenNthCalledWith(1, complete);
     expect(h.onState).toHaveBeenNthCalledWith(2, partial);
+    h.client.close();
+  });
+
+  it("adapts frozen v1 incremental frames into local replacement states", () => {
+    const h = harness();
+    h.session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+
+    h.session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      terminals: [dormant],
+    });
+    h.session.emitFrame({
+      kind: "upsert",
+      hasBinaryPayload: false,
+      terminal: running,
+    });
+    expect(h.onState).not.toHaveBeenCalled();
+
+    h.session.emitFrame({ kind: "initialized", hasBinaryPayload: false });
+    expect(h.onState).toHaveBeenLastCalledWith({
+      kind: "state",
+      hasBinaryPayload: false,
+      state: {
+        coverage: "partial-serving-host",
+        scope: { kind: "epic", epicId: "epic-1" },
+        servingHostId: "host-1",
+        terminals: [running],
+      },
+    });
+
+    h.session.emitFrame({
+      kind: "deleted",
+      hasBinaryPayload: false,
+      terminalId: "terminal-1",
+      revision: 8,
+    });
+    expect(h.onState).toHaveBeenLastCalledWith({
+      kind: "state",
+      hasBinaryPayload: false,
+      state: {
+        coverage: "partial-serving-host",
+        scope: { kind: "epic", epicId: "epic-1" },
+        servingHostId: "host-1",
+        terminals: [],
+      },
+    });
     h.client.close();
   });
 

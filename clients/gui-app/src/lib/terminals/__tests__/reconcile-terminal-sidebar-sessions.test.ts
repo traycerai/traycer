@@ -107,6 +107,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [listedSession(SHARED_ID, { lifecycleOwner: "registry" })],
       durableCollection: completeFleet([
@@ -127,6 +128,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [
         listedSession("term-a", { lifecycleOwner: "registry" }),
@@ -150,6 +152,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [listedSession("gone", { lifecycleOwner: "registry" })],
       durableCollection: collection,
@@ -162,6 +165,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [
         listedSession("setup-term", { lifecycleOwner: "manager" }),
@@ -185,6 +189,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "legacy",
+      topology: "local",
       coverage: null,
       listed: [listedSession("legacy-a", {}), listedSession("legacy-b", {})],
       durableCollection: completeFleet([
@@ -217,6 +222,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "partial-serving-host",
       listed,
       durableCollection: partial,
@@ -232,6 +238,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed,
       durableCollection: complete,
@@ -242,6 +249,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed,
       durableCollection: recovered,
@@ -254,11 +262,29 @@ describe("reconcileTerminalSidebarSessions", () => {
     ]);
   });
 
+  it("does not report a fleet outage for a local-only v1 authority", () => {
+    const result = reconcileTerminalSidebarSessions({
+      epicId: EPIC_ID,
+      servingHostId: HOST_A,
+      capability: "capable",
+      topology: "local",
+      coverage: "partial-serving-host",
+      listed: [listedSession("local", { lifecycleOwner: "registry" })],
+      durableCollection: partialServing(HOST_A, [
+        durableTerminal(HOST_A, "local", "running"),
+      ]),
+    });
+
+    expect(result.incompleteFleet).toBe(false);
+    expect(rowIds(result)).toEqual([`${HOST_A}:local`]);
+  });
+
   it("keeps dormant persistent terminals visible", () => {
     const result = reconcileTerminalSidebarSessions({
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [],
       durableCollection: completeFleet([
@@ -275,6 +301,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "unknown",
+      topology: "local",
       coverage: null,
       listed: [
         listedSession("cached", { lifecycleOwner: "manager" }),
@@ -293,6 +320,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: [
         listedSession("fresh-client-missing", {}),
@@ -320,6 +348,7 @@ describe("reconcileTerminalSidebarSessions", () => {
       epicId: EPIC_ID,
       servingHostId: HOST_A,
       capability: "capable",
+      topology: "fleet",
       coverage: "complete-fleet",
       listed: managerIds.map((sessionId) =>
         listedSession(sessionId, { lifecycleOwner: "manager" }),

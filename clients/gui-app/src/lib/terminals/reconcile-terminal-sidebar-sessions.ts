@@ -36,6 +36,7 @@ export interface ReconcileTerminalSidebarSessionsArgs {
   readonly epicId: string;
   readonly servingHostId: string;
   readonly capability: "unknown" | "legacy" | "capable";
+  readonly topology: "local" | "fleet";
   readonly coverage: PlainTerminalListCoverage | null;
   readonly listed: readonly ListedTerminalSidebarSession[];
   readonly durableCollection: PlainTerminalCollection | undefined;
@@ -106,7 +107,9 @@ export function reconcileTerminalSidebarSessions(
     return { incompleteFleet: false, rows: [] };
   }
   const incompleteFleet =
-    args.capability === "capable" && args.coverage === "partial-serving-host";
+    args.capability === "capable" &&
+    args.topology === "fleet" &&
+    args.coverage === "partial-serving-host";
   const listed = args.listed.filter((session) =>
     isVisibleEpicTerminalSession(session, args.epicId),
   );
