@@ -10,10 +10,16 @@ import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connect
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
 import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
 
 const mocks = vi.hoisted(() => ({
   useEpicSyncPillState: vi.fn(),
   chatBackupStatus: null as EpicChatBackupStatus | null,
+  presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
+}));
+
+vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
+  useAgentActivityPresenceDegraded: () => mocks.presenceDegraded,
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -80,6 +86,7 @@ describe("<EpicConnectionPill />", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     mocks.chatBackupStatus = null;
+    mocks.presenceDegraded = null;
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -567,5 +574,88 @@ describe("<EpicConnectionPill />", () => {
         ).toBe(nextState);
       },
     );
+  });
+
+  describe("agent-activity presence degraded", () => {
+    const PRESENCE_DEGRADED_ARIA =
+      "Live agent activity is unavailable. Agent status may be stale or unknown until it reconnects.";
+    const CLOUD_DOWN_ARIA =
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.";
+
+    it("shows the amber agent-activity warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Agent status may be stale");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(
+        PRESENCE_DEGRADED_ARIA,
+      );
+    });
+
+    it("loses to an artifact-sync warning like reconnecting", () => {
+      mocks.presenceDegraded = "stream-down";
+      renderPill("reconnecting");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+    });
+
+    it("loses to a chat-backup warning", () => {
+      mocks.presenceDegraded = "stream-down";
+      mocks.chatBackupStatus = {
+        severity: "warning",
+        tooltip: "Chat backup failing · 1 chat not backed up",
+        ariaLabel: "Chat backup failing · 1 chat not backed up",
+      };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("chat-backup");
+    });
+
+    it("surfaces the presence-degraded message through the tooltip", async () => {
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      await expectTooltip(PRESENCE_DEGRADED_ARIA);
+    });
+
+    it("shows the cloud-down amber warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Remote agent status unavailable");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(CLOUD_DOWN_ARIA);
+    });
+
+    it("surfaces the cloud-down message through the tooltip", async () => {
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      await expectTooltip(CLOUD_DOWN_ARIA);
+    });
   });
 });

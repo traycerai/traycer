@@ -119,7 +119,10 @@ import {
   agentInboxSubscribeV12,
   agentInboxSubscribeV13,
 } from "@traycer/protocol/host/agent/inbox";
-import { agentActivitySubscribeV10 } from "@traycer/protocol/host/agent/activity";
+import {
+  agentActivitySubscribeV10,
+  agentActivitySubscribeV11,
+} from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
   agentRolesClaimV10,
@@ -7869,12 +7872,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // production wiring selects cloud everywhere; local remains dormant until an
   // explicit host mode exists. State frames report the selected plane, while
   // renderers never choose a different RPC from entitlement state.
+  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.0` stays
+  // registered verbatim so a `1.1` client bridges down to a `1.0` host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
+        },
+        1: {
+          contract: agentActivitySubscribeV11,
         },
       },
     },
