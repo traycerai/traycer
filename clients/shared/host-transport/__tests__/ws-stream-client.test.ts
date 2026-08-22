@@ -3610,6 +3610,56 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("re-arms the mint when a host that went active comes back needs-reauth", async () => {
+    // The once-per-host bound was written for a host that reports `missing`
+    // and keeps reporting it: repeating the attempt could only repeat the same
+    // failure, and an unbounded policy turns a reconnect loop into a stream of
+    // mints. A host that has since HELD a credential and burned it is not that
+    // host - it burned it precisely so a client would mint another - and
+    // refusing on the strength of an attempt that already succeeded would
+    // leave it on the client lease until the app is restarted.
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    const reconnectReporting = async (
+      state: "missing" | "active" | "needs-reauth",
+    ): Promise<void> => {
+      sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+      await wait(30);
+      completeProvisionHandshake(sockets[sockets.length - 1].socket, state);
+      await flush();
+    };
+
+    // The host adopts something (from another client, or an earlier session):
+    // no ask, so no mint.
+    await reconnectReporting("active");
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // ...and the cloud then refuses it in a way refreshing cannot repair.
+    await reconnectReporting("needs-reauth");
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    // The bound still holds where it was meant to: a host that keeps saying
+    // the same thing is asked once, however long the reconnect loop runs.
+    await reconnectReporting("needs-reauth");
+    await reconnectReporting("needs-reauth");
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    session.close();
+  });
+
   it("holds a pending credential across a reconnect and delivers it exactly once", async () => {
     const deferred: { resolve: ((outcome: Provisioned) => void) | null } = {
       resolve: null,

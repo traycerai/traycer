@@ -241,8 +241,33 @@ export class WsStreamClient<
    * superseding the last. Giving up instead costs only the delegated credential,
    * and the host keeps running on the connection's client lease until the app is
    * restarted.
+   *
+   * RE-ARMED on a fresh edge, though - see {@link lastHostCredentialState}.
+   * "One attempt per host per client" was written when a host that reported
+   * `missing` kept reporting `missing`: repeating the attempt could only
+   * repeat the same failure. A host that has since gone `active` and come back
+   * `needs-reauth` is not that host. It held a credential, the cloud refused
+   * it, and the host burned it precisely so that a client would mint another -
+   * so refusing on the strength of an attempt that already succeeded leaves it
+   * on the client lease until the app restarts.
    */
   private readonly provisionAttemptedHostIds = new Set<string>();
+  /**
+   * The last `hostCredentialState` each host reported, so a repeat can be told
+   * from a TRANSITION.
+   *
+   * The distinction is the entire re-arm rule, and it is what keeps the
+   * unbounded-mint failure above closed: a host stuck reporting `missing`
+   * reports the same value every reconnect, matches its last observation, and
+   * re-arms nothing however long the reconnect loop runs. Only a host that
+   * reported something else in between - `active`, most of all - can arm a
+   * second mint, and it can arm at most one per round trip through a working
+   * credential.
+   */
+  private readonly lastHostCredentialState = new Map<
+    string,
+    HostCredentialState
+  >();
   /**
    * Minted credentials waiting for a live connection to carry them, keyed by
    * host. The socket that triggered the mint can be gone by the time it
@@ -524,6 +549,27 @@ export class WsStreamClient<
   ): void {
     if (this.closed) {
       return;
+    }
+    // Recorded before anything else can return early, so no path through this
+    // method can lose a transition. A state that never reaches the map is
+    // indistinguishable from one that never happened, and the very next ack
+    // would then read as "unchanged" against a stale predecessor.
+    const previousState = this.lastHostCredentialState.get(hostId) ?? null;
+    this.lastHostCredentialState.set(hostId, state);
+    if (
+      previousState !== state &&
+      (state === "missing" || state === "needs-reauth")
+    ) {
+      // A host that HAD a credential and no longer has a usable one. The two
+      // states it can arrive in are the two the host uses to ask for another:
+      // `missing` after a discard (revoked, owner switch), `needs-reauth`
+      // after a burn - including the burn this change adds for a freshly
+      // refreshed credential the cloud refused anyway, which is the whole
+      // reason the re-arm has to exist at all. Without it that burn is a
+      // one-way door for the rest of the app session: the host stops serving
+      // its credential, asks for a replacement on every `openAck`, and the
+      // client - having minted once, hours ago, successfully - never answers.
+      this.provisionAttemptedHostIds.delete(hostId);
     }
     if (this.flushPendingProvision(hostId)) {
       return;

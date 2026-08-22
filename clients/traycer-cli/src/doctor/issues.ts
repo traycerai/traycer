@@ -81,6 +81,21 @@ export const DOCTOR_ISSUE_CODES = {
   // login. A policy applied after install is invisible to install-time
   // verification, so doctor is the surface that has to say it.
   WINDOWS_SCRIPT_HOST_DISABLED: "WINDOWS_SCRIPT_HOST_DISABLED",
+  // The host held its own delegated credential, the cloud refused it in a way
+  // refreshing cannot repair, and it burned it - leaving a sticky marker and
+  // falling back to whatever bearer a connected client carries.
+  //
+  // Every symptom of this state points AWAY from it. Epic opens, notifications
+  // and artifact rooms fail with sign-in-flavoured errors that reloading and
+  // re-logging-in cannot change (the host, not the renderer, chooses what to
+  // spend), the service is running, the port answers, and every other probe
+  // here reads healthy. That is exactly the gap doctor exists to close: the
+  // marker is the one durable trace, and it is on disk the whole time.
+  //
+  // Error rather than warning: work the user asked for is failing right now.
+  // It clears itself the moment the app re-provisions the host, so it can only
+  // be reported while genuinely true.
+  HOST_CREDENTIAL_NEEDS_REAUTH: "HOST_CREDENTIAL_NEEDS_REAUTH",
 } as const;
 
 export type DoctorIssueCode =

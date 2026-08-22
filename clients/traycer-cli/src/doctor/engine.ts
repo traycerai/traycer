@@ -1,7 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { access, lstat, readlink, stat } from "node:fs/promises";
+import { access, lstat, readFile, readlink, stat } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
-import { cliCredentialsPath } from "../store/paths";
+import {
+  cliCredentialsPath,
+  hostCredentialPath,
+  hostNeedsReauthPath,
+} from "../store/paths";
 import {
   pendingUpgradeFinalisable,
   readPendingCliUpgrade,
@@ -473,6 +477,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   // repair is the app's own cli-reconcile at its next successful launch.
   const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
   if (cliSlotIssue !== null) issues.push(cliSlotIssue);
+
+  // ---- 4c. Host delegated-credential health ----
+  // Local, cheap, and the only surface that reports this at all: the host
+  // reports `needs-reauth` to CLIENTS on every stream open, but a user whose
+  // client cannot get far enough to see that has nothing else to look at.
+  const credentialIssue = await probeHostCredentialNeedsReauth(
+    opts.environment,
+  );
+  if (credentialIssue !== null) issues.push(credentialIssue);
 
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
@@ -962,6 +975,73 @@ export function routeIncompatibleRecovery(
         ? "traycer host restart"
         : null;
   return { fixAction, terminalCommand, plan };
+}
+
+// Reads the host's sticky needs-reauth marker.
+//
+// PRESENCE of the marker is the verdict, on its own. The tempting stronger
+// test - marker AND credential file - is nearly unsatisfiable and would make
+// this probe dead code: the host DELETES the credential and then writes the
+// marker, so the two coexist only when that delete failed, which the host
+// already self-repairs at its next startup. In the state this probe is for,
+// the credential file is gone and the marker is the only thing left.
+//
+// The marker's own lifecycle is what makes reporting it safe: it is cleared by
+// every successful adopt/refresh, so it can only be found set while the host
+// genuinely still needs a fresh provisioning.
+//
+// Never throws - doctor probes are advisory, and an unreadable or malformed
+// marker reads as "nothing to report" rather than taking the whole report down.
+async function probeHostCredentialNeedsReauth(
+  environment: Environment,
+): Promise<DoctorIssue | null> {
+  try {
+    const markerPath = hostNeedsReauthPath(environment);
+    const raw = await readFile(markerPath, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const marker = isRecord(parsed) ? parsed : {};
+    const reason =
+      typeof marker.reason === "string" && marker.reason.length > 0
+        ? marker.reason
+        : "unknown";
+    const recordedAt =
+      typeof marker.recordedAt === "string" ? marker.recordedAt : "unknown";
+    const credentialPresent = await access(
+      hostCredentialPath(environment),
+    ).then(
+      () => true,
+      () => false,
+    );
+    return {
+      code: DOCTOR_ISSUE_CODES.HOST_CREDENTIAL_NEEDS_REAUTH,
+      severity: "error",
+      title: "Host credential needs re-authorization",
+      message:
+        `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
+        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix.",
+      // No `fixAction`: the repair is not a CLI subcommand. A connected owner
+      // client mints the replacement silently on its next connection, so the
+      // honest instruction is "open the app", and Desktop must not render a
+      // button for a repair it would perform by simply being open.
+      fixAction: null,
+      terminalCommand: `traycer login`,
+      details: {
+        markerPath,
+        reason,
+        recordedAt,
+        // True only in the delete-failed shape above. Carried because a
+        // support bundle wants to know which of the two it is looking at.
+        credentialFilePresent: credentialPresent,
+      },
+    };
+  } catch {
+    // No marker (the overwhelmingly common case), or one we cannot read.
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // Detects the "file is both there and not found" field shape: the CLI
