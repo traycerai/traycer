@@ -200,6 +200,7 @@ export interface AuthTokenStoreBridgeSurface {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(handler: Listener<TokenStoreChange>): Disposable;
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,
@@ -227,6 +228,11 @@ export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.authTokenStoreDelete,
       ) as Promise<void>,
+    deleteIfToken: (expectedToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDeleteIfToken,
+        expectedToken,
+      ) as Promise<"deleted" | "kept">,
     subscribe: (handler) =>
       subscribe<TokenStoreChange>(
         RunnerHostEvent.authTokenStoreChange,

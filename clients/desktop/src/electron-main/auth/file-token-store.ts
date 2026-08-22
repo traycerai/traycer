@@ -14,7 +14,6 @@ import {
 } from "@traycer-clients/shared/auth/auth-validation";
 import type { Environment } from "@traycer/protocol/config/paths";
 import { cliCredentialsPath } from "@traycer/protocol/config/paths";
-import { readCredentialsFile } from "@traycer/protocol/config/credentials";
 import {
   createCredentialsMutationStore,
   type CredentialsMutationStore,
@@ -197,6 +196,33 @@ export class FileTokenStore {
         error: describeLogError(error),
       });
     }
+    try {
+      // Drain any quarantined conditional deletes BEFORE the first read is
+      // served: a pair whose delete was pending when the app died must be
+      // removed — not rehydrated — on this launch. Reads suppress the pair
+      // regardless; the drain (retried on the store's own cadence on
+      // failure) is what actually completes the delete.
+      //
+      // Bounded like the init gate above, and for the same reason: an
+      // unbounded drain waits out the store's full lock timeout, so a
+      // contended lock delays the first credential read by that long. An
+      // aborted acquisition comes back `lock-busy`, which returns false and
+      // re-arms the store's own retry - and reads stay suppressed by the
+      // quarantine record in the meantime, so nothing is served that
+      // shouldn't be.
+      const clean = await this.store.drainQuarantine(
+        AbortSignal.timeout(INIT_GATE_WAIT_MS),
+      );
+      if (!clean) {
+        log.warn(
+          "[file-token-store] quarantined credential delete still pending",
+        );
+      }
+    } catch (error) {
+      log.warn("[file-token-store] quarantine drain failed at startup", {
+        error: describeLogError(error),
+      });
+    }
   }
 
   /**
@@ -337,7 +363,10 @@ export class FileTokenStore {
     }
     let file: StoredCredentials | null;
     try {
-      file = await readCredentialsFile(this.credentialsPath);
+      // Through the store, not a raw file read: the change fan-out must be
+      // quarantine-aware — a pair whose conditional delete is pending is
+      // never advertised as present to any window.
+      file = await this.store.read();
     } catch (error) {
       log.warn("[file-token-store] credentials read after watch event failed", {
         error: describeLogError(error),
@@ -448,6 +477,31 @@ export class FileTokenStore {
       if (result.outcome !== "deleted") {
         throw new Error(`credentials sign-out did not land: ${result.outcome}`);
       }
+    });
+  }
+
+  /**
+   * Conditional delete for a renderer undoing a superseded sign-in save. The
+   * comparison and the delete run inside ONE locked mutation
+   * (`signOutIfToken`), so a sibling window's sign-in — or an external CLI
+   * writer — serializes wholly before the comparison (its pair is kept) or
+   * wholly after the landed delete; the renderer never composes this from
+   * `get()` + `delete()`. Rejects when the store cannot decide (lock-busy)
+   * or the delete cannot land, so a still-durable stale pair is never
+   * reported as cleaned up.
+   */
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
+    return this.enqueue(async () => {
+      const result = await this.store.signOutIfToken(expectedToken, null);
+      if (result.outcome === "deleted") {
+        return "deleted";
+      }
+      if (result.outcome === "superseded") {
+        return "kept";
+      }
+      throw new Error(
+        `conditional credentials delete did not land: ${result.outcome}`,
+      );
     });
   }
 

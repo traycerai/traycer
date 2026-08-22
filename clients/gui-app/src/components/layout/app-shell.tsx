@@ -8,6 +8,7 @@ import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migratio
 import { AppHeader } from "@/components/layout/header/app-header";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
+import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
@@ -60,6 +61,7 @@ export function AppShell(props: AppShellProps) {
           <RootDndProvider>
             <div className="relative flex h-safe-dvh w-full flex-col">
               <AppHeader variant="app" />
+              <SessionConnectivityStrip />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal. */}

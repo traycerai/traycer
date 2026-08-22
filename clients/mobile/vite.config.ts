@@ -256,7 +256,10 @@ export default defineConfig(async (): Promise<UserConfig> => {
       : shippedConfig(environment);
 
   // The dev server (and its pid.json endpoint) exist only for the loopback
-  // scaffolding; a shipped build neither serves nor needs a port.
+  // scaffolding; a shipped build neither serves nor needs a port. The
+  // physical-device lane (`dev:ios:device`) overrides the bind address so a
+  // phone on the same LAN can load the bundle; everything else stays on
+  // loopback.
   let server: UserConfig["server"];
   if (environment === "dev") {
     const portRaw = requiredEnv("PORT");
@@ -264,7 +267,12 @@ export default defineConfig(async (): Promise<UserConfig> => {
     if (!Number.isInteger(port) || port < 1 || port > 65_535) {
       throw new Error("PORT must be a valid TCP port");
     }
-    server = { host: "127.0.0.1", port, strictPort: true };
+    const hostRaw = process.env.TRAYCER_DEV_VITE_HOST;
+    const host =
+      typeof hostRaw === "string" && hostRaw.trim().length > 0
+        ? hostRaw.trim()
+        : "127.0.0.1";
+    server = { host, port, strictPort: true };
   }
 
   return {

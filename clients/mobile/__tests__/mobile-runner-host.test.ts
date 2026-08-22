@@ -47,6 +47,9 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     pushRegistration: null,
     openPushSettings: null,
     returnScheme,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
   });
 }
 
@@ -111,6 +114,9 @@ function phoneRunner(input: {
     }),
     openPushSettings: input.openPushSettings,
     returnScheme: "traycer",
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
   });
 }
 

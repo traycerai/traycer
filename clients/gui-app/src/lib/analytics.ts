@@ -72,6 +72,7 @@ export type AnalyticsSettingsSection =
   | "general"
   | "host"
   | "keybindings"
+  | "link-phone"
   | "notifications"
   | "providers"
   | "shell"
@@ -1028,6 +1029,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     general: true,
     host: true,
     keybindings: true,
+    "link-phone": true,
     notifications: true,
     providers: true,
     shell: true,

@@ -635,9 +635,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
             worktreesByEpicId={worktreesByEpicId}
             openEpicIds={openEpicIdSet}
-            onRefresh={refreshHistory}
             listRef={listRef}
             onRowKeyDown={keyboardNav.onRowKeyDown}
+            onRefresh={refreshHistory}
           />
         </NotificationIndicatorsProvider>
       </section>
