@@ -187,7 +187,13 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: HOST_A,
     scope: { kind: "epic", epicId: EPIC_ID },
-    capability: { status: authority.capability },
+    capability:
+      authority.capability === "capable"
+        ? {
+            status: "capable",
+            schemaVersion: { major: 2, minor: 1 },
+          }
+        : { status: authority.capability },
     canMutate: authority.canMutate,
     collection: durableCollection.value,
     coverage: durableCollection.value?.coverage ?? null,
