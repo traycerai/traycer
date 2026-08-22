@@ -57,7 +57,6 @@ import {
   classifyWorktreeTier,
   describeReviewReasons,
   provenRemovable,
-  type WorktreeClassification,
   type WorktreeTier,
 } from "@traycer-clients/shared/worktree/classify-worktree";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -998,7 +997,7 @@ export function WorktreesList(props: {
   const availableTiers = useMemo(() => {
     const present = new Set<WorktreeTier>();
     for (const entry of classificationEntryByPath.values()) {
-      present.add(listedWorktreeTier(entry));
+      present.add(classifyWorktreeTier(entry));
     }
     // A persisted/selected tier remains visible even when it currently has no
     // matches. Otherwise its trigger would silently read "All" and broaden the
@@ -2279,11 +2278,9 @@ const WorktreeRow = memo(function WorktreeRow(
   // those placeholders: the isGitRepo/dirty-count cliff makes an unresolved
   // row look clean enough to delete when it is actually still unknown.
   const classification =
-    entry.resolvedAt === null ? null : classifyListedWorktree(entry);
+    entry.resolvedAt === null ? null : classifyWorktree(entry);
   const tierClassification =
-    classificationEntry === null
-      ? null
-      : classifyListedWorktree(classificationEntry);
+    classificationEntry === null ? null : classifyWorktree(classificationEntry);
   const displayEntry = classificationEntry ?? entry;
   const navigate = useNavigate();
   const openTask = useCallback(
@@ -2465,7 +2462,7 @@ function WorktreeTierPill(props: {
   }
   const unavailable = props.state === "unavailable";
   const style = WORKTREE_TIER_PILL_STYLE[props.tier];
-  const reviewReasons = reviewReasonsFor(props.entry, props.tier);
+  const reviewReasons = reviewTooltipReasons(props.entry, props.tier);
   const tierTooltip =
     reviewReasons.length === 0 ? (
       WORKTREE_TIER_TOOLTIP[props.tier]
@@ -3816,9 +3813,6 @@ function branchLabel(entry: WorktreeHostEntry): string {
   return entry.branch ?? "detached HEAD";
 }
 
-const GIT_UNREADABLE_REASON =
-  "Git can't read this worktree — its main repository is missing or was moved";
-
 function gitUnreadableOf(entry: WorktreeHostEntry): boolean {
   return (
     "gitUnreadable" in entry &&
@@ -3827,21 +3821,13 @@ function gitUnreadableOf(entry: WorktreeHostEntry): boolean {
   );
 }
 
-function listedWorktreeTier(entry: WorktreeHostEntryV14): WorktreeTier {
-  return gitUnreadableOf(entry) ? "review" : classifyWorktreeTier(entry);
-}
-
-function classifyListedWorktree(
+function reviewTooltipReasons(
   entry: WorktreeHostEntryV14,
-): WorktreeClassification {
-  if (!gitUnreadableOf(entry)) return classifyWorktree(entry);
-  return {
-    tier: "review",
-    label: WORKTREE_TIER_LABEL.review,
-    facts: [GIT_UNREADABLE_REASON],
-    prFacts: [],
-    nonPrFacts: [GIT_UNREADABLE_REASON],
-  };
+  tier: WorktreeTier,
+): readonly string[] {
+  if (tier !== "review") return [];
+  if (!gitUnreadableOf(entry) && entry.branchStatus === null) return [];
+  return describeReviewReasons(entry);
 }
 
 function unresolvedWorktreeSecondaryCopy(
@@ -3851,16 +3837,6 @@ function unresolvedWorktreeSecondaryCopy(
     return "Couldn't verify this worktree with git. Refresh to retry, or delete it.";
   }
   return "Waiting for host verification…";
-}
-
-function reviewReasonsFor(
-  entry: WorktreeHostEntryV14,
-  tier: WorktreeTier,
-): readonly string[] {
-  if (tier !== "review") return [];
-  if (gitUnreadableOf(entry)) return [GIT_UNREADABLE_REASON];
-  if (entry.branchStatus === null) return [];
-  return describeReviewReasons(entry);
 }
 
 function invalidateWorktreeDeleteCaches(
