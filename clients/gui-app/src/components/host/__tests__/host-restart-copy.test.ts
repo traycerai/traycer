@@ -104,6 +104,20 @@ describe("describeHostBusy", () => {
     expect(copy.label).not.toMatch(/session/i);
   });
 
+  it("says Busy, not Idle, for a busy host with an all-zero breakdown", () => {
+    // pendingCreates is not a breakdown field: the host can be busy with
+    // count 0 and {0,0,0} while a terminal create is in flight.
+    const copy = describeHostBusy({
+      breakdown: ZERO,
+      busySessionCount: 0,
+      busy: true,
+    });
+    expect(copy.label).toBe("Busy");
+    expect(copy.sentence).toBe(
+      "It reports it is busy, and re-registering will end that work.",
+    );
+  });
+
   it("falls back to N sessions for a @1.1 host with a count and no breakdown", () => {
     const copy = describeHostBusy({
       breakdown: null,

@@ -846,6 +846,7 @@ export function HostOverviewPanel(props: {
             liveBusySessionCount={view.busySessionCount}
             liveBusyBreakdown={view.busyBreakdown}
             settledBusySessionCount={view.settledBusySessionCount}
+            settledBusyBreakdown={view.settledBusyBreakdown}
           />
         )}
       </HostIdentityCard>

@@ -53,7 +53,9 @@ interface BusySubject {
  * Priority, matching the protocol's "null means did not say":
  *
  *   1. a typed breakdown with work → "2 agents · 1 terminal working"
- *   2. a typed breakdown of zeros → "Idle"
+ *   2. a typed all-zero breakdown is Idle only when `busy === false`.
+ *      `busy && all-zero` is the in-flight create window (`pendingCreates`
+ *      is not a breakdown field) → generic "Busy", never Idle.
  *   3. no breakdown, a positive count → "2 sessions" (@1.1 hosts)
  *   4. no breakdown, `busy` → "Busy" (old host that named no count)
  *   5. no breakdown, a reported zero → "Idle"
@@ -63,18 +65,15 @@ export function describeHostBusy(input: DescribeHostBusyInput): HostBusyCopy {
   const { breakdown, busySessionCount, busy } = input;
   if (breakdown !== null) {
     const subjects = breakdownSubjects(breakdown);
-    if (subjects.length === 0) return idleCopy();
+    if (subjects.length === 0) {
+      return busy ? unknownBusyCopy() : idleCopy();
+    }
     return namedCopy(subjects);
   }
   if (busySessionCount !== null && busySessionCount > 0) {
     return countFallbackCopy(busySessionCount);
   }
-  if (busy) {
-    return {
-      label: "Busy",
-      sentence: "It reports it is busy, and re-registering will end that work.",
-    };
-  }
+  if (busy) return unknownBusyCopy();
   if (busySessionCount === 0) return idleCopy();
   return { label: null, sentence: null };
 }
@@ -214,6 +213,13 @@ function idleCopy(): HostBusyCopy {
   return {
     label: "Idle",
     sentence: "It reports no work, so nothing should be interrupted.",
+  };
+}
+
+function unknownBusyCopy(): HostBusyCopy {
+  return {
+    label: "Busy",
+    sentence: "It reports it is busy, and re-registering will end that work.",
   };
 }
 

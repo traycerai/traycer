@@ -43,6 +43,7 @@ function MountedDrainGate(props: {
   readonly liveBusySessionCount: number | null;
   readonly liveBusyBreakdown?: HostBusyBreakdown | null;
   readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown?: HostBusyBreakdown | null;
 }) {
   const mutation = useHostRegistryUpdateMutation(props.item.hostId);
   return (
@@ -52,6 +53,7 @@ function MountedDrainGate(props: {
       liveBusySessionCount={props.liveBusySessionCount}
       liveBusyBreakdown={props.liveBusyBreakdown ?? null}
       settledBusySessionCount={props.settledBusySessionCount}
+      settledBusyBreakdown={props.settledBusyBreakdown ?? null}
     />
   );
 }
@@ -250,6 +252,85 @@ describe("ApplyNowControl — refetch splits display from arming", () => {
     );
     fireEvent.click(within(dialog).getByTestId("confirm-action"));
 
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ApplyNowControl — same-total category swap between arm and confirm", () => {
+  const twoAgents: HostBusyBreakdown = {
+    workingAgents: 2,
+    activeTerminalAgents: 0,
+    busyTerminals: 0,
+  };
+  const twoTerminals: HostBusyBreakdown = {
+    workingAgents: 0,
+    activeTerminalAgents: 0,
+    busyTerminals: 2,
+  };
+
+  it("refuses to confirm when the named kinds change and the total stays 2", () => {
+    // The defect: the button said "ends 2 agents", those agents finished, two
+    // terminals started, the settled COUNT was still 2, and confirm ended
+    // terminals the user was never told about.
+    const item = pendingRegistryItem("host-g");
+    const { rerender } = render(
+      <MountedDrainGate
+        item={item}
+        liveBusySessionCount={2}
+        liveBusyBreakdown={twoAgents}
+        settledBusySessionCount={2}
+        settledBusyBreakdown={twoAgents}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("host-apply-now-trigger-host-g"));
+    const dialog = screen.getByRole("dialog");
+    expect(
+      screen.getByTestId("host-apply-now-trigger-host-g").textContent,
+    ).toContain("ends 2 agents");
+
+    rerender(
+      <MountedDrainGate
+        item={item}
+        liveBusySessionCount={2}
+        liveBusyBreakdown={twoTerminals}
+        settledBusySessionCount={2}
+        settledBusyBreakdown={twoTerminals}
+      />,
+    );
+
+    expect(dialog.textContent).toMatch(/no longer 2 agents/);
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
+    expect(mutateSpy).not.toHaveBeenCalled();
+  });
+
+  it("treats a settled breakdown that becomes null as a lost read, not a zero object", () => {
+    const item = pendingRegistryItem("host-h");
+    const { rerender } = render(
+      <MountedDrainGate
+        item={item}
+        liveBusySessionCount={2}
+        liveBusyBreakdown={twoAgents}
+        settledBusySessionCount={2}
+        settledBusyBreakdown={twoAgents}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("host-apply-now-trigger-host-h"));
+    const dialog = screen.getByRole("dialog");
+
+    rerender(
+      <MountedDrainGate
+        item={item}
+        liveBusySessionCount={2}
+        liveBusyBreakdown={twoAgents}
+        settledBusySessionCount={2}
+        settledBusyBreakdown={null}
+      />,
+    );
+
+    expect(dialog.textContent).toMatch(/can't currently see what is working/i);
+    fireEvent.click(within(dialog).getByTestId("confirm-action"));
     expect(mutateSpy).not.toHaveBeenCalled();
   });
 });
