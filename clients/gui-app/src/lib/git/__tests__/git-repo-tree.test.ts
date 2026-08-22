@@ -352,5 +352,20 @@ describe("buildGitModuleGroups", () => {
       headKind: "detached",
       headLabel: "detached @ 2222222",
     });
+
+    const emptyBranchResult = buildGitModuleGroups({
+      root: {
+        repoRoot: "/repo",
+        label: "traycer-internal",
+        branch: "",
+        headSha: "abcdef1234",
+        files: [],
+        repoState: { kind: "clean" },
+        repoMode: "normal",
+      },
+      submodules: [changeset({ branch: "" })],
+    });
+    expect(emptyBranchResult.modules[0].headKind).toBe("detached");
+    expect(emptyBranchResult.modules[1].headKind).toBe("detached");
   });
 });
