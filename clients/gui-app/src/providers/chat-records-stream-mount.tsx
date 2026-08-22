@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import {
   ChatRecordsStreamClient,
-  type ChatRecordDelta,
+  type ChatRecordsStreamDelta,
 } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -10,7 +10,10 @@ import {
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
 
 /**
  * The record-change PUSH stream, mounted once per app.
@@ -53,6 +56,22 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
  * only thing dropping costs is freshness for a surface that is not on screen.
  * `peek` rather than `get` so a background delta cannot reorder the MRU and
  * evict the epic the user is actually in.
+ *
+ * ## A delta is applied only to a session bound to THIS stream's host
+ *
+ * `epicId` alone does not identify a destination. An epic session is pinned to
+ * the host it was established on and survives an app-wide host change - a
+ * re-point in flight, or a tab reopened on its original host - so the registry
+ * can hold a session on host A while this subscription is dialling host B.
+ * Routing by `epicId` alone would then apply B's rows to A's store: a record
+ * that does not exist on A's plane would render in A's session, and every
+ * affordance on it would address the wrong host. The session-scoped record
+ * hooks (`use-epic-chat-records.ts`, `use-epic-tui-agent-records.ts`) already
+ * read through `useEpicSessionHostClient` for exactly this reason; the stamp
+ * comparison is how a host-scoped subscription reaches the same answer.
+ *
+ * A skipped delta costs latency only - the session's own 20s list read against
+ * its own host is the backup for every dropped frame, as above.
  */
 /**
  * A session that stayed open at least this long before closing counts as
@@ -83,9 +102,22 @@ export function ChatRecordsStreamMount(): ReactNode {
     // Narrowed capture: the guard above does not narrow `wsStreamClient`
     // inside the nested `openClient` function declaration.
     const streamClient = wsStreamClient;
-    const applyDelta = (delta: ChatRecordDelta): void => {
+    const applyDelta = (delta: ChatRecordsStreamDelta): void => {
+      // Peek, not acquire, for every delta kind - a record change must never
+      // construct an epic session or reorder the MRU (see the doc above).
       const handle = getOpenEpicRegistry().peek(delta.epicId);
       if (handle === null) return;
+      // The session's host, not just its epic - see the doc above. Both
+      // record tables are gated, not only the terminal-agent one: a chat row
+      // from the wrong host is the same contamination with the same
+      // consequences.
+      if (getEpicSessionHandleHostId(handle) !== hostId) return;
+      // One stream, two record tables: the @1.1 terminal-agent kinds go to
+      // the terminal-agent reducer, everything else to the chat reducer.
+      if (delta.kind === "tuiUpsert" || delta.kind === "tuiRemove") {
+        handle.store.getState().applyTuiAgentRecordDelta(delta);
+        return;
+      }
       handle.store.getState().applyChatRecordDelta(delta);
     };
     const hostConnection = acquireHostConnection(hostId);

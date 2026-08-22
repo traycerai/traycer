@@ -4,6 +4,7 @@ import { EpicPlainTerminalTombstoneReconciler } from "@/components/epic-canvas/e
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
 import { useInitialChatHandoff } from "@/components/epic-canvas/hooks/use-initial-chat-handoff";
 import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import { useEpicSyncTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import { useEpicRouteSynchronization } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
 import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
@@ -46,6 +47,8 @@ function EpicRouteSessionEffects(props: EpicRouteSessionBodyProps) {
   // while another tab is in front. A background epic that stopped hearing about
   // its own chats would lose the rows again the moment it was swept.
   useEpicSyncChatRecords(props.epicId);
+  // Same placement, same reason, for the terminal-agent record table.
+  useEpicSyncTuiAgentRecords(props.epicId);
   return props.active ? <EpicRouteActiveEffects {...props} /> : null;
 }
 

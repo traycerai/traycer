@@ -33,6 +33,7 @@ import {
 } from "@/lib/host-error-toast";
 import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
+import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import {
   beginPendingChatCreation,
@@ -508,6 +509,12 @@ function useEpicArchiveChatMutation(
         // That stopped being true at the single-write pivot: `archivedAt` is a
         // chat-database fact now, and the record list is how it reaches here.
         invalidateEpicChatRecords(queryClient, ctx.hostId);
+        // ONE archive RPC covers both record kinds (the host resolves the id
+        // across chats and terminal agents) and the response does not say
+        // which one it hit, so refresh both record lists - the extra read is a
+        // local registry lookup, and guessing the kind here would leave the
+        // other table stale exactly when the guess is wrong.
+        invalidateEpicTuiAgentRecords(queryClient, ctx.hostId);
       },
       onError:
         failurePresentation === "individual"

@@ -356,6 +356,7 @@ import {
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
+import { epicListTuiAgentsV10 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
   workspaceMentionFilesV10,
@@ -489,7 +490,10 @@ import {
   epicCommunicationGraphSubscribeV10,
   hostCommunicationGraphCloudFeedSubscribeV10,
 } from "@traycer/protocol/host/epic/communication-graph";
-import { hostChatRecordsSubscribeV10 } from "@traycer/protocol/host/epic/chat-records";
+import {
+  hostChatRecordsSubscribeV10,
+  hostChatRecordsSubscribeV11,
+} from "@traycer/protocol/host/epic/chat-records";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -6037,6 +6041,25 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // The terminal-agent record read (the TUI eviction). Optional and
+  // host-local for the reason `epic.listChatRecords` is: it answers out of
+  // this host's own registry. A client talking to a host without it runs
+  // DOC-ONLY - that host still writes the `tuiAgents` map, which is exactly
+  // the projection the renderer already renders - so the degrade arm needs no
+  // surface of its own. Never on the unary released floor.
+  "epic.listTuiAgents": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicListTuiAgentsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "editor.openPaths": {
     1: {
       latestMinor: 0,
@@ -8060,12 +8083,20 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // `epic.listChatRecords` poll remains the record table's only refresh -
   // latency, never missing rows. Never add it to the unary released floor -
   // that list is fail-closed on the name set.
+  // @1.1 adds the terminal-agent delta frames (`tuiUpsert` / `tuiRemove`) -
+  // the TUI eviction's freshness half, riding the same host-scoped stream.
+  // @1.0 stays installed and FROZEN: a client that negotiated it never
+  // receives the new kinds, and the host gates emission on the negotiated
+  // version.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
+        },
+        1: {
+          contract: hostChatRecordsSubscribeV11,
         },
       },
     },

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
+import { tuiAgentRecordSummarySchema } from "@traycer/protocol/host/epic/tui-agent-records";
 // The PERSISTED variant, with its `.default(...)` backstops, and not the
 // wire-strict one: this is a read of a record that may have been written before
 // `serviceTier` or `profileId` existed, and the strict schema exists to stop a
@@ -370,49 +371,155 @@ export type ChatRecordRemovalReason = z.infer<
  * corrupts - so the contract refuses the combination outright (the
  * `resolveCloudChatHeadResponseSchema` pattern).
  */
+// ─── Frozen `host.chatRecords.subscribe@1.0` server-frame set (as shipped) ──
+//
+// IMMUTABLE, on the `epic.subscribe` precedent: a client that negotiated @1.0
+// agreed to exactly these frame kinds. New frames go on a new minor's union
+// below, and the host gates their emission on the NEGOTIATED version.
+const hostChatRecordsSubscribeSharedServerFrameSchemasV10 = [
+  z.object({
+    kind: z.literal("upsert"),
+    ...textFrameFields,
+    epicId: z.string().min(1),
+    chatId: z.string().min(1),
+    revision: z.number().int().nonnegative(),
+    record: chatRecordSummarySchema,
+  }),
+  z.object({
+    kind: z.literal("remove"),
+    ...textFrameFields,
+    epicId: z.string().min(1),
+    chatId: z.string().min(1),
+    reason: chatRecordRemovalReasonSchema,
+  }),
+  z.object({
+    kind: z.literal("pong"),
+    ...textFrameFields,
+  }),
+] as const;
+
+/**
+ * The minimal SUPERTYPE of both minors' frame unions that the envelope
+ * invariants read - declared by hand rather than inferred so the refine
+ * functions can be shared between the schemas without a circular
+ * const/type reference (each schema's inferred type would name the refine
+ * that builds it).
+ */
+type EnvelopeCheckedFrame =
+  | {
+      readonly kind: "upsert";
+      readonly chatId: string;
+      readonly revision: number;
+      readonly record: { readonly chatId: string; readonly revision: number };
+    }
+  | {
+      readonly kind: "tuiUpsert";
+      readonly tuiAgentId: string;
+      readonly revision: number;
+      readonly record: {
+        readonly tuiAgentId: string;
+        readonly revision: number;
+      };
+    }
+  | { readonly kind: "remove" }
+  | { readonly kind: "tuiRemove" }
+  | { readonly kind: "pong" };
+
+/** The @1.0 envelope invariant, verbatim from the original inline refine. */
+function refineChatUpsertEnvelope(
+  frame: EnvelopeCheckedFrame,
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "upsert") return;
+  const upsert = frame;
+  if (upsert.chatId !== upsert.record.chatId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["chatId"],
+      message:
+        "An upsert's envelope must address the row it carries - `chatId` must equal `record.chatId`.",
+    });
+  }
+  if (upsert.revision !== upsert.record.revision) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["revision"],
+      message:
+        "An upsert's envelope must order by the row it carries - `revision` must equal `record.revision`.",
+    });
+  }
+}
+
+/** The @1.1 addition: the same invariant for the terminal-agent upsert. */
+function refineTuiUpsertEnvelope(
+  frame: EnvelopeCheckedFrame,
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "tuiUpsert") return;
+  const upsert = frame;
+  if (upsert.tuiAgentId !== upsert.record.tuiAgentId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["tuiAgentId"],
+      message:
+        "A tuiUpsert's envelope must address the row it carries - `tuiAgentId` must equal `record.tuiAgentId`.",
+    });
+  }
+  if (upsert.revision !== upsert.record.revision) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["revision"],
+      message:
+        "A tuiUpsert's envelope must order by the row it carries - `revision` must equal `record.revision`.",
+    });
+  }
+}
+
 export const hostChatRecordsSubscribeServerFrameSchemaV10 = z
-  .discriminatedUnion("kind", [
-    z.object({
-      kind: z.literal("upsert"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      revision: z.number().int().nonnegative(),
-      record: chatRecordSummarySchema,
-    }),
-    z.object({
-      kind: z.literal("remove"),
-      ...textFrameFields,
-      epicId: z.string().min(1),
-      chatId: z.string().min(1),
-      reason: chatRecordRemovalReasonSchema,
-    }),
-    z.object({
-      kind: z.literal("pong"),
-      ...textFrameFields,
-    }),
-  ])
-  .superRefine((frame, ctx) => {
-    if (frame.kind !== "upsert") return;
-    if (frame.chatId !== frame.record.chatId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["chatId"],
-        message:
-          "An upsert's envelope must address the row it carries - `chatId` must equal `record.chatId`.",
-      });
-    }
-    if (frame.revision !== frame.record.revision) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["revision"],
-        message:
-          "An upsert's envelope must order by the row it carries - `revision` must equal `record.revision`.",
-      });
-    }
-  });
+  .discriminatedUnion(
+    "kind",
+    hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+  )
+  .superRefine(refineChatUpsertEnvelope);
 export type HostChatRecordsSubscribeServerFrameV10 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV10
+>;
+
+// ─── `host.chatRecords.subscribe@1.1` - additive: terminal-agent deltas ─────
+//
+// The TUI eviction's freshness half: terminal-agent records live in the same
+// registry the chat rows do, and their deltas ride the SAME host-scoped
+// stream rather than a socket of their own. Additive minor on the
+// `epic.subscribe@1.1` precedent - a client that negotiated @1.0 never
+// receives the new kinds; the host gates emission on the negotiated version.
+//
+// `tuiRemove` reuses the chat removal-reason vocabulary. Today a TUI row can
+// only ever say `deleted` (the rows are structurally owner-only, so there is
+// no entitlement to revoke), but the enum is shared rather than narrowed so
+// a future sharing surface cannot fork the vocabulary.
+export const hostChatRecordsSubscribeServerFrameSchemaV11 = z
+  .discriminatedUnion("kind", [
+    ...hostChatRecordsSubscribeSharedServerFrameSchemasV10,
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: tuiAgentRecordSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV11 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV11
 >;
 
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
@@ -431,5 +538,13 @@ export const hostChatRecordsSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV10,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV11 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV11,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });

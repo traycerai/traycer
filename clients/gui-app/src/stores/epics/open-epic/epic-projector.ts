@@ -52,8 +52,10 @@ import {
   readMaybeNumber,
   readMaybeString,
   terminalAgentProjectionsEq,
+  terminalAgentSlicesEq,
   treeNodesEq,
   unionChatsSlice,
+  unionTerminalAgentsSlice,
 } from "./projection-helpers";
 import type {
   AgentRolesSlice,
@@ -210,6 +212,11 @@ export function createEpicProjector(
    * slice in doc-only mode, which makes the union a reference pass-through.
    */
   getChatRecords: () => ChatsSlice,
+  /**
+   * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`),
+   * with exactly the chat records' rationale and doc-only contract.
+   */
+  getTuiAgentRecords: () => TerminalAgentsSlice,
 ): EpicProjector {
   let attached: AttachedConfig | null = null;
   let suspended = false;
@@ -238,6 +245,7 @@ export function createEpicProjector(
           patches,
           currentUserId: getCurrentUserId(),
           chatRecords: getChatRecords(),
+          tuiAgentRecords: getTuiAgentRecords(),
         }),
       );
     };
@@ -249,7 +257,12 @@ export function createEpicProjector(
     // ingest can apply bytes and then call `projectFull` once.
     if (!suspended) {
       store.setState(
-        projectFullState(doc, getCurrentUserId(), getChatRecords()),
+        projectFullState(
+          doc,
+          getCurrentUserId(),
+          getChatRecords(),
+          getTuiAgentRecords(),
+        ),
       );
     }
   }
@@ -268,7 +281,12 @@ export function createEpicProjector(
 
   function projectFull(): EpicProjectedSlices {
     if (attached === null) return EMPTY_PROJECTED_SLICES;
-    return projectFullState(attached.doc, getCurrentUserId(), getChatRecords());
+    return projectFullState(
+      attached.doc,
+      getCurrentUserId(),
+      getChatRecords(),
+      getTuiAgentRecords(),
+    );
   }
 
   return {
@@ -600,6 +618,7 @@ type MutableProjectedPatch = {
   deletedArtifacts?: DeletedArtifactsSlice;
   docChats?: ChatsSlice;
   chats?: ChatsSlice;
+  docTuiAgents?: TerminalAgentsSlice;
   tuiAgents?: TerminalAgentsSlice;
   agentRoles?: AgentRolesSlice;
   tree?: TreeSlice;
@@ -960,15 +979,26 @@ interface ApplyTerminalAgentsArgs {
   readonly patches: ProjectorPatches;
   readonly next: MutableProjectedPatch;
   readonly currentUserId: string | null;
+  readonly tuiAgentRecords: TerminalAgentsSlice;
 }
 
+/**
+ * Reconciles the DOC terminal-agent slice from this transaction's patches,
+ * then unions the host's registry rows over it - the terminal twin of
+ * {@link applyChatsSlice}, with the same split for the same reason: the doc
+ * reconcile has to run against the doc's own previous projection
+ * (`docTuiAgents`), because a doc-side removal (a migrated host sweeping its
+ * own entries) applied to the union would take the live registry-backed row
+ * with it. The display ownership filter stays on THIS arm only; the record
+ * arm's rows are owner-selected at the store's ingest.
+ */
 // Mirror of applyMapSlice for the terminal-agents slice, with the extra
 // per-agent membership transitions; same rationale for keeping it flat.
 // eslint-disable-next-line complexity
 function applyTerminalAgentsSlice(
   args: ApplyTerminalAgentsArgs,
 ): TerminalAgentsSlice {
-  const { state, doc, patches, next, currentUserId } = args;
+  const { state, doc, patches, next, currentUserId, tuiAgentRecords } = args;
   if (patches.terminalAgentsContainerReseeded) {
     reseedFromContainer(
       doc,
@@ -981,10 +1011,13 @@ function applyTerminalAgentsSlice(
     patches.terminalAgentsRemoved.size === 0 &&
     patches.terminalAgentsCreated.size === 0
   ) {
+    // Nothing doc-side moved, and the record slice can only change through a
+    // full re-projection (see `createEpicProjector`'s `getTuiAgentRecords`),
+    // so the union already in the store is still the union.
     return state.tuiAgents;
   }
   const byId: Record<string, TuiAgentProjection> = {
-    ...state.tuiAgents.byId,
+    ...state.docTuiAgents.byId,
   };
   let mutated = false;
   for (const id of patches.terminalAgentsRemoved) {
@@ -1022,12 +1055,45 @@ function applyTerminalAgentsSlice(
       mutated = true;
     }
   }
-  if (!mutated) return state.tuiAgents;
+  if (!mutated) {
+    return unionTerminalAgentsInto({
+      state,
+      next,
+      docTuiAgents: state.docTuiAgents,
+      tuiAgentRecords,
+    });
+  }
   const allIds = computeIdsFromMap(byId);
-  const allIdsRef = pickStableIds(allIds, state.tuiAgents.allIds);
-  const nextSlice: TerminalAgentsSlice = { byId, allIds: allIdsRef };
-  next.tuiAgents = nextSlice;
-  return nextSlice;
+  const allIdsRef = pickStableIds(allIds, state.docTuiAgents.allIds);
+  const nextDocTuiAgents: TerminalAgentsSlice = { byId, allIds: allIdsRef };
+  next.docTuiAgents = nextDocTuiAgents;
+  return unionTerminalAgentsInto({
+    state,
+    next,
+    docTuiAgents: nextDocTuiAgents,
+    tuiAgentRecords,
+  });
+}
+
+/**
+ * Publishes the union of the doc terminal-agent slice and the record slice,
+ * writing `tuiAgents` only when the result differs from what the store already
+ * holds. Structural gate ({@link terminalAgentSlicesEq}) for the same reason
+ * {@link unionInto} uses one: an agent present in both sources whose frozen doc
+ * entry differs from its row holds a fresh object on every recompute, so a
+ * reference gate could never say "unchanged" for it.
+ */
+function unionTerminalAgentsInto(args: {
+  readonly state: OpenEpicState;
+  readonly next: MutableProjectedPatch;
+  readonly docTuiAgents: TerminalAgentsSlice;
+  readonly tuiAgentRecords: TerminalAgentsSlice;
+}): TerminalAgentsSlice {
+  const { state, next, docTuiAgents, tuiAgentRecords } = args;
+  const union = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
+  if (terminalAgentSlicesEq(union, state.tuiAgents)) return state.tuiAgents;
+  next.tuiAgents = union;
+  return union;
 }
 
 interface ApplyTreeArgs {
@@ -1116,10 +1182,12 @@ interface ApplyPatchesArgs {
   readonly patches: ProjectorPatches;
   readonly currentUserId: string | null;
   readonly chatRecords: ChatsSlice;
+  readonly tuiAgentRecords: TerminalAgentsSlice;
 }
 
 function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
-  const { state, doc, patches, currentUserId, chatRecords } = args;
+  const { state, doc, patches, currentUserId, chatRecords, tuiAgentRecords } =
+    args;
   const next: MutableProjectedPatch = {};
   applyEpicHeader(state, doc, patches, next);
   const nextArtifacts = applyArtifactsSlice(state, doc, patches, next);
@@ -1141,6 +1209,7 @@ function applyPatches(args: ApplyPatchesArgs): Partial<OpenEpicState> {
     patches,
     next,
     currentUserId,
+    tuiAgentRecords,
   });
   if (nextTerminalAgents.allIds !== state.tuiAgents.allIds) {
     patches.structuralTreeDirty = true;

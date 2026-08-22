@@ -224,6 +224,15 @@ export interface EpicProjectedSlices {
   readonly docChats: ChatsSlice;
   /** Doc entries unioned with the host's records. Components read THIS. */
   readonly chats: ChatsSlice;
+  /**
+   * The Y.Doc's own terminal-agent entries, before the host's registry rows
+   * (`epic.listTuiAgents`) are folded in - the terminal-agent twin of
+   * {@link EpicProjectedSlices.docChats}, kept separate for the same reason: a
+   * doc removal must reconcile against the doc's own history rather than
+   * against the union, or it would take a live registry-backed agent with it.
+   */
+  readonly docTuiAgents: TerminalAgentsSlice;
+  /** Doc entries unioned with the host's registry rows. Components read THIS. */
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
@@ -258,6 +267,15 @@ export const EMPTY_CHATS_SLICE: ChatsSlice = Object.freeze({
   allIds: EMPTY_ARRAY,
 });
 
+/**
+ * The empty terminal-agent table, shared by the doc slice, the record slice
+ * and the union for the same identity reason as {@link EMPTY_CHATS_SLICE}.
+ */
+export const EMPTY_TERMINAL_AGENTS_SLICE: TerminalAgentsSlice = Object.freeze({
+  byId: Object.freeze({} as Record<string, TuiAgentProjection>),
+  allIds: EMPTY_ARRAY,
+});
+
 export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
   byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });
@@ -278,10 +296,8 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   }),
   docChats: EMPTY_CHATS_SLICE,
   chats: EMPTY_CHATS_SLICE,
-  tuiAgents: Object.freeze({
-    byId: Object.freeze({} as Record<string, TuiAgentProjection>),
-    allIds: EMPTY_ARRAY,
-  }),
+  docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
+  tuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
   agentRoles: EMPTY_AGENT_ROLES_SLICE,
   tree: Object.freeze({
     rootIds: EMPTY_ARRAY,
