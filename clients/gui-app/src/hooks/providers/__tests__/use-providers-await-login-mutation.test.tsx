@@ -170,4 +170,38 @@ describe("useProvidersAwaitLogin overlay merge", () => {
     // not merely inert here.
     expect(copilot?.auth.status).toBe("authenticated");
   });
+
+  it("invalidates both harness catalogs for the awaiting host on a successful login - a sign-in can flip `available`", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const guiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.gui.listHarnesses"
+    >(HOST_ID, "agent.gui.listHarnesses", {});
+    const tuiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.tui.listHarnesses"
+    >(HOST_ID, "agent.tui.listHarnesses", {});
+    queryClient.setQueryData(guiKey, { harnesses: [] });
+    queryClient.setQueryData(tuiKey, { harnesses: [] });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({ providerId: "copilot", profileId: null });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
 });

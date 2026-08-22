@@ -25,37 +25,76 @@ import type {
 } from "@/lib/commands/types";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
+import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 
-const catalogMock = vi.hoisted(() => ({
-  harnesses: [
-    {
-      id: "codex",
-      label: "Codex",
-      available: true,
-      error: null,
-      models: [
-        {
-          harnessId: "codex",
-          slug: "gpt-live",
-          label: "GPT Live",
-          description: null,
-          isDefault: true,
-          contextWindow: null,
-          maxOutputTokens: null,
-          defaultReasoningEffort: "high",
-          supportedReasoningEfforts: [
-            { id: "high", label: "High", description: null },
-          ],
-          defaultServiceTier: null,
-          supportedServiceTiers: [],
-          metadata: {},
-        },
-      ],
-      modelsLoading: false,
-      modelsError: null,
-    },
-  ],
-}));
+/**
+ * Minimal shape this fixture needs - not the full `GuiHarnessCatalogEntry`,
+ * which requires fields (`modes`, `requiresApiKey`, `enabled`, …) this
+ * suite's mocked `useGuiHarnessCatalog` never reads. `authStatus` is
+ * explicit and optional here so a test can add a signed-out row without
+ * TS inferring the array's element type from the first literal alone (which
+ * would then reject a later literal that adds the field).
+ */
+interface ComposerCatalogHarnessFixture {
+  readonly id: string;
+  readonly label: string;
+  readonly available: boolean;
+  readonly authStatus?: GuiHarnessOption["authStatus"];
+  readonly error: string | null;
+  readonly models: ReadonlyArray<{
+    readonly harnessId: string;
+    readonly slug: string;
+    readonly label: string;
+    readonly description: string | null;
+    readonly isDefault: boolean;
+    readonly contextWindow: number | null;
+    readonly maxOutputTokens: number | null;
+    readonly defaultReasoningEffort: string;
+    readonly supportedReasoningEfforts: ReadonlyArray<{
+      readonly id: string;
+      readonly label: string;
+      readonly description: string | null;
+    }>;
+    readonly defaultServiceTier: string | null;
+    readonly supportedServiceTiers: ReadonlyArray<string>;
+    readonly metadata: Record<string, unknown>;
+  }>;
+  readonly modelsLoading: boolean;
+  readonly modelsError: null;
+}
+
+const catalogMock: { harnesses: ComposerCatalogHarnessFixture[] } = vi.hoisted(
+  () => ({
+    harnesses: [
+      {
+        id: "codex",
+        label: "Codex",
+        available: true,
+        error: null,
+        models: [
+          {
+            harnessId: "codex",
+            slug: "gpt-live",
+            label: "GPT Live",
+            description: null,
+            isDefault: true,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            defaultServiceTier: null,
+            supportedServiceTiers: [],
+            metadata: {},
+          },
+        ],
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ],
+  }),
+);
 
 /**
  * Minimal shape the mocked binding / `useGuiHarnessCatalogForClient`
@@ -156,6 +195,26 @@ function captureItems(
   let captured: ReadonlyArray<CommandItem> = [];
   function Probe() {
     captured = composerSource.useItems(ctx(activeEpicId, focusedComposerKind));
+    return null;
+  }
+  render(<Probe />);
+  return captured;
+}
+
+/**
+ * Same idea as `renderSubpageItems`, but returns the collected items instead
+ * of discarding them. Takes `subpage` as a plain (non-nullable) parameter so
+ * the caller's own narrowing of an `x | undefined` lookup carries through -
+ * a nested `Probe` closure capturing the outer optional directly does not
+ * narrow across that boundary.
+ */
+function collectSubpageItems(
+  subpage: CommandSubpage,
+  focusedComposerKind: FocusedComposerKind,
+): ReadonlyArray<CommandItem> {
+  let captured: ReadonlyArray<CommandItem> = [];
+  function Probe() {
+    captured = subpage.useItems(ctx(null, focusedComposerKind));
     return null;
   }
   render(<Probe />);
@@ -561,6 +620,133 @@ describe("composerSource", () => {
 
     renderSubpageItems(modelSubpage, "landing");
     expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(hostClientB);
+  });
+
+  it("excludes a signed-out provider from both the provider and model subpages - definitive authStatus, no providers.list join available here", () => {
+    const original = catalogMock.harnesses;
+    catalogMock.harnesses = [
+      ...original,
+      {
+        id: "claude",
+        label: "Claude Code",
+        available: true,
+        authStatus: "unauthenticated",
+        error: null,
+        models: [
+          {
+            harnessId: "claude",
+            slug: "opus",
+            label: "Opus",
+            description: null,
+            isDefault: true,
+            contextWindow: null,
+            maxOutputTokens: null,
+            defaultReasoningEffort: "high",
+            supportedReasoningEfforts: [
+              { id: "high", label: "High", description: null },
+            ],
+            defaultServiceTier: null,
+            supportedServiceTiers: [],
+            metadata: {},
+          },
+        ],
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ];
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+      );
+      const items = captureItems(null, "landing");
+      const providerSubpage = items.find(
+        (i) => i.id === "composer:switch-provider",
+      )?.subpage;
+      const modelSubpage = items.find(
+        (i) => i.id === "composer:switch-model",
+      )?.subpage;
+      if (providerSubpage === null || providerSubpage === undefined) {
+        throw new Error("expected a provider subpage");
+      }
+      if (modelSubpage === null || modelSubpage === undefined) {
+        throw new Error("expected a model subpage");
+      }
+
+      const providerItems = collectSubpageItems(providerSubpage, "landing");
+      expect(providerItems.map((item) => item.id)).not.toContain(
+        "composer:provider:claude",
+      );
+      // codex (from the base fixture, no authStatus) still lists.
+      expect(providerItems.map((item) => item.id)).toContain(
+        "composer:provider:codex",
+      );
+
+      const modelItems = collectSubpageItems(modelSubpage, "landing");
+      expect(
+        modelItems.some((item) => item.id.startsWith("composer:model:claude")),
+      ).toBe(false);
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
+  it("excludes a provider with available: false from both subpages regardless of authStatus", () => {
+    const original = catalogMock.harnesses;
+    catalogMock.harnesses = [
+      {
+        id: "codex",
+        label: "Codex",
+        available: false,
+        authStatus: "authenticated",
+        error: null,
+        models: original[0].models,
+        modelsLoading: false,
+        modelsError: null,
+      },
+    ];
+    try {
+      registerFocusedComposerControls(
+        "landing",
+        stubControls({}),
+        TEST_HOST_CLIENT,
+      );
+      const items = captureItems(null, "landing");
+      const providerSubpage = items.find(
+        (i) => i.id === "composer:switch-provider",
+      )?.subpage;
+      if (providerSubpage === null || providerSubpage === undefined) {
+        throw new Error("expected a provider subpage");
+      }
+      const providerItems = collectSubpageItems(providerSubpage, "landing");
+      expect(providerItems).toEqual([]);
+    } finally {
+      catalogMock.harnesses = original;
+    }
+  });
+
+  it("with a host that reports no authStatus at all, both subpages list exactly what they list today", () => {
+    // The base fixture's `codex` entry already has no `authStatus` key - an
+    // old host below agent.gui.listHarnesses@7.1. Confirms the predicate is
+    // false for every row on such a host rather than excluding everything.
+    expect(catalogMock.harnesses[0]).not.toHaveProperty("authStatus");
+    registerFocusedComposerControls(
+      "landing",
+      stubControls({}),
+      TEST_HOST_CLIENT,
+    );
+    const items = captureItems(null, "landing");
+    const providerSubpage = items.find(
+      (i) => i.id === "composer:switch-provider",
+    )?.subpage;
+    if (providerSubpage === null || providerSubpage === undefined) {
+      throw new Error("expected a provider subpage");
+    }
+    const providerItems = collectSubpageItems(providerSubpage, "landing");
+    expect(providerItems.map((item) => item.id)).toContain(
+      "composer:provider:codex",
+    );
   });
 
   it("with no focused composer registered, the provider subpage resolves the default host's client", () => {
