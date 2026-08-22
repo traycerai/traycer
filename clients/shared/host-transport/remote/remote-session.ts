@@ -9,6 +9,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   mergeConnectionManifests,
+  selectConnectionManifestForPeer,
   splitConnectionManifest,
 } from "@traycer/protocol/framework/capability-manifest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -42,7 +43,7 @@ import {
 import {
   extractBearerForOpenFrame,
   prepareRequestPayload,
-  decodeResponsePayload,
+  decodeResponsePayloadWithContext,
 } from "../ws-rpc-client";
 import {
   prepareStreamSubscribeRequest,
@@ -406,6 +407,7 @@ interface PendingUnary {
   readonly clientCanonical: SchemaVersion;
   readonly hostCanonical: SchemaVersion;
   readonly methodRegistry: MethodVersionRegistry;
+  readonly onWireRequest: unknown;
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: HostRpcError) => void;
   timer: TimerHandle | null;
@@ -1013,6 +1015,7 @@ export class RemoteSession<
           clientCanonical,
           hostCanonical,
           methodRegistry,
+          onWireRequest: prepared.onWirePayload,
           resolve,
           reject,
           timer,
@@ -1996,11 +1999,16 @@ export class RemoteSession<
     if (hostManifest === null) {
       return;
     }
-    const clientCanonical = this.clientManifests.stream[stream.method];
+    const selectedClientManifest = selectConnectionManifestForPeer(
+      this.options.streamRegistry,
+      this.clientManifests.stream,
+      hostManifest.stream,
+    );
+    const clientCanonical = selectedClientManifest[stream.method];
     const hostCanonical = hostManifest.stream[stream.method];
     const compat = checkStreamMethodCompatibility(
       this.options.streamRegistry,
-      this.clientManifests.stream,
+      selectedClientManifest,
       hostManifest.stream,
       "client",
       stream.method,
@@ -2072,13 +2080,15 @@ export class RemoteSession<
       return;
     }
     try {
-      const decoded = decodeResponsePayload(
+      const decoded = decodeResponsePayloadWithContext(
         entry.methodRegistry,
         entry.clientCanonical,
         entry.hostCanonical,
         parsed.data.result,
         entry.requestId,
         entry.method,
+        entry.onWireRequest,
+        this.options.hostId,
       );
       entry.resolve(decoded);
     } catch (cause) {

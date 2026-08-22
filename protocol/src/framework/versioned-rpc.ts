@@ -16,6 +16,8 @@ import {
 } from "./json-schema-fingerprint";
 import type {
   AnyRpcContract,
+  ContextlessUpgradePath,
+  ContextualUpgradePath,
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
@@ -26,11 +28,11 @@ import type {
   MethodDegradeDeclaration,
   RequestOf,
   ResponseOf,
+  RpcResponseUpgradeContext,
   RuntimeDowngradePath,
   RuntimeUpgradePath,
   SchemaVersion,
   UncheckedVersionedRpcRegistry,
-  UpgradePath,
   ValidateVersionedRpcRegistryDegrades,
   ValidateVersionedRpcRegistry,
   VersionedRpcRegistry,
@@ -41,6 +43,8 @@ export type {
   AnyRpcContract,
   AnyUpgradePath,
   AnyVersionEntry,
+  ContextlessUpgradePath,
+  ContextualUpgradePath,
   ContractForInstalledVersion,
   DowngradePath,
   DowngradeResult,
@@ -104,7 +108,14 @@ export function defineRpcContract<
 export function defineUpgradePath<
   From extends AnyRpcContract,
   To extends AnyRpcContract,
->(path: UpgradePath<From, To>): UpgradePath<From, To> {
+>(path: ContextlessUpgradePath<From, To>): ContextlessUpgradePath<From, To> {
+  return path;
+}
+
+export function defineContextualUpgradePath<
+  From extends AnyRpcContract,
+  To extends AnyRpcContract,
+>(path: ContextualUpgradePath<From, To>): ContextualUpgradePath<From, To> {
   return path;
 }
 
@@ -429,6 +440,18 @@ function assertSchemaCompatibility(
       const line = methodRegistry[major];
       const minors = getSortedNumberKeys(line.versions);
 
+      if (major === majors[0]) {
+        for (const minor of minors) {
+          if (
+            line.versions[minor].semanticMajorBreakFromPreviousMajor === true
+          ) {
+            throw new Error(
+              `Version ${major}.${minor} for method '${method}' declares \`semanticMajorBreakFromPreviousMajor\` but there is no previous installed major`,
+            );
+          }
+        }
+      }
+
       for (let index = 1; index < minors.length; index += 1) {
         const previousMinor = minors[index - 1];
         const currentMinor = minors[index];
@@ -543,6 +566,14 @@ function assertSchemaCompatibility(
 
       const currentLatestEntry =
         currentLine.versions[currentLine.latestMinor];
+      if (
+        (requestBreak !== null || responseBreak !== null) &&
+        currentLatestEntry.semanticMajorBreakFromPreviousMajor === true
+      ) {
+        throw new Error(
+          `Major bump ${previousMajor} -> ${currentMajor} for method '${method}' declares \`semanticMajorBreakFromPreviousMajor\` but already has a structural breaking change; remove the annotation`,
+        );
+      }
       if (
         requestBreak === null &&
         responseBreak === null &&
@@ -736,6 +767,52 @@ export function upgradeResponseToVersion<
   toVersion: ToVersion,
   response: ResponseOf<ContractForInstalledVersion<Registry, FromVersion>>,
 ): ResponseOf<ContractForInstalledVersion<Registry, ToVersion>> {
+  return upgradeResponseToVersionInternal(
+    registry,
+    fromVersion,
+    toVersion,
+    response,
+    undefined,
+  );
+}
+
+export function upgradeResponseToVersionWithContext<
+  Registry extends MethodVersionRegistry,
+  const FromVersion extends InstalledSchemaVersion<Registry>,
+  const ToVersion extends InstalledSchemaVersion<Registry>,
+>(
+  registry: Registry,
+  fromVersion: FromVersion,
+  toVersion: ToVersion,
+  response: ResponseOf<ContractForInstalledVersion<Registry, FromVersion>>,
+  context: RpcResponseUpgradeContext<
+    RequestOf<ContractForInstalledVersion<Registry, FromVersion>>
+  >,
+): ResponseOf<ContractForInstalledVersion<Registry, ToVersion>> {
+  return upgradeResponseToVersionInternal(
+    registry,
+    fromVersion,
+    toVersion,
+    response,
+    context,
+  );
+}
+
+function upgradeResponseToVersionInternal<
+  Registry extends MethodVersionRegistry,
+  const FromVersion extends InstalledSchemaVersion<Registry>,
+  const ToVersion extends InstalledSchemaVersion<Registry>,
+>(
+  registry: Registry,
+  fromVersion: FromVersion,
+  toVersion: ToVersion,
+  response: ResponseOf<ContractForInstalledVersion<Registry, FromVersion>>,
+  context:
+    | RpcResponseUpgradeContext<
+        RequestOf<ContractForInstalledVersion<Registry, FromVersion>>
+      >
+    | undefined,
+): ResponseOf<ContractForInstalledVersion<Registry, ToVersion>> {
   assertUpgradeOrder(fromVersion, toVersion);
 
   if (isSameSchemaVersion(fromVersion, toVersion)) {
@@ -750,6 +827,9 @@ export function upgradeResponseToVersion<
   let currentResponse: Parameters<
     RuntimeUpgradePath<Registry>["upgradeResponse"]
   >[0] = response;
+  let currentRequest: Parameters<
+    RuntimeUpgradePath<Registry>["upgradeRequest"]
+  >[0] | null = context?.request ?? null;
 
   for (let index = fromIndex + 1; index <= toIndex; index += 1) {
     const nextVersion = installedVersions[index];
@@ -767,7 +847,15 @@ export function upgradeResponseToVersion<
 
     const runtimeUpgradePath =
       versionEntry.upgradeFromPreviousVersion as RuntimeUpgradePath<Registry>;
-    currentResponse = runtimeUpgradePath.upgradeResponse(currentResponse);
+    currentResponse = runtimeUpgradePath.upgradeResponse(
+      currentResponse,
+      currentRequest === null || context === undefined
+        ? undefined
+        : { request: currentRequest, hostId: context.hostId },
+    );
+    if (currentRequest !== null) {
+      currentRequest = runtimeUpgradePath.upgradeRequest(currentRequest);
+    }
   }
 
   return currentResponse as ResponseOf<

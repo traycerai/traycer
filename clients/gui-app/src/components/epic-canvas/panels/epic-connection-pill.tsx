@@ -20,6 +20,7 @@ import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-
 import { cn } from "@/lib/utils";
 import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
 import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { plainTerminalCapabilityTopology } from "@/lib/terminals/plain-terminal-authority";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
@@ -66,7 +67,8 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     scope: { kind: "epic", epicId: props.epicId },
   });
   const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
-    terminalAuthority.coverage === "partial-serving-host",
+    plainTerminalCapabilityTopology(terminalAuthority.capability) === "fleet" &&
+      terminalAuthority.coverage === "partial-serving-host",
     JSON.stringify([terminalAuthority.hostId, props.epicId]),
   );
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw

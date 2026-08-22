@@ -57,6 +57,14 @@ export type TerminalPlainSubscribeListServerFrameV10 = z.infer<
   typeof terminalPlainSubscribeListServerFrameSchemaV10
 >;
 
+export const terminalPlainSubscribeListClientFrameSchemaV10 =
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("ping"),
+      ...textFrameFields,
+    }),
+  ]);
+
 /**
  * Server frames are replacement `state` plus the transport keepalive.
  * Each accepted `state` frame replaces the collection described by its
@@ -99,7 +107,7 @@ export const terminalPlainSubscribeListV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: terminalPlainSubscribeListOpenRequestSchemaV10,
   serverFrameSchema: terminalPlainSubscribeListServerFrameSchemaV10,
-  clientFrameSchema: terminalPlainSubscribeListClientFrameSchema,
+  clientFrameSchema: terminalPlainSubscribeListClientFrameSchemaV10,
 });
 
 export const terminalPlainSubscribeListV21 = defineStreamRpcContract({

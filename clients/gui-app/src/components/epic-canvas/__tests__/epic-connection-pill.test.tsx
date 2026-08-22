@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   chatBackupStatus: null as EpicChatBackupStatus | null,
   terminalCoverage: null as
     "partial-serving-host" | "complete-fleet" | "complete-local" | null,
+  terminalCapability: {
+    status: "capable",
+    schemaVersion: { major: 2, minor: 1 },
+  },
   commGraphFeedHealth: null as CommGraphFeedHealth | null,
 }));
 
@@ -54,6 +58,7 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: "host-a",
     coverage: mocks.terminalCoverage,
+    capability: mocks.terminalCapability,
   }),
 }));
 
@@ -100,6 +105,10 @@ describe("<EpicConnectionPill />", () => {
     vi.useRealTimers();
     mocks.chatBackupStatus = null;
     mocks.terminalCoverage = null;
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 2, minor: 1 },
+    };
     mocks.commGraphFeedHealth = null;
   });
 
@@ -366,6 +375,24 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
     );
+  });
+
+  it("does not report a fleet outage for a local-only RC host", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    };
+    renderPill("hostPending");
+
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).not.toContain("Remote terminals unavailable");
   });
 
   it("shows the highest severity across artifact sync and chat backup", async () => {

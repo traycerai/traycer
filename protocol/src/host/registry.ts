@@ -6294,7 +6294,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: terminalPlainListV21,
           upgradeFromPreviousVersion: terminalPlainListUpgradeV10ToV21,
-          semanticMajorBreakFromPreviousMajor: true,
         },
       },
       downgradePathsFromLatest: { 1: terminalPlainListDowngradeV21ToV10 },
@@ -6318,7 +6317,6 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: terminalPlainRenameV21,
           upgradeFromPreviousVersion: terminalPlainRenameUpgradeV10ToV21,
-          semanticMajorBreakFromPreviousMajor: true,
         },
       },
       downgradePathsFromLatest: { 1: terminalPlainRenameDowngradeV21ToV10 },

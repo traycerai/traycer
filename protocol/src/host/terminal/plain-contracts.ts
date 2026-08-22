@@ -1,4 +1,5 @@
 import {
+  defineContextualUpgradePath,
   defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
@@ -234,19 +235,24 @@ export const terminalPlainCreateDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
-export const terminalPlainListUpgradeV10ToV21 = defineUpgradePath<
+export const terminalPlainListUpgradeV10ToV21 = defineContextualUpgradePath<
   typeof terminalPlainListV10,
   typeof terminalPlainListV21
 >({
   from: terminalPlainListV10.schemaVersion,
   to: terminalPlainListV21.schemaVersion,
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => {
-    const first = response.terminals[0];
-    if (first?.record.scope.kind === "epic") {
+  upgradeResponse: (response, context) => {
+    if (context === undefined) {
+      throw new Error(
+        "terminal.plain.list v1 responses require request context when upgraded to v2",
+      );
+    }
+    if (context.request.scope.kind === "epic") {
       return {
-        coverage: "complete-fleet",
-        scope: first.record.scope,
+        coverage: "partial-serving-host",
+        scope: context.request.scope,
+        servingHostId: context.hostId,
         terminals: response.terminals,
       };
     }
@@ -265,6 +271,9 @@ export const terminalPlainListDowngradeV21ToV10 = defineDowngradePath<
   to: terminalPlainListV10.schemaVersion,
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
+    if (response.coverage === "complete-fleet") {
+      return { ok: false, error: runtimeUnavailableDowngrade };
+    }
     const parsed = listPlainTerminalsResponseSchemaV10.safeParse({
       terminals: response.terminals,
     });

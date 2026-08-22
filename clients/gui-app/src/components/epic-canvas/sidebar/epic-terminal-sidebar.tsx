@@ -104,6 +104,7 @@ import {
 } from "@/lib/terminals/pending-create-identity";
 import {
   getPlainTerminal,
+  plainTerminalCapabilityTopology,
   plainTerminalCollectionIdentityKey,
   plainTerminalCollectionValues,
   type PlainTerminalCollection,
@@ -270,13 +271,16 @@ function TerminalsPanelBodyLive(props: {
         epicId,
         servingHostId: activeHostId,
         capability: durableAuthority.capability.status,
+        topology:
+          plainTerminalCapabilityTopology(durableAuthority.capability) ??
+          "fleet",
         coverage: durableAuthority.coverage ?? null,
         listed: list.data?.sessions ?? [],
         durableCollection: durableAuthority.collection,
       }),
     [
       activeHostId,
-      durableAuthority.capability.status,
+      durableAuthority.capability,
       durableAuthority.collection,
       durableAuthority.coverage,
       epicId,

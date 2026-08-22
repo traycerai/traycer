@@ -39,6 +39,18 @@ export type PlainTerminalCapability =
       readonly schemaVersion: SchemaVersion;
     };
 
+export type PlainTerminalTopology = "local" | "fleet";
+
+export function plainTerminalCapabilityTopology(
+  capability: PlainTerminalCapability,
+): PlainTerminalTopology | null {
+  if (capability.status !== "capable") return null;
+  return capability.schemaVersion.major ===
+    PLAIN_TERMINAL_LOCAL_FAMILY_VERSION.major
+    ? "local"
+    : "fleet";
+}
+
 /**
  * Resolves the optional family as a unit. The frozen v1 family is local-only
  * durable authority; v2.1 is fleet authority. A partial mix is legacy.

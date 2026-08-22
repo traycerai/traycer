@@ -43,6 +43,7 @@ import {
   type PlainTerminalProjection,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
+  terminalPlainSubscribeListClientFrameSchemaV10,
   terminalPlainSubscribeListServerFrameSchemaV10,
   terminalPlainSubscribeListV10,
   terminalPlainSubscribeListClientFrameSchema,
@@ -60,7 +61,11 @@ import {
   terminalListV23,
   terminalRenameV10,
 } from "@traycer/protocol/host/terminal/contracts";
-import type { SchemaVersion as FrameworkSchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  downgradeResponseAcrossMajors,
+  upgradeResponseToVersionWithContext,
+  type SchemaVersion as FrameworkSchemaVersion,
+} from "@traycer/protocol/framework/index";
 
 function terminal(
   runtime: PlainTerminalProjection["runtime"],
@@ -877,6 +882,66 @@ describe("protocol registration and released compatibility", () => {
         hasBinaryPayload: false,
         terminal: unknown,
       }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the frozen v1 client frame schema independent from v2", () => {
+    const ping = { kind: "ping", hasBinaryPayload: false } as const;
+    expect(terminalPlainSubscribeListClientFrameSchemaV10.parse(ping)).toEqual(
+      ping,
+    );
+    expect(terminalPlainSubscribeListClientFrameSchemaV10).not.toBe(
+      terminalPlainSubscribeListClientFrameSchema,
+    );
+  });
+
+  it("upgrades an empty v1 Epic list with its request scope and serving host", () => {
+    const upgraded = upgradeResponseToVersionWithContext(
+      hostRpcRegistry["terminal.plain.list"],
+      PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
+      PLAIN_TERMINAL_FAMILY_VERSION,
+      { terminals: [] },
+      {
+        request: { scope: epicScope },
+        hostId: "host-1",
+      },
+    );
+
+    expect(upgraded).toEqual({
+      coverage: "partial-serving-host",
+      scope: epicScope,
+      servingHostId: "host-1",
+      terminals: [],
+    });
+  });
+
+  it("upgrades an empty v1 independent list as complete local authority", () => {
+    const upgraded = upgradeResponseToVersionWithContext(
+      hostRpcRegistry["terminal.plain.list"],
+      PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
+      PLAIN_TERMINAL_FAMILY_VERSION,
+      { terminals: [] },
+      {
+        request: { scope: independentScope },
+        hostId: "host-1",
+      },
+    );
+
+    expect(upgraded).toEqual({
+      coverage: "complete-local",
+      scope: independentScope,
+      terminals: [],
+    });
+  });
+
+  it("refuses to down-project a fleet list onto the frozen v1 line", () => {
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["terminal.plain.list"],
+        PLAIN_TERMINAL_FAMILY_VERSION.major,
+        PLAIN_TERMINAL_LOCAL_FAMILY_VERSION.major,
+        completeFleet,
+      ).ok,
     ).toBe(false);
   });
 
