@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UsageActivityHeatmap } from "@/components/usage-analytics/usage-activity-heatmap";
@@ -109,6 +115,73 @@ describe("<UsageActivityHeatmap />", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.textContent).toContain("2026-08-03");
     expect(rows[0]?.textContent).toContain("$5.00");
+    expect(rows[0]?.textContent).toContain("10");
+  });
+
+  it("hovering a tile states the day's cost AND tokens, whichever metric colors it", async () => {
+    // The tile is colored by one metric, but a reader comparing days wants
+    // both numbers in one hover - not a metric-picker round trip. Rendered
+    // under the Tokens metric so the cost line can only come from the
+    // cell's own cost field, not from `value`.
+    render(
+      <TooltipProvider delayDuration={0}>
+        <UsageActivityHeatmap
+          calendar={buildUsageActivityCalendar(
+            DAYS,
+            [bucket("2026-08-03", 5)],
+            "tokens",
+          )}
+          metric="tokens"
+        />
+      </TooltipProvider>,
+    );
+    const tile = screen
+      .getAllByTestId("usage-activity-day")
+      .find((entry) => entry.getAttribute("data-day") === "2026-08-03");
+    if (tile === undefined) throw new Error("missing 2026-08-03 tile");
+    fireEvent.pointerMove(tile);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Aug 3, 2026");
+    expect(tooltip.textContent).toContain("Cost");
+    expect(tooltip.textContent).toContain("$5.00");
+    expect(tooltip.textContent).toContain("Tokens");
+    expect(tooltip.textContent).toContain("10");
+  });
+
+  it("a day mixing priced and unpriced turns shows only its figure - the caveat is reserved for all-unpriced days", async () => {
+    // User ruling: a per-tile "not counted" on every mixed day is cognitive
+    // overload; the headline footnote already carries the window-wide count.
+    render(
+      <TooltipProvider delayDuration={0}>
+        <UsageActivityHeatmap
+          calendar={buildUsageActivityCalendar(
+            DAYS,
+            [
+              bucket("2026-08-03", 5),
+              {
+                ...bucket("2026-08-03", 0),
+                model: "grok-4",
+                costProvenance: "unpriced",
+                factCount: 2,
+              },
+            ],
+            "cost",
+          )}
+          metric="cost"
+        />
+      </TooltipProvider>,
+    );
+    const tile = screen
+      .getAllByTestId("usage-activity-day")
+      .find((entry) => entry.getAttribute("data-day") === "2026-08-03");
+    if (tile === undefined) throw new Error("missing 2026-08-03 tile");
+    fireEvent.pointerMove(tile);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("Cost$5.00");
+    expect(tooltip.textContent).not.toContain("not counted");
+    // Tokens are independent of pricing - the unpriced bucket's 10 tokens
+    // count there alongside the priced bucket's 10.
+    expect(tooltip.textContent).toContain("Tokens20");
   });
 
   it("opens on the most recent weeks, not the oldest", () => {
