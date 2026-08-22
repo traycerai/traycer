@@ -9,6 +9,7 @@ import {
   createTerminalSessionStore,
   type TerminalWrite,
 } from "@/stores/terminals/terminal-session-store";
+import { isTerminalCrashExit } from "@/hooks/terminal/use-terminal-crash-notification";
 
 type TerminalSnapshotFrame = Extract<
   TerminalSubscribeServerFrame,
@@ -602,6 +603,74 @@ describe("createTerminalSessionStore", () => {
       exitCode: 0,
       activeProcessName: null,
     });
+  });
+
+  it("keeps a live-delivered reaped exit reason so the kill is not a crash", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    // The host's setup-terminal reap kills a session its canvas tile is
+    // actively subscribed to: `handlePtyExit` broadcasts a `sessionUpdated`
+    // frame carrying the reason, then a reasonless `exit` frame. The store
+    // must keep the reason across both, or the tile reports the reap as
+    // "exited unexpectedly".
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+    harness.callbacks().onExit(exit(-1));
+
+    const state = harness.handle.store.getState();
+    expect(state).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+    expect(
+      isTerminalCrashExit({
+        status: state.status,
+        exitCode: state.exitCode,
+        exitReason: state.exitReason,
+        isExitSuppressed: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not clobber a learned exit reason with a reason-less session update", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "killed",
+      },
+    });
+    // e.g. from a host predating the field, or a frame built without it.
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+      },
+    });
+
+    expect(harness.handle.store.getState().exitReason).toBe("killed");
   });
 
   describe("ack-credit (terminal.subscribe@1.1)", () => {
