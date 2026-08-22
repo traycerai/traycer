@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -102,6 +103,20 @@ function pillClaimsSynced(): boolean {
 async function expectTooltip(text: string) {
   fireEvent.focus(screen.getByTestId("epic-connection-pill"));
   expect((await screen.findByRole("tooltip")).textContent).toBe(text);
+}
+
+/**
+ * The hover, one entry per degraded plane: the selected plane's sentence
+ * first, then every other degraded plane in source order. A single-plane
+ * hover is a bare string, which reads here as one line.
+ */
+async function tooltipLines(): Promise<ReadonlyArray<string | null>> {
+  fireEvent.focus(screen.getByTestId("epic-connection-pill"));
+  const tooltip = await screen.findByRole("tooltip");
+  const entries = within(tooltip).queryAllByRole("listitem");
+  return entries.length === 0
+    ? [tooltip.textContent]
+    : entries.map((entry) => entry.textContent);
 }
 
 describe("<EpicConnectionPill />", () => {
@@ -374,14 +389,73 @@ describe("<EpicConnectionPill />", () => {
 
     const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.dataset.source).toBe("terminal-catalog");
-    expect(pill.textContent).toContain("Remote terminals unavailable");
-    expect(pill.className).toContain("bg-amber-500/10");
+    // Dot-only, like the other read-only degradations: the sentence is on
+    // hover and in the accessible name, never a permanent label in the row.
+    expect(pill.textContent).toBe("");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(pill.className).not.toContain("bg-amber-500/10");
     expect(pill.getAttribute("aria-label")).toBe(
       "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
     );
     expect(screen.getByRole("status").textContent).toBe(
       "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
     );
+  });
+
+  it("shows one plane's copy and lists every other degraded plane on hover", async () => {
+    // Two warnings at once: the catalog gap (earlier source, so it wins the
+    // tie) and degraded presence, which carries a label of its own. The row
+    // must not concatenate them - one light, the selected plane's copy only -
+    // while the hover and the accessible name carry both, selected first, so
+    // the second outage is not hidden behind the first.
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    mocks.presenceDegraded = "cloud-down";
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("terminal-catalog");
+    expect(pill.textContent).toBe("");
+    const catalogCopy =
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
+    const presenceCopy =
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.";
+    expect(pill.getAttribute("aria-label")).toBe(
+      `${catalogCopy} ${presenceCopy}`,
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      `${catalogCopy} ${presenceCopy}`,
+    );
+    vi.useRealTimers();
+    expect(await tooltipLines()).toEqual([catalogCopy, presenceCopy]);
+  });
+
+  it("does not list a merely busy plane beside a degraded one on hover", async () => {
+    // "Backing up chats" is activity, not an outage: when the graph feed is
+    // the one degraded plane, the hover stays a single sentence.
+    mocks.chatBackupStatus = {
+      severity: "activity",
+      tooltip: "Backing up chats",
+      ariaLabel: "Backing up chats",
+    };
+    mocks.commGraphFeedHealth = {
+      severity: "warning",
+      tooltip: "Communication graph feed: reconnecting…",
+      ariaLabel: "Communication graph feed: reconnecting…",
+    };
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("comm-graph");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Communication graph feed: reconnecting…",
+    );
+    await expectTooltip("Communication graph feed: reconnecting…");
   });
 
   it("does not report a fleet outage for a local-only RC host", () => {
@@ -415,7 +489,12 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
       "bg-red-500",
     );
-    await expectTooltip(OFFLINE_COPY);
+    // The row shows the winner alone; the loser is not dropped, it follows
+    // on hover.
+    expect(await tooltipLines()).toEqual([
+      OFFLINE_COPY,
+      "Chat backup failing · 1 chat not backed up",
+    ]);
   });
 
   it("keeps artifact status when warning severities tie", async () => {
@@ -429,7 +508,10 @@ describe("<EpicConnectionPill />", () => {
     const pill = screen.getByRole<HTMLButtonElement>("button");
     expect(pill.dataset.source).toBe("artifact");
     expect(pill.textContent).toContain("Connecting…");
-    await expectTooltip("Connecting to server");
+    expect(await tooltipLines()).toEqual([
+      "Connecting to server",
+      "Chat backup failing · 1 chat not backed up",
+    ]);
   });
 
   const COMM_GRAPH_HEALTH: CommGraphFeedHealth = {

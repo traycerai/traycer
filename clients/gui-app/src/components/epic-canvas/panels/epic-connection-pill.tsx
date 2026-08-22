@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { LivePulse } from "@/components/ui/live-pulse";
 import {
@@ -98,7 +98,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   return (
     <>
       <TooltipWrapper
-        label={rawSelected.indicator.tooltip}
+        label={tooltipFor(rawSelected)}
         side="top"
         sideOffset={undefined}
         align={undefined}
@@ -108,7 +108,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
           data-testid="epic-connection-pill"
           data-status={state}
           data-source={selected.source}
-          aria-label={rawSelected.indicator.ariaLabel}
+          aria-label={accessibleNameFor(rawSelected)}
           className={cn(
             "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
             indicator.containerClassName,
@@ -134,21 +134,21 @@ function warningAnnouncement(
     selected.source !== "artifact" &&
     selected.indicator.severity === "warning"
   ) {
-    return selected.indicator.ariaLabel;
+    return accessibleNameFor(selected);
   }
   switch (state) {
     case "offlineWithUnsavedChanges":
     case "offlineWithHostPending":
     case "offlineChangesSavedLocally":
     case "offline":
-      return selected.indicator.ariaLabel;
+      return accessibleNameFor(selected);
     // A routine reconnect stays silent - it announces nothing a sighted user
     // would be interrupted by either. Once it has been down long enough to
     // escalate, it is worth saying: the copy tells the user their unsent work
     // depends on this window staying open.
     case "connecting":
     case "reconnecting":
-      return linkDownTooLong ? selected.indicator.ariaLabel : null;
+      return linkDownTooLong ? accessibleNameFor(selected) : null;
     default:
       return null;
   }
@@ -215,14 +215,50 @@ interface PillIndicator {
   readonly ariaLabel: string;
 }
 
+type PillSource =
+  | "artifact"
+  | "chat-backup"
+  | "terminal-catalog"
+  | "comm-graph"
+  | "agent-activity";
+
 interface SelectedIndicator {
-  readonly source:
-    | "artifact"
-    | "chat-backup"
-    | "terminal-catalog"
-    | "comm-graph"
-    | "agent-activity";
+  readonly source: PillSource;
   readonly indicator: PillIndicator;
+  /**
+   * Every OTHER plane that is degraded (warning or worse) right now, in
+   * source order. The visible row stays the selected plane's alone - one
+   * light, at most one label - and these ride the hover and the accessible
+   * name, so a second outage is never hidden behind the first.
+   */
+  readonly alsoDegraded: ReadonlyArray<PillIndicator>;
+}
+
+/**
+ * The hover copy: the selected plane's sentence, then one line per other
+ * degraded plane. A single-plane case stays a plain string so the tooltip
+ * reads exactly as it always has.
+ */
+function tooltipFor(selected: SelectedIndicator): ReactNode {
+  if (selected.alsoDegraded.length === 0) return selected.indicator.tooltip;
+  // A real list, winner first: one entry per degraded plane, in the order
+  // the accessible name reads them.
+  return (
+    <ul className="flex flex-col gap-1">
+      <li>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</li>
+      {selected.alsoDegraded.map((other) => (
+        <li key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** The accessible name and live announcement: every degraded plane, selected first. */
+function accessibleNameFor(selected: SelectedIndicator): string {
+  return [
+    selected.indicator.ariaLabel,
+    ...selected.alsoDegraded.map((other) => other.ariaLabel),
+  ].join(" ");
 }
 
 function ConnectionPillDot(props: { indicator: PillIndicator }) {
@@ -332,74 +368,85 @@ interface PillSignals {
   readonly presenceDegraded: AgentActivityPresenceDegradedReason | null;
 }
 
-function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
-  const {
-    artifactIndicator,
-    chatBackupStatus,
-    terminalCatalogUnavailable,
-    commGraphFeedHealth,
-    presenceDegraded,
-  } = signals;
-  let selected: SelectedIndicator = {
-    source: "artifact",
-    indicator: artifactIndicator,
-  };
-  if (chatBackupStatus !== null) {
-    const chatIndicator = indicatorForChatBackup(chatBackupStatus);
-    if (
-      SEVERITY_RANK[chatIndicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
-      selected = { source: "chat-backup", indicator: chatIndicator };
-    }
-  }
-  if (terminalCatalogUnavailable) {
-    const terminalIndicator = indicatorForTerminalCatalogUnavailable();
-    if (
-      SEVERITY_RANK[terminalIndicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
-      selected = {
-        source: "terminal-catalog",
-        indicator: terminalIndicator,
-      };
-    }
-  }
-  if (commGraphFeedHealth !== null) {
-    const feedIndicator = indicatorForCommGraphFeed(commGraphFeedHealth);
-    if (
-      SEVERITY_RANK[feedIndicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
-      selected = { source: "comm-graph", indicator: feedIndicator };
-    }
-  }
-  if (presenceDegraded !== null) {
-    const presenceIndicator = indicatorForPresenceDegraded(presenceDegraded);
-    if (
-      SEVERITY_RANK[presenceIndicator.severity] >
-      SEVERITY_RANK[selected.indicator.severity]
-    ) {
-      selected = { source: "agent-activity", indicator: presenceIndicator };
-    }
-  }
-  // Ties stay with the earlier source. Artifact/Yjs warnings can mean the
-  // newest bytes exist only in this renderer; chat backup, catalog health,
-  // graph-feed health and presence health remain secondary when an equally
-  // severe durability warning is active. The read-only ones are checked last:
-  // the graph feed costs the canvas new rows and presence costs only the
-  // freshness of a spinner, not the user's data.
-  return selected;
+interface PillCandidate {
+  readonly source: PillSource;
+  readonly indicator: PillIndicator;
 }
 
+function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
+  // Source order IS the tie-break order: ties stay with the earlier source.
+  // Artifact/Yjs warnings can mean the newest bytes exist only in this
+  // renderer; chat backup, catalog health, graph-feed health and presence
+  // health remain secondary when an equally severe durability warning is
+  // active. The read-only ones come last: the graph feed costs the canvas new
+  // rows and presence costs only the freshness of a spinner, not the user's
+  // data.
+  const artifact: PillCandidate = {
+    source: "artifact",
+    indicator: signals.artifactIndicator,
+  };
+  const secondary: PillCandidate[] = [];
+  if (signals.chatBackupStatus !== null) {
+    secondary.push({
+      source: "chat-backup",
+      indicator: indicatorForChatBackup(signals.chatBackupStatus),
+    });
+  }
+  if (signals.terminalCatalogUnavailable) {
+    secondary.push({
+      source: "terminal-catalog",
+      indicator: indicatorForTerminalCatalogUnavailable(),
+    });
+  }
+  if (signals.commGraphFeedHealth !== null) {
+    secondary.push({
+      source: "comm-graph",
+      indicator: indicatorForCommGraphFeed(signals.commGraphFeedHealth),
+    });
+  }
+  if (signals.presenceDegraded !== null) {
+    secondary.push({
+      source: "agent-activity",
+      indicator: indicatorForPresenceDegraded(signals.presenceDegraded),
+    });
+  }
+  let selected = artifact;
+  for (const candidate of secondary) {
+    if (
+      SEVERITY_RANK[candidate.indicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = candidate;
+    }
+  }
+  // One light, at most one label: the others are not dropped, they move to
+  // the hover and the accessible name (see `SelectedIndicator.alsoDegraded`).
+  // Only degraded planes ride along - a plane that is merely busy ("Saving
+  // changes", "Backing up chats") is not a second outage to report.
+  const alsoDegraded = [artifact, ...secondary]
+    .filter(
+      (candidate) =>
+        candidate !== selected &&
+        SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning,
+    )
+    .map((candidate) => candidate.indicator);
+  return { ...selected, alsoDegraded };
+}
+
+/**
+ * Dot-only, like chat backup and the graph feed: remote discovery dropping out
+ * is worth an amber light and a sentence on hover, not a permanent label in
+ * the status row - the terminals this host serves stay fully usable, and the
+ * coverage gap heals by itself.
+ */
 function indicatorForTerminalCatalogUnavailable(): PillIndicator {
   const message =
     "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
   return {
     severity: "warning",
-    containerClassName: AMBER_CONTAINER_CLASS,
+    containerClassName: QUIET_CONTAINER_CLASS,
     dotClassName: "bg-amber-500",
-    label: "Remote terminals unavailable",
+    label: null,
     showAgentSpinner: false,
     pulse: null,
     tooltip: message,

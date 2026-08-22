@@ -112,6 +112,46 @@ export const DOCTOR_ISSUE_CODES = {
   // Warning rather than error: nothing is known to be broken. Nothing is known
   // to be WORKING either, which is why it is not silence.
   HOST_AUTH_DIR_INACCESSIBLE: "HOST_AUTH_DIR_INACCESSIBLE",
+  // A SECOND needs-reauth marker, on the host's IDENTITY plane
+  // (`<identity home>/identity/needs-reauth.json`), and deliberately its own
+  // code rather than a variant of the one above.
+  //
+  // The auth-plane marker says the host's own delegated credential was burned
+  // and a connected owner client has to mint a replacement. This one says the
+  // host's COORDINATION identity paused after a refresh was rejected, and it
+  // recovers the moment somebody signs in again on this machine - a fresh user
+  // bearer in the shared CLI credentials file is the exit condition the host
+  // is watching for. Same filename, different directory, different plane,
+  // opposite repair: reporting them as one verdict would send half the readers
+  // to the wrong fix, which is the misdiagnosis this pair exists to prevent.
+  HOST_IDENTITY_NEEDS_REAUTH: "HOST_IDENTITY_NEEDS_REAUTH",
+  // The identity plane's indeterminate answer - the counterpart of
+  // HOST_AUTH_DIR_INACCESSIBLE, for the same reason and about the other
+  // directory.
+  HOST_IDENTITY_DIR_INACCESSIBLE: "HOST_IDENTITY_DIR_INACCESSIBLE",
+  // The scope statement, and the reason silence is not available to this probe
+  // on a dev machine that runs an identity pool.
+  //
+  // A host resolves its identity home as `devIdentityHomeOverride ?? <host
+  // home>`, and that override is installed inside the host process by the pool
+  // walk. Nothing on disk records which identity a running host acquired. So
+  // on an eligible pool machine, "no marker in the default identity home" is
+  // not evidence of a healthy identity plane - it is evidence that this probe
+  // was looking somewhere else, which is precisely the environment the
+  // original incident was filed from. Saying nothing there would report a
+  // stranded host as clean.
+  //
+  // Scoped to hosts that could actually have taken a pool identity: a `dev`
+  // environment (the host's own walk is `not-applicable` otherwise) AND a
+  // non-empty pool root. A production doctor is definitive about the default
+  // identity home even on a developer's machine that carries a pool, and
+  // captioning it there would be the same false noise in the other direction.
+  //
+  // Info rather than warning: nothing is claimed to be wrong, and the host
+  // itself answers this definitively (`host.doctor` substitutes its own
+  // verdict for every code in this group, silence included). It is a caption
+  // on the report's coverage, not a fault.
+  HOST_IDENTITY_HOME_UNVERIFIED: "HOST_IDENTITY_HOME_UNVERIFIED",
 } as const;
 
 export type DoctorIssueCode =

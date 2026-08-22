@@ -1,11 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { access, lstat, readFile, readlink, stat } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  readdir,
+  readFile,
+  readlink,
+  stat,
+} from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
 import {
   cliCredentialsPath,
   hostCredentialPath,
+  hostDevIdentityPoolRoot,
+  hostIdentityNeedsReauthPath,
   hostNeedsReauthPath,
 } from "../store/paths";
 import {
@@ -488,6 +497,21 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     opts.environment,
   );
   if (credentialIssue !== null) issues.push(credentialIssue);
+
+  // ---- 4d. Host identity-plane health ----
+  // The OTHER needs-reauth marker. Same filename, different directory,
+  // different plane, and a recovery that is the opposite of 4c's - so it gets
+  // its own probe and its own codes rather than a branch inside that one.
+  //
+  // Unlike 4c this probe can never say "clean", because the location it reads
+  // is only the DEFAULT identity home and the host may have acquired another.
+  // `hostProcessAlive` is passed so the deferral names something the reader
+  // can act on: a running host answers this authoritatively.
+  const identityIssue = await probeHostIdentityNeedsReauth(
+    opts.environment,
+    hostProcessAlive,
+  );
+  if (identityIssue !== null) issues.push(identityIssue);
 
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
@@ -1102,6 +1126,10 @@ const UNKNOWN_MARKER_FIELD = "unknown";
  * alone would call that state probeable and re-create the same wrong verdict
  * through a different door.
  *
+ * Plane-agnostic despite the name (it takes the directory): the identity-plane
+ * probe below asks the same question about its own marker's parent, and the
+ * two planes must not answer "can I look here?" differently.
+ *
  * Never throws.
  */
 async function probeAuthDirectory(
@@ -1187,6 +1215,270 @@ function isFileNotFoundError(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+// ---- Identity plane ------------------------------------------------------ //
+
+// Reads the host's IDENTITY-plane needs-reauth marker, and is honest about
+// what reading it can and cannot settle.
+//
+// Everything above this line is the AUTH plane: the host's own delegated
+// credential under `<host home>/auth/`, which a connected owner client
+// re-provisions. This marker lives under `<identity home>/identity/` and means
+// something else - the host's coordination identity paused after a credential
+// refresh was rejected - and it clears when a user bearer NEWER than the
+// marker lands in the shared CLI credentials file, i.e. when somebody signs in
+// again here. Two planes, two markers of the same name, opposite repairs.
+//
+// WHY THIS ONE CANNOT REPORT CLEAN. A host resolves its identity home as
+// `devIdentityHomeOverride ?? <host home>`, and the override is installed
+// inside the host process by the dev identity pool walk - not in a file, not
+// in an env var this CLI is spawned with, not derivable from any path here. On
+// a pool machine the marker this probe is looking for may sit under
+// `~/.traycer/host/dev/identities/<name>/identity/`, and which `<name>` a
+// running host took is knowledge that exists only in that process. An
+// ENOENT-is-clean probe would therefore report a stranded dev-pool host as
+// healthy, which is the environment the original incident was filed from.
+//
+// So the answer is scoped rather than asserted: a marker found here is
+// reported, a marker that cannot be found here is reported as NOT VERIFIED
+// whenever this host could actually have taken a pool identity (see
+// `identityHomeUnverifiedIssue` for the two negatives that rule that out),
+// and the host's own `host.doctor` - the only party that resolves the live
+// identity home - substitutes its own verdict for every code this function
+// emits.
+//
+// Never throws; doctor probes are advisory and must not take the report down.
+async function probeHostIdentityNeedsReauth(
+  environment: Environment,
+  hostProcessAlive: boolean,
+): Promise<DoctorIssue | null> {
+  const markerPath = hostIdentityNeedsReauthPath(environment);
+  const identityDirPath = dirname(markerPath);
+  try {
+    let raw: string | null;
+    try {
+      raw = await readFile(markerPath, "utf8");
+    } catch (err) {
+      if (isFileNotFoundError(err)) {
+        return await identityHomeUnverifiedIssue(
+          environment,
+          markerPath,
+          identityDirPath,
+          hostProcessAlive,
+        );
+      }
+      const parent = await probeAuthDirectory(identityDirPath);
+      if (parent === "absent") {
+        // No identity directory, so no marker inside it - as unremarkable as
+        // ENOENT on the file, and scoped the same way.
+        return await identityHomeUnverifiedIssue(
+          environment,
+          markerPath,
+          identityDirPath,
+          hostProcessAlive,
+        );
+      }
+      if (parent === "unprobeable") {
+        return identityDirectoryInaccessibleIssue(identityDirPath);
+      }
+      // Searchable directory, unreadable file: something is there. Present is
+      // the verdict; the contents were only ever diagnostics.
+      raw = null;
+    }
+    const marker = parseIdentityMarkerFields(raw);
+    return {
+      code: DOCTOR_ISSUE_CODES.HOST_IDENTITY_NEEDS_REAUTH,
+      severity: "error",
+      title: "Host identity needs re-authorization",
+      message:
+        `The host identity in ${identityDirPath} is paused: a credential refresh was rejected without a revoke (${marker.reason}, since ${marker.since}), so the host stopped re-enrolling and its remote plane - relay attach, cloud-linked Tasks, anything that needs this machine reachable from outside - stays down until the pause lifts. ` +
+        "It lifts on its own as soon as a user bearer NEWER than that marker reaches the shared CLI credentials file: run `traycer login` on this machine, or sign in from the Traycer app here, and the host re-enrolls itself. " +
+        "This is NOT the host's own delegated credential (HOST_CREDENTIAL_NEEDS_REAUTH), which a connected owner client re-provisions and signing in again does not repair. If both are reported they are two separate faults, each needing its own repair. " +
+        "Scope: this is the DEFAULT identity home. A host that acquired a dev-pool identity home resolves a different one in-process, so its own `host.doctor` is the authority on whether this marker is the one it is holding.",
+      fixAction: null,
+      // Unlike the auth plane, a sign-in IS the repair here: the pause watches
+      // the CLI login file for a bearer issued after the marker. Desktop
+      // renders "Open in Terminal" for a non-null command, and here that
+      // button does the thing the card describes.
+      terminalCommand: `traycer login`,
+      details: {
+        markerPath,
+        identityDirPath,
+        reason: marker.reason,
+        since: marker.since,
+        // "The host told us why" vs "a marker is there and we could not read
+        // it" - one verdict, two different support conversations.
+        markerReadable: raw !== null && marker.reason !== UNKNOWN_MARKER_FIELD,
+        // Both markers share a filename; this is what keeps a support bundle
+        // from confusing them.
+        plane: "identity",
+        // This probe reads one location and never claims to have read the
+        // live one.
+        scope: "default-identity-home",
+        authoritative: false,
+      },
+    };
+  } catch {
+    // Nothing above should throw, but a probe that cannot answer must not be
+    // the reason `doctor` fails.
+    return null;
+  }
+}
+
+/**
+ * The scope caption: no marker in the default identity home, and what that is
+ * worth.
+ *
+ * `null` - genuine silence - whenever the pool walk that installs an identity
+ * override could not have run, because then the absence just read IS the whole
+ * answer. Two independent negatives establish that, and each one alone is
+ * enough:
+ *
+ * 1. THE ENVIRONMENT IS NOT `dev`. The host's own gate opens with
+ *    `config.environment !== "dev" -> not-applicable`
+ *    (`lifecycle/dev-identity-pool.ts`), so a production host always falls
+ *    back to its own host home no matter what the pool contains. Spelled
+ *    `!== "dev"` rather than `=== "production"` to mirror that gate exactly:
+ *    `Environment` is an open string alias, and a future slot must be
+ *    ineligible until something deliberately makes it eligible. Without this,
+ *    one developer's internal `make dev-desktop` pool would caption every
+ *    PRODUCTION doctor run on their machine forever - false uncertainty about
+ *    a home that process cannot use, which is the same noise this gate exists
+ *    to avoid, only pointed the other way.
+ * 2. THERE IS NO POOL. With no identity seated under
+ *    {@link hostDevIdentityPoolRoot}, no host here can hold an overridden
+ *    identity home even on a dev build.
+ *
+ * What is deliberately NOT mirrored is the host's second gate,
+ * `isEffectiveHomeCanonical()`. It reads the host's EFFECTIVE home, which
+ * honours a `--host-data-dir` this CLI cannot see: a dev host launched
+ * manually into a non-canonical directory looks canonical from here while
+ * being fully pool-eligible. Suppressing on a canonical-looking dev home would
+ * therefore report exactly that host clean, so `dev` stays conservative.
+ *
+ * The pool root is read for EXISTENCE, never attributed: which identity a
+ * running host took is not recorded anywhere this CLI can see.
+ */
+async function identityHomeUnverifiedIssue(
+  environment: Environment,
+  markerPath: string,
+  identityDirPath: string,
+  hostProcessAlive: boolean,
+): Promise<DoctorIssue | null> {
+  if (environment !== "dev") {
+    return null;
+  }
+  const poolRoot = hostDevIdentityPoolRoot();
+  if (!(await devIdentityPoolExists(poolRoot))) {
+    return null;
+  }
+  const authority = hostProcessAlive
+    ? "A host process is running on this machine and resolves its own identity home, so its `host.doctor` answers this definitively - read that report (the Traycer app's host Doctor asks the host directly) rather than this line."
+    : "No host process is running on this machine, so the authoritative check could not run at all. Start the host and re-run doctor through it for a definitive answer.";
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_IDENTITY_HOME_UNVERIFIED,
+    severity: "info",
+    title: "Host identity state not verified here",
+    message:
+      `No identity-plane re-auth marker in the default identity home (${identityDirPath}) - but this machine has a dev identity pool (${poolRoot}), and a host that acquired an identity from it keeps its marker under that identity's own home instead. ` +
+      "This check reads the default location only, so its silence is not a clean bill of health for the identity plane. " +
+      authority,
+    // Nothing to press and nothing to copy: this is a statement about
+    // coverage, not a fault with a repair.
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      probedMarkerPath: markerPath,
+      probedIdentityDirPath: identityDirPath,
+      devIdentityPoolRoot: poolRoot,
+      // The eligibility fact this caption rests on - a support bundle should
+      // not have to infer why the caption is here rather than absent.
+      environment,
+      hostProcessAlive,
+      plane: "identity",
+      scope: "default-identity-home",
+      authoritative: false,
+    },
+  };
+}
+
+/**
+ * Whether a dev identity pool exists on this machine - one `readdir`, existence
+ * only.
+ *
+ * An empty pool root counts as no pool: the directory can outlive every
+ * identity in it, and a pool with nothing in it cannot have given a host an
+ * identity home. A readdir that fails for any reason OTHER than "not there"
+ * counts as a pool, because the caller's silence is the unsafe direction: this
+ * function exists to decide whether the CLI may stay quiet, and "I could not
+ * tell" must not resolve to quiet.
+ */
+async function devIdentityPoolExists(poolRoot: string): Promise<boolean> {
+  try {
+    const entries = await readdir(poolRoot, { withFileTypes: true });
+    return entries.some(
+      (entry) => entry.isDirectory() || entry.isSymbolicLink(),
+    );
+  } catch (err) {
+    return !isFileNotFoundError(err);
+  }
+}
+
+/**
+ * The identity plane's "could not look", kept separate from
+ * {@link authDirectoryInaccessibleIssue} for the reason both exist: an issue
+ * that names a repair must name the one that applies. This is a permission on
+ * a different directory belonging to a different plane, and it is also NOT the
+ * scope caption above - that one means "I looked and found nothing here", this
+ * one means "I could not look".
+ */
+function identityDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_IDENTITY_DIR_INACCESSIBLE,
+    severity: "warning",
+    title: "Cannot inspect this host's identity state",
+    message:
+      `This host's identity directory (${dirPath}) could not be read, so doctor cannot tell whether the host's coordination identity is healthy or paused waiting for a fresh sign-in. ` +
+      "Check the directory's ownership and permissions - it should be readable and searchable by the user the host runs as. " +
+      "This is not itself an identity fault; it means this one check could not run.",
+    fixAction: null,
+    terminalCommand: null,
+    details: { identityDirPath: dirPath, plane: "identity" },
+  };
+}
+
+/**
+ * Best-effort read of the identity marker's diagnostic fields. Separate from
+ * {@link parseMarkerFields} because the two markers do not agree on their
+ * field names - the identity plane stamps `since`, the auth plane
+ * `recordedAt` - and reusing one reader would silently report `unknown` for
+ * whichever plane it was not written for.
+ */
+function parseIdentityMarkerFields(raw: string | null): {
+  readonly reason: string;
+  readonly since: string;
+} {
+  if (raw === null) {
+    return { reason: UNKNOWN_MARKER_FIELD, since: UNKNOWN_MARKER_FIELD };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { reason: UNKNOWN_MARKER_FIELD, since: UNKNOWN_MARKER_FIELD };
+  }
+  const marker = isRecord(parsed) ? parsed : {};
+  return {
+    reason:
+      typeof marker.reason === "string" && marker.reason.length > 0
+        ? marker.reason
+        : UNKNOWN_MARKER_FIELD,
+    since:
+      typeof marker.since === "string" && marker.since.length > 0
+        ? marker.since
+        : UNKNOWN_MARKER_FIELD,
+  };
 }
 
 // Detects the "file is both there and not found" field shape: the CLI

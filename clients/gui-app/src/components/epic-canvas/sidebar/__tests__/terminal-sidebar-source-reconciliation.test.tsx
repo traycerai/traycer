@@ -332,7 +332,7 @@ describe("terminal sidebar source reconciliation", () => {
       durableTerminal(HOST_A, "shared"),
       durableTerminal(HOST_B, "shared"),
     ]);
-    const { getAllByTestId, queryByTestId } = render(
+    const { getAllByTestId } = render(
       wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
     );
     const rows = getAllByTestId("epic-terminal-sidebar-item-shared");
@@ -340,7 +340,6 @@ describe("terminal sidebar source reconciliation", () => {
     expect(
       rows.map((row) => row.getAttribute("data-terminal-host-id")),
     ).toEqual([HOST_A, HOST_B]);
-    expect(queryByTestId("epic-terminal-sidebar-incomplete-fleet")).toBeNull();
   });
 
   it("keeps manager-owned listed rows and suppresses an ordinary stale shadow", () => {
@@ -417,18 +416,15 @@ describe("terminal sidebar source reconciliation", () => {
     view.rerender(
       wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
     );
-    expect(
-      view.queryByTestId("epic-terminal-sidebar-incomplete-fleet"),
-    ).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(750);
     });
-    expect(
-      view.getByTestId("epic-terminal-sidebar-incomplete-fleet"),
-    ).not.toBeNull();
     expect(view.getByTestId("epic-terminal-sidebar-item-local")).not.toBeNull();
     expect(view.queryByTestId("epic-terminal-sidebar-item-remote")).toBeNull();
-    expect(view.getByText(/Showing this host only/)).not.toBeNull();
+    // The coverage gap is the status pill's to report, not the sidebar's:
+    // no caption row, the serving host's rows alone.
+    expect(view.queryByText(/Showing this host only/)).toBeNull();
+    expect(view.queryByText(/Remote terminal/)).toBeNull();
 
     durableCollection.value = completeFleet([
       durableTerminal(HOST_A, "local"),
@@ -438,27 +434,28 @@ describe("terminal sidebar source reconciliation", () => {
       wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
     );
     expect(
-      view.queryByTestId("epic-terminal-sidebar-incomplete-fleet"),
-    ).toBeNull();
-    expect(
       view.getByTestId("epic-terminal-sidebar-item-remote-restored"),
     ).not.toBeNull();
     vi.useRealTimers();
   });
 
-  it("does not flash the incomplete-fleet notice when catalog hydration recovers within the grace", async () => {
+  it("holds the loading state rather than flashing the empty state while catalog hydration recovers within the grace", async () => {
+    // A partial fleet with no serving-host rows is, for the first 750ms, most
+    // likely a catalog still hydrating. Claiming "No terminals yet." in that
+    // window would be wrong the moment the remote rows arrive, so the body
+    // keeps loading until the grace elapses or coverage recovers.
     vi.useFakeTimers();
     durableCollection.value = partialFleet(HOST_A, []);
     const view = render(
       wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={TAB_ID} />),
     );
-    expect(
-      view.queryByTestId("epic-terminal-sidebar-incomplete-fleet"),
-    ).toBeNull();
+    expect(view.queryByTestId("epic-terminal-sidebar-empty")).toBeNull();
+    expect(view.getByText("Loading terminals…")).not.toBeNull();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
+    expect(view.queryByTestId("epic-terminal-sidebar-empty")).toBeNull();
     durableCollection.value = completeFleet([
       durableTerminal(HOST_B, "remote-before-notice"),
     ]);
@@ -469,9 +466,7 @@ describe("terminal sidebar source reconciliation", () => {
       await vi.advanceTimersByTimeAsync(500);
     });
 
-    expect(
-      view.queryByTestId("epic-terminal-sidebar-incomplete-fleet"),
-    ).toBeNull();
+    expect(view.queryByTestId("epic-terminal-sidebar-empty")).toBeNull();
     expect(
       view.getByTestId("epic-terminal-sidebar-item-remote-before-notice"),
     ).not.toBeNull();
