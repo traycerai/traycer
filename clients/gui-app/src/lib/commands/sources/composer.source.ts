@@ -27,6 +27,7 @@ import {
   useGuiHarnessCatalogForClient,
   type GuiHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import { useHostBinding } from "@/lib/host";
 import { resolveSubtreeHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
@@ -344,12 +345,33 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
   );
 }
 
+/**
+ * Both subpages listed on `available` alone, which made them the last
+ * auth-blind paths into the composer: `available` is a binary-resolution/CLI
+ * probe that never consults auth, so a provider whose account is signed out
+ * was still offered here and the switch landed on a harness every turn would
+ * bounce off the send gate.
+ *
+ * The picker surfaces fixed this by joining against `providers.list`, but the
+ * palette has no such query - it holds a catalog and nothing else. So this is
+ * the site the row-carried `authStatus` exists for: the same definitive-only
+ * verdict the rail and the send gate read, taken straight off the row being
+ * listed. On a host below `agent.gui.listHarnesses@7.1` the field is absent,
+ * the predicate is false for every row, and both subpages list exactly what
+ * they list today.
+ */
+function providerOfferableInPalette(provider: HarnessOption): boolean {
+  return provider.available && !isHarnessRowSignedOut(provider);
+}
+
 function useProviderSubpageItems(): ReadonlyArray<CommandItem> {
   const catalog = useFocusedComposerCatalog();
   return useMemo(
     () =>
       catalog.harnesses.flatMap((provider) =>
-        provider.available ? [buildProviderItem(provider)] : [],
+        providerOfferableInPalette(provider)
+          ? [buildProviderItem(provider)]
+          : [],
       ),
     [catalog.harnesses],
   );
@@ -360,7 +382,7 @@ function useModelSubpageItems(): ReadonlyArray<CommandItem> {
   return useMemo(
     () =>
       catalog.harnesses.flatMap((provider) =>
-        provider.available
+        providerOfferableInPalette(provider)
           ? provider.models.map((model) => buildModelItem(provider, model))
           : [],
       ),

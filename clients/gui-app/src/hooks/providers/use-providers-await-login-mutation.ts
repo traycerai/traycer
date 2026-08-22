@@ -15,6 +15,7 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
+import { invalidateHarnessCatalogsForHost } from "@/hooks/providers/invalidations";
 
 type AwaitLoginRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -155,6 +156,12 @@ export function useProvidersAwaitLoginForClient(args: {
             };
           },
         });
+        // A login can now flip `available`: an undetected provider is
+        // effectively disabled and reported unavailable, so signing in is
+        // exactly the edge that brings it back. The overlay above only
+        // reaches `providers.list`, which is why this is a separate call
+        // rather than something the echo could carry.
+        invalidateHarnessCatalogsForHost(queryClient, context.hostId);
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't confirm sign-in."),

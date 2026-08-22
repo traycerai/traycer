@@ -10,6 +10,7 @@ import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
+import { invalidateHarnessCatalogsForHost } from "@/hooks/providers/invalidations";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -47,6 +48,11 @@ export function useRefreshProviders(): () => Promise<void> {
           hostId: ctx.hostId,
           update: () => data,
         });
+        // Makes good on what this hook's contract has always claimed. Under
+        // auto-enablement a refresh can change which providers are available
+        // at all - a terminal sign-in completing is observed exactly here -
+        // so the catalogs must be dropped alongside the list.
+        invalidateHarnessCatalogsForHost(queryClient, ctx.hostId);
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),
