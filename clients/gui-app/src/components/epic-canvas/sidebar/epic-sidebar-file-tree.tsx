@@ -31,6 +31,7 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent,
+  type RefObject,
 } from "react";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { cn } from "@/lib/utils";
@@ -91,7 +92,15 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
-import { mergeExpandedDirectoryPaths } from "@/lib/workspace/workspace-file-list-tree";
+import {
+  ancestorDirectoryPathsOf,
+  mergeExpandedDirectoryPaths,
+} from "@/lib/workspace/workspace-file-list-tree";
+import {
+  clearFileTreeRevealRequest,
+  useFileTreeRevealRequest,
+  type FileTreeRevealRequest,
+} from "@/stores/file-tree/file-tree-reveal-store";
 import {
   projectWorkspaceSearchPaths,
   type WorkspaceSearchPathsProjection,
@@ -578,6 +587,16 @@ function FileTreeBodyForResolvedHost(
     onLatchHost,
   ]);
 
+  // True while the REVEAL path is rewriting the selection programmatically.
+  // Pierre reports every selection change through the same `onSelectionChange`
+  // a click lands in, and that handler opens the row's preview - which for a
+  // reveal would re-navigate to the very tile the gesture came from. A flag
+  // rather than a one-path marker: the rewrite is a deselect of every other
+  // row followed by one select, and with two rows selected the first deselect
+  // already reports a non-empty selection. Pierre notifies synchronously from
+  // inside each `select()` / `deselect()`, so the flag brackets the whole
+  // block and a later user click is never suppressed.
+  const suppressSelectionOpenRef = useRef(false);
   const { model } = useFileTree({
     paths: treePaths,
     initialExpansion: "closed",
@@ -591,6 +610,7 @@ function FileTreeBodyForResolvedHost(
     onSelectionChange: (selectedPaths) => {
       const selectedPath = selectedPaths.at(-1);
       if (selectedPath === undefined) return;
+      if (suppressSelectionOpenRef.current) return;
       handlersRef.current.onSelect(selectedPath);
     },
   });
@@ -619,6 +639,34 @@ function FileTreeBodyForResolvedHost(
     mode: source.mode,
     searchExpandedPaths: source.searchExpandedPaths,
     localFilterQuery: source.localFilterQuery,
+  });
+
+  // "Reveal in Sidebar" for a workspace-file tab. Only a request for THIS
+  // host + workspace is this body's to serve; one naming another workspace is
+  // routed by the panel above (it switches the selection, which remounts this
+  // body for the right workspace). Declared AFTER the expansion hook on
+  // purpose: its per-tick effect must run after the reset that re-seeds the
+  // model from a new path list, so it sees the rows that list just added.
+  const revealRequest = useFileTreeRevealRequest(props.tabId);
+  const activeRevealRequest =
+    revealRequest !== null &&
+    hostId !== null &&
+    revealRequest.hostId === hostId &&
+    revealRequest.workspacePath === props.workspacePath
+      ? revealRequest
+      : null;
+  const clearSearchQuery = useCallback(() => {
+    setSearchQuery("");
+  }, []);
+  useWorkspaceFileTreeReveal({
+    model,
+    request: activeRevealRequest,
+    viewTabId: props.tabId,
+    treePaths,
+    fileNameByPath: nameByTreePath,
+    browsing: source.mode === "browse",
+    clearSearchQuery,
+    suppressSelectionOpenRef,
   });
 
   // Git status arrives from its own subscription; push it into Pierre's
@@ -881,6 +929,102 @@ function useWorkspaceFileTreeExpansion(args: {
     model,
     setExpandedPaths,
     workspacePath,
+  ]);
+}
+
+/**
+ * Serves a "Reveal in Sidebar" request for a file in THIS body's workspace:
+ * clears the filter (a filtered tree hides non-matching rows and owns
+ * expansion while active), opens the file's ancestor folders, and once the
+ * file's row is listed, selects it, scrolls it into view, and consumes the
+ * request.
+ *
+ * Ancestors are opened on the MODEL, one listed level per tick, never by
+ * writing them into the expansion store directly. The store is derived from
+ * the model for every directory the model knows (`mergeExpandedDirectoryPaths`
+ * treats a known row as authoritative), so a store write for a known-but-
+ * collapsed folder would be folded straight back out on the next sync. An
+ * `expand()` instead flows the same way a click does: sync writes it to the
+ * store, the store's coverage asks the host for that listing, the listing
+ * re-seeds the model with the next level's rows, and this effect - keyed on
+ * the listed files - opens the next folder. The file row appearing ends the
+ * walk. With the unary snapshot every row is already listed, so it is one
+ * pass.
+ *
+ * A request for a file the workspace never lists (deleted, or a root that
+ * stopped serving) stays pending until a newer request for the same view tab
+ * replaces it; it is in-memory and per view tab, so that is bounded.
+ */
+function useWorkspaceFileTreeReveal(args: {
+  readonly model: PierreFileTreeModel;
+  /** The request for this host + workspace, or `null` when none is pending. */
+  readonly request: FileTreeRevealRequest | null;
+  readonly viewTabId: string;
+  /**
+   * Every listed row. A dependency of the walk because a listing can add the
+   * NEXT folder without adding a file (`fileNameByPath` unchanged), and the
+   * walk has to wake up for it.
+   */
+  readonly treePaths: ReadonlyArray<string>;
+  /** Listed file rows; a path absent here is not (yet) a selectable row. */
+  readonly fileNameByPath: ReadonlyMap<string, string>;
+  /** False while a filter drives the tree (either mode) - reveal waits. */
+  readonly browsing: boolean;
+  readonly clearSearchQuery: () => void;
+  /** Set for the whole selection rewrite so no notification opens a preview. */
+  readonly suppressSelectionOpenRef: RefObject<boolean>;
+}): void {
+  const {
+    model,
+    request,
+    viewTabId,
+    treePaths,
+    fileNameByPath,
+    browsing,
+    clearSearchQuery,
+    suppressSelectionOpenRef,
+  } = args;
+
+  // Once per request: drop an active filter so the tree returns to browsing
+  // (debounced, so the walk below starts on a later tick).
+  useEffect(() => {
+    if (request === null) return;
+    clearSearchQuery();
+  }, [clearSearchQuery, request]);
+
+  useEffect(() => {
+    if (request === null || !browsing) return;
+    // Nothing listed yet - the first listing re-runs this.
+    if (treePaths.length === 0) return;
+    const { filePath } = request;
+    for (const directoryPath of ancestorDirectoryPathsOf(filePath)) {
+      const directory = model.getItem(directoryPath);
+      if (directory === null || !isDirectoryHandle(directory)) continue;
+      if (!directory.isExpanded()) directory.expand();
+    }
+    if (!fileNameByPath.has(filePath)) return;
+    const item = model.getItem(filePath);
+    if (item === null) return;
+    suppressSelectionOpenRef.current = true;
+    try {
+      for (const selectedPath of model.getSelectedPaths()) {
+        if (selectedPath === filePath) continue;
+        model.getItem(selectedPath)?.deselect();
+      }
+      if (!item.isSelected()) item.select();
+    } finally {
+      suppressSelectionOpenRef.current = false;
+    }
+    model.scrollToPath(filePath, { offset: "nearest" });
+    clearFileTreeRevealRequest(viewTabId, request.nonce);
+  }, [
+    browsing,
+    fileNameByPath,
+    model,
+    request,
+    suppressSelectionOpenRef,
+    treePaths,
+    viewTabId,
   ]);
 }
 

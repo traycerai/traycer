@@ -47,7 +47,9 @@ export function publishAgentActivity(
       turn: [...bucket.turn],
     };
   }
-  __setAgentActivityStateForTests(byEpic, "cloud");
+  // Fixtures describe a healthy cloud union; surfaces that test the degraded
+  // cloud-link reading set `cloudSyncStatus` on the store directly.
+  __setAgentActivityStateForTests(byEpic, "cloud", "connected");
 }
 
 export function resetAgentActivity(): void {

@@ -36,7 +36,10 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
-import type { TerminalPlainSubscribeListServerFrame } from "@traycer/protocol/host/terminal/plain-subscribe-list";
+import type {
+  TerminalPlainSubscribeListServerFrame,
+  TerminalPlainSubscribeListServerFrameV10,
+} from "@traycer/protocol/host/terminal/plain-subscribe-list";
 import type { HostStreamClientBinding } from "@/hooks/host/use-host-stream-client-for";
 import { useLandingTerminalDurableLifecycle } from "@/components/home/terminal-panel/landing-terminal-durable-bootstrap";
 import { reconcileCapableLandingTerminals } from "@/components/home/terminal-panel/use-landing-terminal-reconciliation";
@@ -143,6 +146,8 @@ class ControlledSession implements IStreamSession {
   private statusHandler: StatusChangeHandler | null = null;
   closeCount = 0;
 
+  constructor(private readonly negotiatedVersion: SchemaVersion) {}
+
   sendClientFrame(
     _envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
@@ -159,7 +164,7 @@ class ControlledSession implements IStreamSession {
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
-    return { major: 2, minor: 1 };
+    return this.negotiatedVersion;
   }
 
   close(): void {
@@ -174,7 +179,11 @@ class ControlledSession implements IStreamSession {
     this.statusHandler?.(status, reason);
   }
 
-  emitFrame(frame: TerminalPlainSubscribeListServerFrame): void {
+  emitFrame(
+    frame:
+      | TerminalPlainSubscribeListServerFrame
+      | TerminalPlainSubscribeListServerFrameV10,
+  ): void {
     this.frameHandler?.(frame, null);
   }
 
@@ -183,7 +192,7 @@ class ControlledSession implements IStreamSession {
 
 class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   readonly sessions: ControlledSession[] = [];
-  private readonly negotiatedVersion: SchemaVersion = { major: 2, minor: 1 };
+  private negotiatedVersion: SchemaVersion = { major: 2, minor: 1 };
   private readonly supportListeners = new Set<() => void>();
   subscribeCount = 0;
 
@@ -217,7 +226,7 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     _params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     this.subscribeCount += 1;
-    const session = new ControlledSession();
+    const session = new ControlledSession(this.negotiatedVersion);
     this.sessions.push(session);
     return session;
   }
@@ -242,6 +251,10 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   setSupport(support: StreamMethodSupport): void {
     this.support = support;
     for (const listener of this.supportListeners) listener();
+  }
+
+  setNegotiatedVersion(version: SchemaVersion): void {
+    this.negotiatedVersion = version;
   }
 
   get session(): ControlledSession {
@@ -377,6 +390,16 @@ function recordCapableManifest(): void {
   };
   for (const method of PLAIN_TERMINAL_RPC_METHODS) {
     manifest[method] = { major: 2, minor: 1 };
+  }
+  recordNegotiatedHostManifest(HOST_ID, manifest);
+}
+
+function recordLocalCapableManifest(): void {
+  const manifest: Record<string, SchemaVersion> = {
+    "host.status": { major: 1, minor: 0 },
+  };
+  for (const method of PLAIN_TERMINAL_RPC_METHODS) {
+    manifest[method] = { major: 1, minor: 0 };
   }
   recordNegotiatedHostManifest(HOST_ID, manifest);
 }
@@ -1258,6 +1281,51 @@ describe("usePlainTerminalAuthority integration", () => {
     expect(rendered.result.current.capability).toEqual({ status: "legacy" });
     expect(rendered.result.current.query.fetchStatus).toBe("idle");
     expect(stream.subscribeCount).toBe(0);
+  });
+
+  it("uses the frozen local authority when a new client connects to an RC host", async () => {
+    recordLocalCapableManifest();
+    const test = fixture([terminal(1, null)]);
+    const stream = new ControlledStreamClient("supported");
+    stream.setNegotiatedVersion({ major: 1, minor: 0 });
+    const rendered = renderHook(
+      () =>
+        usePlainTerminalAuthority({
+          hostId: HOST_ID,
+          scope: SCOPE,
+          client: test.client,
+          streamClient: stream,
+          capabilityIncarnation: "rc-host",
+        }),
+      { wrapper: test.Wrapper },
+    );
+
+    await waitFor(() => expect(stream.subscribeCount).toBe(1));
+    act(() => {
+      stream.session.emitStatus("open", null);
+      stream.session.emitFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        terminals: [
+          {
+            ...terminal(1, null),
+            runtime: { status: "dormant" },
+          },
+        ],
+      });
+      stream.session.emitFrame({
+        kind: "initialized",
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => expect(rendered.result.current.canMutate).toBe(true));
+    expect(rendered.result.current.capability).toEqual({
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    });
+    expect(rendered.result.current.coverage).toBe("partial-serving-host");
+    expect(rendered.result.current.terminals).toEqual([terminal(1, null)]);
   });
 
   it("starts when support becomes available without replacing the established session", async () => {

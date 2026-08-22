@@ -16,6 +16,7 @@ import {
   type RequestOf,
   type ResponseOf,
   type RpcErrorFor,
+  type RpcResponseUpgradeContext,
   type RpcRequestFor,
   type RpcSuccessFor,
   type UncheckedVersionedRpcRegistry,

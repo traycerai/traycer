@@ -10,6 +10,7 @@ import {
   mergeConnectionManifests,
   splitConnectionManifest,
   upgradeResponseToVersion,
+  upgradeResponseToVersionWithContext,
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
@@ -416,6 +417,7 @@ export class WsRpcClient<
           params,
           requestId,
           responseTimeoutMs,
+          selected.hostId,
         );
       }
 
@@ -431,6 +433,7 @@ export class WsRpcClient<
         params,
         requestId,
         responseTimeoutMs,
+        selected.hostId,
       );
     } finally {
       authority.abortSignal.removeEventListener("abort", onAbort);
@@ -452,6 +455,7 @@ async function executeAvailableMethodRequest<Payload, Response>(
   params: Payload,
   requestId: string,
   responseTimeoutMs: number,
+  hostId: string,
 ): Promise<Response> {
   const preparedRequest = prepareRequestPayload<Payload>(
     methodRegistry,
@@ -487,13 +491,15 @@ async function executeAvailableMethodRequest<Payload, Response>(
 
   const decodedResult = decodeResponseFrame(responseFrame, requestId, method);
 
-  return decodeResponsePayload<Response>(
+  return decodeResponsePayloadWithContext<Response>(
     methodRegistry,
     clientCanonical,
     hostCanonical,
     decodedResult,
     requestId,
     method,
+    preparedRequest.onWirePayload,
+    hostId,
   );
 }
 
@@ -511,6 +517,7 @@ async function executeUnavailableMethodDegrade<
   params: RequestOfMethod<Registry, Method>,
   requestId: string,
   responseTimeoutMs: number,
+  hostId: string,
 ): Promise<ResponseOfMethod<Registry, Method>> {
   // Degrade POLICY is shared with the remote mux transport (see
   // `unavailable-method-degrade.ts`); only the dispatch below is ws-specific.
@@ -533,6 +540,7 @@ async function executeUnavailableMethodDegrade<
         input.params,
         requestId,
         responseTimeoutMs,
+        hostId,
       ),
   })) as ResponseOfMethod<Registry, Method>;
 }
@@ -638,6 +646,47 @@ export function decodeResponsePayload<Payload>(
   requestId: string,
   method: string,
 ): Payload {
+  return decodeResponsePayloadInternal(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    result,
+    requestId,
+    method,
+    null,
+  );
+}
+
+export function decodeResponsePayloadWithContext<Payload>(
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  result: unknown,
+  requestId: string,
+  method: string,
+  onWireRequest: unknown,
+  hostId: string,
+): Payload {
+  return decodeResponsePayloadInternal(
+    methodRegistry,
+    clientCanonical,
+    hostCanonical,
+    result,
+    requestId,
+    method,
+    { request: onWireRequest, hostId },
+  );
+}
+
+function decodeResponsePayloadInternal<Payload>(
+  methodRegistry: MethodVersionRegistry,
+  clientCanonical: SchemaVersion,
+  hostCanonical: SchemaVersion,
+  result: unknown,
+  requestId: string,
+  method: string,
+  context: { readonly request: unknown; readonly hostId: string } | null,
+): Payload {
   if (clientCanonical.major === hostCanonical.major) {
     if (clientCanonical.minor <= hostCanonical.minor) {
       return result as Payload;
@@ -649,6 +698,7 @@ export function decodeResponsePayload<Payload>(
       result,
       requestId,
       method,
+      context,
     );
   }
   if (clientCanonical.major < hostCanonical.major) {
@@ -661,6 +711,7 @@ export function decodeResponsePayload<Payload>(
     result,
     requestId,
     method,
+    context,
   );
 }
 
@@ -671,6 +722,7 @@ function upgradeResponseAlongChain<Payload>(
   result: unknown,
   requestId: string,
   method: string,
+  context: { readonly request: unknown; readonly hostId: string } | null,
 ): Payload {
   try {
     // The host is the older side here, so `result` is raw wire data framed at
@@ -694,12 +746,21 @@ function upgradeResponseAlongChain<Payload>(
       }
       chainInput = parsed.data;
     }
-    const upgraded = upgradeResponseToVersion(
-      methodRegistry,
-      fromVersion,
-      toVersion,
-      chainInput as never,
-    );
+    const upgraded =
+      context === null
+        ? upgradeResponseToVersion(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+          )
+        : upgradeResponseToVersionWithContext(
+            methodRegistry,
+            fromVersion,
+            toVersion,
+            chainInput as never,
+            { request: context.request as never, hostId: context.hostId },
+          );
     return upgraded as Payload;
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);

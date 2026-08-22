@@ -746,6 +746,8 @@ describe("NotificationsPopover", () => {
     const status = await screen.findByTestId("notifications-feed-status");
     expect(status.textContent).toContain("Loading notifications");
     expect(status.textContent).toContain("Fetching your notification history.");
+    expect(status.getAttribute("data-tone")).toBe("neutral");
+    expect(status.className).not.toContain("bg-warning/10");
     expect(
       screen.getByTestId("notifications-feed-status-spinner"),
     ).toBeDefined();
@@ -766,8 +768,10 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const status = await screen.findByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Notifications unavailable");
+    expect(status.textContent).toContain("Cloud notifications unavailable");
     expect(status.textContent).toContain("We’ll keep trying to reconnect.");
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
     expect(
       screen.queryByTestId("notifications-feed-status-spinner"),
     ).toBeNull();
@@ -793,10 +797,12 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const status = await screen.findByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain("Reconnecting to cloud notifications");
     expect(status.textContent).toContain(
-      "Refreshing your notification history.",
+      "Showing notifications already on this device until it’s back.",
     );
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
     expect(
       screen.getByTestId("notifications-feed-status-spinner"),
     ).toBeDefined();
@@ -823,7 +829,9 @@ describe("NotificationsPopover", () => {
 
     expect(await screen.findByTestId("notification-entry")).toBeDefined();
     const status = screen.getByTestId("notifications-feed-status");
-    expect(status.textContent).toContain("Reconnecting to notifications");
+    expect(status.textContent).toContain("Reconnecting to cloud notifications");
+    expect(status.getAttribute("data-tone")).toBe("degraded");
+    expect(status.className).toContain("bg-warning/10");
   });
 
   it("shows caught up only after an authoritative empty cloud snapshot", async () => {

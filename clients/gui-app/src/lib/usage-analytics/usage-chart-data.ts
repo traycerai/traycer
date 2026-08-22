@@ -1,8 +1,8 @@
 import type { UsageSummaryResponse } from "@/hooks/usage-analytics/use-usage-summary-query";
 import {
   buildUsageSeriesScale,
-  seriesKeysByFirstAppearance,
   USAGE_SERIES_OTHER_KEY,
+  USAGE_SERIES_SLOT_COUNT,
   type UsageSeriesScale,
 } from "@/lib/usage-analytics/usage-series-scale";
 
@@ -64,7 +64,7 @@ export function bucketMetricValue(
 /**
  * Builds the stacked-bar chart's per-day columns, one segment per series
  * (harness or model per `groupBy`, or "Other" for anything past the
- * eight-slot cap), in the scale's fixed stacking order. `days` drives the
+ * slot cap), in the scale's fixed stacking order. `days` drives the
  * x-axis so a day with zero activity still gets a zero-height column instead
  * of compressing the axis. `groupBy` must match the one the `scale` was
  * built with, or every bucket folds into "Other".
@@ -137,14 +137,71 @@ export function applyUsageSeriesVisibility(
   });
 }
 
-/** Convenience: the fixed-order series scale for a response's buckets under the given grouping. */
+/**
+ * Series keys ranked by the window's total known cost, descending. This
+ * drives SELECTION only - which keys get a palette slot and which fold into
+ * "Other" - so "Other" is always the long tail, never whichever series
+ * happened to show up late in the window. Ties (most often a run of
+ * unpriced series at $0) break on total tokens, then on the key itself, so
+ * the ranking is a function of the DATA rather than of the order the host
+ * happened to return buckets in.
+ *
+ * Deliberately NOT the slot order: see `buildUsageSeriesScaleForBuckets`.
+ */
+export function seriesKeysByTotalCost(
+  buckets: readonly UsageBucket[],
+  groupBy: UsageChartGroupBy,
+): readonly string[] {
+  const totals = new Map<string, { costUsd: number; tokens: number }>();
+  for (const bucket of buckets) {
+    const key = bucketSeriesKey(bucket, groupBy);
+    const existing = totals.get(key) ?? { costUsd: 0, tokens: 0 };
+    totals.set(key, {
+      costUsd: existing.costUsd + bucket.knownCostUsd,
+      tokens: existing.tokens + totalTokensForBucket(bucket),
+    });
+  }
+  return [...totals.entries()]
+    .sort(
+      ([keyA, a], [keyB, b]) =>
+        b.costUsd - a.costUsd ||
+        b.tokens - a.tokens ||
+        keyA.localeCompare(keyB),
+    )
+    .map(([key]) => key);
+}
+
+/**
+ * The series scale for a response's buckets under the given grouping, on
+ * two SEPARATE axes:
+ *
+ * - **Selection** is by spend (`seriesKeysByTotalCost`): the top
+ *   `USAGE_SERIES_SLOT_COUNT` keys get palette slots and the rest fold into
+ *   "Other", so the fold is always the long tail.
+ * - **Slot assignment** among the selected keys is alphabetical, which is
+ *   independent of the totals. Ranking cannot drive it: the scale is
+ *   rebuilt from every response, so a refetch in which one series merely
+ *   overtakes another ($9 -> $11 past a steady $10) would swap two entities'
+ *   colors in the chart AND in the harness split beside it, while the
+ *   surface stayed mounted. "Color follows the entity, never its rank"
+ *   (dataviz skill) - the same rule `applyUsageSeriesVisibility` keeps when
+ *   a series is toggled off. Changing magnitudes now move a series' place in
+ *   the stack only if they move it across the selection cutoff.
+ *
+ * Overflow keys are appended after the selected ones purely so
+ * `buildUsageSeriesScale` still sees them and emits the "Other" sentinel;
+ * their relative order past the cap is immaterial.
+ */
 export function buildUsageSeriesScaleForBuckets(
   buckets: readonly UsageBucket[],
   groupBy: UsageChartGroupBy,
 ): UsageSeriesScale {
-  return buildUsageSeriesScale(
-    seriesKeysByFirstAppearance(buckets, (bucket) =>
-      bucketSeriesKey(bucket, groupBy),
-    ),
+  const ranked = seriesKeysByTotalCost(buckets, groupBy);
+  const selected = [...ranked.slice(0, USAGE_SERIES_SLOT_COUNT)].sort((a, b) =>
+    a.localeCompare(b),
   );
+  return buildUsageSeriesScale([
+    ...selected,
+    ...ranked.slice(USAGE_SERIES_SLOT_COUNT),
+  ]);
 }

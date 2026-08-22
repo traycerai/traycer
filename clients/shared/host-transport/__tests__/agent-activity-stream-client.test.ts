@@ -109,8 +109,10 @@ describe("AgentActivityStreamClient", () => {
       hasBinaryPayload: false,
     });
 
-    expect(onState).toHaveBeenNthCalledWith(1, "local", localState);
-    expect(onState).toHaveBeenNthCalledWith(2, "cloud", cloudState);
+    // Neither fixture frame carries `cloudSyncStatus` (a `1.0` host's shape):
+    // the live schema defaults it to `null` - no claim - never "connected".
+    expect(onState).toHaveBeenNthCalledWith(1, "local", localState, null);
+    expect(onState).toHaveBeenNthCalledWith(2, "cloud", cloudState, null);
 
     const reason: StreamCloseReason = { kind: "caller" };
     session.emitStatus("closed", reason);
