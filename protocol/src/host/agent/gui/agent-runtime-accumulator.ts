@@ -13,6 +13,7 @@ import type {
   PlanBlock,
   PlanStep,
   ProviderNoticeMetadata,
+  SubAgentBlock,
   ToolInputDetail,
   TodoItem,
   WorkflowActivityEntry,
@@ -331,6 +332,71 @@ function isNewSubagentRun(
     existingSpawnToolCallId !== null &&
     incomingSpawnToolCallId !== existingSpawnToolCallId
   );
+}
+
+// Terminal monotonicity. A sub-agent / workflow card is terminal once it has
+// left "streaming": completed, errored (a failed OR a stopped run - `stopped:
+// true` rides on errored), interrupted, superseded. Terminal status, `stopped`
+// and the terminal `timestamp` are sticky: a late / duplicate / conflicting
+// `*.progress` or `*.completed` (a replay, a reconnect, a producer re-emit, a
+// native child terminal landing AFTER the root turn's finalize already
+// interrupted or superseded the card) never rewrites them. The only way back to
+// "streaming" is `isNewSubagentRun` on a `*.started` that names a different
+// spawn - a genuinely new run on the same block id. Producer-side run guards
+// are primary; this is the accumulator's defense in depth.
+function isTerminalSubagentBlock(block: SubAgentBlock): boolean {
+  return block.status !== "streaming";
+}
+
+// A late `*.completed` on an already-terminal card keeps every terminal field.
+// It may still fill a `result` no earlier terminal recorded (a root-cascade
+// stop landed first without one and the native completion carries the child's
+// final message) and adopt a parent the card did not yet know (parent identity
+// is enrichable after terminal, exactly as a `*.started` re-emit may enrich
+// it). Anything else is an identity no-op, so `accumulateTurnContent` does not
+// bump `blocksVersion` for it.
+// Does this `*.started` begin a NEW run on an existing card? Primarily the
+// explicit discriminator (`isNewSubagentRun`: a different non-null spawn id).
+// One more case: a TERMINAL card that never learned a spawn id (minted by the
+// orphan `*.progress` / `*.completed` fallbacks because its own `started` was
+// dropped) receives a `started` that carries one and is stamped LATER than the
+// card's terminal. That is a continuation of the same block id (a Claude
+// SendMessage restart), not a late re-emit of the run that already ended - a
+// reordered `started` of the finished run carries an EARLIER timestamp and
+// must keep refreshing the terminal card in place.
+function reopensSubagentRun(
+  event: { spawnToolCallId?: string; timestamp: number },
+  existing: SubAgentBlock,
+): boolean {
+  if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+    return true;
+  }
+  return (
+    isTerminalSubagentBlock(existing) &&
+    existing.spawnToolCallId === null &&
+    event.spawnToolCallId !== undefined &&
+    event.timestamp > existing.timestamp
+  );
+}
+
+function mergeLateSubagentTerminal(
+  blocks: ContentBlock[],
+  existing: SubAgentBlock,
+  event: { parentBlockId?: string | null; result?: string },
+): ContentBlock[] {
+  const result = existing.result ?? nullableString(event.result);
+  const parentBlockId = resolveParentBlockId(event, existing);
+  if (
+    result === existing.result &&
+    parentBlockId === (existing.parentBlockId ?? null)
+  ) {
+    return blocks;
+  }
+  return replaceBlock(blocks, existing.blockId, {
+    ...existing,
+    result,
+    parentBlockId,
+  });
 }
 
 // Appends a new workflow activity entry, skipping a consecutive duplicate
@@ -1572,7 +1638,7 @@ export function accumulateEvent(
       // name/task in place rather than appending a duplicate card.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
-        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+        if (reopensSubagentRun(event, existing)) {
           return replaceBlock(blocks, event.blockId, {
             ...existing,
             status: "streaming",
@@ -1632,6 +1698,9 @@ export function accumulateEvent(
     case "subagent.progress": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        // A terminal card ignores late progress entirely: no append, no
+        // timestamp advance, no parent adoption (see isTerminalSubagentBlock).
+        if (isTerminalSubagentBlock(existing)) return blocks;
         const updated = {
           ...existing,
           progressUpdates: [...existing.progressUpdates, event.update],
@@ -1671,6 +1740,12 @@ export function accumulateEvent(
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
       if (existing) {
+        // Status / stopped / timestamp are sticky once terminal: a duplicate or
+        // conflicting completion only ever fills a still-null result or a
+        // not-yet-known parent (see mergeLateSubagentTerminal).
+        if (isTerminalSubagentBlock(existing)) {
+          return mergeLateSubagentTerminal(blocks, existing, event);
+        }
         const updated = {
           ...existing,
           status,
@@ -1710,7 +1785,7 @@ export function accumulateEvent(
       // open a fresh dual-written subagent block.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
-        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+        if (reopensSubagentRun(event, existing)) {
           return replaceBlock(blocks, event.blockId, {
             ...existing,
             status: "streaming",
@@ -1777,6 +1852,9 @@ export function accumulateEvent(
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       const progressLine = event.activity !== null ? event.activity.text : null;
       if (existing) {
+        // Same terminal guard as `subagent.progress`: a settled workflow card
+        // ignores late activity / count / token ticks.
+        if (isTerminalSubagentBlock(existing)) return blocks;
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(existing.name);
         const updated = {
           ...existing,
@@ -1832,6 +1910,12 @@ export function accumulateEvent(
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
       if (existing) {
+        // Status / stopped / timestamp are sticky once terminal: a duplicate or
+        // conflicting completion only ever fills a still-null result or a
+        // not-yet-known parent (see mergeLateSubagentTerminal).
+        if (isTerminalSubagentBlock(existing)) {
+          return mergeLateSubagentTerminal(blocks, existing, event);
+        }
         const updated = {
           ...existing,
           status,

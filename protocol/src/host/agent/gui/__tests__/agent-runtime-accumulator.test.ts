@@ -10,6 +10,7 @@ import {
   toolCallErroredEventSchema,
   toolCallStartedEventSchema,
 } from "../agent-runtime";
+import type { RuntimeEvent } from "../agent-runtime";
 import type {
   ContentBlock,
   ToolCallManagedCommandRestarted,
@@ -2886,6 +2887,538 @@ describe("accumulateTurnContent", () => {
     });
     expect(unchanged).toBe(state);
     expect(unchanged.blocksVersion).toBe(2);
+  });
+});
+
+describe("subagent terminal monotonicity", () => {
+  function streamingCard(): ContentBlock[] {
+    return accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+      task: "investigate",
+    });
+  }
+
+  function expectSubAgentBlock(block: ContentBlock | undefined): SubAgentBlock {
+    if (block?.type !== "subagent") {
+      throw new Error("Expected a subagent block");
+    }
+    return block;
+  }
+
+  it("a same-run subagent.started re-emit enriches agentType in place, and later re-emits preserve it", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "Subagent",
+      spawnToolCallId: "toolu_1",
+    });
+    expect(expectSubAgentBlock(blocks[0]).agentType).toBeNull();
+
+    // The async identity fetch resolves: name and type arrive together.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 2,
+      name: "Godel (explorer)",
+      agentType: "explorer",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "streaming",
+      agentType: "explorer",
+      spawnToolCallId: "toolu_1",
+      startedAt: 1,
+    });
+
+    // A later re-emit that omits the type does not clear it.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 3,
+      name: "Godel (explorer)",
+    });
+    expect(expectSubAgentBlock(blocks[0]).agentType).toBe("explorer");
+
+    // Identity stays enrichable after terminal without reopening the card.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 4,
+      outcome: "completed",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 5,
+      name: "Godel (reviewer)",
+      agentType: "reviewer",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "completed",
+      agentType: "reviewer",
+    });
+  });
+
+  it.each<{ readonly how: string; readonly terminal: RuntimeEvent }>([
+    {
+      how: "completed",
+      terminal: {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 2,
+        outcome: "completed",
+      },
+    },
+    {
+      how: "failed",
+      terminal: {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 2,
+        outcome: "failed",
+      },
+    },
+    {
+      how: "stopped",
+      terminal: {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 2,
+        outcome: "stopped",
+      },
+    },
+    {
+      how: "interrupted by turn.stopped",
+      terminal: {
+        type: "turn.stopped",
+        blockId: "turn",
+        timestamp: 2,
+        turnId: "turn",
+      },
+    },
+    {
+      how: "superseded by a steer restart",
+      terminal: {
+        type: "turn.interrupted",
+        blockId: "turn",
+        timestamp: 2,
+        turnId: "turn",
+        reason: "Turn interrupted to run a queued steering request.",
+        code: "STEER_RESTART",
+        recoverable: true,
+      },
+    },
+  ])(
+    "subagent.progress on a terminal card ($how) is an identity no-op",
+    ({ terminal }) => {
+      const before = accumulateEvent(streamingCard(), terminal);
+      expect(expectSubAgentBlock(before[0]).status).not.toBe("streaming");
+
+      const after = accumulateEvent(before, {
+        type: "subagent.progress",
+        blockId: "sa1",
+        timestamp: 9999,
+        update: "late",
+        parentBlockId: "other",
+      });
+      expect(after).toBe(before);
+    },
+  );
+
+  it("a duplicate or conflicting subagent.completed never rewrites a terminal card's status, stopped or timestamp", () => {
+    const stopped = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "stopped",
+      result: "stopped by idle",
+    });
+    const stoppedThenCompleted = accumulateEvent(stopped, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "completed",
+      result: "all done",
+    });
+    expect(stoppedThenCompleted).toBe(stopped);
+    expect(expectSubAgentBlock(stoppedThenCompleted[0])).toMatchObject({
+      status: "errored",
+      stopped: true,
+      result: "stopped by idle",
+      timestamp: 2,
+    });
+
+    const completed = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "completed",
+      result: "done",
+    });
+    const completedThenFailed = accumulateEvent(completed, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "failed",
+      result: "boom",
+    });
+    expect(completedThenFailed).toBe(completed);
+    expect(expectSubAgentBlock(completedThenFailed[0])).toMatchObject({
+      status: "completed",
+      stopped: false,
+      result: "done",
+      timestamp: 2,
+    });
+  });
+
+  it("a late subagent.completed fills a still-null result on a terminal card without changing terminal state", () => {
+    let blocks = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "stopped",
+    });
+    expect(expectSubAgentBlock(blocks[0]).result).toBeNull();
+
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "completed",
+      result: "final message",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "errored",
+      stopped: true,
+      timestamp: 2,
+      result: "final message",
+    });
+
+    const again = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 4,
+      outcome: "completed",
+      result: "again",
+    });
+    expect(again).toBe(blocks);
+  });
+
+  it("a late subagent.completed may adopt a parent the terminal card did not yet know", () => {
+    const completed = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "completed",
+      result: "done",
+    });
+    const parented = accumulateEvent(completed, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "failed",
+      parentBlockId: "sa-parent",
+    });
+    expect(expectSubAgentBlock(parented[0])).toMatchObject({
+      status: "completed",
+      result: "done",
+      timestamp: 2,
+      parentBlockId: "sa-parent",
+    });
+    // Re-sending the same parent is an identity no-op.
+    expect(
+      accumulateEvent(parented, {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 4,
+        outcome: "completed",
+        parentBlockId: "sa-parent",
+      }),
+    ).toBe(parented);
+  });
+
+  it("the new-run discriminator still reopens a terminal card, after which progress and completion apply to the new run", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+      spawnToolCallId: "toolu_run1",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "stopped",
+    });
+    const ignored = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 3,
+      update: "late",
+    });
+    expect(ignored).toBe(blocks);
+
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 4,
+      name: "explorer",
+      spawnToolCallId: "toolu_run2",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 5,
+      update: "step",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "streaming",
+      progressUpdates: ["step"],
+      timestamp: 5,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 6,
+      outcome: "completed",
+      result: "ok",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "completed",
+      timestamp: 6,
+      result: "ok",
+      spawnToolCallId: "toolu_run2",
+    });
+  });
+
+  it("workflow.progress and a conflicting workflow.completed are ignored on a terminal workflow card", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "workflow.started",
+      blockId: "wf1",
+      timestamp: 1,
+      name: "review",
+      intent: "Review the diff",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf1",
+      timestamp: 2,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      totalTokens: 1000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf1",
+      timestamp: 3,
+      outcome: "completed",
+      result: "3 findings",
+    });
+
+    const lateProgress = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf1",
+      timestamp: 4,
+      activity: { kind: "label", text: "late" },
+      agentsFinished: 16,
+      totalTokens: 9999,
+    });
+    expect(lateProgress).toBe(blocks);
+
+    const lateFailure = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf1",
+      timestamp: 5,
+      outcome: "failed",
+      result: "boom",
+    });
+    expect(lateFailure).toBe(blocks);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "completed",
+      stopped: false,
+      result: "3 findings",
+      timestamp: 3,
+      progressUpdates: ["Find"],
+    });
+    expect(expectSubAgentBlock(blocks[0]).workflowMeta).toMatchObject({
+      agentsStarted: 16,
+      agentsFinished: null,
+      totalTokens: 1000,
+    });
+  });
+
+  it("a root turn.stopped followed by a late child subagent.completed keeps the card interrupted and only fills the result", () => {
+    let blocks = accumulateEvent(streamingCard(), {
+      type: "turn.stopped",
+      blockId: "turn",
+      timestamp: 5,
+      turnId: "turn",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "interrupted",
+      timestamp: 5,
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 9,
+      outcome: "completed",
+      result: "done anyway",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "interrupted",
+      stopped: false,
+      timestamp: 5,
+      result: "done anyway",
+    });
+  });
+
+  it("a child subagent.completed(stopped) before the root turn.stopped keeps the neutral stopped state while its nested children are interrupted", () => {
+    let blocks = streamingCard();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "sa1-tool",
+      parentBlockId: "sa1",
+      timestamp: 2,
+      toolName: "read_file",
+      input: {},
+      agentMessageSend: null,
+    });
+    // The host's root-terminal cascade: the explicit child terminal lands
+    // first, then the generic root terminal.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "stopped",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "turn.stopped",
+      blockId: "turn",
+      timestamp: 4,
+      turnId: "turn",
+    });
+
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "errored",
+      stopped: true,
+      timestamp: 3,
+    });
+    expect(blocks[1]).toMatchObject({
+      blockId: "sa1-tool",
+      status: "interrupted",
+    });
+
+    // The cascade result is sticky: a native completion that lands after the
+    // root terminal cannot repaint the stopped child as completed.
+    const late = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 9,
+      outcome: "completed",
+      result: "finished after all",
+    });
+    expect(expectSubAgentBlock(late[0])).toMatchObject({
+      status: "errored",
+      stopped: true,
+      timestamp: 3,
+      result: "finished after all",
+    });
+    expect(
+      accumulateEvent(late, {
+        type: "subagent.progress",
+        blockId: "sa1",
+        timestamp: 10,
+        update: "late",
+      }),
+    ).toBe(late);
+  });
+
+  it("a continuation subagent.started with a spawn id reopens a terminal card that never learned one (orphan-minted)", () => {
+    // The first run's `started` was dropped: the card exists only through the
+    // orphan `completed` fallback, with no spawn id to discriminate on.
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 1000,
+      outcome: "completed",
+      result: "first",
+    });
+    expect(expectSubAgentBlock(blocks[0]).spawnToolCallId).toBeNull();
+
+    // A later continuation on the same block id names its spawn.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 2000,
+      name: "explorer",
+      task: "continue",
+      spawnToolCallId: "toolu_run2",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "streaming",
+      startedAt: 2000,
+      result: null,
+      spawnToolCallId: "toolu_run2",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 2500,
+      update: "step",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3000,
+      outcome: "failed",
+      result: "boom",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "errored",
+      stopped: false,
+      progressUpdates: ["step"],
+      result: "boom",
+      timestamp: 3000,
+    });
+  });
+
+  it("a reordered subagent.started of the finished run (earlier timestamp, first spawn id) refreshes the terminal card without reopening it", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 1000,
+      outcome: "completed",
+      result: "first",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 500,
+      name: "explorer",
+      task: "the original task",
+      spawnToolCallId: "toolu_run1",
+    });
+    expect(blocks).toHaveLength(1);
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "completed",
+      result: "first",
+      timestamp: 1000,
+      name: "explorer",
+      task: "the original task",
+      spawnToolCallId: "toolu_run1",
+    });
   });
 });
 
