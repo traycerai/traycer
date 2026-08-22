@@ -8,6 +8,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -158,6 +159,12 @@ export interface HostStatusSnapshot {
    * consumer that starts to cannot mistake "did not say" for "said none".
    */
   readonly busySessionCount: number | null;
+  /**
+   * Typed split of {@link busySessionCount}, or `null` when the peer did not
+   * say how the total splits (`host.status@1.1` and older). A real zero
+   * object is idle-by-kind; `null` is unknown.
+   */
+  readonly busyBreakdown: HostBusyBreakdown | null;
   readonly hostVersion: string;
 }
 
@@ -427,6 +434,7 @@ export function useHostCompatibilityProbeForClient(
       hostStatus: {
         busy: probe.data.busy,
         busySessionCount: probe.data.busySessionCount,
+        busyBreakdown: probe.data.busyBreakdown,
         hostVersion: probe.data.hostVersion,
       },
     };

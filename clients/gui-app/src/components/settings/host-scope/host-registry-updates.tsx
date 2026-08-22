@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { cn } from "@/lib/utils";
 import type { UpdateHostVersionPolicyMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import {
   deriveUpdateAffordance,
   deriveUpdatePill,
@@ -114,13 +115,18 @@ export function HostUpdateDrainGateRow(props: {
   readonly item: HostListItem;
   readonly mutation: UpdateHostVersionPolicyMutation;
   /**
-   * Open sessions blocking the drain, from `host.status` over the live
+   * Open work blocking the drain, from `host.status` over the live
    * connection. `null` when this client has no live read of the host — NOT
    * zero.
    *
    * The DISPLAY read. It drives the labels and nothing else.
    */
   readonly liveBusySessionCount: number | null;
+  /**
+   * Typed split of that total, or `null` when the host did not say. Names
+   * kinds on the button when present; count copy is retained otherwise.
+   */
+  readonly liveBusyBreakdown: HostBusyBreakdown | null;
   /**
    * The same count from a SETTLED read — nothing in flight, not aged out.
    * Drives the drain force's arm/confirm path, which needs a number it can
@@ -132,6 +138,7 @@ export function HostUpdateDrainGateRow(props: {
   const affordance = deriveUpdateAffordance({
     updateState: item.status.updateState,
     liveBusySessionCount: props.liveBusySessionCount,
+    liveBusyBreakdown: props.liveBusyBreakdown,
   });
   if (affordance.applyNowLabel === null) return null;
   return (

@@ -350,8 +350,9 @@ const LATEST_SCHEDULING = {
 
 export const HOST_METHOD_POLL_TABLE = {
   // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` is the number "Apply now — ends N
-  // sessions" promises and then destroys, so the question is not whether the
+  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
+  // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does
   // not refetch on its own, so without a cadence a focused Overview served the
   // count it read on mount indefinitely.

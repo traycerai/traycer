@@ -15,6 +15,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 
 const { mutateSpy } = vi.hoisted(() => ({ mutateSpy: vi.fn() }));
 
@@ -40,6 +41,7 @@ import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/
 function MountedDrainGate(props: {
   readonly item: HostListItem;
   readonly liveBusySessionCount: number | null;
+  readonly liveBusyBreakdown?: HostBusyBreakdown | null;
   readonly settledBusySessionCount: number | null;
 }) {
   const mutation = useHostRegistryUpdateMutation(props.item.hostId);
@@ -48,6 +50,7 @@ function MountedDrainGate(props: {
       item={props.item}
       mutation={mutation}
       liveBusySessionCount={props.liveBusySessionCount}
+      liveBusyBreakdown={props.liveBusyBreakdown ?? null}
       settledBusySessionCount={props.settledBusySessionCount}
     />
   );
