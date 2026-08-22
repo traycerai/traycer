@@ -3845,6 +3845,211 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("a stale active ack does not eat an armed provision retry", async () => {
+    // Regression: `armProvisionRetry`'s timer used to re-read
+    // `lastHostCredentialState` at fire time and bail unless it was still
+    // `missing`/`needs-reauth`. One `WsStreamClient` owns several sessions
+    // and `handleHostCredentialAck` runs per `openAck` with no cross-session
+    // ordering, so an `active` ack FORMED BEFORE the burn that armed this
+    // retry can be PROCESSED AFTER it - the arm sits behind a mint network
+    // round trip, so an ack racing across it is ordinary, not exotic. The
+    // old timer read that stale `active`, bailed, and never rescheduled -
+    // leaving the host unprovisioned with no further `openAck` left to wake
+    // it while its socket stayed up.
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // The pre-burn ack arrives late, on a reconnect of the very session that
+    // armed the retry - the same mechanics a sibling session's stale
+    // handshake would produce, minus the second socket. Nothing was handed
+    // off, so this must not be read as recovery.
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "active");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // Past the floor + jitter ceiling (1_000 + 250) with margin - the retry
+    // must fire regardless of the stale `active` sitting in
+    // `lastHostCredentialState`.
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    session.close();
+  });
+
+  it("this client's own successful handoff does cancel an armed retry", async () => {
+    // The one thing allowed to cancel the timer - see
+    // `WsStreamClient.armProvisionRetry`'s doc comment. A delivery this
+    // client performed has provenance an `active` report does not, so unlike
+    // the test above it IS correct for this to be read as recovery.
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValueOnce(
+        provisioned({
+          token: "tok-cancels-retry",
+          refreshToken: "refresh-cancels-retry",
+          familyId: "family-cancels-retry",
+          provisionedAt: "2026-07-08T17:00:00.000Z",
+        }),
+      )
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // Same state on reconnect - no transition, so this does not re-arm on
+    // its own; it is the client giving its attempt marker back after
+    // `pending-elsewhere` that lets this ask again and actually deliver.
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(2);
+    expect(provisionFrames(sockets[sockets.length - 1].socket)).toHaveLength(1);
+
+    // Past the floor + jitter ceiling: the retry the FIRST call armed must
+    // not fire a third mint, because this client already carried a
+    // credential to this host.
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    session.close();
+  });
+
+  it("a later missing/needs-reauth ack clears the handoff record so an armed retry can still fire", async () => {
+    // The re-arm edge in `handleHostCredentialAck` clears BOTH
+    // `provisionAttemptedHostIds` and `handedOffHostIds`. If only the former
+    // were cleared, a host that had a credential handed to it, burned it,
+    // and got a NEW retry armed for that burn would find the retry silently
+    // swallowed by a handoff record left over from the credential it already
+    // burned - the timer's `handedOffHostIds` check cannot tell "still holds
+    // it" from "held it once, and burned it since" unless this edge clears
+    // the record.
+    const outcome = provisioned({
+      token: "tok-first-handoff",
+      refreshToken: "refresh-first-handoff",
+      familyId: "family-first-handoff",
+      provisionedAt: "2026-07-08T18:00:00.000Z",
+    });
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce(outcome)
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    // Call 1: a clean handoff on the very socket that asked.
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(provisionFrames(sockets[0].socket)).toHaveLength(1);
+
+    // Call 2: the delivered credential is burned; the host asks again. This
+    // transition must clear the stale handoff record left by call 1, or the
+    // retry it arms below would be swallowed by a fact about a DIFFERENT
+    // credential.
+    sockets[0].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(2);
+
+    // Past the floor + jitter ceiling: the retry call 2 armed must still
+    // fire a third mint.
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(3);
+
+    session.close();
+  });
+
+  it("carries the reason that armed the retry, not whatever lastHostCredentialState reads at fire time", async () => {
+    // `reason` is passed into `armProvisionRetry` and closed over by its
+    // timer rather than re-read from `lastHostCredentialState` at fire time,
+    // because the map can - and, per the regression above, does - hold
+    // something else by then. Arm with `missing`, then let a stale `active`
+    // land (same mechanics as the regression test), and check the request
+    // the timer eventually fires: it must still say `missing`, which a
+    // re-read could not even express - `active` is excluded from the mint
+    // request's `reason` type.
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(mint).toHaveBeenNthCalledWith(1, {
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "active");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(2);
+    expect(mint).toHaveBeenNthCalledWith(2, {
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+
+    session.close();
+  });
+
   it("re-arms the mint when a host that went active comes back needs-reauth", async () => {
     // The once-per-host bound was written for a host that reports `missing`
     // and keeps reporting it: repeating the attempt could only repeat the same

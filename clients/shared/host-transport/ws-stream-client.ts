@@ -276,6 +276,23 @@ export class WsStreamClient<
    */
   private readonly provisionRetryTimers = new Map<string, TimerHandle>();
   /**
+   * Hosts THIS client handed a credential to.
+   *
+   * The only provenance-bearing evidence of recovery available here, and the
+   * reason it must exist separately from {@link lastHostCredentialState}: a
+   * handoff writes `active` into that map itself, so by the time a retry
+   * fires, "we delivered" and "some other transport's pre-burn ack arrived
+   * late" are the same value. A reported `active` carries nothing to tell
+   * them apart - which is precisely why `noteHostCredentialState` refuses to
+   * act on one - so a retry that trusted the map could be consumed by an
+   * acknowledgment formed BEFORE the burn it is meant to repair, leaving the
+   * host unprovisioned with no edge left to wake anybody.
+   *
+   * Cleared on the same edge that re-arms an attempt: a host reporting
+   * `missing`/`needs-reauth` again no longer holds what we gave it.
+   */
+  private readonly handedOffHostIds = new Set<string>();
+  /**
    * Minted credentials waiting for a live connection to carry them, keyed by
    * host. The socket that triggered the mint can be gone by the time it
    * resolves - dropping the credential there would waste a mint that has
@@ -578,6 +595,8 @@ export class WsStreamClient<
       // its credential, asks for a replacement on every `openAck`, and the
       // client - having minted once, hours ago, successfully - never answers.
       this.provisionAttemptedHostIds.delete(hostId);
+      // Whatever we handed this host, it is not holding it any more.
+      this.handedOffHostIds.delete(hostId);
     }
     if (this.flushPendingProvision(hostId)) {
       return;
@@ -629,7 +648,7 @@ export class WsStreamClient<
       // left to wake anybody, and "the next ack will ask again" is only true
       // if something else happens to reconnect.
       this.provisionAttemptedHostIds.delete(hostId);
-      this.armProvisionRetry(hostId, outcome.retryAfterMs);
+      this.armProvisionRetry(hostId, outcome.retryAfterMs, state);
       return;
     }
     if (outcome.kind !== "provisioned") {
@@ -692,8 +711,37 @@ export class WsStreamClient<
    * runs up to an hour later (the ladder's top rung), by which point the
    * client may be closed, the credential may have been delivered by somebody
    * else, or this client may already be mid-attempt.
+   *
+   * `reason` is the state that BOUGHT the retry, carried rather than re-read.
+   * Re-reading it made the mint's reason a function of the last arrival, and
+   * the last arrival is exactly what cannot be trusted here.
+   *
+   * ## What is allowed to cancel this, and what is not
+   *
+   * A reported `active` is NOT. It has no provenance: an acknowledgment
+   * formed before the burn can be processed after this timer was armed - the
+   * arm sits behind a mint round trip, so an ack in flight across it is
+   * ordinary rather than exotic - and consuming the retry on one strands the
+   * host with nothing left to wake it while its socket stays up. That is the
+   * same reason `noteHostCredentialState` is inert, applied to the same
+   * report.
+   *
+   * Only {@link handedOffHostIds} - a delivery this client performed - and a
+   * live attempt marker stop it.
+   *
+   * The accepted cost of that: if ANOTHER transport delivered and the
+   * app-wide adoption claim has since lapsed, this re-asks and the fresh mint
+   * supersedes a credential that was working. That is bounded on both ends -
+   * inside the claim window the flow answers `pending-elsewhere` and re-arms
+   * instead of minting, and the escalation ladder caps how often it can
+   * repeat - and it resolves to a provisioned host, whereas the failure it
+   * replaces resolves to an unprovisioned one.
    */
-  private armProvisionRetry(hostId: string, retryAfterMs: number): void {
+  private armProvisionRetry(
+    hostId: string,
+    retryAfterMs: number,
+    reason: Exclude<HostCredentialState, "active">,
+  ): void {
     if (this.closed) {
       return;
     }
@@ -716,12 +764,6 @@ export class WsStreamClient<
       if (mint === null) {
         return;
       }
-      const lastState = this.lastHostCredentialState.get(hostId) ?? null;
-      if (lastState !== "missing" && lastState !== "needs-reauth") {
-        // The host stopped asking - it adopted somebody's credential, or we
-        // recorded our own successful handoff. Nothing to re-ask for.
-        return;
-      }
       if (this.provisionAttemptedHostIds.has(hostId)) {
         // An `openAck` beat the timer to it and an attempt is already running
         // or spent. Re-asking here would double-mint the very host the claim
@@ -729,7 +771,7 @@ export class WsStreamClient<
         return;
       }
       this.provisionAttemptedHostIds.add(hostId);
-      void this.runMintFlow(mint, hostId, lastState);
+      void this.runMintFlow(mint, hostId, reason);
     }, delayMs);
     this.provisionRetryTimers.set(hostId, timer);
   }
@@ -789,6 +831,9 @@ export class WsStreamClient<
         // transition and therefore re-arms; the app-wide claim and the
         // escalation ladder still bound how often that can turn into a mint.
         this.lastHostCredentialState.set(hostId, "active");
+        // Recorded separately from the line above because only THIS fact has
+        // provenance. See {@link handedOffHostIds}.
+        this.handedOffHostIds.add(hostId);
         return true;
       }
     }
