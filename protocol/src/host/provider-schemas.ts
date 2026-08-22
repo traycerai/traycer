@@ -1251,6 +1251,41 @@ export const providerProfileActionSchema = z.discriminatedUnion("type", [
 ]);
 export type ProviderProfileAction = z.infer<typeof providerProfileActionSchema>;
 
+/**
+ * Tri-state enablement intent for a provider. `"on"` / `"off"` are sticky user
+ * choices that ignore detection; `"auto"` (the default, and what an unset
+ * provider means) derives enablement from whether the host passively detected
+ * an account for it.
+ *
+ * Carried on `providers.list@7.1` rows, on `agent.gui.listHarnesses@7.1` rows,
+ * and as the optional `mode` on `providers.setEnabled@2.2`. It never replaces
+ * `enabled`, which stays the strict boolean EFFECTIVE value on every wire.
+ */
+export const providerEnablementModeSchema = z.enum(["auto", "on", "off"]);
+export type ProviderEnablementMode = z.infer<
+  typeof providerEnablementModeSchema
+>;
+
+/**
+ * Why a provider in `"auto"` mode came out enabled or disabled, so the client
+ * can render the derived outcome ("Auto · enabled — account detected") instead
+ * of a bare toggle state.
+ *
+ * Deliberately COARSER than the host's own five-value source: the host's
+ * `sticky-on`/`sticky-off` both collapse to `"sticky"` (the mode field already
+ * says which), and its fail-open arm reports `"auto-detected"` - a fail-open
+ * provider renders as enabled, and telling a user "no account detected" about
+ * a provider Traycer just enabled would be a lie about a read error.
+ */
+export const providerEnablementSourceSchema = z.enum([
+  "sticky",
+  "auto-detected",
+  "auto-undetected",
+]);
+export type ProviderEnablementSource = z.infer<
+  typeof providerEnablementSourceSchema
+>;
+
 const providerCliStateBaseShape = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -1335,19 +1370,19 @@ const providerCliStateBaseShape = {
   // accusing every provider on an old host of a missing binary.
   cliBinaryResolved: z.boolean().catch(true).optional(),
   // ── v7.0 fields ────────────────────────────────────────────────────────
-  // These three ride `providers.list@7.0`, the LIVE head line. They arrived on
-  // an unreleased v8.0 that the release collapsed into v7.0, so v7.0 now binds
-  // the canonical schemas rather than a hand-frozen pin. They are ABSENT from
-  // v6.0 and below because `providerCliStateSchemaV60` is a plain `z.object`
-  // whose key set does not model them, so the v7->v6 reparse drops them the
-  // way every older bridge drops the keys its target never modelled.
+  // These three ride `providers.list@7.0` and up. They arrived on an unreleased
+  // v8.0 that the release collapsed into v7.0. They are ABSENT from v6.0 and
+  // below because `providerCliStateSchemaV60` is a plain `z.object` whose key
+  // set does not model them, so the v7->v6 reparse drops them the way every
+  // older bridge drops the keys its target never modelled.
   //
-  // Growing this shape therefore GROWS THE v7.0 WIRE - the freeze that used to
-  // stand between the two is gone. What catches it now is the deep
-  // `z.toJSONSchema` snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts`,
-  // which dumps v7.0's live shape and turns red in a plain `bun run test`. A
-  // field that belongs on the next line needs v8.0 opened for it, not a green
-  // fixture regenerated over it.
+  // v7.0 no longer binds this shape: `providerCliStateBaseShapeV70` below is
+  // its hand-frozen pin, taken when v7.1 opened for the enablement fields. So
+  // growing THIS shape grows the v7.1 wire, not v7.0's. The deep
+  // `z.toJSONSchema` snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts`
+  // pins both lines and turns red in a plain `bun run test` either way - when
+  // it does, freeze the line that stopped being head, do not regenerate over
+  // it.
   //
   // Which pack (if any) serves this provider's managed binary. Null means the
   // provider has no managed pack on this host - the store is unmanaged, or the
@@ -1380,6 +1415,18 @@ const providerCliStateBaseShape = {
   // Null when the host could not resolve any runnable binary, which is the
   // same condition `cliBinaryResolved: false` reports.
   nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
+  // ── v7.1 fields (auth-aware enablement) ────────────────────────────────
+  // The tri-state intent behind `enabled`, and why an `"auto"` provider came
+  // out the way it did. `enabled` above is untouched and stays the strict
+  // boolean EFFECTIVE value, so a client that ignores both fields behaves
+  // exactly as it does today - which is the whole reason they are additive
+  // rather than a reshaped `enabled`.
+  //
+  // `.optional()` with no `.catch()` default: absent means "this host predates
+  // auto enablement", which the client must be able to tell from any concrete
+  // value (it falls back to the binary switch). A default would erase that.
+  enablementMode: providerEnablementModeSchema.optional(),
+  enablementSource: providerEnablementSourceSchema.optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -1511,13 +1558,16 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * v1.0 through v6.0 each have their own hand-frozen response; v7.0 BINDS THIS
- * ONE, because the release collapsed the unreleased v8.0 that used to sit above
- * it into v7.0. So this is both the shape the host BUILDS and the shape the
- * head line serializes: a field added to `providerCliStateBaseShape` reaches
- * the v7.0 wire immediately rather than waiting for a new line to model it.
- * The freeze below still guards v1.0-v6.0; v7.0 is guarded by the deep
- * `frozen-catalog-lines` snapshot instead.
+ * v1.0 through v7.0 each have their own hand-frozen response; v7.1 - the head
+ * line - BINDS THIS ONE. So this is both the shape the host BUILDS and the
+ * shape the head serializes: a field added to `providerCliStateBaseShape`
+ * reaches the v7.1 wire immediately rather than waiting for a new line to
+ * model it. v7.0 used to bind it too (the release collapsed an unreleased v8.0
+ * into v7.0); `providersListResponseSchemaV70` is the freeze taken when v7.1
+ * opened, and its comment records why that freeze was not skipped.
+ *
+ * Both lines are guarded by the deep `frozen-catalog-lines` snapshot, which
+ * dumps this live shape for the head and the frozen one for v7.0.
  */
 export const providersListResponseSchema = z.object({
   providers: z.array(providerCliStateSchema),
@@ -1819,6 +1869,90 @@ export type ProvidersListResponseV70Preimage = z.infer<
   typeof providersListResponseSchemaV70Preimage
 >;
 
+// ── Frozen protocol-v7.0 provider state + list response ────────────────────
+//
+// THE REAL v7.0 FREEZE, taken under the `V70` names `registry.ts` reserved for
+// it, standing beside (not replacing) the `*V70Preimage` shapes above - those
+// remain the v6 -> v7 bridge's first-pass target and the compat suites' v7-era
+// shape. Do not collapse the two: they model different things. The pre-image
+// is v7.0 BEFORE the version-manager group; this is v7.0 as it actually
+// serializes, version-manager group included.
+//
+// Why it was taken now, and why the new enablement fields ride v7.1 rather
+// than widening v7.0 in place: `registry.ts`'s head-line note licenses an
+// UNRELEASED line to widen in place, and by `scripts/compat/support-floor.json`
+// (`includeReleaseCandidates: false`) v7.0 is formally unreleased. That is a
+// compat-FLOOR policy, not evidence that no peer speaks 7.0 -
+// `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1` (2026-08-19) ship it. Widening in
+// place would put two different shapes under one version number, which
+// negotiation cannot detect and these strict-parsing schemas cannot tolerate:
+// an rc peer that negotiated 7.0 and receives 7.1 keys can reject the whole
+// response. Freezing here lets the v7.1 -> v7.0 contract parse strip the new
+// keys honestly instead. Do not "simplify" this back to a widen-in-place.
+//
+// Like `providersListRequestSchemaV70`, this pin freezes v7.0's own KEY SET
+// and deliberately keeps live references for the leaf schemas
+// (`providerCliCandidateSchema`, `providerProfileSchema`, the managed-version
+// group, `providerNativeCapabilitiesSchema`, `nativeListResultSchema`).
+// Growth inside any of those is caught by the deep `z.toJSONSchema` snapshot in
+// `__tests__/__fixtures__/frozen-catalog-lines.ts`, which pins this shape - and
+// when it goes red, hand-freeze the sub-schema that grew rather than
+// regenerating the fixture.
+const providerCliStateBaseShapeV70 = {
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  terminalAgentArgs: z.string().catch(""),
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  availabilityPending: z.boolean().catch(false),
+  profiles: z.array(providerProfileSchema).catch([]),
+  // `.optional()` on top of `.catch(null)` is copied deliberately, not tidied
+  // away - see the live shape's comments for what each half does.
+  managedInstallState: providerManagedInstallStateSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  versionVisibility: providerVersionVisibilitySchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  cliBinaryResolved: z.boolean().catch(true).optional(),
+  packId: z.string().nullable().catch(null).optional(),
+  managedVersions: providerManagedVersionsSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
+};
+
+export const providerCliStateSchemaV70 = z.object({
+  providerId: providerIdSchemaV70,
+  ...providerCliStateBaseShapeV70,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV70 = z.infer<typeof providerCliStateSchemaV70>;
+
+export const providersListResponseSchemaV70 = z.object({
+  providers: z.array(providerCliStateSchemaV70),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV70 = z.infer<
+  typeof providersListResponseSchemaV70
+>;
+
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
 // `providers.list` adds ACP GUI harness providers; the v2→v1 bridge filters
 // them for v1.0 callers.
@@ -2023,6 +2157,33 @@ export const providersSetEnabledRequestSchemaV21 =
   });
 export type ProvidersSetEnabledRequestV21 = z.infer<
   typeof providersSetEnabledRequestSchemaV21
+>;
+
+/**
+ * `providers.setEnabled@2.2` request - adds the optional tri-state `mode` the
+ * three-way Auto/On/Off settings control sends. `enabled` stays REQUIRED for
+ * the reason 2.1's comment gives (demoting it would emit payloads a released
+ * peer cannot parse); a 2.2 caller sends both, and the host takes `mode` as
+ * authoritative when present, mapping `enabled` to on/off otherwise. So a 2.1
+ * caller keeps exact binary semantics and needs no bridge fill - the 2.1 -> 2.2
+ * upgrade is identity, with `mode` simply absent.
+ *
+ * WHY A NEW MINOR RATHER THAN `providers.nativeMutate`: the doctrine above
+ * froze 2.1 and routes additions onto that method, but that doctrine is about
+ * provider-NATIVE config pass-through (mcp/plugins/skills mutations that have
+ * nothing to do with enablement and were only ever folded here for lack of a
+ * carrier). `mode` is Traycer's own enablement semantic on the very method
+ * that already owns enablement, and it is an additive optional REQUEST field,
+ * which is exactly what a minor is for. Routing it through `nativeMutate`
+ * would put enablement behind a native-config verb and leave `setEnabled`
+ * unable to express the state it names.
+ */
+export const providersSetEnabledRequestSchemaV22 =
+  providersSetEnabledRequestSchemaV21.extend({
+    mode: providerEnablementModeSchema.optional(),
+  });
+export type ProvidersSetEnabledRequestV22 = z.infer<
+  typeof providersSetEnabledRequestSchemaV22
 >;
 
 export const providersSetApiKeyRequestSchema = z.object({
