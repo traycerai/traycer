@@ -42,6 +42,23 @@ function dayRange(from: string, to: string): string[] {
 }
 
 describe("buildUsageActivityCalendar", () => {
+  it("carries both cost and tokens on every cell, whichever metric sets the level", () => {
+    // The tile's hover states both numbers; `value` only drives intensity.
+    const days = dayRange("2026-08-02", "2026-08-08");
+    const buckets = [
+      bucket("2026-08-03", 5, {}),
+      bucket("2026-08-03", 2, { model: "claude-opus-5" }),
+    ];
+    for (const metric of ["cost", "tokens"] as const) {
+      const calendar = buildUsageActivityCalendar(days, buckets, metric);
+      const cell = calendar.weeks[0]?.cells.find(
+        (entry) => entry?.day === "2026-08-03",
+      );
+      expect(cell).toMatchObject({ costUsd: 7, tokens: 20 });
+      expect(cell?.value).toBe(metric === "cost" ? 7 : 20);
+    }
+  });
+
   it("gives every day a tile - zero-usage days get level 0, not a hole", () => {
     // 2026-08-02 is a Sunday.
     const days = dayRange("2026-08-02", "2026-08-08");
