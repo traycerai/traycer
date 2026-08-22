@@ -276,6 +276,13 @@ export type VersionEntry<
    * cannot check; other structural reductions remain forbidden.
    */
   readonly responseGrowthProjectionGated?: true;
+  /**
+   * Declares that the first contract in a new major changes semantics even
+   * when its isolated request/response schemas remain structurally
+   * compatible. Use only when the method belongs to a coherently negotiated
+   * family whose authority or topology changed across the major boundary.
+   */
+  readonly semanticMajorBreakFromPreviousMajor?: true;
 };
 
 export type AnyVersionEntry = VersionEntry<

@@ -1,5 +1,8 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
-import { PLAIN_TERMINAL_FAMILY_VERSION } from "@traycer/protocol/host/terminal/plain-contracts";
+import {
+  PLAIN_TERMINAL_FAMILY_VERSION,
+  PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
+} from "@traycer/protocol/host/terminal/plain-contracts";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   ImportLegacyPlainTerminalRequest,
@@ -37,29 +40,35 @@ export type PlainTerminalCapability =
     };
 
 /**
- * Resolves the optional family as a unit. Clients require the complete v2
- * family; a partial v1/v2 mix is legacy behavior, never a license to compose
- * incompatible method semantics.
+ * Resolves the optional family as a unit. The frozen v1 family is local-only
+ * durable authority; v2.1 is fleet authority. A partial mix is legacy.
  */
 export function resolvePlainTerminalCapability(input: {
   readonly manifestKnown: boolean;
   readonly versionFor: (method: PlainTerminalRpcMethod) => SchemaVersion | null;
 }): PlainTerminalCapability {
   if (!input.manifestKnown) return { status: "unknown" };
-  for (const method of PLAIN_TERMINAL_RPC_METHODS) {
-    const version = input.versionFor(method);
-    if (
-      version === null ||
-      version.major !== PLAIN_TERMINAL_FAMILY_VERSION.major ||
-      version.minor !== PLAIN_TERMINAL_FAMILY_VERSION.minor
-    ) {
-      return { status: "legacy" };
+  for (const candidate of [
+    PLAIN_TERMINAL_FAMILY_VERSION,
+    PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
+  ]) {
+    let matches = true;
+    for (const method of PLAIN_TERMINAL_RPC_METHODS) {
+      const version = input.versionFor(method);
+      if (
+        version === null ||
+        version.major !== candidate.major ||
+        version.minor !== candidate.minor
+      ) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return { status: "capable", schemaVersion: candidate };
     }
   }
-  return {
-    status: "capable",
-    schemaVersion: PLAIN_TERMINAL_FAMILY_VERSION,
-  };
+  return { status: "legacy" };
 }
 
 export function plainTerminalCollectionIdentityKey(

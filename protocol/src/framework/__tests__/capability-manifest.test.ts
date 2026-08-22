@@ -8,6 +8,7 @@ import {
   defineRpcContract,
   defineVersionedRpcRegistry,
   mergeConnectionManifests,
+  selectConnectionManifestForPeer,
   splitConnectionManifest,
   validateVersionedRpcRegistryDegrades,
 } from "@traycer/protocol/framework/index";
@@ -58,6 +59,13 @@ const REGISTRY_WITH_UNSUPPORTED_OPTIONAL = defineFloorAwareVersionedRpcRegistry(
     },
   },
 );
+
+const MULTI_MAJOR_MANIFEST_REGISTRY = {
+  echo: {
+    1: { latestMinor: 1 },
+    2: { latestMinor: 0 },
+  },
+} as const;
 
 describe("capability manifest helpers", () => {
   it("keeps the host legacy manifest exactly the released floor set", () => {
@@ -130,6 +138,35 @@ describe("capability manifest helpers", () => {
       "floor.method": { major: 1, minor: 0 },
       "optional.method": { major: 1, minor: 0 },
     });
+  });
+
+  it("selects the latest installed minor on the peer's offered major", () => {
+    const hostManifest = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY);
+
+    expect(
+      selectConnectionManifestForPeer(
+        MULTI_MAJOR_MANIFEST_REGISTRY,
+        hostManifest,
+        {
+        echo: { major: 1, minor: 0 },
+        },
+      ),
+    ).toEqual({ echo: { major: 1, minor: 1 } });
+  });
+
+  it("retains the host canonical when the peer's major is not installed", () => {
+    const hostManifest = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY);
+
+    expect(
+      selectConnectionManifestForPeer(
+        MULTI_MAJOR_MANIFEST_REGISTRY,
+        hostManifest,
+        {
+          echo: { major: 3, minor: 0 },
+          "peer.only": { major: 1, minor: 0 },
+        },
+      ),
+    ).toEqual({ echo: { major: 2, minor: 0 } });
   });
 });
 

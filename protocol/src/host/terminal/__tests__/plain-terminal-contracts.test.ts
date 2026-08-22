@@ -6,12 +6,19 @@ import {
 import {
   PLAIN_TERMINAL_FAMILY_METHODS,
   PLAIN_TERMINAL_FAMILY_VERSION,
+  PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
   resolvePlainTerminalFamilyCapability,
+  terminalPlainCloseV10,
   terminalPlainCloseV21,
+  terminalPlainCreateV10,
   terminalPlainCreateV21,
+  terminalPlainEnsureRunningV10,
   terminalPlainEnsureRunningV21,
+  terminalPlainImportLegacyV10,
   terminalPlainImportLegacyV21,
+  terminalPlainListV10,
   terminalPlainListV21,
+  terminalPlainRenameV10,
   terminalPlainRenameV21,
   type PlainTerminalFamilyMethod,
 } from "@traycer/protocol/host/terminal/plain-contracts";
@@ -36,6 +43,8 @@ import {
   type PlainTerminalProjection,
 } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
+  terminalPlainSubscribeListServerFrameSchemaV10,
+  terminalPlainSubscribeListV10,
   terminalPlainSubscribeListClientFrameSchema,
   terminalPlainSubscribeListOpenRequestSchema,
   terminalPlainSubscribeListServerFrameSchema,
@@ -151,6 +160,12 @@ const V2_FAMILY = Object.fromEntries(
   PLAIN_TERMINAL_FAMILY_METHODS.map((method) => [
     method,
     { major: 2, minor: 1 },
+  ]),
+) as Record<PlainTerminalFamilyMethod, FrameworkSchemaVersion>;
+const V1_FAMILY = Object.fromEntries(
+  PLAIN_TERMINAL_FAMILY_METHODS.map((method) => [
+    method,
+    { major: 1, minor: 0 },
   ]),
 ) as Record<PlainTerminalFamilyMethod, FrameworkSchemaVersion>;
 
@@ -790,7 +805,7 @@ describe("lifetime-delete revision", () => {
 });
 
 describe("plain-terminal family capability", () => {
-  it("requires the complete v2 family and reports anything else unsupported", () => {
+  it("recognizes only complete v1-local or v2-fleet families", () => {
     expect(familyCapability({}, false)).toEqual({ status: "unknown" });
     expect(familyCapability({}, true)).toEqual({ status: "unsupported" });
     expect(
@@ -805,51 +820,64 @@ describe("plain-terminal family capability", () => {
         true,
       ),
     ).toEqual({ status: "unsupported" });
-    expect(
-      familyCapability(
-        Object.fromEntries(
-          PLAIN_TERMINAL_FAMILY_METHODS.map((method) => [
-            method,
-            { major: 1, minor: 0 },
-          ]),
-        ),
-        true,
-      ),
-    ).toEqual({ status: "unsupported" });
+    expect(familyCapability(V1_FAMILY, true)).toEqual({
+      status: "capable",
+      schemaVersion: PLAIN_TERMINAL_LOCAL_FAMILY_VERSION,
+      topology: "local",
+    });
     expect(familyCapability(V2_FAMILY, true)).toEqual({
       status: "capable",
       schemaVersion: PLAIN_TERMINAL_FAMILY_VERSION,
+      topology: "fleet",
     });
   });
 });
 
 describe("protocol registration and released compatibility", () => {
-  it("registers every unary contract as optional v2 with no v1 line", () => {
+  it("registers the frozen v1 and fleet v2 unary lines", () => {
     const expected = {
-      "terminal.plain.create": terminalPlainCreateV21,
-      "terminal.plain.list": terminalPlainListV21,
-      "terminal.plain.rename": terminalPlainRenameV21,
-      "terminal.plain.ensureRunning": terminalPlainEnsureRunningV21,
-      "terminal.plain.close": terminalPlainCloseV21,
-      "terminal.plain.importLegacy": terminalPlainImportLegacyV21,
+      "terminal.plain.create": [terminalPlainCreateV10, terminalPlainCreateV21],
+      "terminal.plain.list": [terminalPlainListV10, terminalPlainListV21],
+      "terminal.plain.rename": [terminalPlainRenameV10, terminalPlainRenameV21],
+      "terminal.plain.ensureRunning": [
+        terminalPlainEnsureRunningV10,
+        terminalPlainEnsureRunningV21,
+      ],
+      "terminal.plain.close": [terminalPlainCloseV10, terminalPlainCloseV21],
+      "terminal.plain.importLegacy": [
+        terminalPlainImportLegacyV10,
+        terminalPlainImportLegacyV21,
+      ],
     } as const;
 
-    for (const [method, contract] of Object.entries(expected)) {
+    for (const [method, contracts] of Object.entries(expected)) {
       const entry = hostRpcRegistry[method as keyof typeof expected];
       expect(entry.degrade).toEqual({ kind: "unsupported" });
+      expect(entry[1].latestMinor).toBe(0);
+      expect(entry[1].versions[0].contract).toBe(contracts[0]);
       expect(entry[2].latestMinor).toBe(1);
-      expect(entry[2].versions[1].contract).toBe(contract);
+      expect(entry[2].versions[1].contract).toBe(contracts[1]);
       expect(0 in entry[2].versions).toBe(false);
-      expect("1" in entry).toBe(false);
     }
   });
 
-  it("registers the replacement-state list stream at v2", () => {
+  it("registers the v1 incremental and v2 replacement-state streams", () => {
     const entry = hostStreamRpcRegistry["terminal.plain.subscribeList"];
+    expect(entry[1].latestMinor).toBe(0);
+    expect(entry[1].versions[0].contract).toBe(terminalPlainSubscribeListV10);
     expect(entry[2].latestMinor).toBe(1);
     expect(entry[2].versions[1].contract).toBe(terminalPlainSubscribeListV21);
     expect(0 in entry[2].versions).toBe(false);
-    expect("1" in entry).toBe(false);
+  });
+
+  it("keeps unknown runtime outside the frozen v1 stream", () => {
+    expect(
+      terminalPlainSubscribeListServerFrameSchemaV10.safeParse({
+        kind: "upsert",
+        hasBinaryPayload: false,
+        terminal: unknown,
+      }).success,
+    ).toBe(false);
   });
 
   it("leaves all released generic terminal version lines frozen", () => {

@@ -541,7 +541,13 @@ function assertSchemaCompatibility(
         toUnknownKeyTree(currentLatestContract.responseSchema),
       );
 
-      if (requestBreak === null && responseBreak === null) {
+      const currentLatestEntry =
+        currentLine.versions[currentLine.latestMinor];
+      if (
+        requestBreak === null &&
+        responseBreak === null &&
+        currentLatestEntry.semanticMajorBreakFromPreviousMajor !== true
+      ) {
         throw new Error(
           `Major bump ${previousMajor} -> ${currentMajor} for method '${method}' is not a breaking change (could have shipped as a minor)`,
         );

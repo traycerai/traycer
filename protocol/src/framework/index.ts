@@ -176,6 +176,7 @@ export type {
 export {
   buildConnectionManifest,
   mergeConnectionManifests,
+  selectConnectionManifestForPeer,
   splitConnectionManifest,
 } from "./capability-manifest";
 

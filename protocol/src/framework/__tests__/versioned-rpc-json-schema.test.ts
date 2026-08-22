@@ -537,6 +537,52 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
     );
   });
 
+  it("allows a schema-compatible major when the registry declares a semantic break", () => {
+    const localV10 = defineRpcContract({
+      method: "semanticAuthority",
+      schemaVersion: { major: 1, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const fleetV20 = defineRpcContract({
+      method: "semanticAuthority",
+      schemaVersion: { major: 2, minor: 0 } as const,
+      requestSchema: z.object({ terminalId: z.string() }),
+      responseSchema: z.object({ ok: z.boolean() }),
+    });
+    const upgrade = defineUpgradePath<typeof localV10, typeof fleetV20>({
+      from: localV10.schemaVersion,
+      to: fleetV20.schemaVersion,
+      upgradeRequest: (request) => request,
+      upgradeResponse: (response) => response,
+    });
+
+    const registry = {
+      semanticAuthority: {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: { contract: localV10, upgradeFromPreviousVersion: null },
+          },
+          downgradePathsFromLatest: {},
+        },
+        2: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: fleetV20,
+              upgradeFromPreviousVersion: upgrade,
+              semanticMajorBreakFromPreviousMajor: true,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    } as const;
+
+    expect(() => validateVersionedRpcRegistry(registry)).not.toThrow();
+  });
+
   it("does not let the discriminator STAMP alone justify a major bump", () => {
     // `x-traycer-discriminator` is metadata this framework writes onto the
     // emitted schema so arm identity can be resolved; it constrains no value.
