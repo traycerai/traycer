@@ -93,7 +93,22 @@ const PENDING_ADOPTION_TTL_MS = 60_000;
  * reason: the renderer holds several transports against one host, so any bound
  * kept per transport is not a bound at all.
  */
-const awaitingAdoptionByHostId = new Map<string, number>();
+/**
+ * Per host: when the claim was taken, and the mint-flow generation it was taken
+ * under.
+ *
+ * The GENERATION half exists because `active` arrives on a callback that
+ * nothing else orders. A delayed `active` from a transport belonging to the
+ * previous account - or reporting a credential from before a burn - can land
+ * after a NEW account's mint has settled, and a release keyed on `hostId`
+ * alone would free that new claim before its credential was ever adopted,
+ * reopening the double-mint this map exists to close. Correlating on the
+ * generation makes a stale report about an older epoch simply not match.
+ */
+const awaitingAdoptionByHostId = new Map<
+  string,
+  { readonly mintedAt: number; readonly generation: number }
+>();
 
 /**
  * Reports what a host says about its credential, so the app-wide flow can tell
@@ -108,21 +123,36 @@ export function noteHostCredentialState(
   hostId: string,
   state: "missing" | "active" | "needs-reauth",
 ): void {
-  if (state === "active") {
-    awaitingAdoptionByHostId.delete(hostId);
+  if (state !== "active") {
+    return;
   }
+  const claim = awaitingAdoptionByHostId.get(hostId);
+  if (claim === undefined) {
+    return;
+  }
+  if (claim.generation !== generation) {
+    // An `active` from before the last reset. It is evidence about a
+    // credential minted for an identity that is gone, so it says nothing about
+    // whether THIS claim's credential has landed.
+    return;
+  }
+  awaitingAdoptionByHostId.delete(hostId);
 }
 
 /**
  * Whether a mint for `hostId` is still awaiting adoption, expiring the claim
- * if it has outlived {@link PENDING_ADOPTION_TTL_MS}.
+ * if it has outlived {@link PENDING_ADOPTION_TTL_MS} or belongs to a
+ * superseded generation.
  */
 function mintAwaitingAdoption(hostId: string): boolean {
-  const mintedAt = awaitingAdoptionByHostId.get(hostId);
-  if (mintedAt === undefined) {
+  const claim = awaitingAdoptionByHostId.get(hostId);
+  if (claim === undefined) {
     return false;
   }
-  if (Date.now() - mintedAt >= PENDING_ADOPTION_TTL_MS) {
+  if (
+    claim.generation !== generation ||
+    Date.now() - claim.mintedAt >= PENDING_ADOPTION_TTL_MS
+  ) {
     awaitingAdoptionByHostId.delete(hostId);
     return false;
   }
@@ -152,7 +182,11 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
     // host formed it before the credential now in flight reached it - and
     // minting a second one would supersede the first, with each able to revoke
     // the other. Wait for the delivery already under way.
-    return Promise.resolve({ kind: "unavailable" });
+    //
+    // NOT `unavailable`: the caller must not count this as its one attempt.
+    // See the outcome's own doc - answering `unavailable` here can strand a
+    // host whose only surviving transport asked during the claim window.
+    return Promise.resolve({ kind: "pending-elsewhere" });
   }
   const existing = attemptsByHostId.get(hostId);
   if (existing !== undefined) {
@@ -188,7 +222,10 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         // has to ride a live socket to the host and be adopted. Hold the claim
         // across that gap - it is exactly the window a second transport would
         // otherwise mint into.
-        awaitingAdoptionByHostId.set(hostId, Date.now());
+        awaitingAdoptionByHostId.set(hostId, {
+          mintedAt: Date.now(),
+          generation: startedAt,
+        });
       }
       return outcome;
     });

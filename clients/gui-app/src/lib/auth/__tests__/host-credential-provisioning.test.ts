@@ -227,7 +227,10 @@ describe("appHostCredentialMintFlow adoption claim", () => {
       reason: "needs-reauth",
     });
 
-    expect(second).toEqual({ kind: "unavailable" });
+    // `pending-elsewhere`, NOT `unavailable`: the second transport has not
+    // spent its one attempt on this, because nothing was attempted and nothing
+    // failed - a delivery is simply already in flight.
+    expect(second).toEqual({ kind: "pending-elsewhere" });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -271,6 +274,62 @@ describe("appHostCredentialMintFlow adoption claim", () => {
       reason: "needs-reauth",
     });
     expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires the claim after the TTL so a stalled delivery cannot strand the host", async () => {
+    // The liveness half. T1 mints and dies before delivery; if the claim never
+    // expired, and the only surviving transport had already asked, the host
+    // would sit on the client lease until the app restarted.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    const realNow = Date.now;
+    try {
+      await appHostCredentialMintFlow({
+        hostId: "host-stalled",
+        reason: "needs-reauth",
+      });
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      Date.now = () => realNow() + 61_000;
+      await appHostCredentialMintFlow({
+        hostId: "host-stalled",
+        reason: "needs-reauth",
+      });
+      expect(runner).toHaveBeenCalledTimes(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  it("does not honour a claim left over from a superseded generation", async () => {
+    // The half of the stale-`active` problem that IS closable here: a claim is
+    // only ever honoured for the generation it was taken under, so nothing
+    // from a previous account can block the current one's mint.
+    //
+    // The other half is NOT fixed and cannot be from this module -
+    // `onHostCredentialState(hostId, state)` carries no provenance, so a
+    // delayed `active` produced before a burn/account-switch is
+    // indistinguishable from a fresh one and will still release a current
+    // claim. Closing that needs the report to carry which credential it is
+    // about, across the shared-transport boundary. Recorded here rather than
+    // asserted away.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-generations",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    resetHostCredentialProvisioning();
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-generations",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(2);
   });
 
   it("does not hold a claim for a mint that produced no credential", async () => {

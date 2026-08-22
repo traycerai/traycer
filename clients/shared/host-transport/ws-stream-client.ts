@@ -613,6 +613,15 @@ export class WsStreamClient<
       );
       return;
     }
+    if (outcome.kind === "pending-elsewhere") {
+      // Another transport's credential for this host is already in flight, so
+      // this client has not actually spent an attempt. Give the marker back:
+      // if that delivery lands, the host reports `active` and nobody asks
+      // again; if it never lands, the app-wide claim expires and THIS client's
+      // next ack can mint - which matters when it is the only one left.
+      this.provisionAttemptedHostIds.delete(hostId);
+      return;
+    }
     if (outcome.kind !== "provisioned") {
       return;
     }

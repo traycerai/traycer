@@ -3610,6 +3610,44 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("does not consume the client's one attempt on a pending-elsewhere answer", async () => {
+    // The liveness half of the app-wide claim. Another transport's credential
+    // is already in flight, so this client has not actually attempted
+    // anything - and if that delivery never lands and this client is the only
+    // one left, it must still be able to ask. Answering `unavailable` here
+    // spent the client's single attempt and could strand the host on the
+    // client lease until the app restarted.
+    const mint = vi
+      .fn(async () => ({ kind: "pending-elsewhere" as const }))
+      .mockName("mint");
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // Same state on the next ack - no transition, so the re-arm edge does NOT
+    // fire. Only giving the marker back can let this ask again.
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(2);
+    session.close();
+  });
+
   it("re-arms the mint when a host that went active comes back needs-reauth", async () => {
     // The once-per-host bound was written for a host that reports `missing`
     // and keeps reporting it: repeating the attempt could only repeat the same

@@ -48,7 +48,23 @@ export type HostCredentialMintOutcome =
        */
       readonly expiresIn: number;
     }
-  | { readonly kind: "unavailable" };
+  | { readonly kind: "unavailable" }
+  /**
+   * Nothing to hand over BECAUSE another transport's credential for this host
+   * is already on its way - so this caller should not treat its attempt as
+   * spent.
+   *
+   * Split out of `unavailable` for one reason: `unavailable` is terminal for
+   * the asking client (it has had its one attempt), and that is right for
+   * every case it covers - a rejected hostId, an expired sign-in, a mint that
+   * failed. It is wrong here, because nothing was attempted and nothing
+   * failed; the app is simply waiting for a delivery already in flight. A
+   * transport that burned its single attempt on this answer, and then turned
+   * out to be the only surviving one, would leave the host on the client lease
+   * with nobody left to ask - the app-wide claim protecting the credential
+   * would have stranded the host instead.
+   */
+  | { readonly kind: "pending-elsewhere" };
 
 /**
  * App-supplied hook that mints a host credential and hands it back for delivery.
