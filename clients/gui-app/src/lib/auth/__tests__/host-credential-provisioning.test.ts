@@ -237,7 +237,7 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     // `pending-elsewhere`, NOT `unavailable`: the second transport has not
     // spent its one attempt on this, because nothing was attempted and nothing
     // failed - a delivery is simply already in flight.
-    expect(second).toEqual({ kind: "pending-elsewhere" });
+    expect(second).toMatchObject({ kind: "pending-elsewhere" });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -302,7 +302,7 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     for (const reason of ["missing", "needs-reauth"] as const) {
       expect(
         await appHostCredentialMintFlow({ hostId: "host-held", reason }),
-      ).toEqual({ kind: "pending-elsewhere" });
+      ).toMatchObject({ kind: "pending-elsewhere" });
     }
     expect(runner).toHaveBeenCalledTimes(1);
   });
@@ -328,7 +328,7 @@ describe("appHostCredentialMintFlow adoption claim", () => {
         hostId: "host-stale-active",
         reason: "needs-reauth",
       }),
-    ).toEqual({ kind: "pending-elsewhere" });
+    ).toMatchObject({ kind: "pending-elsewhere" });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
@@ -482,7 +482,7 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(60_001 + 120_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
       expect(runner).toHaveBeenCalledTimes(2);
 
       vi.setSystemTime(60_001 + 120_000);
@@ -498,7 +498,7 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(thirdMintAt + 150_000);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
       expect(runner).toHaveBeenCalledTimes(3);
 
       vi.setSystemTime(thirdMintAt + 240_000);
@@ -582,7 +582,7 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(sixthMintAt + 1_800_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Exactly at the decay window: one rung decays (6 -> 5), but the
@@ -591,14 +591,14 @@ describe("appHostCredentialMintFlow mint escalation ladder", () => {
       vi.setSystemTime(sixthMintAt + 1_800_000);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Still short of the decayed rung's own 960_000ms wait.
       vi.setSystemTime(sixthMintAt + 1_800_000 + 960_000 - 1);
       await expect(
         appHostCredentialMintFlow({ hostId, reason: "missing" }),
-      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      ).resolves.toMatchObject({ kind: "pending-elsewhere" });
       expect(runner).toHaveBeenCalledTimes(calls);
 
       // Now the decayed rung's own wait has elapsed too: admitted. This is

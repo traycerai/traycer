@@ -153,6 +153,26 @@ function mintInBackoff(hostId: string): boolean {
   );
 }
 
+/**
+ * What is LEFT of this host's escalation rung, for the caller's retry timer.
+ *
+ * Read straight after {@link mintInBackoff} returns true, so the decay
+ * bookkeeping it performs has already been applied and this sees the effective
+ * entry. Floored at zero rather than trusted to be positive: the two reads
+ * sample the clock separately, and a window that expires between them should
+ * produce "ask now", not a negative delay.
+ */
+function remainingBackoffMs(hostId: string): number {
+  const entry = mintBackoffByHostId.get(hostId);
+  if (entry === undefined) {
+    return 0;
+  }
+  return Math.max(
+    0,
+    entry.lastMintedAt + mintBackoffWaitMs(entry.completedMints) - Date.now(),
+  );
+}
+
 function recordCompletedMint(hostId: string): void {
   const entry = mintBackoffByHostId.get(hostId);
   const completedMints =
@@ -253,6 +273,21 @@ function mintAwaitingAdoption(hostId: string): boolean {
 }
 
 /**
+ * What is LEFT of this host's adoption claim, for the caller's retry timer.
+ *
+ * Zero when no claim is held - a claim that expired between
+ * {@link mintAwaitingAdoption} and this read should send the caller back
+ * immediately rather than idle it for a full TTL it no longer owes.
+ */
+function remainingAdoptionClaimMs(hostId: string): number {
+  const claim = awaitingAdoptionByHostId.get(hostId);
+  if (claim === undefined) {
+    return 0;
+  }
+  return Math.max(0, claim.mintedAt + PENDING_ADOPTION_TTL_MS - Date.now());
+}
+
+/**
  * A running attempt, plus the per-caller gate that decides which single caller
  * is handed the credential itself.
  */
@@ -279,7 +314,10 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
     // NOT `unavailable`: the caller must not count this as its one attempt.
     // See the outcome's own doc - answering `unavailable` here can strand a
     // host whose only surviving transport asked during the claim window.
-    return Promise.resolve({ kind: "pending-elsewhere" });
+    return Promise.resolve({
+      kind: "pending-elsewhere",
+      retryAfterMs: remainingAdoptionClaimMs(hostId),
+    });
   }
   const existing = attemptsByHostId.get(hostId);
   if (existing !== undefined) {
@@ -292,9 +330,12 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   if (mintInBackoff(hostId)) {
     // The escalation ladder says this host has been minting too often to be
     // healthy. `pending-elsewhere`, not `unavailable`, for the same reason as
-    // the adoption claim above: the caller keeps its attempt, and the next
-    // credential-state edge after the window re-asks.
-    return Promise.resolve({ kind: "pending-elsewhere" });
+    // the adoption claim above: the caller keeps its attempt, and it re-asks
+    // when the window it is told to wait for has passed.
+    return Promise.resolve({
+      kind: "pending-elsewhere",
+      retryAfterMs: remainingBackoffMs(hostId),
+    });
   }
   const current = runner;
   if (current === null) {

@@ -134,10 +134,13 @@ describe("runDoctor host credential needs-reauth", () => {
       "a freshly refreshed credential was itself rejected",
     );
     expect(issue?.message).toContain("2026-08-21T15:12:00.000Z");
-    // The repair is not a CLI subcommand - a connected owner client mints the
-    // replacement silently - so Desktop must not render a fix button.
+    // NEITHER, and the terminal command especially: Desktop renders "Open in
+    // Terminal" for any non-null `terminalCommand`, and `traycer login` signs
+    // the HUMAN in - it cannot provision the HOST's credential, so the button
+    // could only ever look like it had failed. The repair is opening the app,
+    // which the message already says.
     expect(issue?.fixAction).toBeNull();
-    expect(issue?.terminalCommand).toBe("traycer login");
+    expect(issue?.terminalCommand).toBeNull();
     expect(issue?.details).toMatchObject({
       reason: "a freshly refreshed credential was itself rejected",
       recordedAt: "2026-08-21T15:12:00.000Z",

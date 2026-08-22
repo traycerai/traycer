@@ -270,6 +270,12 @@ export class WsStreamClient<
     HostCredentialState
   >();
   /**
+   * Per host: the timer that re-asks after a `pending-elsewhere` wait. Cleared
+   * on close so a retry can never outlive the transport that would carry the
+   * credential it asks for.
+   */
+  private readonly provisionRetryTimers = new Map<string, TimerHandle>();
+  /**
    * Minted credentials waiting for a live connection to carry them, keyed by
    * host. The socket that triggered the mint can be gone by the time it
    * resolves - dropping the credential there would waste a mint that has
@@ -394,6 +400,7 @@ export class WsStreamClient<
     // Never outlive the transport with a live credential in memory: there is no
     // socket left to deliver it on, and the next client mints its own.
     this.discardAllPendingProvisions();
+    this.clearAllProvisionRetries();
     console.info(
       `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`,
     );
@@ -615,12 +622,14 @@ export class WsStreamClient<
       return;
     }
     if (outcome.kind === "pending-elsewhere") {
-      // Another transport's credential for this host is already in flight, so
-      // this client has not actually spent an attempt. Give the marker back:
-      // if that delivery lands, the host reports `active` and nobody asks
-      // again; if it never lands, the app-wide claim expires and THIS client's
-      // next ack can mint - which matters when it is the only one left.
+      // This client has not actually spent an attempt - the app is waiting on
+      // a claim or a backoff window, not refusing. Give the marker back, and
+      // arm the retry ourselves: the host's state does NOT change while that
+      // window runs (it keeps reporting `needs-reauth`), so there is no edge
+      // left to wake anybody, and "the next ack will ask again" is only true
+      // if something else happens to reconnect.
       this.provisionAttemptedHostIds.delete(hostId);
+      this.armProvisionRetry(hostId, outcome.retryAfterMs);
       return;
     }
     if (outcome.kind !== "provisioned") {
@@ -671,6 +680,75 @@ export class WsStreamClient<
   }
 
   /** Drops one held credential and disarms its timer. Safe to call twice. */
+  /**
+   * Re-asks for a credential once the wait a `pending-elsewhere` answer named
+   * has passed.
+   *
+   * Jittered so several transports told to wait on the SAME claim do not all
+   * come back on the same millisecond and re-race the thing the claim exists
+   * to serialize.
+   *
+   * Every precondition is re-checked at fire time rather than captured: this
+   * runs up to an hour later (the ladder's top rung), by which point the
+   * client may be closed, the credential may have been delivered by somebody
+   * else, or this client may already be mid-attempt.
+   */
+  private armProvisionRetry(hostId: string, retryAfterMs: number): void {
+    if (this.closed) {
+      return;
+    }
+    this.clearProvisionRetry(hostId);
+    // FLOORED, and that floor is load-bearing rather than tidy. A wait can
+    // legitimately arrive at or near zero - a claim that expired between the
+    // flow's gate and its own clock read - and without a floor the retry fires
+    // immediately, is answered `pending-elsewhere` again, and spins. Nothing
+    // downstream bounds that: the flow's gates are cheap and would happily
+    // answer thousands of times a second.
+    const delayMs =
+      Math.max(retryAfterMs, PROVISION_RETRY_MIN_DELAY_MS) +
+      Math.floor(Math.random() * PROVISION_RETRY_JITTER_MS);
+    const timer = setTimeout(() => {
+      this.provisionRetryTimers.delete(hostId);
+      if (this.closed) {
+        return;
+      }
+      const mint = this.options.hostCredentialMint;
+      if (mint === null) {
+        return;
+      }
+      const lastState = this.lastHostCredentialState.get(hostId) ?? null;
+      if (lastState !== "missing" && lastState !== "needs-reauth") {
+        // The host stopped asking - it adopted somebody's credential, or we
+        // recorded our own successful handoff. Nothing to re-ask for.
+        return;
+      }
+      if (this.provisionAttemptedHostIds.has(hostId)) {
+        // An `openAck` beat the timer to it and an attempt is already running
+        // or spent. Re-asking here would double-mint the very host the claim
+        // is protecting.
+        return;
+      }
+      this.provisionAttemptedHostIds.add(hostId);
+      void this.runMintFlow(mint, hostId, lastState);
+    }, delayMs);
+    this.provisionRetryTimers.set(hostId, timer);
+  }
+
+  private clearProvisionRetry(hostId: string): void {
+    const timer = this.provisionRetryTimers.get(hostId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.provisionRetryTimers.delete(hostId);
+    }
+  }
+
+  private clearAllProvisionRetries(): void {
+    for (const timer of this.provisionRetryTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.provisionRetryTimers.clear();
+  }
+
   private discardPendingProvision(hostId: string): void {
     const pending = this.pendingProvisions.get(hostId);
     if (pending === undefined) {
@@ -699,6 +777,18 @@ export class WsStreamClient<
     for (const session of Array.from(this.ownedSessions)) {
       if (session.pushHostCredentialProvision(hostId, pending)) {
         this.discardPendingProvision(hostId);
+        // ASSUMED-ADOPTED, and recorded so the re-arm edge can see it. Nothing
+        // acks an adoption: the host confirms only on its NEXT `openAck`, and
+        // the socket that just carried the credential last reported
+        // `needs-reauth`. Leaving that as the remembered state made a later
+        // burn look like no transition at all - same state, marker still set -
+        // so the replacement mint was suppressed for the life of the client.
+        //
+        // Optimistic on purpose. If the host in fact did not adopt, its next
+        // ack says `missing`/`needs-reauth` and corrects this, which is a
+        // transition and therefore re-arms; the app-wide claim and the
+        // escalation ladder still bound how often that can turn into a mint.
+        this.lastHostCredentialState.set(hostId, "active");
         return true;
       }
     }
@@ -858,6 +948,18 @@ interface PendingHostCredentialProvision {
  * Mirrored client-side purely to avoid entering the INTERACTIVE mint for a host
  * that can never hold a credential.
  */
+/**
+ * Floor under any `pending-elsewhere` retry. See {@link WsStreamClient.armProvisionRetry}
+ * - a near-zero wait must not become a spin.
+ */
+const PROVISION_RETRY_MIN_DELAY_MS = 1_000;
+/**
+ * Spread over the retry, so several transports told to wait on the SAME claim
+ * do not all come back on one millisecond and re-race what the claim exists to
+ * serialize.
+ */
+const PROVISION_RETRY_JITTER_MS = 250;
+
 const HOST_ID_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

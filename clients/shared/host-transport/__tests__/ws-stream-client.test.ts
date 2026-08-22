@@ -3697,6 +3697,113 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
+  it("re-arms after a SUCCESSFUL handoff, so a later burn can mint again", async () => {
+    // T1. There is no ack that says "adopted": the host confirms only on its
+    // NEXT `openAck`, and the socket that carried the credential has already
+    // seen `needs-reauth`. So after a successful delivery `lastHostCredentialState`
+    // still read `needs-reauth`, and when the replacement was later burned the
+    // next ack was `needs-reauth` again - no transition, marker still set, and
+    // the replacement mint suppressed until the client was recreated.
+    //
+    // Recording the handoff as `active` (assumed-adopted; the host confirms or
+    // corrects on its next ack) is what makes that later burn a transition.
+    const mint = vi.fn(async () =>
+      provisioned({
+        token: "tok-handoff",
+        refreshToken: "refresh-handoff",
+        familyId: "family-handoff",
+        provisionedAt: "2026-07-08T16:00:00.000Z",
+      }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    // Delivered on this very socket.
+    expect(allProvisionFrames(sockets)).toHaveLength(1);
+
+    // The replacement is later burned; the host asks again on the SAME socket's
+    // next ack. Without the handoff being recorded this reads as unchanged.
+    sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(
+      sockets[sockets.length - 1].socket,
+      "needs-reauth",
+    );
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(2);
+    session.close();
+  });
+
+  it("retries after the wait a pending-elsewhere answer asks for, with no new ack", async () => {
+    // T2. Giving the marker back is not enough on its own: nothing re-asks
+    // until another `openAck` arrives, and the claim TTL is only evaluated when
+    // the flow is next called. A host whose only surviving transport asked
+    // during the window therefore sat un-provisioned with nobody scheduled to
+    // look again.
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValueOnce({ kind: "pending-elsewhere", retryAfterMs: 0 })
+      .mockResolvedValue({ kind: "unavailable" });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    // No new ack, no state transition - only the timer. A zero-length wait is
+    // floored to `PROVISION_RETRY_MIN_DELAY_MS` (+ jitter), which is exactly
+    // what stops a just-expired claim spinning, so wait past that.
+    await wait(1_600);
+    expect(mint).toHaveBeenCalledTimes(2);
+    session.close();
+  });
+
+  it("does not retry a pending-elsewhere wait on a closed client", async () => {
+    // The negative direction, and the one that matters: a timer that outlives
+    // the transport would mint a credential with nothing left to deliver it on.
+    const mint = vi
+      .fn<HostCredentialMintFlow>()
+      .mockResolvedValue({ kind: "pending-elsewhere", retryAfterMs: 0 });
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "needs-reauth");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    client.close("test");
+    await wait(1_600);
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    session.close();
+  });
+
   it("does not consume the client's one attempt on a pending-elsewhere answer", async () => {
     // The liveness half of the app-wide claim. Another transport's credential
     // is already in flight, so this client has not actually attempted
@@ -3705,7 +3812,10 @@ describe("WsStreamClient host credential provisioning", () => {
     // spent the client's single attempt and could strand the host on the
     // client lease until the app restarted.
     const mint = vi
-      .fn(async () => ({ kind: "pending-elsewhere" as const }))
+      .fn(async () => ({
+        kind: "pending-elsewhere" as const,
+        retryAfterMs: 60_000,
+      }))
       .mockName("mint");
     const { factory, sockets } = makeFactory();
     const client = makeProvisioningClient({

@@ -1032,12 +1032,19 @@ async function probeHostCredentialNeedsReauth(
       message:
         `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
         "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix.",
-      // No `fixAction`: the repair is not a CLI subcommand. A connected owner
-      // client mints the replacement silently on its next connection, so the
-      // honest instruction is "open the app", and Desktop must not render a
-      // button for a repair it would perform by simply being open.
+      // NEITHER a fix action NOR a terminal command, and for the same reason:
+      // nothing on a command line repairs this. A connected owner client mints
+      // the replacement silently, so the honest instruction is the one already
+      // in the message - open the app.
+      //
+      // `terminalCommand` was `traycer login`, which reads as a repair and is
+      // not one: signing the HUMAN in again does not provision the HOST's
+      // delegated credential, which is the whole distinction this issue
+      // exists to draw. Desktop's failure card renders "Open in Terminal"
+      // whenever this is non-null (`host-doctor-issue-card.tsx`), so leaving
+      // it set offered a button that could only look like it had failed.
       fixAction: null,
-      terminalCommand: `traycer login`,
+      terminalCommand: null,
       details: {
         markerPath,
         reason,

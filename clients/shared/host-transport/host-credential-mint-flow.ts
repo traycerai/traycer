@@ -55,9 +55,10 @@ export type HostCredentialMintOutcome =
    * already on its way (the adoption claim), or because the app-wide mint
    * escalation ladder is deferring re-mints for a host that has been minting
    * too often to be healthy. In the second case there is no delivery in
-   * flight and no timer serving this caller; the next `openAck` after the
-   * window simply asks again (the transport gives its attempt marker back on
-   * this answer, so re-asking needs no state transition).
+   * flight. In both cases the transport gives its attempt marker back AND
+   * arms a timer for `retryAfterMs`, so the retry does not depend on another
+   * `openAck` arriving - which matters because the host's state does not
+   * change while the window runs, so there is no edge left to wake anyone.
    *
    * Split out of `unavailable` for one reason: `unavailable` is terminal for
    * the asking client (it has had its one attempt), and that is right for
@@ -69,7 +70,26 @@ export type HostCredentialMintOutcome =
    * with nobody left to ask - the app-wide claim protecting the credential
    * would have stranded the host instead.
    */
-  | { readonly kind: "pending-elsewhere" };
+  | {
+      readonly kind: "pending-elsewhere";
+      /**
+       * How long to wait before asking again, in milliseconds.
+       *
+       * Carried on the OUTCOME rather than shared as a constant because the
+       * two things that answer `pending-elsewhere` have genuinely different
+       * waits - the remaining adoption-claim TTL, and the remaining rung of
+       * the mint escalation ladder - and only the flow knows which applies or
+       * how much of it is left. A constant here would have to be the longer of
+       * the two for safety, which would idle a host through a claim that
+       * expired seconds after it asked.
+       *
+       * The transport arms a timer for this and re-asks WITHOUT needing a new
+       * `openAck`, because in both cases the host's state does not change
+       * while the window runs: it keeps reporting `needs-reauth`, so there is
+       * no edge left to wake anybody.
+       */
+      readonly retryAfterMs: number;
+    };
 
 /**
  * App-supplied hook that mints a host credential and hands it back for delivery.
