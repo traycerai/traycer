@@ -123,6 +123,7 @@ function hostStatusResponse() {
     busy: false,
     busySessionCount: 0,
     updateProgress: null,
+    busyBreakdown: null,
   };
 }
 

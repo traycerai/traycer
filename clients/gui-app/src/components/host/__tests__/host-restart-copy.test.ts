@@ -10,6 +10,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 2,
       blockers: null,
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "2 sessions are still keeping this host busy.",
@@ -20,6 +21,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 1,
       blockers: null,
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "1 session is still keeping this host busy.",
@@ -30,6 +32,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,
       blockers: { workingAgents: true, runningTerminals: false },
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "Agent work is still keeping this host busy.",
@@ -40,6 +43,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,
       blockers: { workingAgents: true, runningTerminals: true },
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "Agent work and open terminals are still keeping this host busy.",
@@ -50,6 +54,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 2,
       blockers: { workingAgents: true, runningTerminals: true },
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "2 sessions, agent work, and open terminals are still keeping this host busy.",
@@ -64,6 +69,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,
       blockers: null,
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "The host is still finishing other work.",
@@ -74,6 +80,7 @@ describe("busyRestartVerdictSentence", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,
       blockers: { workingAgents: false, runningTerminals: false },
+      busyBreakdown: null,
     };
     expect(busyRestartVerdictSentence(verdict)).toBe(
       "The host is still finishing other work.",
@@ -86,6 +93,7 @@ describe("busyRestartMessage", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 2,
       blockers: null,
+      busyBreakdown: null,
     };
     expect(busyRestartMessage(verdict, true)).toBe(
       "2 sessions are still keeping this host busy. Nothing was interrupted; " +
@@ -97,6 +105,7 @@ describe("busyRestartMessage", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 0,
       blockers: { workingAgents: true, runningTerminals: true },
+      busyBreakdown: null,
     };
     expect(busyRestartMessage(verdict, false)).toBe(
       "Agent work and open terminals are still keeping this host busy. " +
@@ -108,6 +117,7 @@ describe("busyRestartMessage", () => {
     const verdict: HostRestartBusyVerdict = {
       busySessionCount: 1,
       blockers: null,
+      busyBreakdown: null,
     };
     expect(busyRestartMessage(verdict, false)).toBe(
       "1 session is still keeping this host busy. Nothing was interrupted; " +

@@ -216,6 +216,7 @@ describe("<HostSettingsPanel /> Overview identity card — active-sessions chip"
             busy: true,
             busySessionCount: 1,
             updateProgress: null,
+            busyBreakdown: null,
           };
         },
       },

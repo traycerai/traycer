@@ -127,6 +127,7 @@ export function buildConfigHostFixture(options: {
         busy: false,
         busySessionCount: 0,
         updateProgress: null,
+        busyBreakdown: null,
       };
     },
     "config.shell.get": async () => {

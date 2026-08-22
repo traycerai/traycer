@@ -173,6 +173,7 @@ export function buildOverviewHostFixture(options: {
         busy: false,
         busySessionCount: options.busySessionCount ?? 0,
         updateProgress: null,
+        busyBreakdown: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

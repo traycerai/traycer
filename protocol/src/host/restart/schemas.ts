@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hostBusyBreakdownSchema } from "@traycer/protocol/host/status/contracts";
 
 /**
  * Caller-generated identity for one logical restart action. Retries must keep
@@ -45,9 +46,23 @@ export const hostRestartBusyBlockersSchema = z.object({
  * case would put an affirmative "nothing is blocking" in the host's mouth
  * under a verdict that says the opposite.
  */
+export const hostRestartBusyVerdictV11Schema = z.object({
+  busySessionCount: z.number().int().nonnegative(),
+  blockers: hostRestartBusyBlockersSchema.nullable(),
+});
+
+/**
+ * v1.2 verdict: the v1.1 count + blockers, plus a typed `busyBreakdown`.
+ *
+ * `busyBreakdown: null` means the host did not say how the total splits —
+ * NOT that every component is zero. `blockers` is unchanged: a v1.2 host
+ * still names the boolean deny signals, and a v1.1 host still upgrades them
+ * to `null`.
+ */
 export const hostRestartBusyVerdictSchema = z.object({
   busySessionCount: z.number().int().nonnegative(),
   blockers: hostRestartBusyBlockersSchema.nullable(),
+  busyBreakdown: hostBusyBreakdownSchema.nullable(),
 });
 
 export const hostRestartResponseV10Schema = z.discriminatedUnion("outcome", [
@@ -55,6 +70,14 @@ export const hostRestartResponseV10Schema = z.discriminatedUnion("outcome", [
   z.object({
     outcome: z.literal("busy"),
     verdict: hostRestartBusyVerdictV10Schema,
+  }),
+]);
+
+export const hostRestartResponseV11Schema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("accepted") }),
+  z.object({
+    outcome: z.literal("busy"),
+    verdict: hostRestartBusyVerdictV11Schema,
   }),
 ]);
 
