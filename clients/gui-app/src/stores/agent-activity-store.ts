@@ -66,6 +66,26 @@ export function openAgentActivityStream(
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
 ): () => void {
+  // A new stream epoch makes NO health claim until its own session speaks.
+  //
+  // Neither end of a replacement publishes one otherwise: `IStreamSession`'s
+  // `onStatusChange` only stores the handler (it never replays the current
+  // status), and the disposer below nulls `currentClient` before closing, so
+  // the outgoing session's `closed` callback is rejected by its own identity
+  // guard. A same-host client swap - the app-wide liveness rebuild, which
+  // keeps the replica on purpose - therefore left `open` + a `connected`
+  // stamp from the DEAD session readable while the new one was still
+  // connecting, and a replacement that hung before its first transition kept
+  // them readable indefinitely. The presence indicator that reads this state
+  // would have stayed quiet through exactly the outage it exists to report.
+  //
+  // `byEpic` is deliberately NOT cleared here: the cloud union is per-user and
+  // stays valid across a host switch (see `resetHostReplica`). Only the health
+  // of the stream that reported it belongs to the epoch.
+  useAgentActivityStore.setState({
+    connectionStatus: "connecting",
+    cloudSyncStatus: null,
+  });
   let disposed = false;
   let currentClient: AgentActivityStreamClient | null = null;
   const reopenScheduler = reconnectEngine.openReopenLane(() => {
@@ -122,6 +142,13 @@ export function openAgentActivityStream(
     const client = currentClient;
     currentClient = null;
     client?.close();
+    // The close above is swallowed by the identity guard (`currentClient` is
+    // already null), so retire the epoch's health explicitly rather than
+    // leaving the last live reading behind for whatever opens next.
+    useAgentActivityStore.setState({
+      connectionStatus: "connecting",
+      cloudSyncStatus: null,
+    });
   };
 }
 
