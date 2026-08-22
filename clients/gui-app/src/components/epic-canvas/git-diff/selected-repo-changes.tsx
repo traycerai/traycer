@@ -182,7 +182,9 @@ function moduleHeaderPath(module: GitModuleGroup): string | null {
 }
 
 function moduleHeadLabel(module: GitModuleGroup): string {
-  return module.headLabel.startsWith("detached") ? "Checkout" : "Branch";
+  if (module.headKind === "branch") return "Branch";
+  if (module.headKind === "reference") return "Reference";
+  return "Checkout";
 }
 
 interface ModuleHeaderPreviewRow {
@@ -1134,10 +1136,10 @@ function GitModuleHeader(props: {
               variant="outline"
               className="min-w-0 max-w-full shrink rounded-full px-1.5 font-normal text-muted-foreground"
             >
-              {module.headLabel.startsWith("detached") ? (
-                <GitCommitHorizontal data-icon="inline-start" aria-hidden />
-              ) : (
+              {module.headKind === "branch" ? (
                 <GitBranch data-icon="inline-start" aria-hidden />
+              ) : (
+                <GitCommitHorizontal data-icon="inline-start" aria-hidden />
               )}
               <span className="truncate">{module.headLabel}</span>
             </Badge>

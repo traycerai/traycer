@@ -271,6 +271,7 @@ export interface GitModuleGroup {
   readonly label: string;
   readonly repoRoot: string | null;
   readonly parentPath: string | null;
+  readonly headKind: "branch" | "detached" | "reference";
   readonly headLabel: string;
   readonly files: ReadonlyArray<GitChangedFileV11>;
   readonly repoState: RepoState | null;
@@ -360,6 +361,7 @@ function buildSubmoduleGroup(args: {
     label: changeset.parentPath,
     repoRoot: changeset.repoRoot,
     parentPath: changeset.parentPath,
+    headKind: changeset.branch === null ? "detached" : "branch",
     headLabel,
     files: changeset.files,
     repoState: changeset.repoState,
@@ -391,6 +393,7 @@ function buildPointerOnlySubmoduleGroup(
     label: reference.label,
     repoRoot: null,
     parentPath: reference.parentPath,
+    headKind: "reference",
     headLabel: "reference",
     files: [],
     repoState: null,
@@ -442,6 +445,7 @@ export function buildGitModuleGroups(
     label: input.root.label,
     repoRoot: input.root.repoRoot,
     parentPath: null,
+    headKind: input.root.branch === null ? "detached" : "branch",
     headLabel: rootHeadLabel,
     files: split.ordinaryFiles,
     repoState: input.root.repoState,
