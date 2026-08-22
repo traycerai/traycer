@@ -16,10 +16,13 @@ import {
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
+  listGuiHarnessesResponseSchemaV70,
+  listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListResponseSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -54,6 +57,13 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@4.0": listGuiHarnessesResponseSchemaV40,
   "agent.gui.listHarnesses@5.0": listGuiHarnessesResponseSchemaV50,
   "agent.gui.listHarnesses@6.0": listGuiHarnessesResponseSchemaV60,
+  // v7.0 froze when v7.1 opened for the auth-aware enablement row fields.
+  // Until then the 2.1-6.0 rows above pinned only the id over a LIVE body, so
+  // they were half-frozen; they now share the hand-frozen
+  // `guiHarnessOptionBaseShapeV70` and dump exactly as they did before.
+  "agent.gui.listHarnesses@7.0": listGuiHarnessesResponseSchemaV70,
+  // The head line, pinned for the same reason `providers.list@7.1` is.
+  "agent.gui.listHarnesses@7.1": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -66,17 +76,22 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@4.0": providersListResponseSchemaV40,
   "providers.list@5.0": providersListResponseSchemaV50,
   "providers.list@6.0": providersListResponseSchemaV60,
-  // v7.0 is pinned here while it is still the head line, so this row fails on
-  // the FIRST attempt to grow the live shape rather than on the release that
-  // ships the growth. It names the LIVE schema because that is what the v7.0
-  // contract binds - the head tracks live - and the dump is deep, so growth in
-  // any sub-schema it reaches goes red here too. When it does, hand-freeze this
-  // line and open v8.0 against live; do not regenerate to green. The freeze
-  // takes `V70` names, not `V80`, and the pre-image holding those names has to
-  // be renamed first - `host/registry.ts` (above `providersListV70`) is the
-  // canonical statement of the procedure; this is the third copy of it, so
-  // change it there and keep these in step.
-  "providers.list@7.0": providersListResponseSchema,
+  // v7.0 was pinned here while it was still the head line, so that growth of
+  // the live shape would fail on its FIRST attempt rather than on the release
+  // that shipped it. That is what happened: the auth-aware enablement fields
+  // turned this row red, v7.0 was hand-frozen under the reserved `V70` names,
+  // and v7.1 opened against live. This row was NOT regenerated - it names the
+  // frozen schema now and its dump is unchanged.
+  //
+  // One correction to the procedure `host/registry.ts` states: the new line is
+  // a MINOR, because `versioned-rpc.ts` rejects a major bump that is not a
+  // breaking change and two optional fields are not one. v8.0 stays right for
+  // id/enum growth on a host->client catalog payload.
+  "providers.list@7.0": providersListResponseSchemaV70,
+  // The head line now, holding v7.0's old job: it names the LIVE schema, so
+  // the next attempt to grow it fails here first. Same response - freeze the
+  // line that stopped being head, open the next one, do not regenerate.
+  "providers.list@7.1": providersListResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;
