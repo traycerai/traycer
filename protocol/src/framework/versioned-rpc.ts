@@ -450,6 +450,19 @@ function assertSchemaCompatibility(
             );
           }
         }
+      } else {
+        const firstMinor = getLowestInstalledNumber(line.versions);
+
+        for (const minor of minors) {
+          if (
+            minor !== firstMinor &&
+            line.versions[minor].semanticMajorBreakFromPreviousMajor === true
+          ) {
+            throw new Error(
+              `Version ${major}.${minor} for method '${method}' declares \`semanticMajorBreakFromPreviousMajor\` but the annotation must be on the first installed minor ${major}.${firstMinor}`,
+            );
+          }
+        }
       }
 
       for (let index = 1; index < minors.length; index += 1) {
@@ -564,11 +577,11 @@ function assertSchemaCompatibility(
         toUnknownKeyTree(currentLatestContract.responseSchema),
       );
 
-      const currentLatestEntry =
-        currentLine.versions[currentLine.latestMinor];
+      const currentFirstMinor = getLowestInstalledNumber(currentLine.versions);
+      const currentFirstEntry = currentLine.versions[currentFirstMinor];
       if (
         (requestBreak !== null || responseBreak !== null) &&
-        currentLatestEntry.semanticMajorBreakFromPreviousMajor === true
+        currentFirstEntry.semanticMajorBreakFromPreviousMajor === true
       ) {
         throw new Error(
           `Major bump ${previousMajor} -> ${currentMajor} for method '${method}' declares \`semanticMajorBreakFromPreviousMajor\` but already has a structural breaking change; remove the annotation`,
@@ -577,7 +590,7 @@ function assertSchemaCompatibility(
       if (
         requestBreak === null &&
         responseBreak === null &&
-        currentLatestEntry.semanticMajorBreakFromPreviousMajor !== true
+        currentFirstEntry.semanticMajorBreakFromPreviousMajor !== true
       ) {
         throw new Error(
           `Major bump ${previousMajor} -> ${currentMajor} for method '${method}' is not a breaking change (could have shipped as a minor)`,
@@ -995,6 +1008,19 @@ function getHighestInstalledNumber<Value>(
   }
 
   return latest;
+}
+
+function getLowestInstalledNumber<Value>(
+  values: Readonly<Record<number, Value>>,
+): number {
+  const keys = getSortedNumberKeys(values);
+  const earliest = keys[0];
+
+  if (earliest === undefined) {
+    throw new Error("Registry line must define at least one installed version");
+  }
+
+  return earliest;
 }
 
 function getMajorLine<
