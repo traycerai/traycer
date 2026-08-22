@@ -110,13 +110,25 @@ export const epicsSource: ReactCommandSource = {
 
 /**
  * The search keys the history query can match a row on that are NOT part of
- * the label. Mirrors `LOCAL_FUSE_OPTIONS` in `use-history-query.ts`.
+ * the label. Mirrors `LOCAL_FUSE_OPTIONS` in `use-history-query.ts` - every
+ * key there except `title`, which is already the row's label.
+ *
+ * `worktreePaths` earns its place even though the local epic-id resolution
+ * deliberately matches paths NARROWLY (basename, or the full path only for a
+ * `/`-shaped query, so a common ancestor like the home directory cannot union
+ * unrelated tasks into an ordinary search). That narrowness governs which
+ * tasks ENTER the pool; this list only governs which pooled rows cmdk is
+ * allowed to show, and can never add a task history did not already match. A
+ * worktree directory name is not the branch name - a Traycer worktree carries
+ * a hash suffix - so a query that matched only by path would otherwise be
+ * fetched and then hidden.
  */
 function historyMatchKeywords(row: HistoryItem): ReadonlyArray<string> {
   return [
     ...row.pullRequestNumbers,
     ...row.worktreeBranches,
     ...row.linkedRepos,
+    ...row.worktreePaths,
   ];
 }
 

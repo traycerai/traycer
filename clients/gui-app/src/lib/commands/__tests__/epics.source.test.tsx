@@ -74,6 +74,7 @@ interface HistoryItemOverrides {
   readonly pullRequestNumbers?: ReadonlyArray<string>;
   readonly worktreeBranches?: ReadonlyArray<string>;
   readonly linkedRepos?: ReadonlyArray<string>;
+  readonly worktreePaths?: ReadonlyArray<string>;
 }
 
 function historyItem(overrides: HistoryItemOverrides): HistoryItem {
@@ -91,7 +92,7 @@ function historyItem(overrides: HistoryItemOverrides): HistoryItem {
     chatHostIds: null,
     pullRequestNumbers: overrides.pullRequestNumbers ?? [],
     worktreeBranches: overrides.worktreeBranches ?? [],
-    worktreePaths: [],
+    worktreePaths: overrides.worktreePaths ?? [],
     ownership: "mine",
     permissionRole: null,
     isPinned: false,
@@ -236,6 +237,36 @@ describe("epicsSource", () => {
     expect(paletteFilter(value, "#5186", keywords)).toBeGreaterThan(0);
     expect(paletteFilter(value, "5186", keywords)).toBeGreaterThan(0);
     expect(paletteFilter(value, "clever-elk", keywords)).toBeGreaterThan(0);
+  });
+
+  it("keeps a row history matched only by its worktree path visible", () => {
+    // A Traycer worktree directory is not the branch name - it carries a hash
+    // suffix - so this query reaches the row through `worktreePaths` alone.
+    // Without that keyword the task is fetched by the local arm and then
+    // hidden by cmdk.
+    const row = historyItem({
+      epicId: "epic-path-row",
+      title: "Some unrelated title",
+      worktreeBranches: ["traycer/clever-elk"],
+      worktreePaths: [
+        "/Users/dev/.traycer/worktrees/traycer-clever-elk-7a9d867d6d1d",
+      ],
+    });
+    mockState.result = historyResult([row]);
+
+    const items = captureEpicsItems("7a9d867d6d1d");
+    const item = items.find(
+      (candidate) => candidate.id === "epic:epic-path-row",
+    );
+    expect(item).toBeDefined();
+    if (item === undefined) throw new Error("item missing");
+
+    expect(item.keywords).toContain(
+      "/Users/dev/.traycer/worktrees/traycer-clever-elk-7a9d867d6d1d",
+    );
+    expect(
+      paletteFilter(buildCmdkValue(item), "7a9d867d6d1d", [...item.keywords]),
+    ).toBeGreaterThan(0);
   });
 
   it("ablation: a row without the match keywords scores 0 against the same query", () => {
