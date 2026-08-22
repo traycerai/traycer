@@ -19,6 +19,7 @@ import {
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
+  listTerminalsResponseSchemaV23,
   readTerminalOutputRequestSchema,
   readTerminalOutputResponseSchema,
   renameTerminalRequestSchema,
@@ -173,6 +174,15 @@ export const terminalListV22 = defineRpcContract({
   responseSchema: listTerminalsResponseSchemaV22,
 });
 
+// Additive lifetime-owner discriminator on each response session; request
+// is unchanged from `@2.0`/`@2.1`/`@2.2`.
+export const terminalListV23 = defineRpcContract({
+  method: "terminal.list",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: listTerminalsRequestSchemaV20,
+  responseSchema: listTerminalsResponseSchemaV23,
+});
+
 export const terminalListUpgradeV10ToV20 = defineUpgradePath<
   typeof terminalListV10,
   typeof terminalListV20
@@ -220,6 +230,24 @@ export const terminalListUpgradeV21ToV22 = defineUpgradePath<
     sessions: response.sessions.map((session) => ({
       ...session,
       currentCwd: session.cwd,
+    })),
+    homeCwd: response.homeCwd,
+  }),
+});
+
+// A v2.2 host cannot name lifetime ownership. Fill `registry` so a capable
+// client fail-closes the row as a durable shadow instead of promoting it.
+export const terminalListUpgradeV22ToV23 = defineUpgradePath<
+  typeof terminalListV22,
+  typeof terminalListV23
+>({
+  from: terminalListV22.schemaVersion,
+  to: terminalListV23.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    sessions: response.sessions.map((session) => ({
+      ...session,
+      lifecycleOwner: "registry" as const,
     })),
     homeCwd: response.homeCwd,
   }),
@@ -306,6 +334,29 @@ export const terminalListDowngradeV22ToV10 = defineDowngradePath<
       },
     };
   },
+});
+
+// Major 2's latest bridge to v1.0. Strip `lifecycleOwner` then reuse the
+// v2.2 currentCwd projection so old peers still see launch `cwd`.
+export const terminalListDowngradeV23ToV10 = defineDowngradePath<
+  typeof terminalListV23,
+  typeof terminalListV10
+>({
+  from: terminalListV23.schemaVersion,
+  to: terminalListV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const epicId = downgradeTerminalScopeForV10(request.scope);
+    if (!epicId.ok) return epicId;
+    return { ok: true, value: { epicId: epicId.value } };
+  },
+  downgradeResponse: (response) =>
+    terminalListDowngradeV22ToV10.downgradeResponse({
+      sessions: response.sessions.map((session) => {
+        const { lifecycleOwner: _lifecycleOwner, ...rest } = session;
+        return rest;
+      }),
+      homeCwd: response.homeCwd,
+    }),
 });
 
 // Brand-new method - an older host simply lacks it, so the registry puts it

@@ -5,6 +5,8 @@ import type { PlainTerminalProjectionBarrier } from "@/lib/terminals/plain-termi
 import {
   adoptPlainTerminalDeletionUnary,
   deletePlainTerminal,
+  getPlainTerminal,
+  plainTerminalCollectionIdentityKey,
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -13,6 +15,7 @@ import {
   isUnsupportedEpicTerminalRef,
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 
 export type PlainTerminalDeletionEvidence =
@@ -29,13 +32,17 @@ export type PlainTerminalDeletionEvidence =
 function acknowledgedTerminalId(
   ref: EpicCanvasTileRef | null | undefined,
   hostId: string,
-  pendingCreateArtifactIds: ReadonlySet<string>,
+  pendingCreateTerminalIdentities: ReadonlySet<string>,
 ): string | null {
   if (
     ref?.type !== "terminal" ||
     !isHostEpicTerminalRef(ref) ||
     ref.hostId !== hostId ||
-    pendingCreateArtifactIds.has(ref.id)
+    hasTerminalPendingCreate(
+      pendingCreateTerminalIdentities,
+      ref.hostId,
+      ref.id,
+    )
   ) {
     return null;
   }
@@ -46,12 +53,12 @@ function addAcknowledgedTerminalId(
   terminalIds: Set<string>,
   ref: EpicCanvasTileRef | null | undefined,
   hostId: string,
-  pendingCreateArtifactIds: ReadonlySet<string>,
+  pendingCreateTerminalIdentities: ReadonlySet<string>,
 ): void {
   const terminalId = acknowledgedTerminalId(
     ref,
     hostId,
-    pendingCreateArtifactIds,
+    pendingCreateTerminalIdentities,
   );
   if (terminalId !== null) terminalIds.add(terminalId);
 }
@@ -80,7 +87,7 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
   }
 
   const epic = useEpicCanvasStore.getState();
-  const pendingCreateArtifactIds = epic.pendingCreateArtifactIds;
+  const pendingCreateTerminalIdentities = epic.pendingCreateTerminalIdentities;
   for (const tab of Object.values(epic.tabsById)) {
     if (tab?.epicId !== scope.epicId) continue;
     for (const ref of Object.values(
@@ -90,7 +97,7 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
         terminalIds,
         ref,
         hostId,
-        pendingCreateArtifactIds,
+        pendingCreateTerminalIdentities,
       );
     }
     for (const payload of Object.values(
@@ -100,7 +107,7 @@ export function acknowledgedPlainTerminalPresentationIdsForScope(
         terminalIds,
         payload?.node,
         hostId,
-        pendingCreateArtifactIds,
+        pendingCreateTerminalIdentities,
       );
     }
   }
@@ -173,19 +180,21 @@ function fanOutPlainTerminalDeletionOnce(args: {
  */
 function deletionMatchesRetainedTombstone(
   collection: PlainTerminalCollection | undefined,
+  hostId: string,
   terminalId: string,
   evidence: PlainTerminalDeletionEvidence,
 ): boolean {
   if (collection === undefined) return false;
-  const retained = collection.deletedRevisionById[terminalId];
+  const key = plainTerminalCollectionIdentityKey(hostId, terminalId);
+  const retained = collection.deletedRevisionByIdentity[key];
   if (retained === undefined || retained !== evidence.revision) return false;
-  const existing = collection.terminalsById[terminalId];
+  const existing = getPlainTerminal(collection, hostId, terminalId);
   if (existing !== undefined && existing.record.revision > evidence.revision) {
     return false;
   }
   if (evidence.kind === "unary") {
     const streamAdvanced =
-      (collection.lastStreamSequenceById[terminalId] ?? -1) >
+      (collection.lastStreamSequenceByIdentity[key] ?? -1) >
       evidence.barrier.projectionSequence;
     if (
       streamAdvanced &&
@@ -212,15 +221,15 @@ export function consumeRetainedPlainTerminalTombstone(args: {
   const collection = args.queryClient.getQueryData<PlainTerminalCollection>(
     args.queryKey,
   );
-  const revision = collection?.deletedRevisionById[args.terminalId];
+  const key = plainTerminalCollectionIdentityKey(args.hostId, args.terminalId);
+  const revision = collection?.deletedRevisionByIdentity[key];
   if (collection === undefined || revision === undefined) return false;
   if (
-    collection.pendingPresentationDeletionRevisionById[args.terminalId] !==
-    undefined
+    collection.pendingPresentationDeletionRevisionByIdentity[key] !== undefined
   ) {
     return false;
   }
-  const existing = collection.terminalsById[args.terminalId];
+  const existing = getPlainTerminal(collection, args.hostId, args.terminalId);
   if (existing !== undefined && existing.record.revision > revision) {
     return false;
   }
@@ -245,13 +254,15 @@ export function reconcileRetainedPlainTerminalTombstones(args: {
   );
   if (collection === undefined) return false;
   let swept = false;
-  for (const terminalId of Object.keys(collection.deletedRevisionById)) {
+  for (const key of Object.keys(collection.deletedRevisionByIdentity)) {
+    const parsed = parseFleetIdentityKey(key);
+    if (parsed === null) continue;
     if (
       consumeRetainedPlainTerminalTombstone({
         queryClient: args.queryClient,
         queryKey: args.queryKey,
-        hostId: args.hostId,
-        terminalId,
+        hostId: parsed.hostId,
+        terminalId: parsed.terminalId,
       })
     ) {
       swept = true;
@@ -260,8 +271,55 @@ export function reconcileRetainedPlainTerminalTombstones(args: {
   return swept;
 }
 
+function parseFleetIdentityKey(
+  key: string,
+): { readonly hostId: string; readonly terminalId: string } | null {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 2 ||
+      typeof parsed[0] !== "string" ||
+      typeof parsed[1] !== "string"
+    ) {
+      return null;
+    }
+    return { hostId: parsed[0], terminalId: parsed[1] };
+  } catch {
+    return null;
+  }
+}
+
 function epicPlainTerminalQueryKey(hostId: string, epicId: string): QueryKey {
   return hostQueryKeys.plainTerminals(hostId, { kind: "epic", epicId });
+}
+
+function collectionsForEpicRestore(
+  queryClient: QueryClient,
+  hostId: string,
+  epicId: string,
+): readonly PlainTerminalCollection[] {
+  const ownerKeyed = queryClient.getQueryData<PlainTerminalCollection>(
+    epicPlainTerminalQueryKey(hostId, epicId),
+  );
+  const collections: PlainTerminalCollection[] = [];
+  if (ownerKeyed !== undefined) collections.push(ownerKeyed);
+  for (const [, collection] of queryClient.getQueriesData<
+    PlainTerminalCollection | undefined
+  >({
+    predicate: (query) => query.queryKey[2] === "terminal.plain.list",
+  })) {
+    if (
+      collection === undefined ||
+      collection === ownerKeyed ||
+      collection.scope?.kind !== "epic" ||
+      collection.scope.epicId !== epicId
+    ) {
+      continue;
+    }
+    collections.push(collection);
+  }
+  return collections;
 }
 
 /**
@@ -280,13 +338,27 @@ export function retainedPlainTerminalTombstoneBlocksClosedRestore(args: {
   ) {
     return false;
   }
-  const collection = args.queryClient.getQueryData<PlainTerminalCollection>(
-    epicPlainTerminalQueryKey(args.node.hostId, args.epicId),
+  const key = plainTerminalCollectionIdentityKey(
+    args.node.hostId,
+    args.node.id,
   );
-  const revision = collection?.deletedRevisionById[args.node.id];
-  if (collection === undefined || revision === undefined) return false;
-  const existing = collection.terminalsById[args.node.id];
-  return existing === undefined || existing.record.revision <= revision;
+  for (const collection of collectionsForEpicRestore(
+    args.queryClient,
+    args.node.hostId,
+    args.epicId,
+  )) {
+    const revision = collection.deletedRevisionByIdentity[key];
+    if (revision === undefined) continue;
+    const existing = getPlainTerminal(
+      collection,
+      args.node.hostId,
+      args.node.id,
+    );
+    if (existing === undefined || existing.record.revision <= revision) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -304,6 +376,19 @@ export function rejectClosedPlainTerminalRestore(args: {
     return false;
   }
   if (args.node.type !== "terminal") return true;
+  for (const [queryKey, collection] of args.queryClient.getQueriesData<
+    PlainTerminalCollection | undefined
+  >({
+    predicate: (query) => query.queryKey[2] === "terminal.plain.list",
+  })) {
+    if (collection === undefined) continue;
+    consumeRetainedPlainTerminalTombstone({
+      queryClient: args.queryClient,
+      queryKey,
+      hostId: args.node.hostId,
+      terminalId: args.node.id,
+    });
+  }
   consumeRetainedPlainTerminalTombstone({
     queryClient: args.queryClient,
     queryKey: epicPlainTerminalQueryKey(args.node.hostId, args.epicId),
@@ -331,19 +416,26 @@ export function commitPlainTerminalDeletion(args: {
   const current = args.queryClient.getQueryData<PlainTerminalCollection>(
     args.queryKey,
   );
+  const identity = { hostId: args.hostId, terminalId: args.terminalId };
+  const key = plainTerminalCollectionIdentityKey(args.hostId, args.terminalId);
   const next =
     args.evidence.kind === "stream"
-      ? deletePlainTerminal(current, args.terminalId, args.evidence.revision)
+      ? deletePlainTerminal(current, identity, args.evidence.revision)
       : adoptPlainTerminalDeletionUnary(
           current,
-          args.terminalId,
+          identity,
           args.evidence.revision,
           args.evidence.barrier,
         );
   if (next === current) {
     if (
       args.deferPresentation ||
-      !deletionMatchesRetainedTombstone(current, args.terminalId, args.evidence)
+      !deletionMatchesRetainedTombstone(
+        current,
+        args.hostId,
+        args.terminalId,
+        args.evidence,
+      )
     ) {
       return false;
     }
@@ -357,19 +449,19 @@ export function commitPlainTerminalDeletion(args: {
   if (args.deferPresentation) {
     committed = {
       ...next,
-      pendingPresentationDeletionRevisionById: {
-        ...next.pendingPresentationDeletionRevisionById,
-        [args.terminalId]: revision,
+      pendingPresentationDeletionRevisionByIdentity: {
+        ...next.pendingPresentationDeletionRevisionByIdentity,
+        [key]: revision,
       },
     };
   } else if (
-    next.pendingPresentationDeletionRevisionById[args.terminalId] !== undefined
+    next.pendingPresentationDeletionRevisionByIdentity[key] !== undefined
   ) {
-    const pendingPresentationDeletionRevisionById = {
-      ...next.pendingPresentationDeletionRevisionById,
+    const pendingPresentationDeletionRevisionByIdentity = {
+      ...next.pendingPresentationDeletionRevisionByIdentity,
     };
-    delete pendingPresentationDeletionRevisionById[args.terminalId];
-    committed = { ...next, pendingPresentationDeletionRevisionById };
+    delete pendingPresentationDeletionRevisionByIdentity[key];
+    committed = { ...next, pendingPresentationDeletionRevisionByIdentity };
   }
   args.queryClient.setQueryData<PlainTerminalCollection>(
     args.queryKey,
@@ -399,25 +491,26 @@ export function commitPlainTerminalDeferredDeletion(args: {
   const collection = args.queryClient.getQueryData<PlainTerminalCollection>(
     args.queryKey,
   );
+  const key = plainTerminalCollectionIdentityKey(args.hostId, args.terminalId);
   const revision =
-    collection?.pendingPresentationDeletionRevisionById[args.terminalId];
+    collection?.pendingPresentationDeletionRevisionByIdentity[key];
   if (
     collection?.streamSnapshotFresh !== true ||
     collection.snapshotEpoch !== args.snapshotEpoch ||
     revision === undefined ||
-    collection.terminalsById[args.terminalId] !== undefined ||
-    (collection.deletedRevisionById[args.terminalId] ?? -1) < revision
+    getPlainTerminal(collection, args.hostId, args.terminalId) !== undefined ||
+    (collection.deletedRevisionByIdentity[key] ?? -1) < revision
   ) {
     return false;
   }
 
-  const pendingPresentationDeletionRevisionById = {
-    ...collection.pendingPresentationDeletionRevisionById,
+  const pendingPresentationDeletionRevisionByIdentity = {
+    ...collection.pendingPresentationDeletionRevisionByIdentity,
   };
-  delete pendingPresentationDeletionRevisionById[args.terminalId];
+  delete pendingPresentationDeletionRevisionByIdentity[key];
   args.queryClient.setQueryData<PlainTerminalCollection>(args.queryKey, {
     ...collection,
-    pendingPresentationDeletionRevisionById,
+    pendingPresentationDeletionRevisionByIdentity,
   });
   fanOutPlainTerminalDeletionOnce({
     hostId: args.hostId,
@@ -451,7 +544,7 @@ export function commitPlainTerminalSnapshotOmission(args: {
   if (
     collection?.streamSnapshotFresh !== true ||
     collection.snapshotEpoch !== args.snapshotEpoch ||
-    collection.terminalsById[args.terminalId] !== undefined
+    getPlainTerminal(collection, args.hostId, args.terminalId) !== undefined
   ) {
     return false;
   }

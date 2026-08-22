@@ -45,6 +45,7 @@ import {
   useSurfaceHostClient,
   useSurfaceHostPin,
   useTabSurfaceKey,
+  type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -105,6 +106,11 @@ import {
   useFileTreeStore,
   useSelectedFileTreeWorkspace,
 } from "@/stores/file-tree/file-tree-store";
+import {
+  clearFileTreeRevealRequest,
+  useFileTreeRevealRequest,
+} from "@/stores/file-tree/file-tree-reveal-store";
+import { planFileTreeRevealRouting } from "@/components/epic-canvas/sidebar/file-tree-reveal-routing";
 import {
   useEpicSidebarEffectiveExpanded,
   useEpicSidebarExpansionStore,
@@ -235,6 +241,13 @@ interface FileTreeWorkspaceSelection {
   readonly selectedWorkspacePath: string | null;
   readonly setSelectedWorkspacePath: (workspacePath: string) => void;
   /**
+   * The browsable roots the picker offers, in picker order. Empty while the
+   * bindings read has not answered - `rootsResolved` tells the two apart.
+   */
+  readonly workspaceRoots: ReadonlyArray<string>;
+  /** True once the bindings read has answered (with roots or without). */
+  readonly rootsResolved: boolean;
+  /**
    * Non-null when the bindings read FAILED, as opposed to answering with no
    * browsable roots. Both leave `selectedWorkspacePath` null, and the panel
    * must not tell the same story about them.
@@ -330,6 +343,8 @@ function useFileTreeWorkspaceSelection(
     hostId,
     selectedWorkspacePath,
     setSelectedWorkspacePath,
+    workspaceRoots,
+    rootsResolved: queryResolved,
     failure: classifyBindingsFailure(workspacesQuery.error),
     retry,
   };
@@ -346,6 +361,88 @@ function resolveFileTreeWorkspaceRoot(
     return storedWorkspacePath;
   }
   return workspaceRoots[0] ?? null;
+}
+
+/**
+ * Routes a pending "Reveal in Sidebar" request to the panel the file lives
+ * in. The request names the file's host and workspace root (a workspace-file
+ * tab carries both for life); this panel may be showing another of either, so
+ * the gesture re-points it the way the picker would: pin to the file's host,
+ * then select its root. The row-level reveal - expand ancestors, select, scroll
+ * - is the body's job once it is mounted for that host + workspace
+ * (`epic-sidebar-file-tree.tsx`).
+ *
+ * Two requests cannot be served and are dropped, leaving the panel where it
+ * was rather than pointed at something that does not exist:
+ * - the file's host is pinned yet the panel still resolves elsewhere - a pin
+ *   is a preference, and one whose host cannot serve (dead, or since
+ *   deregistered so the fleet guard cleared it) resolves to `effective`;
+ * - the file's root is not among the browsable roots this host offers - a
+ *   synthesized out-of-root workspace (`workspaceFileRefFromAbsoluteFilePath`)
+ *   or a binding since removed.
+ *
+ * `setSelection` is called without a one-shot guard on purpose: it is
+ * idempotent on a same-value write, and the "pinned yet unresolved" check is
+ * what terminates the dead-host case - so a StrictMode re-run of the effect,
+ * which re-reads the SAME pre-write closure, just repeats the write instead of
+ * mistaking the stale read for a refused one.
+ */
+function useFileTreeRevealRouting(args: {
+  readonly tabId: string;
+  readonly pin: SurfaceHostPin;
+  readonly selection: FileTreeWorkspaceSelection;
+}): void {
+  const { tabId } = args;
+  const request = useFileTreeRevealRequest(tabId);
+  const {
+    resolvedHostId,
+    selection: pinnedHostId,
+    setSelection,
+    latchOnFirstUse,
+  } = args.pin;
+  const {
+    rootsResolved,
+    workspaceRoots,
+    selectedWorkspacePath,
+    setSelectedWorkspacePath,
+  } = args.selection;
+  useEffect(() => {
+    if (request === null) return;
+    const step = planFileTreeRevealRouting({
+      request,
+      resolvedHostId,
+      pinnedHostId,
+      rootsResolved,
+      workspaceRoots,
+      selectedWorkspacePath,
+    });
+    switch (step.kind) {
+      case "pin-host":
+        setSelection(step.hostId);
+        return;
+      case "drop":
+        clearFileTreeRevealRequest(tabId, request.nonce);
+        return;
+      case "select-workspace":
+        latchOnFirstUse();
+        setSelectedWorkspacePath(step.workspacePath);
+        return;
+      case "wait":
+      case "ready":
+        return;
+    }
+  }, [
+    latchOnFirstUse,
+    pinnedHostId,
+    request,
+    resolvedHostId,
+    rootsResolved,
+    selectedWorkspacePath,
+    setSelectedWorkspacePath,
+    setSelection,
+    tabId,
+    workspaceRoots,
+  ]);
 }
 
 export interface EpicLeftPanelHostProps {
@@ -1159,6 +1256,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   // app-wide effective host.
   const hostClient = useSurfaceHostClient(pin.resolvedHostId);
   const resolvedHostEntry = useHostDirectoryEntryForHostId(pin.resolvedHostId);
+  useFileTreeRevealRouting({ tabId: props.tabId, pin, selection });
   const handleSelectPath = (workspacePath: string): void => {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);

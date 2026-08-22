@@ -23,6 +23,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -30,6 +31,7 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
+import { resetEpicTerminalDurableCreatesForTests } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import { modLabel } from "@/lib/keybindings/platform";
 
 const selectById = vi.fn();
@@ -219,6 +221,7 @@ describe("<NewTerminalPicker />", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+    resetEpicTerminalDurableCreatesForTests();
   });
 
   it("opens a popover with the host section and workspace rows", () => {
@@ -351,9 +354,11 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
     expect(
-      useEpicCanvasStore
-        .getState()
-        .pendingCreateArtifactIds.has(terminals[0].id),
+      hasTerminalPendingCreate(
+        useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+        terminals[0].hostId,
+        terminals[0].id,
+      ),
     ).toBe(true);
   });
 

@@ -25,7 +25,7 @@ const LANDING_PAGE_ID = "landing-a";
 const SCOPE = { kind: "independent" } as const;
 const CAPABILITY = {
   status: "capable",
-  schemaVersion: { major: 1, minor: 0 },
+  schemaVersion: { major: 2, minor: 1 },
 } as const;
 
 function tab(input: {
@@ -271,7 +271,11 @@ describe("capable landing-terminal reconciliation", () => {
     useLandingTerminalStore.getState().addTab(legacy);
     queryClient.setQueryData(
       hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      deletePlainTerminal(freshCollection([]), "terminal-1", 2),
+      deletePlainTerminal(
+        freshCollection([]),
+        { hostId: HOST_ID, terminalId: "terminal-1" },
+        2,
+      ),
     );
     const importLegacy = vi.fn(() =>
       Promise.reject(new Error("unexpected import")),
@@ -292,7 +296,7 @@ describe("capable landing-terminal reconciliation", () => {
     expect(
       queryClient.getQueryData<PlainTerminalCollection>(
         hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
-      )?.deletedRevisionById["terminal-1"],
+      )?.deletedRevisionByIdentity[JSON.stringify([HOST_ID, "terminal-1"])],
     ).toBe(2);
   });
 

@@ -12,18 +12,27 @@ import {
   useEpicChatBackupStatus,
   type EpicChatBackupStatus,
 } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import {
+  useCommGraphFeedHealth,
+  type CommGraphFeedHealth,
+} from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { cn } from "@/lib/utils";
 import {
   useAgentActivityPresenceDegraded,
   type AgentActivityPresenceDegradedReason,
 } from "@/hooks/agent/use-agent-activity-presence-degraded";
+import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
- * highest-severity signal across artifact/Yjs durability, chat publication and
- * agent-activity presence, keeping chat backup on the dot + tooltip instead of
- * a permanent sidebar row. Secondary-plane failures live here rather than only
- * in the panel whose data happened to expose them.
+ * highest-severity signal across artifact/Yjs durability, chat publication,
+ * remote-terminal discovery, the communication-graph feed, and agent-activity
+ * presence. Secondary-plane failures live here rather than only in the panel
+ * whose data happened to expose them - or, in the graph's case, captioned onto
+ * every agent node, and in presence's, nowhere at all.
  *
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
@@ -55,19 +64,33 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
   const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
+  const commGraphFeedHealth = useCommGraphFeedHealth(props.epicId);
+  const canvasHostId = useCanvasHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const terminalAuthority = useHostPlainTerminalAuthority({
+    hostId: canvasHostId,
+    scope: { kind: "epic", epicId: props.epicId },
+  });
+  const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
+    terminalAuthority.coverage === "partial-serving-host",
+    JSON.stringify([terminalAuthority.hostId, props.epicId]),
+  );
   const presenceDegraded = useAgentActivityPresenceDegraded();
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
-  const selected = highestSeverityIndicator(
-    indicatorFor(state, linkDownTooLong),
+  const secondarySignals = {
     chatBackupStatus,
+    terminalCatalogUnavailable,
+    commGraphFeedHealth,
     presenceDegraded,
-  );
-  const rawSelected = highestSeverityIndicator(
-    indicatorFor(derived, linkDownTooLong),
-    chatBackupStatus,
-    presenceDegraded,
-  );
+  };
+  const selected = highestSeverityIndicator({
+    artifactIndicator: indicatorFor(state, linkDownTooLong),
+    ...secondarySignals,
+  });
+  const rawSelected = highestSeverityIndicator({
+    artifactIndicator: indicatorFor(derived, linkDownTooLong),
+    ...secondarySignals,
+  });
   const { indicator } = selected;
 
   return (
@@ -191,7 +214,12 @@ interface PillIndicator {
 }
 
 interface SelectedIndicator {
-  readonly source: "artifact" | "chat-backup" | "agent-activity";
+  readonly source:
+    | "artifact"
+    | "chat-backup"
+    | "terminal-catalog"
+    | "comm-graph"
+    | "agent-activity";
   readonly indicator: PillIndicator;
 }
 
@@ -288,11 +316,28 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
   danger: 3,
 };
 
-function highestSeverityIndicator(
-  artifactIndicator: PillIndicator,
-  chatBackupStatus: EpicChatBackupStatus | null,
-  presenceDegraded: AgentActivityPresenceDegradedReason | null,
-): SelectedIndicator {
+/**
+ * The secondary planes weighed against the artifact/Yjs verdict. An object
+ * rather than a parameter list: there are five of them now, and a positional
+ * call site stops being readable (and trips `max-params`) well before the
+ * pill runs out of planes to report.
+ */
+interface PillSignals {
+  readonly artifactIndicator: PillIndicator;
+  readonly chatBackupStatus: EpicChatBackupStatus | null;
+  readonly terminalCatalogUnavailable: boolean;
+  readonly commGraphFeedHealth: CommGraphFeedHealth | null;
+  readonly presenceDegraded: AgentActivityPresenceDegradedReason | null;
+}
+
+function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
+  const {
+    artifactIndicator,
+    chatBackupStatus,
+    terminalCatalogUnavailable,
+    commGraphFeedHealth,
+    presenceDegraded,
+  } = signals;
   let selected: SelectedIndicator = {
     source: "artifact",
     indicator: artifactIndicator,
@@ -306,6 +351,27 @@ function highestSeverityIndicator(
       selected = { source: "chat-backup", indicator: chatIndicator };
     }
   }
+  if (terminalCatalogUnavailable) {
+    const terminalIndicator = indicatorForTerminalCatalogUnavailable();
+    if (
+      SEVERITY_RANK[terminalIndicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = {
+        source: "terminal-catalog",
+        indicator: terminalIndicator,
+      };
+    }
+  }
+  if (commGraphFeedHealth !== null) {
+    const feedIndicator = indicatorForCommGraphFeed(commGraphFeedHealth);
+    if (
+      SEVERITY_RANK[feedIndicator.severity] >
+      SEVERITY_RANK[selected.indicator.severity]
+    ) {
+      selected = { source: "comm-graph", indicator: feedIndicator };
+    }
+  }
   if (presenceDegraded !== null) {
     const presenceIndicator = indicatorForPresenceDegraded(presenceDegraded);
     if (
@@ -316,10 +382,27 @@ function highestSeverityIndicator(
     }
   }
   // Ties stay with the earlier source. Artifact/Yjs warnings can mean the
-  // newest bytes exist only in this renderer; chat backup starts from a
-  // durable local chat, and stale presence loses nothing at all - so both
-  // stay secondary when an equally severe durability warning is active.
+  // newest bytes exist only in this renderer; chat backup, catalog health,
+  // graph-feed health and presence health remain secondary when an equally
+  // severe durability warning is active. The read-only ones are checked last:
+  // the graph feed costs the canvas new rows and presence costs only the
+  // freshness of a spinner, not the user's data.
   return selected;
+}
+
+function indicatorForTerminalCatalogUnavailable(): PillIndicator {
+  const message =
+    "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
+  return {
+    severity: "warning",
+    containerClassName: AMBER_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: "Remote terminals unavailable",
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: message,
+    ariaLabel: message,
+  };
 }
 
 /**
@@ -375,6 +458,24 @@ function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {
     pulse: null,
     tooltip: status.tooltip,
     ariaLabel: status.ariaLabel,
+  };
+}
+
+/**
+ * Dot-only, like chat backup: the feed degrading is worth an amber light and a
+ * sentence on hover, not a permanent label in the status row - the canvas is
+ * still fully usable on the rows it already holds.
+ */
+function indicatorForCommGraphFeed(health: CommGraphFeedHealth): PillIndicator {
+  return {
+    severity: health.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: health.tooltip,
+    ariaLabel: health.ariaLabel,
   };
 }
 

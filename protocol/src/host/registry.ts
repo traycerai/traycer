@@ -384,14 +384,16 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV22ToV10,
+  terminalListDowngradeV23ToV10,
   terminalListV10,
   terminalListV20,
   terminalListV21,
   terminalListV22,
+  terminalListV23,
   terminalListUpgradeV10ToV20,
   terminalListUpgradeV20ToV21,
   terminalListUpgradeV21ToV22,
+  terminalListUpgradeV22ToV23,
   terminalReadOutputV10,
   terminalRenameV10,
   terminalSubscribeV10,
@@ -402,14 +404,14 @@ import {
   terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
-  terminalPlainCloseV10,
-  terminalPlainCreateV10,
-  terminalPlainEnsureRunningV10,
-  terminalPlainImportLegacyV10,
-  terminalPlainListV10,
-  terminalPlainRenameV10,
+  terminalPlainCloseV21,
+  terminalPlainCreateV21,
+  terminalPlainEnsureRunningV21,
+  terminalPlainImportLegacyV21,
+  terminalPlainListV21,
+  terminalPlainRenameV21,
 } from "@traycer/protocol/host/terminal/plain-contracts";
-import { terminalPlainSubscribeListV10 } from "@traycer/protocol/host/terminal/plain-subscribe-list";
+import { terminalPlainSubscribeListV21 } from "@traycer/protocol/host/terminal/plain-subscribe-list";
 import {
   hostNotificationHooksSave,
   hostNotificationHooksStatus,
@@ -6179,7 +6181,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: terminalListV20,
@@ -6193,8 +6195,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: terminalListV22,
           upgradeFromPreviousVersion: terminalListUpgradeV21ToV22,
         },
+        3: {
+          contract: terminalListV23,
+          upgradeFromPreviousVersion: terminalListUpgradeV22ToV23,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV22ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV23ToV10 },
     },
   },
   // Brand-new v1.0 method on the same `degrade: unsupported` channel as
@@ -6226,17 +6232,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // Durable plain terminals use their own optional family. The released
+  // Durable plain terminals use their own optional v2.1 family. The released
   // generic terminal methods also carry terminal-agent sessions and remain
   // frozen; a peer without this family continues on the legacy client-owned
-  // lifecycle until capability-gated migration is available.
+  // lifecycle. Mixed v1/v2 is unsupported; the family moves together.
   "terminal.plain.create": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainCreateV10,
+        1: {
+          contract: terminalPlainCreateV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6245,11 +6251,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "terminal.plain.list": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainListV10,
+        1: {
+          contract: terminalPlainListV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6258,11 +6264,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "terminal.plain.rename": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainRenameV10,
+        1: {
+          contract: terminalPlainRenameV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6271,11 +6277,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "terminal.plain.ensureRunning": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainEnsureRunningV10,
+        1: {
+          contract: terminalPlainEnsureRunningV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6284,11 +6290,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "terminal.plain.close": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainCloseV10,
+        1: {
+          contract: terminalPlainCloseV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -6297,11 +6303,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "terminal.plain.importLegacy": {
     degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainImportLegacyV10,
+        1: {
+          contract: terminalPlainImportLegacyV21,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -7719,14 +7725,14 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // Snapshot-first durable plain-terminal collection. Unsupported on older
+  // Replacement-state durable plain-terminal collection. Unsupported on older
   // hosts, where the capability-gated client keeps its legacy local model.
   "terminal.plain.subscribeList": {
-    1: {
-      latestMinor: 0,
+    2: {
+      latestMinor: 1,
       versions: {
-        0: {
-          contract: terminalPlainSubscribeListV10,
+        1: {
+          contract: terminalPlainSubscribeListV21,
         },
       },
     },

@@ -123,7 +123,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
-    "compile": "tsc --noEmit",
+    "compile": "tsgo --noEmit --singleThreaded",
     "prepack": "bun run build",
     "test": "vitest run",
     "lint": "eslint . --cache --fix --max-warnings 0"

@@ -2,50 +2,29 @@ import { createElement, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  PlainTerminalProjection,
-  RenamePlainTerminalRequest,
-} from "@traycer/protocol/host/terminal/plain-schemas";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import {
+  getPlainTerminal,
   replacePlainTerminalSnapshot,
   setPlainTerminalStreamStatus,
   settlePlainTerminalSnapshot,
   type PlainTerminalCollection,
-  type PlainTerminalProjectionBarrier,
 } from "@/lib/terminals/plain-terminal-authority";
-import type { PlainTerminalMutationAuthority } from "@/hooks/terminal/use-plain-terminal-mutations";
+import { usePlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
 
 vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
-
-type CapturedMutation = {
-  readonly mapVariables: (variables: never) => unknown;
-  readonly options: {
-    readonly onMutate?: (variables: never) => unknown;
-    readonly onSuccess?: (
-      response: never,
-      variables: never,
-      context: {
-        hostId: string;
-        scope: PlainTerminalMutationAuthority["scope"];
-        barrier: PlainTerminalProjectionBarrier;
-      },
-    ) => void;
-  };
-};
-
-const captured = new Map<string, CapturedMutation>();
-
-vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostMutation: (args: CapturedMutation & { readonly method: string }) => {
-    captured.set(args.method, args);
-    return { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
-  },
-}));
-
-import { usePlainTerminalMutations } from "@/hooks/terminal/use-plain-terminal-mutations";
 
 const SCOPE = { kind: "epic", epicId: "epic-1" } as const;
 
@@ -82,19 +61,6 @@ function collection(hostId: string): PlainTerminalCollection {
   );
 }
 
-function authority(
-  hostId: string,
-  overrides: Partial<PlainTerminalMutationAuthority>,
-): PlainTerminalMutationAuthority {
-  return {
-    hostId,
-    scope: SCOPE,
-    canMutate: true,
-    collection: collection(hostId),
-    ...overrides,
-  };
-}
-
 function wrapper(
   queryClient: QueryClient,
 ): ({ children }: { readonly children: ReactNode }) => ReactNode {
@@ -104,96 +70,143 @@ function wrapper(
 
 describe("plain terminal mutation authority", () => {
   beforeEach(() => {
-    captured.clear();
     vi.clearAllMocks();
   });
 
-  it("writes a delayed canonical response to the host captured at mutation start", () => {
-    const queryClient = new QueryClient();
+  it("writes a delayed canonical response to the serving-host cache captured at mutate start", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "rename",
+      handlers: {
+        "terminal.plain.rename": (request) => ({
+          terminal: terminal({
+            hostId: "host-a",
+            revision: 2,
+            manualTitle: request.manualTitle,
+          }),
+        }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      messenger,
+      findHostById: (hostId) => ({ ...mockLocalHostEntry, hostId }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    const client = spine.createRequesterForHostId("host-a");
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals("host-a", SCOPE),
+      collection("host-a"),
+    );
     const rendered = renderHook(
-      ({ currentAuthority }) =>
+      ({ currentHostId }) =>
         usePlainTerminalMutations({
-          authority: currentAuthority,
-          client: null,
+          authority: {
+            hostId: currentHostId,
+            scope: SCOPE,
+            canMutate: true,
+            collection: collection(currentHostId),
+          },
+          client,
+          resolveOwnerClient: () => client,
         }),
       {
-        initialProps: { currentAuthority: authority("host-a", {}) },
+        initialProps: { currentHostId: "host-a" },
         wrapper: wrapper(queryClient),
       },
     );
-    expect(rendered.result.current.rename).toBeDefined();
-    const started = captured.get("terminal.plain.rename");
-    if (started === undefined) throw new Error("rename mutation was not bound");
-    const context = started.options.onMutate?.({} as never);
 
-    rendered.rerender({ currentAuthority: authority("host-b", {}) });
-    const canonical = terminal({
+    const pending = rendered.result.current.rename.mutateAsync({
       hostId: "host-a",
-      revision: 2,
+      terminalId: "terminal-1",
       manualTitle: "canonical",
     });
-    started.options.onSuccess?.(
-      { terminal: canonical } as never,
-      {} as never,
-      context as {
-        hostId: string;
-        scope: typeof SCOPE;
-        barrier: PlainTerminalProjectionBarrier;
-      },
-    );
+    rendered.rerender({ currentHostId: "host-b" });
+    await pending;
 
     expect(
-      queryClient.getQueryData<PlainTerminalCollection>(
-        hostQueryKeys.plainTerminals("host-a", SCOPE),
-      )?.terminalsById["terminal-1"]?.record.manualTitle,
+      getPlainTerminal(
+        queryClient.getQueryData<PlainTerminalCollection>(
+          hostQueryKeys.plainTerminals("host-a", SCOPE),
+        ),
+        "host-a",
+        "terminal-1",
+      )?.record.manualTitle,
     ).toBe("canonical");
     expect(
       queryClient.getQueryData(hostQueryKeys.plainTerminals("host-b", SCOPE)),
     ).toBeUndefined();
   });
 
-  it("uses ensureRunning only for an existing logical id and never falls back to create", () => {
-    const queryClient = new QueryClient();
-    renderHook(
+  it("uses ensureRunning only for an existing fleet identity and never falls back to create", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const rendered = renderHook(
       () =>
         usePlainTerminalMutations({
-          authority: authority("host-a", {}),
+          authority: {
+            hostId: "host-a",
+            scope: SCOPE,
+            canMutate: true,
+            collection: collection("host-a"),
+          },
           client: null,
+          resolveOwnerClient: () => null,
         }),
       { wrapper: wrapper(queryClient) },
     );
-    const ensure = captured.get("terminal.plain.ensureRunning");
-    if (ensure === undefined) {
-      throw new Error("plain terminal mutations were not bound");
-    }
 
-    expect(() =>
-      ensure.mapVariables({
+    await expect(
+      rendered.result.current.ensureRunning.mutateAsync({
+        hostId: "host-a",
         terminalId: "missing-terminal",
         cols: 80,
         rows: 24,
-      } as never),
-    ).toThrow("Cannot bootstrap an unknown terminal");
+      }),
+    ).rejects.toThrow("Cannot bootstrap an unknown terminal");
   });
 
-  it("blocks mutation variables while capable host data is stale", () => {
-    const queryClient = new QueryClient();
-    renderHook(
+  it("blocks mutations while capable host data is stale", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const rendered = renderHook(
       () =>
         usePlainTerminalMutations({
-          authority: authority("host-a", { canMutate: false }),
+          authority: {
+            hostId: "host-a",
+            scope: SCOPE,
+            canMutate: false,
+            collection: collection("host-a"),
+          },
           client: null,
+          resolveOwnerClient: () => null,
         }),
       { wrapper: wrapper(queryClient) },
     );
-    const rename = captured.get("terminal.plain.rename");
-    if (rename === undefined) throw new Error("rename mutation was not bound");
-    const request: RenamePlainTerminalRequest = {
-      terminalId: "terminal-1",
-      manualTitle: "blocked",
-    };
-    expect(() => rename.mapVariables(request as never)).toThrow(
-      "Cached data is view-only",
-    );
+
+    await expect(
+      rendered.result.current.rename.mutateAsync({
+        hostId: "host-a",
+        terminalId: "terminal-1",
+        manualTitle: "blocked",
+      }),
+    ).rejects.toThrow("Cached data is view-only");
   });
 });
