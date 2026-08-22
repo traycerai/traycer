@@ -48,6 +48,13 @@ const IDENTITY_DIR_CODE = "HOST_IDENTITY_DIR_INACCESSIBLE";
 const UNVERIFIED_CODE = "HOST_IDENTITY_HOME_UNVERIFIED";
 const CREDENTIAL_CODE = "HOST_CREDENTIAL_NEEDS_REAUTH";
 
+/**
+ * A `make dev-desktop` run slot, for the two rows that exercise one. Chosen so
+ * `sanitizeDevDesktopSlot` maps it to itself, which is what lets the fixture
+ * spell the resulting paths literally instead of re-deriving them.
+ */
+const DEV_RUN_SLOT = "doctor-run-slot";
+
 let workHome: string;
 
 beforeEach(() => {
@@ -55,10 +62,11 @@ beforeEach(() => {
   osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
-  // A dev-desktop slot would move `hostHomeDir("dev")` to
-  // `host/dev-runs/<slot>` and take the fixture's paths with it. The rows here
-  // are about the plain dev home, so the variable is cleared rather than left
-  // to whatever launched the test runner.
+  // A dev-desktop slot moves `hostHomeDir("dev")` to `host/dev-runs/<slot>`
+  // and takes the fixture's paths with it. Most rows here are about the plain
+  // dev home, so the variable is cleared rather than left to whatever launched
+  // the test runner; the two rows that DO exercise a slot set it themselves
+  // and are named for it.
   delete process.env.DEV_DESKTOP_SLOT;
   vi.resetModules();
 });
@@ -170,6 +178,20 @@ function hostHomeFor(environment: string): string {
   return environment === "production" ? base : join(base, environment);
 }
 
+/**
+ * `~/.traycer/host/dev-runs/<slot>` - what `hostHomeDir("dev")` resolves to
+ * INSTEAD of the plain dev home while `DEV_DESKTOP_SLOT` is set, and therefore
+ * what {@link identityDir}'s slot-less spelling deliberately does not cover.
+ */
+function devRunHomeFor(slot: string): string {
+  return join(workHome, ".traycer", "host", "dev-runs", slot);
+}
+
+/** `<run home>/identity` - the identity subtree of one dev-desktop run. */
+function devRunIdentityDir(slot: string): string {
+  return join(devRunHomeFor(slot), "identity");
+}
+
 /** `<host home>/identity` - the DEFAULT identity home's identity subtree. */
 function identityDir(environment: string): string {
   return join(hostHomeFor(environment), "identity");
@@ -190,9 +212,17 @@ function devIdentityPoolRoot(): string {
 }
 
 function writeIdentityMarker(environment: string, marker: unknown): void {
-  mkdirSync(identityDir(environment), { recursive: true });
+  writeIdentityMarkerInto(identityDir(environment), marker);
+}
+
+/** Seats an identity marker in an identity subtree named outright. */
+function writeIdentityMarkerInto(
+  identityDirPath: string,
+  marker: unknown,
+): void {
+  mkdirSync(identityDirPath, { recursive: true });
   writeFileSync(
-    join(identityDir(environment), "needs-reauth.json"),
+    join(identityDirPath, "needs-reauth.json"),
     JSON.stringify(marker),
   );
 }
@@ -391,6 +421,50 @@ describe("runDoctor host identity needs-reauth", () => {
     expect(issues.some((i) => i.code === IDENTITY_DIR_CODE)).toBe(false);
     expect(issues.some((i) => i.code === UNVERIFIED_CODE)).toBe(false);
   });
+
+  it("reads the marker from the dev-desktop RUN home when a slot is set", async () => {
+    // The first half of the one asymmetry in this feature. The marker path
+    // resolves through `hostHomeDir`, so a `make dev-desktop` run moves it to
+    // `host/dev-runs/<slot>/identity` - while the pool root the scope caption
+    // reads stays at the plain `host/dev/identities` (pinned by the sibling
+    // row in the scope suite). The plain dev home is written here too, with a
+    // DIFFERENT reason: it is another run's tree, so a marker-path resolution
+    // that lost its slot-awareness would find that one and be caught by the
+    // reason rather than merely by the absence of an issue.
+    //
+    // The slot is set here and nowhere else; the suite's `afterEach` restores
+    // the launching environment's value and `beforeEach` clears it, so it
+    // cannot reach a sibling row even if this one throws.
+    process.env.DEV_DESKTOP_SLOT = DEV_RUN_SLOT;
+    stageHostNotRunning("dev");
+    stageDevIdentityPool("machine");
+    writeIdentityMarkerInto(devRunIdentityDir(DEV_RUN_SLOT), {
+      version: 1,
+      reason: "refresh-rejected",
+      since: "2026-08-21T15:12:00.000Z",
+    });
+    writeIdentityMarker("dev", {
+      version: 1,
+      reason: "other-run-marker",
+      since: "2026-01-01T00:00:00.000Z",
+    });
+
+    const issues = await runDoctorFor("dev");
+
+    const issue = issues.find((i) => i.code === IDENTITY_CODE);
+    expect(issue).toBeDefined();
+    expect(issue?.details).toMatchObject({
+      markerPath: join(devRunIdentityDir(DEV_RUN_SLOT), "needs-reauth.json"),
+      identityDirPath: devRunIdentityDir(DEV_RUN_SLOT),
+      // This run's marker, not the plain dev home's.
+      reason: "refresh-rejected",
+      since: "2026-08-21T15:12:00.000Z",
+      markerReadable: true,
+    });
+    expect(issue?.message).toContain(devRunIdentityDir(DEV_RUN_SLOT));
+    // A marker that WAS found is the answer; the caption is for absence only.
+    expect(issues.some((i) => i.code === UNVERIFIED_CODE)).toBe(false);
+  });
 });
 
 /**
@@ -519,6 +593,47 @@ describe("runDoctor identity-home scope", () => {
     const issue = issues.find((i) => i.code === UNVERIFIED_CODE);
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("info");
+  });
+
+  it("still finds the machine-wide pool from inside a dev-desktop run slot", async () => {
+    // The second half of the asymmetry, and the half nothing else pins. The
+    // two paths this row spans resolve through DIFFERENT rules on purpose:
+    // `hostIdentityNeedsReauthPath` follows `hostHomeDir` into
+    // `host/dev-runs/<slot>/identity`, while `hostDevIdentityPoolRoot` is
+    // fixed at `host/dev/identities` because the pool is one per MACHINE, not
+    // one per run. Routing the pool root through `hostHomeDir` too - the
+    // tidying this deliberate split invites - would send it looking inside
+    // this run's own tree, find nothing, and drop the caption: a stranded
+    // dev-pool host reported clean, which is the exact regression the caption
+    // exists to prevent. Asserted through the issue's own details so it is
+    // production's resolution being pinned, not the fixture's.
+    //
+    // Slot handling as in the marker row above: set here only, cleared and
+    // restored by the suite's hooks.
+    process.env.DEV_DESKTOP_SLOT = DEV_RUN_SLOT;
+    stageHostNotRunning("dev");
+    stageDevIdentityPool("machine");
+
+    const issues = await runDoctorFor("dev");
+
+    const issue = issues.find((i) => i.code === UNVERIFIED_CODE);
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("info");
+    expect(issue?.details).toMatchObject({
+      // Probed inside the run...
+      probedIdentityDirPath: devRunIdentityDir(DEV_RUN_SLOT),
+      probedMarkerPath: join(
+        devRunIdentityDir(DEV_RUN_SLOT),
+        "needs-reauth.json",
+      ),
+      // ...but the pool it weighed that absence against is the machine's.
+      devIdentityPoolRoot: devIdentityPoolRoot(),
+      environment: "dev",
+      hostProcessAlive: false,
+    });
+    expect(issue?.message).toContain(devIdentityPoolRoot());
+    // Nothing was found, so nothing is asserted about the identity itself.
+    expect(issues.some((i) => i.code === IDENTITY_CODE)).toBe(false);
   });
 
   it("reports the marker it DID find even on an eligible pool machine, rather than only the caption", async () => {
