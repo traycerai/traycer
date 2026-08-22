@@ -513,6 +513,8 @@ import {
   worktreeListAllForHostResponseSchemaV14,
   worktreeListAllForHostRequestSchemaV15,
   worktreeListAllForHostResponseSchemaV15,
+  worktreeListAllForHostRequestSchemaV16,
+  worktreeListAllForHostResponseSchemaV16,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
   worktreeListBranchesRequestSchema,
@@ -1177,6 +1179,29 @@ export const worktreeListAllForHostUpgradeV14ToV15 = defineUpgradePath<
     worktrees: response.worktrees.map((worktree) => ({
       ...worktree,
       presence: "present" as const,
+    })),
+  }),
+});
+
+export const worktreeListAllForHostV16 = defineRpcContract({
+  method: "worktree.listAllForHost",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: worktreeListAllForHostRequestSchemaV16,
+  responseSchema: worktreeListAllForHostResponseSchemaV16,
+});
+
+export const worktreeListAllForHostUpgradeV15ToV16 = defineUpgradePath<
+  typeof worktreeListAllForHostV15,
+  typeof worktreeListAllForHostV16
+>({
+  from: worktreeListAllForHostV15.schemaVersion,
+  to: worktreeListAllForHostV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    worktrees: response.worktrees.map((worktree) => ({
+      ...worktree,
+      gitUnreadable: false,
     })),
   }),
 });
@@ -6449,7 +6474,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.listAllForHost": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: worktreeListAllForHostV10,
@@ -6474,6 +6499,10 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: worktreeListAllForHostV15,
           upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV14ToV15,
+        },
+        6: {
+          contract: worktreeListAllForHostV16,
+          upgradeFromPreviousVersion: worktreeListAllForHostUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},
