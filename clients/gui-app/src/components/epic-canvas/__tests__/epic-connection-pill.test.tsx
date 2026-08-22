@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -112,10 +113,10 @@ async function expectTooltip(text: string) {
 async function tooltipLines(): Promise<ReadonlyArray<string | null>> {
   fireEvent.focus(screen.getByTestId("epic-connection-pill"));
   const tooltip = await screen.findByRole("tooltip");
-  const paragraphs = Array.from(tooltip.querySelectorAll("p"));
-  return paragraphs.length === 0
+  const entries = within(tooltip).queryAllByRole("listitem");
+  return entries.length === 0
     ? [tooltip.textContent]
-    : paragraphs.map((line) => line.textContent);
+    : entries.map((entry) => entry.textContent);
 }
 
 describe("<EpicConnectionPill />", () => {

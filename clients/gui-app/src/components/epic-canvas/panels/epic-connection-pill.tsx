@@ -241,13 +241,15 @@ interface SelectedIndicator {
  */
 function tooltipFor(selected: SelectedIndicator): ReactNode {
   if (selected.alsoDegraded.length === 0) return selected.indicator.tooltip;
+  // A real list, winner first: one entry per degraded plane, in the order
+  // the accessible name reads them.
   return (
-    <div className="flex flex-col gap-1">
-      <p>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</p>
+    <ul className="flex flex-col gap-1">
+      <li>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</li>
       {selected.alsoDegraded.map((other) => (
-        <p key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</p>
+        <li key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</li>
       ))}
-    </div>
+    </ul>
   );
 }
 
