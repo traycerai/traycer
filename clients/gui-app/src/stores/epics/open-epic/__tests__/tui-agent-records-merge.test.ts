@@ -62,9 +62,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function row(
-  overrides: Partial<TuiAgentRecordSummary>,
-): TuiAgentRecordSummary {
+function row(overrides: Partial<TuiAgentRecordSummary>): TuiAgentRecordSummary {
   return {
     tuiAgentId: "tui-1",
     ownerUserId: USER,
@@ -231,7 +229,9 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     // answer for the session - the merge must not become a way back in.
     signedInAs(USER);
     const handle = newSession();
-    handle.store.getState().applyTuiAgentRecords([row({ tuiAgentId: "tui-1" })]);
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([row({ tuiAgentId: "tui-1" })]);
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiRemove",
       epicId: "epic-test",

@@ -55,10 +55,14 @@ import {
   type LeftPanelId,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   getEpicSessionHandleHostClient,
+  getEpicSessionHandleHostId,
   getOpenEpicRegistry,
 } from "@/lib/registries/epic-session-registry";
+import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
 import {
   canReparentProjected,
   type ProjectedReparentNode,
@@ -582,6 +586,15 @@ export interface SidebarReparentDropInput {
   readonly panelId: RootCreatePanelId;
   /** The canvas tab the drop happened in - scopes the new-parent expand. */
   readonly viewTabId: string;
+  /**
+   * The app's query client, handed in by the DnD provider (this module is
+   * imperative and has no hook context). A reparent that goes through the
+   * host RPC invalidates the moved node's record query on success, exactly
+   * as the hook-based chat mutations do - without it a successful drop on a
+   * host whose push stream is disconnected or unsupported sat under its old
+   * parent until the next 20s poll.
+   */
+  readonly queryClient: QueryClient;
 }
 
 /**
@@ -663,11 +676,26 @@ export function commitSidebarReparentDrop(
     // way the hook-based chat mutations surface theirs.
     const client = getEpicSessionHandleHostClient(handle);
     if (client === null) return;
+    const sessionHostId = getEpicSessionHandleHostId(handle);
+    const movedNodeType = evaluation.node.type;
     void client
       .request("epic.reparentChat", {
         epicId: input.epicId,
         chatId: input.sourceNodeId,
         newParentId: input.newParentId,
+      })
+      .then(() => {
+        // The commit landed in the host's registry. The push stream brings
+        // the moved pointer back when it is live; when it is disconnected,
+        // unsupported, or (for a terminal agent) negotiated below @1.1, only
+        // the 20s poll would - so re-ask now, the way every hook-based record
+        // mutation does on success. Scoped to the session's host: that is
+        // the client the request was sent on.
+        if (movedNodeType === "terminal-agent") {
+          invalidateEpicTuiAgentRecords(input.queryClient, sessionHostId);
+        } else {
+          invalidateEpicChatRecords(input.queryClient, sessionHostId);
+        }
       })
       .catch((error: unknown) => {
         toastFromHostError(
