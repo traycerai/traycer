@@ -638,11 +638,12 @@ export function createTerminalSessionStore(
       },
       onExit: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
-        // A live exit frame carries no reason - it is only ever a genuine
-        // process exit or an explicit kill to an attached viewer (a reaped
-        // idle session has no viewer, so it is observed via the reattach
-        // snapshot's `session.exitReason` instead). Leave `exitReason`
-        // untouched here; the snapshot path is authoritative for it.
+        // A live exit frame carries no reason. It is NOT only ever a genuine
+        // process exit to an attached viewer: the host's setup-terminal reap
+        // kills sessions whose canvas tiles are live subscribers. The reason
+        // for such a kill arrives on the `sessionUpdated` frame the host
+        // broadcasts immediately before this exit frame (handled below), so
+        // leave `exitReason` untouched here rather than clearing it.
         set({
           status: "exited",
           exitCode: frame.exitCode,
@@ -664,6 +665,13 @@ export function createTerminalSessionStore(
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
+          // The one live carrier of the exit reason for an attached viewer.
+          // The host kills setup terminals whose tiles are subscribed (the
+          // reap keys on typed input, not viewers), and its `handlePtyExit`
+          // broadcasts this frame - reason included - before the reasonless
+          // `exit` frame. Dropping it here classified every reaped setup
+          // shell as a crash ("exited unexpectedly" notifications).
+          exitReason: frame.session.exitReason ?? get().exitReason,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
