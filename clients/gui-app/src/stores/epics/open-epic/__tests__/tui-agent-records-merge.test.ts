@@ -90,6 +90,13 @@ function row(overrides: Partial<TuiAgentRecordSummary>): TuiAgentRecordSummary {
   };
 }
 
+/**
+ * Every handle a test opens. A store subscribes to the auth store at
+ * construction and unsubscribes only in `dispose()`, so an undisposed handle
+ * would keep re-publishing and re-projecting on every later test's sign-out.
+ */
+const openHandles: OpenEpicStoreHandle[] = [];
+
 function newSession(): OpenEpicStoreHandle {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
@@ -111,6 +118,7 @@ function newSession(): OpenEpicStoreHandle {
   });
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
+  openHandles.push(handle);
   return handle;
 }
 
@@ -130,6 +138,9 @@ function signedInAs(userId: string): void {
 
 // The auth store is module-global; do not leak this identity into the next test.
 afterEach(() => {
+  // Before the sign-out: a live handle's auth subscription would otherwise
+  // re-publish and re-project a store the test is done with.
+  for (const handle of openHandles.splice(0)) handle.dispose();
   useAuthStore.getState().setSignedOut();
 });
 

@@ -61,9 +61,12 @@ export type ListTuiAgentsRequest = z.infer<typeof listTuiAgentsRequestSchema>;
 export const tuiAgentRecordSummarySchema = z.object({
   tuiAgentId: z.string().min(1),
   /** IDENTITY-BEARING, as on the chat row - never render, always key. */
-  ownerUserId: z.string(),
-  /** The BINDING host - the record is bound to it for life. */
-  hostId: z.string(),
+  ownerUserId: z.string().min(1),
+  /**
+   * The BINDING host - the record is bound to it for life. Non-empty like the
+   * owner: a row with no binding could not be addressed by any affordance.
+   */
+  hostId: z.string().min(1),
   /**
    * The harness discriminator, an OPEN string on the wire so a newer host's
    * vendor still parses; clients narrow through their own harness catalog

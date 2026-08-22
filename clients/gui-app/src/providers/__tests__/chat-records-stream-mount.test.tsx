@@ -15,7 +15,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { ChatRecordsStreamDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   createOpenEpicStore,
@@ -30,7 +31,9 @@ import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 
 interface StreamState {
   /** One entry per `ChatRecordsStreamClient` construction. */
-  readonly opened: Array<{ readonly emit: (delta: ChatRecordDelta) => void }>;
+  readonly opened: Array<{
+    readonly emit: (delta: ChatRecordsStreamDelta) => void;
+  }>;
   closes: number;
   support: StreamMethodSupport | null;
   hostId: string | null;
@@ -60,7 +63,9 @@ vi.mock(
   () => ({
     ChatRecordsStreamClient: class {
       constructor(options: {
-        readonly callbacks: { readonly onDelta: (d: ChatRecordDelta) => void };
+        readonly callbacks: {
+          readonly onDelta: (d: ChatRecordsStreamDelta) => void;
+        };
       }) {
         streamState.opened.push({ emit: options.callbacks.onDelta });
       }
@@ -103,6 +108,36 @@ function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
   };
 }
 
+function tuiRecord(
+  overrides: Partial<TuiAgentRecordSummary>,
+): TuiAgentRecordSummary {
+  return {
+    tuiAgentId: "tui-1",
+    ownerUserId: "user-a",
+    hostId: "host-A",
+    harnessId: "claude",
+    harnessSessionId: null,
+    parentId: null,
+    title: "An agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: [],
+    workspaceMode: null,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 1,
+    ...overrides,
+  };
+}
+
 const noopStreamFactory: EpicStreamClientFactory = () => ({
   applyUpdate: () => undefined,
   awareness: () => undefined,
@@ -131,7 +166,7 @@ function openEpic(epicId: string, hostId: string | null): OpenEpicStoreHandle {
   return handle;
 }
 
-function emit(delta: ChatRecordDelta): void {
+function emit(delta: ChatRecordsStreamDelta): void {
   const stream = streamState.opened.at(-1);
   if (stream === undefined) throw new Error("no stream opened");
   act(() => {
@@ -210,6 +245,13 @@ describe("<ChatRecordsStreamMount />", () => {
       epicId: "epic-1",
       record: record({ chatId: "from-host-a" }),
     });
+    // The terminal-agent frame too, so the assertion on its table is about
+    // the GATE and not about a table nothing ever wrote to.
+    emit({
+      kind: "tuiUpsert",
+      epicId: "epic-1",
+      record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
+    });
 
     expect(foreign.store.getState().chats.allIds).toEqual([]);
     // Same gate for both tables, not just the terminal-agent arm.
@@ -228,8 +270,16 @@ describe("<ChatRecordsStreamMount />", () => {
       epicId: "epic-1",
       record: record({ chatId: "from-host-a" }),
     });
+    emit({
+      kind: "tuiUpsert",
+      epicId: "epic-1",
+      record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
+    });
 
     expect(bound.store.getState().chats.allIds).toEqual(["from-host-a"]);
+    expect(bound.store.getState().tuiAgentRecords.allIds).toEqual([
+      "tui-from-host-a",
+    ]);
   });
 
   it("drops a delta for an epic with no live session rather than acquiring one", () => {
