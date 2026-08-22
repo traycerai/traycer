@@ -3871,8 +3871,18 @@ describe("WsStreamClient host credential provisioning", () => {
     const reconnectReporting = async (
       state: "missing" | "active" | "needs-reauth",
     ): Promise<void> => {
+      const before = sockets.length;
       sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
-      await wait(30);
+      // WAIT FOR THE SOCKET, not for a fixed delay. The re-dial backs off, so
+      // by the fourth drop a flat 30ms expires before the new socket exists -
+      // and the handshake below would then be completed on the CLOSED one,
+      // delivering no ack at all. A case that asserts a mint count is
+      // UNCHANGED passes vacuously when that happens, which is how the
+      // reconnect that never landed went unnoticed.
+      for (let i = 0; i < 100 && sockets.length === before; i += 1) {
+        await wait(10);
+      }
+      expect(sockets.length).toBeGreaterThan(before);
       completeProvisionHandshake(sockets[sockets.length - 1].socket, state);
       await flush();
     };
@@ -3891,6 +3901,14 @@ describe("WsStreamClient host credential provisioning", () => {
     await reconnectReporting("needs-reauth");
     await reconnectReporting("needs-reauth");
     expect(mint).toHaveBeenCalledTimes(2);
+
+    // The re-arm is a VALUE CHANGE, not a return to `active`. A burned
+    // credential the host then deletes reports `missing`, and that host is
+    // asking for one just as plainly as the `needs-reauth` before it - so a
+    // rule that only re-armed via `active` would strand exactly the host that
+    // cleaned up after itself.
+    await reconnectReporting("missing");
+    expect(mint).toHaveBeenCalledTimes(3);
 
     session.close();
   });
