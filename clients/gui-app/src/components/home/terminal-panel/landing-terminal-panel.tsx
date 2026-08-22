@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type TransitionEvent as ReactTransitionEvent,
 } from "react";
@@ -29,6 +30,10 @@ import {
   usePointerDragCommit,
   type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
+import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   getPlainTerminal,
@@ -77,6 +82,18 @@ import {
   resolveLandingTerminalLaunchCwd,
   type LandingTerminalHostContext,
 } from "./landing-terminal-host-context";
+
+/**
+ * The panel's own surface. Desktop is a docked split, so it reads as chrome
+ * beside the content and carries the seam borders. The phone overlay covers the
+ * page rather than sitting next to it, so `bg-canvas` there laid a white sheet
+ * under the `bg-background` header, and the borders divide nothing.
+ */
+function landingTerminalPanelSurfaceClass(isMobile: boolean): string {
+  return isMobile
+    ? "bg-background"
+    : "border-t border-l border-canvas-border/70 bg-canvas";
+}
 
 interface LandingTerminalDragState {
   readonly containerWidth: number;
@@ -1013,7 +1030,21 @@ function LandingTerminalPanelContents(
     setPanelWidthFraction: props.onSetPanelWidthFraction,
     onLayoutSettled: scheduleTerminalLayoutReconcile,
   });
-
+  // Below the mobile breakpoint a side-by-side split leaves both halves
+  // unusably narrow and the drag handle has no pointer to serve, so an open
+  // panel always renders through the maximized full-overlay path instead.
+  // The overlay geometry applies only while actually open: a closed panel
+  // physically collapses to the 0%-width in-flow strip on every device
+  // rather than lingering as an invisible full-viewport layer.
+  const isMobile = useIsMobileViewport();
+  const fullOverlay = props.maximized || isMobile;
+  const overlayActive = fullOverlay && props.panelOpen;
+  // Same touch-key treatment as the epic terminal tiles: at phone width the
+  // open panel is a full overlay, so the key bar mounts under the body and
+  // the keyboard inset pads the covered strip (0 wherever the platform
+  // resizes the layout itself). Desktop keeps its physical keyboard.
+  const keyboardInset = useVirtualKeyboardInset();
+  const keyBarActive = isMobile && props.panelOpen;
   useLandingTerminalShortcuts({
     landingPageId: props.landingPageId,
     panelOpen: props.panelOpen,
@@ -1026,9 +1057,12 @@ function LandingTerminalPanelContents(
     onCloseTab: props.onCloseTab,
     onCloseAllTabs: props.onCloseAllTabs,
   });
-  const panelStyle = props.maximized
-    ? undefined
-    : { width: props.panelOpen ? `${props.panelWidthFraction * 100}%` : "0%" };
+  const panelStyle = landingTerminalPanelStyle({
+    overlayActive,
+    panelOpen: props.panelOpen,
+    panelWidthFraction: props.panelWidthFraction,
+    keyboardInsetPx: keyBarActive ? keyboardInset : 0,
+  });
   const handlePanelTransitionEnd = useCallback(
     (event: ReactTransitionEvent<HTMLElement>): void => {
       if (event.target !== event.currentTarget) return;
@@ -1046,6 +1080,9 @@ function LandingTerminalPanelContents(
       scheduleTerminalLayoutReconcile();
     },
     [isDragging, props.panelOpen, scheduleTerminalLayoutReconcile],
+  );
+  const revealToggle = props.panelOpen ? null : (
+    <LandingTerminalPanelToggle onOpenPanel={props.onOpenPanel} />
   );
   useEffect(() => {
     const panel = panelRef.current;
@@ -1066,9 +1103,16 @@ function LandingTerminalPanelContents(
   return (
     <>
       {/* Reveal-only affordance. Once open, the panel header owns collapse -
-          rendering both would stack two controls in the same corner. */}
-      {props.panelOpen ? null : (
-        <LandingTerminalPanelToggle onOpenPanel={props.onOpenPanel} />
+          rendering both would stack two controls in the same corner. On a phone
+          it lives in the header's route-actions slot instead of floating in the
+          content area, where it was the only element in an otherwise empty
+          region with nothing to align to. */}
+      {isMobile ? (
+        <MobileLandingTerminalActionBinder
+          landingPageId={props.landingPageId}
+        />
+      ) : (
+        revealToggle
       )}
       <div
         {...sliderProps}
@@ -1084,8 +1128,7 @@ function LandingTerminalPanelContents(
         className={cn(
           "relative z-10 shrink-0 bg-background ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden",
           pointerDragHandleAxisClassName("horizontal"),
-          (!props.panelOpen || props.maximized) &&
-            "invisible pointer-events-none",
+          (!props.panelOpen || fullOverlay) && "invisible pointer-events-none",
         )}
       />
       <aside
@@ -1094,7 +1137,8 @@ function LandingTerminalPanelContents(
         data-testid="landing-terminal-panel"
         data-open={props.panelOpen ? "true" : "false"}
         className={cn(
-          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-t border-l border-canvas-border/70 bg-canvas",
+          "flex h-full min-h-0 shrink-0 flex-col overflow-hidden",
+          landingTerminalPanelSurfaceClass(isMobile),
           // The width transition exists for open/collapse only. During a
           // resize drag the global freeze class suspends it - otherwise every
           // per-frame `style.width` write eases over the default duration and
@@ -1103,12 +1147,13 @@ function LandingTerminalPanelContents(
           props.panelOpen
             ? "transition-[width]"
             : "invisible pointer-events-none transition-[width,visibility]",
-          props.maximized && "absolute inset-0 z-20 w-full",
+          overlayActive && "absolute inset-0 z-20 w-full",
         )}
         style={panelStyle}
         onTransitionEnd={handlePanelTransitionEnd}
       >
         <LandingTerminalPanelHeader
+          isMobile={isMobile}
           maximized={props.maximized}
           onToggleMaximized={props.onToggleMaximized}
           onTogglePanel={props.onTogglePanel}
@@ -1143,8 +1188,52 @@ function LandingTerminalPanelContents(
           onCancelDirectoryPicker={props.onCancelDirectoryPicker}
           authorityEntries={props.authorityEntries}
         />
+        <LandingTerminalMobileKeyBar
+          active={keyBarActive}
+          instanceId={props.activeInstanceId}
+          keyboardOpen={keyboardInset > 0}
+        />
       </aside>
     </>
+  );
+}
+
+/**
+ * In-flow width for the docked split; in overlay mode (maximized / mobile)
+ * the panel is absolutely positioned instead, and at phone width the measured
+ * keyboard inset pads the covered strip so the key bar rides above the soft
+ * keyboard (0 wherever the platform resizes the layout itself).
+ */
+function landingTerminalPanelStyle(args: {
+  readonly overlayActive: boolean;
+  readonly panelOpen: boolean;
+  readonly panelWidthFraction: number;
+  readonly keyboardInsetPx: number;
+}): CSSProperties | undefined {
+  if (!args.overlayActive) {
+    return {
+      width: args.panelOpen ? `${args.panelWidthFraction * 100}%` : "0%",
+    };
+  }
+  if (args.keyboardInsetPx > 0) return { paddingBottom: args.keyboardInsetPx };
+  return undefined;
+}
+
+interface LandingTerminalMobileKeyBarProps {
+  readonly active: boolean;
+  readonly instanceId: string | null;
+  readonly keyboardOpen: boolean;
+}
+
+function LandingTerminalMobileKeyBar(
+  props: LandingTerminalMobileKeyBarProps,
+): ReactNode {
+  if (!props.active || props.instanceId === null) return null;
+  return (
+    <MobileTerminalKeyBar
+      instanceId={props.instanceId}
+      keyboardOpen={props.keyboardOpen}
+    />
   );
 }
 
@@ -1429,11 +1518,94 @@ function LandingTerminalPanelToggle(props: {
   );
 }
 
+/**
+ * Both directions of the panel control, rendered into the mobile header's
+ * route-actions slot instead of floating in the content area. Free to leave
+ * that corner at phone width because the open panel goes through the
+ * full-overlay path there, so there is no docked-split geometry to stay
+ * aligned with.
+ *
+ * It carries collapse as well as reveal because the overlay is `absolute
+ * inset-0` inside the PAGE container, which sits below the app header - so it
+ * never covers the header, and a collapse button inside the panel would stack a
+ * second bar under a header that is still on screen. One control in one bar
+ * instead.
+ *
+ * Reads the store itself rather than taking handlers as props: the slot holds a
+ * baked `ReactNode`, and one closing over a caller's handler would go stale
+ * (see `MobileEpicHeaderActionsBinder`). The page id is data, not a handler:
+ * the binder re-bakes the slot whenever it changes, so it stays current.
+ */
+function LandingTerminalHeaderToggle(props: {
+  readonly landingPageId: string;
+}): ReactNode {
+  const panelOpen = useLandingTerminalStore(
+    (state) => landingTerminalLayoutFor(state, props.landingPageId).panelOpen,
+  );
+  const setPanelOpen = useLandingTerminalStore((state) => state.setPanelOpen);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label={panelOpen ? "Collapse terminal panel" : "Open terminal panel"}
+      data-testid={
+        panelOpen ? "landing-terminal-collapse" : "landing-terminal-toggle"
+      }
+      className="shrink-0 text-muted-foreground hover:text-foreground"
+      onClick={() => {
+        setPanelOpen(props.landingPageId, !panelOpen);
+      }}
+    >
+      {panelOpen ? (
+        <PanelRightClose className="size-4" />
+      ) : (
+        <PanelRightOpen className="size-4" />
+      )}
+    </Button>
+  );
+}
+
+/**
+ * Publishes the reveal toggle into the mobile header while the landing terminal
+ * panel is mounted, and clears it on unmount so it cannot leak into History,
+ * Settings or the epic view. Rendered from the panel contents, so it inherits
+ * the availability guard above - no toggle appears where no terminal can run.
+ */
+function MobileLandingTerminalActionBinder(props: {
+  readonly landingPageId: string;
+}): ReactNode {
+  const setRightActions = useMobileHeaderStore(
+    (state) => state.setRightActions,
+  );
+  useEffect(() => {
+    // Re-baked whenever the focused landing page changes, so the slotted node
+    // always toggles the layout of the page actually on screen.
+    setRightActions(
+      <LandingTerminalHeaderToggle landingPageId={props.landingPageId} />,
+    );
+    return () => {
+      setRightActions(null);
+    };
+  }, [setRightActions, props.landingPageId]);
+  return null;
+}
+
+/**
+ * Desktop-only chrome row. Both of its controls are meaningless at phone width:
+ * the open panel is a full overlay regardless of the maximized bit, so
+ * Maximize/Restore is a no-op, and collapse lives in the app header's slot
+ * because the overlay never covers that header - keeping a collapse button here
+ * would stack a second bar directly under one that is still on screen. The tab
+ * strip becomes the panel's top row there instead.
+ */
 function LandingTerminalPanelHeader(props: {
+  readonly isMobile: boolean;
   readonly maximized: boolean;
   readonly onToggleMaximized: () => void;
   readonly onTogglePanel: () => void;
 }): ReactNode {
+  if (props.isMobile) return null;
   return (
     <div className="flex h-9 shrink-0 items-center justify-between border-b border-canvas-border/70 px-2">
       <div className="flex min-w-0 items-center gap-2 text-ui-sm font-medium">

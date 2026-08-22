@@ -14,6 +14,7 @@ import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
+import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   handlePrimaryFocusIn,
@@ -58,6 +59,7 @@ const mocks = vi.hoisted(() => {
     probeError: null,
     dataUpdatedAt: 1,
     primaryWorkspacePath: null as string | null,
+    isMobile: false,
     workspacePaths: [] as ReadonlyArray<string>,
     mutableWorkspacePaths: [] as string[],
     kill: vi.fn(),
@@ -200,6 +202,12 @@ vi.mock("@/lib/host", () => ({
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   buildTransientHostClient: mocks.buildTransientHostClient,
+}));
+// jsdom reports a desktop width, so this only makes the default explicit -
+// the phone case flips it per test.
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => mocks.isMobile,
+  isMobileViewport: () => mocks.isMobile,
 }));
 vi.mock(
   "@/components/home/host-workspace-selector/use-home-workspace-source",
@@ -503,6 +511,12 @@ function testRect(width: number, height: number, left: number): DOMRect {
   };
 }
 
+/** Stands in for MobileAppHeader: renders whatever the slot currently holds. */
+function MobileHeaderSlotProbe() {
+  const rightActions = useMobileHeaderStore((state) => state.rightActions);
+  return <>{rightActions}</>;
+}
+
 // The panel outlives its start page's activation, so several behaviors now
 // depend on which top-level surface owns the screen. Default layout = a start
 // page is active, which is what every other case in this file assumes.
@@ -544,6 +558,7 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeError = null;
     mocks.dataUpdatedAt = 1;
     mocks.primaryWorkspacePath = null;
+    mocks.isMobile = false;
     mocks.workspacePaths = [];
     mocks.mutableWorkspacePaths = [];
     mocks.kill.mockReset();
@@ -584,6 +599,7 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useMobileHeaderStore.setState({ rightActions: null });
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
@@ -591,6 +607,85 @@ describe("<LandingTerminalPanel />", () => {
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
     useTabsStore.setState(INITIAL_TABS_LAYOUT);
+  });
+
+  describe("at phone width", () => {
+    beforeEach(() => {
+      mocks.isMobile = true;
+      mocks.activeHostId = "host-a";
+      mocks.clientActiveHostId = "host-a";
+      mocks.probeData = emptyList("/Users/dev");
+    });
+
+    it("publishes the reveal toggle into the mobile header instead of floating it", async () => {
+      render(panelUi());
+      await waitFor(() => {
+        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+      });
+
+      // Nothing floating in the content area: the header slot owns it now.
+      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+    });
+
+    it("opens the panel from the slotted toggle", async () => {
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      fireEvent.click(await screen.findByTestId("landing-terminal-toggle"));
+
+      expect(testLayout().panelOpen).toBe(true);
+    });
+
+    // The overlay is absolute inside the PAGE container, so it never covers the
+    // app header - collapse therefore belongs in the same slot rather than in a
+    // panel bar stacked under a header that is still on screen.
+    it("turns into collapse in the same slot while the panel is open", async () => {
+      useLandingTerminalStore
+        .getState()
+        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      await screen.findByTestId("landing-terminal-panel");
+
+      // One control, not two: the reveal icon is gone and the panel renders no
+      // header row of its own at this width.
+      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+      fireEvent.click(await screen.findByTestId("landing-terminal-collapse"));
+
+      expect(testLayout().panelOpen).toBe(false);
+    });
+
+    it("renders no panel header row of its own", async () => {
+      useLandingTerminalStore
+        .getState()
+        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+      await screen.findByTestId("landing-terminal-panel");
+
+      // Collapse lives in the header slot, which this render does not mount.
+      expect(screen.queryByTestId("landing-terminal-collapse")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Maximize terminal panel" }),
+      ).toBeNull();
+    });
+
+    it("clears the slot on unmount so it cannot leak to another surface", async () => {
+      const view = render(panelUi());
+      await waitFor(() => {
+        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+      });
+
+      view.unmount();
+
+      expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+    });
   });
 
   it("hides while no host is selected, preserving an open panel until selection", async () => {

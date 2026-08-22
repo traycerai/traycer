@@ -1411,10 +1411,14 @@ describe("<EpicsListPanel />", () => {
     const input = await screen.findByRole("searchbox", {
       name: "Search tasks",
     });
-    const toolbar = screen.getByRole("button", { name: /filter/i })
-      .parentElement?.parentElement;
+    // Picker mode puts the search inside the chrome bar rather than as a
+    // page-level block above it. Assert against the bar itself instead of
+    // walking parentElement hops from the filter button - the bar's internal
+    // wrapper nesting is layout detail (it changes when the row gains
+    // responsive wrapping) and not what this test is about.
+    const toolbar = screen.getByTestId("panel-chrome-bar");
 
-    expect(toolbar?.contains(input)).toBe(true);
+    expect(toolbar.contains(input)).toBe(true);
     fireEvent.change(input, { target: { value: "logging" } });
     await waitFor(() => {
       expect(useHistorySearchStore.getState().search.query).toBe("logging");

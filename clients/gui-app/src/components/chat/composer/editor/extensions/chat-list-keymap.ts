@@ -4,6 +4,7 @@ import { closeHistory } from "@tiptap/pm/history";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
+import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
@@ -43,30 +44,21 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
       },
       "Shift-Enter": ({ editor }) => {
         if (handleOpeningCodeFence(editor)) return true;
-        if (handleListEnter(editor)) return true;
-        if (editor.isActive("codeBlock")) {
-          // `splitBlock` would fragment one code block into two; `newlineInCode`
-          // inserts a real in-code newline. A bare `return false` would insert
-          // nothing here, because `Enter` is globally bound to submit and
-          // nothing else binds `Shift-Enter`.
-          return editor.chain().newlineInCode().scrollIntoView().run();
-        }
-        // Must run before the `splitBlock` fallback: an empty trailing quote
-        // line means the user already added one blank line via the ordinary
-        // path below and is now signalling "done quoting" rather than "add
-        // another quote line".
-        if (handleQuoteExit(editor)) return true;
-        // A soft newline is a paragraph boundary: `splitBlock` makes each visual
-        // line its own textblock, so native list/heading input rules fire on
-        // every line. `scrollIntoView` keeps the caret visible when the new line
-        // pushes past the editor's max-height. Inside a blockquote this simply
-        // adds another quote line, since `splitBlock` keeps the same ancestor.
-        return editor.chain().splitBlock().scrollIntoView().run();
+        return insertSoftNewline(editor);
       },
       Backspace: ({ editor }) => handleQuoteBackspaceUnwrap(editor),
       Enter: ({ editor }) => {
         if (handlePickerEnter(pickerStore)) return true;
         if (handleOpeningCodeFence(editor)) return true;
+        // On a phone-width viewport the return key is the only way to break a
+        // line — there is no Shift to chord with — so Enter writes a newline
+        // and only the send button submits. Keyed to the VIEWPORT signal, not
+        // the installed-app one: the web app opened on a phone needs the same
+        // behavior. Read imperatively per keypress; the keymap is built once
+        // at editor creation and must not go stale across resizes.
+        if (isMobileViewport()) {
+          return insertSoftNewline(editor);
+        }
         onSubmit.current("enter");
         return true;
       },
@@ -121,6 +113,32 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
     ];
   },
 });
+
+/**
+ * The soft-newline path shared by Shift-Enter everywhere and plain Enter on a
+ * mobile-width viewport.
+ */
+function insertSoftNewline(editor: Editor): boolean {
+  if (handleListEnter(editor)) return true;
+  if (editor.isActive("codeBlock")) {
+    // `splitBlock` would fragment one code block into two; `newlineInCode`
+    // inserts a real in-code newline. A bare `return false` would insert
+    // nothing here, because `Enter` is globally bound to submit and
+    // nothing else binds `Shift-Enter`.
+    return editor.chain().newlineInCode().scrollIntoView().run();
+  }
+  // Must run before the `splitBlock` fallback: an empty trailing quote
+  // line means the user already added one blank line via the ordinary
+  // path below and is now signalling "done quoting" rather than "add
+  // another quote line".
+  if (handleQuoteExit(editor)) return true;
+  // A soft newline is a paragraph boundary: `splitBlock` makes each visual
+  // line its own textblock, so native list/heading input rules fire on
+  // every line. `scrollIntoView` keeps the caret visible when the new line
+  // pushes past the editor's max-height. Inside a blockquote this simply
+  // adds another quote line, since `splitBlock` keeps the same ancestor.
+  return editor.chain().splitBlock().scrollIntoView().run();
+}
 
 // The composer owns both Enter (submit) and Shift-Enter (paragraph split), so
 // Tiptap never sees the newline that completes its native fenced-code input

@@ -7,11 +7,16 @@ import {
 } from "@/components/home/data/landing-options";
 import { cn } from "@/lib/utils";
 import { Zap } from "lucide-react";
+import { useEffect, useRef } from "react";
 import {
   singleDigitLeaderDigitFor,
   usePickerReasoningLeaderForIndex,
 } from "@/providers/keybinding-context";
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
+import {
+  horizontalScrollFadeClass,
+  useHorizontalScrollEdges,
+} from "@/hooks/ui/use-horizontal-scroll-edges";
 
 export interface ReasoningFooterConfig {
   readonly value: ReasoningLevel;
@@ -90,7 +95,13 @@ function ModelSettingsFooter(props: ModelSettingsFooterProps) {
       {showGroupSeparator ? (
         <div className="h-5 w-px shrink-0 bg-border" aria-hidden="true" />
       ) : null}
-      {reasoning === null ? null : <ReasoningFooterGroup config={reasoning} />}
+      {/* Gated on the option count, not just on `reasoning`: the group owns a
+          scroller whose listeners are wired from its own mount, so it must not
+          mount without the strip. A model with no levels renders nothing here
+          and the next model that has them mounts the group afresh. */}
+      {reasoning === null || !hasReasoningOptions ? null : (
+        <ReasoningFooterGroup config={reasoning} />
+      )}
     </div>
   );
 }
@@ -99,27 +110,51 @@ interface ReasoningFooterGroupProps {
   readonly config: ReasoningFooterConfig;
 }
 
+// Mounted only for a model that reports at least one level - see the gate in
+// `ModelSettingsFooter`.
 function ReasoningFooterGroup(props: ReasoningFooterGroupProps) {
   const { value, options, disabled, onChange } = props.config;
-  const hasOptions = options.length > 0;
-
-  if (!hasOptions) return null;
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+  const edges = useHorizontalScrollEdges(scrollerRef, optionsRef);
 
   return (
     <fieldset
       aria-label="Thinking effort"
-      className="m-0 flex min-w-0 flex-1 items-center justify-around gap-1 border-0 p-0"
+      className="m-0 flex min-w-0 flex-1 items-center border-0 p-0"
     >
-      {options.map((option, index) => (
-        <ReasoningLevelButton
-          key={option.id}
-          option={option}
-          index={index}
-          selected={option.id === value}
-          disabled={disabled}
-          onChange={onChange}
-        />
-      ))}
+      {/* Levels are harness-reported per model, so their number is unbounded:
+          the strip scrolls rather than clipping the tail off-screen, and the
+          mask fades whichever edge still hides a level so the overflow reads
+          as "there is more" instead of a silent cut. */}
+      <div
+        ref={scrollerRef}
+        data-testid="model-reasoning-scroller"
+        className={cn(
+          "no-scrollbar flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain",
+          horizontalScrollFadeClass(edges),
+        )}
+      >
+        {/* `w-max min-w-full` keeps the even spread while the levels fit and
+            switches to natural width once they overflow - `justify-around` on
+            an overflowing scroller splits the deficit across both ends, and
+            content pushed past the start edge cannot be scrolled back to. */}
+        <div
+          ref={optionsRef}
+          className="flex w-max min-w-full items-center justify-around gap-1"
+        >
+          {options.map((option, index) => (
+            <ReasoningLevelButton
+              key={option.id}
+              option={option}
+              index={index}
+              selected={option.id === value}
+              disabled={disabled}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      </div>
     </fieldset>
   );
 }
@@ -139,13 +174,26 @@ interface ReasoningLevelButtonProps {
 function ReasoningLevelButton(props: ReasoningLevelButtonProps) {
   const { option, index, selected, disabled, onChange } = props;
   const leaderModifier = usePickerReasoningLeaderForIndex(index);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Keep the selected level on screen. A level past the scroller's right edge
+  // mounts already-selected when the picker opens, so this runs on open too -
+  // without it, a level set on a previous visit would be invisible, and seeing
+  // the strip already scrolled is itself the hint that it scrolls. `nearest`
+  // on both axes makes it a no-op once the pill is fully visible.
+  useEffect(() => {
+    if (!selected) return;
+    buttonRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selected]);
+
   return (
     <button
+      ref={buttonRef}
       type="button"
       aria-pressed={selected}
       disabled={disabled}
       className={cn(
-        "inline-flex max-w-[min(22vw,6.5rem)] items-center rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+        "inline-flex max-w-[min(22vw,6.5rem)] shrink-0 items-center rounded-md px-2 py-1 text-ui-xs text-muted-foreground transition-colors aria-[pressed=false]:hover:bg-accent/30 aria-[pressed=false]:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
         selected && "bg-accent/70 text-foreground",
       )}
       onClick={() => onChange(option.id)}

@@ -409,6 +409,7 @@ export function TerminalsPanelActions(props: LeftPanelSlotProps) {
     <NewTerminalPicker
       epicId={props.epicId}
       tabId={props.tabId}
+      onLaunched={null}
       onBeforeOpen={expandBeforeOpen}
     />
   );

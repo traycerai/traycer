@@ -8,6 +8,11 @@ import type {
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
+import type {
+  LinkLoginStatusFetchResult,
+  MintLinkLoginCodeFetchResult,
+  RespondLinkLoginFetchResult,
+} from "../auth/link-login";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
@@ -166,6 +171,71 @@ export interface IRunnerHost {
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Mints a one-time link-login code under the user bearer — the "Link a
+   * phone" QR surface. The RESULT carries the raw code back into the renderer
+   * by necessity: the QR that must display it renders there. The code is
+   * short-lived and single-use, and the surface re-mints while open, so the
+   * renderer never holds a long-lived secret.
+   */
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult>;
+
+  /**
+   * The minting surface's view of its own code — whether a phone has claimed
+   * it, and the server-observed claimant metadata for the confirmation
+   * prompt. Owner-only on the server.
+   */
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult>;
+
+  /**
+   * The minting surface's decision on a claimed code. Approval is the step
+   * that authorizes the phone's session; a scan alone never does.
+   */
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult>;
+
+  /**
+   * Native QR scanner for the link-login sign-in path, or `null` where no
+   * camera scanner exists (desktop, plain browser, tests). A capability, not
+   * identity (see `lib/mobile-app.ts` in gui-app): the paste-the-code
+   * fallback must render regardless, because a null scanner — and a denied
+   * camera permission on a non-null one — are both ordinary states of the
+   * same surface.
+   */
+  readonly linkCodeScanner: ILinkCodeScanner | null;
+
+  /**
+   * Self-description of the DEVICE for human-facing prompts — the link-login
+   * approver card and the session row. Present only where the shell knows
+   * something better than the browser UA (the mobile app reads the hardware
+   * model natively); `null` elsewhere, and consumers fall back to
+   * `navigator.userAgent`. Descriptive, never identity.
+   */
+  readonly deviceDescriber: IDeviceDescriber | null;
+
+  /**
+   * Link-login codes the OS handed this shell as a launch/open URL — a QR
+   * scanned by the system camera rather than by the in-app scanner. `null`
+   * wherever the OS never delivers one (desktop, plain browser, tests).
+   *
+   * A capability alongside `linkCodeScanner`, not a replacement for it: this
+   * one is not initiated by the user inside the app, so it can arrive before
+   * any surface is mounted and it can arrive while already signed in. Both are
+   * the consumer's problem, and the port's contract is what makes them
+   * solvable — see `ILinkLoginDeepLinkSource`.
+   */
+  readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
 
   /**
    * Verifies a step-up OTP and retains the short-TTL bearer credential inside
@@ -351,7 +421,9 @@ export interface IRunnerHost {
    * offline within seconds instead of waiting out the stream heartbeat.
    *
    * Desktop bridges Electron `powerMonitor` `resume`/`unlock-screen` through
-   * the preload IPC bridge. Shells with no OS wake signal (mobile, web, tests)
+   * the preload IPC bridge. Mobile raises it on the hidden -> visible edge,
+   * where "the machine woke" means the app returned to the foreground and the
+   * OS un-suspended its WebView. Shells with no wake signal at all (web, tests)
    * install a no-op whose handler never fires; consumers still pair this with
    * the cross-platform `window` `online` event, so wake recovery degrades
    * gracefully where no native signal exists.
@@ -481,6 +553,47 @@ export interface IRunnerHost {
    * tray clicks route through the same host-management surface as Settings.
    */
   readonly hostTray: IHostTray | null;
+
+  /**
+   * OS push permission of the DEVICE running this renderer - the phone's own
+   * notification switch, not anything host-scoped. Present on shells where OS
+   * push exists (the native mobile shells) and `null` everywhere else
+   * (desktop, dev web, tests), where the GUI hides the surface entirely.
+   */
+  readonly pushPermission: IPushPermissionHost | null;
+}
+
+/**
+ * The three states the GUI reasons about. Deliberately platform-neutral:
+ * Capacitor's fourth state (`prompt-with-rationale`, Android's "we may ask
+ * once more") collapses to `prompt` at the mobile boundary, so plugin
+ * vocabulary never reaches shared code.
+ */
+export type PushPermissionState = "prompt" | "granted" | "denied";
+
+/**
+ * Read/repair surface for the device's OS push permission, backing the
+ * Settings → Notifications "this phone" row. Only reachable where
+ * `IRunnerHost.pushPermission` is non-null.
+ */
+export interface IPushPermissionHost {
+  /** Local OS read; never prompts. */
+  get(): Promise<PushPermissionState>;
+  /**
+   * Raises the OS prompt if the OS still allows one (before the first ask, or
+   * Android's single rationale retry) and resolves the resulting state. A
+   * grant here also registers the device token immediately, through the same
+   * narrow path a late grant from the OS Settings app takes.
+   */
+  request(): Promise<PushPermissionState>;
+  /** Jumps to this app's notification page in the OS Settings app. */
+  openSettings(): Promise<void>;
+  /**
+   * Fires when the state MAY have changed - a foreground resume (the person
+   * may have just changed it in OS Settings) or a completed `request()`.
+   * Subscribers re-read via `get()`; the signal carries no state itself.
+   */
+  onChange(handler: () => void): Disposable;
 }
 
 /**
@@ -728,6 +841,87 @@ export interface IServiceHost {
    * `null` when the log file is missing or unreadable.
    */
   getLogTail(maxLines: number): Promise<string | null>;
+}
+
+/**
+ * One attempt of the native link-login QR scan. `scanned` carries the RAW
+ * decoded text — parsing it into a code (`parseLinkLoginInput`) is the
+ * caller's job, so a QR that is not a Traycer payload surfaces as a visible
+ * "not a link code" state rather than being silently swallowed here.
+ * `permission-denied` is a first-class outcome, not an error: the surface
+ * falls back to manual code entry.
+ */
+export type LinkCodeScanResult =
+  | { readonly kind: "scanned"; readonly text: string }
+  | { readonly kind: "permission-denied" }
+  | { readonly kind: "canceled" }
+  | { readonly kind: "error" };
+
+/**
+ * Marketing-grade device self-description ("iPhone 16 Pro", "Pixel 9").
+ * Best-effort: resolves `null` when nothing better than the browser UA is
+ * known, and must never throw.
+ */
+export interface IDeviceDescriber {
+  describe(): Promise<string | null>;
+}
+
+/**
+ * A native camera QR scanner. Present only on shells that physically have one
+ * (`IRunnerHost.linkCodeScanner`); `scan()` owns the whole native interaction
+ * including the permission prompt and the fullscreen scan UI.
+ */
+export interface ILinkCodeScanner {
+  scan(): Promise<LinkCodeScanResult>;
+}
+
+/**
+ * Link codes delivered by the OS as an app launch or open URL
+ * (`IRunnerHost.linkLoginDeepLinks`).
+ *
+ * Two properties the in-app scanner does not need, both forced by the fact
+ * that the SYSTEM camera — not the app — starts this flow:
+ *
+ * 1. RETENTION. A cold start delivers the URL before the GUI exists at all;
+ *    the shell captures it at bootstrap and this subscription REPLAYS it. So
+ *    a late subscriber still receives the code, and "the app was launched by
+ *    the scan" is not a race the consumer has to win.
+ * 2. ONE SUBSCRIBER. A retained code is delivered once and then consumed, so
+ *    a second subscriber would either steal it or double-claim it. The GUI
+ *    subscribes in exactly one place and routes from there.
+ *
+ * The code is already NORMALIZED and shape-checked (`parseLinkLoginInput`) —
+ * unlike `LinkCodeScanResult`, which carries raw scanned text. Nothing else
+ * the OS opens reaches the handler: the shell drops every URL that is not a
+ * link-login payload, including the payload-free `traycer://auth/callback`
+ * return link, because there is no surface to show "that wasn't a code" to
+ * when the user never asked for a scan.
+ *
+ * DEDUPE IS THE SHELL'S JOB, AND ONLY THE SHELL'S. It alone can tell one
+ * arrival announced twice by the OS from a person scanning twice, because only
+ * it sees how the URL was delivered and when. Every delivery that reaches a
+ * consumer is therefore one the shell has already judged intentional, and the
+ * consumer must act on all of them — including a repeat of a code it has seen
+ * before, which is what a deliberate rescan of a still-live QR looks like.
+ */
+export interface ILinkLoginDeepLinkSource {
+  onLinkLoginCode(
+    handler: (delivery: LinkLoginDeepLinkDelivery) => void,
+  ): Disposable;
+}
+
+/**
+ * One accepted arrival of a link code.
+ *
+ * `deliveryId` exists so a consumer can say "have I acted on THIS arrival"
+ * without using the code as its own identity. The distinction is the whole
+ * point: two arrivals of one code are a rescan the second time, and a
+ * value-keyed guard cannot see the difference. Unique and increasing within a
+ * shell's lifetime; carries no meaning beyond identity.
+ */
+export interface LinkLoginDeepLinkDelivery {
+  readonly code: string;
+  readonly deliveryId: number;
 }
 
 /**
@@ -985,6 +1179,15 @@ export interface ITokenStore {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  /**
+   * Conditional delete for undoing a superseded sign-in's write: removes the
+   * stored pair ONLY if it still holds exactly `expectedToken`, with the
+   * comparison and the delete atomic at the store's own authority (the
+   * main-process file lock) — never composed from `get()` + `delete()` by a
+   * caller. `kept` means the store held nothing or someone else's pair.
+   * Rejects when the store cannot decide or the delete cannot land.
+   */
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(listener: (change: TokenStoreChange) => void): Disposable;
   /**
    * One-time migration of the legacy per-window localStorage token pair onto the

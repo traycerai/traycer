@@ -22,6 +22,7 @@ import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { getClientAppVersion } from "@/lib/app-version";
+import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
@@ -279,6 +280,34 @@ function NarratingWindowHostModal(props: {
     // gate open, first session still a beat away - blocking an app that was
     // about to answer.
     return null;
+  }
+  if (isMobileApp()) {
+    // THE MOBILE APP NEVER GETS THE DIALOG OVER A MOUNTED SHELL, whatever the
+    // cause, and this is a navigation rule rather than a styling one.
+    //
+    // The dialog is a modal layer, so the primitive raises the document pointer
+    // barrier for as long as it is rendered. On this shell the barrier does not
+    // merely dim the app: the edge-swipe recognizer reads it
+    // (`modalLayerCoversApp`) and stands its touch RESERVATION down, so the web
+    // view hands the edge drag to whatever scroller is underneath and the
+    // gesture cannot come back for the rest of that contact. Back and forward
+    // are the phone's only history affordance - there are no title-bar arrows
+    // to fall back on - so a narration that flickers here (∅ is one frame away
+    // on every resume, where the authority re-attaches with no effective host
+    // while a remote host is still perfectly able to serve) costs the whole app
+    // its navigation, with no modal left on screen to explain why.
+    //
+    // The same words are drawn as the startup card instead: a
+    // `pointer-events-none` layer with only the card itself live, so the
+    // narration is kept - a phone with no reachable host still gets Retry and
+    // `Open settings` - while the shell underneath stays the user's to drive.
+    // Standing down to `null` would be the cheaper fix and the wrong one: this
+    // is the surface that says a fleet is unreachable.
+    //
+    // The PRODUCT gate, deliberately, and the same one the recognizer itself is
+    // gated on: a narrow desktop browser renders the mobile layout without the
+    // swipes, and its narration is the desktop's.
+    return <WindowHostStartupCard {...narrationProps} />;
   }
   return <WindowHostModal {...narrationProps} />;
 }

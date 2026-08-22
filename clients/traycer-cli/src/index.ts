@@ -84,6 +84,7 @@ import { hostStatusCommand } from "./commands/host-status";
 import { buildHostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
 import { buildHostUpdateCommand } from "./commands/host-update";
+import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
@@ -600,6 +601,17 @@ function registerAuthCommands(program: Command): void {
   withRunner(
     program.command("whoami").description("Print the signed-in user"),
     () => whoamiCommand,
+  );
+
+  withRunner(
+    program
+      .command("link-phone")
+      .description("Sign the Traycer mobile app in by scanning a code")
+      .option(
+        "--no-qr",
+        "Print only the typeable code (for terminals that mangle block glyphs)",
+      ),
+    (opts) => buildLinkPhoneCommand({ showQr: opts.qr !== false }),
   );
 }
 

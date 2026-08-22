@@ -7,6 +7,7 @@ import type {
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
 import { QUESTION_TRANSITION } from "./use-interview-card";
@@ -82,9 +83,12 @@ export function QuestionPage(props: QuestionPageProps) {
   // deferred one frame for the same reason as the card itself: a pane is
   // activated on pointerdown, and the trailing mousedown's native focus would
   // otherwise steal focus before this runs (see useInterviewCard).
+  // On the installed mobile app it does nothing: a question rendering, or its
+  // tab becoming active, is not a tap, and a phone keyboard must be summoned by
+  // a tap. Tapping the field there focuses it the ordinary way.
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
-      if (!isActive || disabled || node === null) return;
+      if (!isActive || disabled || node === null || isMobileApp()) return;
       const frame = window.requestAnimationFrame(() => {
         node.focus({ preventScroll: true });
       });

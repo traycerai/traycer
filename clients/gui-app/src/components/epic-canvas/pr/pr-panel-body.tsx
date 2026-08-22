@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -21,9 +15,10 @@ import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
+import { useRecordPrPresence } from "@/hooks/pr/use-pr-presence-probe";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
-import { usePrPresenceStore } from "@/stores/epics/pr-presence-store";
 import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   formatPrRowTitle,
@@ -42,12 +37,19 @@ import {
 /**
  * Pull Requests panel body. Subscribes in foreground mode on the canvas host
  * stream client with an explicit visibility gate:
- *   enabled = sidebar expanded ∧ section expanded ∧ method supported
+ *   enabled = surface showing this body ∧ method supported
  *
+ * On the sidebar, "showing" means sidebar expanded ∧ section expanded.
  * Whole-sidebar collapse is CSS-only (`hidden` on the column) and would leave
  * the body mounted without this gate. Per-section collapse already unmounts
  * the body; the section check is still included so the gate is complete and
  * testable if mount semantics change.
+ *
+ * Below the mobile breakpoint the sidebar column is not rendered at all, so
+ * both collapse flags are stale desktop chrome there and answer nothing about
+ * whether this body is on screen. Its host is then the mobile switcher sheet,
+ * which mounts the body only while the Pull requests category is showing -
+ * mounted IS visible - so the collapse half of the gate is skipped.
  *
  * Layout mirrors the Settings > Worktrees repo listing: a collapsible repo
  * header (chevron + icon + owner/repo + count) over full-bleed rows separated
@@ -64,8 +66,12 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
   const sectionCollapsed = useLeftPanelSectionCollapsed("pull-requests");
   const methodSupport = useStreamMethodSupport("pr.subscribeListForEpic");
   const methodSupported = methodSupport !== "unsupported";
+  const isMobileViewport = useIsMobileViewport();
 
-  const enabled = !mainCollapsed && !sectionCollapsed && methodSupported;
+  const surfaceHidden = isMobileViewport
+    ? false
+    : mainCollapsed || sectionCollapsed;
+  const enabled = !surfaceHidden && methodSupported;
 
   const subscription = usePrListSubscription({
     hostId,
@@ -74,19 +80,13 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
     enabled,
   });
 
-  // The rail's presence gate is fed from HERE - the open panel's own stream -
-  // and nowhere else. Opening an epic performs no PR work at all, so this is
-  // the only writer, and it is why an epic's PR icon appears from the second
-  // open onward rather than the first (see `pr-presence-store`).
-  const recordPrPresence = usePrPresenceStore((s) => s.recordPrPresence);
-  const items = subscription.data?.items ?? null;
-  useEffect(() => {
-    // `null` is "no frame yet", which is NOT the same as "no PRs": writing
-    // `false` there would blank the icon on every panel open before the first
-    // frame lands, exactly the flicker the persisted store exists to prevent.
-    if (hostId === null || items === null) return;
-    recordPrPresence(hostId, props.epicId, items.length > 0);
-  }, [hostId, items, props.epicId, recordPrPresence]);
+  // The rail's presence gate is fed from HERE - the open panel's own stream.
+  // Opening an epic performs no PR work at all, which is why an epic's PR icon
+  // appears from the second open onward rather than the first (see
+  // `pr-presence-store`). A surface that gates the panel's own reachability on
+  // presence and offers no force-visible affordance has to bootstrap the signal
+  // itself, through the probe in `use-pr-presence-probe`.
+  useRecordPrPresence(hostId, props.epicId, subscription.data?.items ?? null);
 
   if (!methodSupported) {
     return <PrHostUpdateRequired />;

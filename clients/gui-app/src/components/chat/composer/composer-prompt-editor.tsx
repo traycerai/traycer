@@ -25,6 +25,7 @@ import {
   type ComposerEditorIncarnation,
 } from "@/lib/composer/composer-editor-incarnation";
 import type { MentionAttachment } from "@/lib/composer/types";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import {
   focusActiveComposer,
@@ -443,6 +444,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   useEffect(() => {
     if (editor === null) return;
     if (!isActive) return;
+    // Becoming the active composer is not a user gesture. On the installed
+    // mobile app that alone must not raise the software keyboard; the explicit
+    // focus paths (tapping the composer, restoring a draft, editing a message)
+    // still do.
+    if (isMobileApp()) return;
     if (editor.isFocused) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     const focusScope = editor.view.dom.closest(

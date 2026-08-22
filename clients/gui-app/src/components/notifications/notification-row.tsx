@@ -224,7 +224,10 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       // whenever any of its interactive controls is hovered or keyboard-
       // focused, so the user can see what they're targeting - distinct from
       // the unread rail, which is a persistent state marker, not a hover
-      // affordance (no persistent row tint).
+      // affordance (no persistent row tint). The row is not a Button, so it
+      // opts into the shared press scrim itself; `hover:` is media-gated to
+      // hover-capable pointers, so without it a finger sees nothing at all for
+      // the whole press.
       //
       // Remote pack-store entries stay fully listed (needs_action evidence)
       // but are visually de-emphasised so this machine's actionable items
@@ -236,7 +239,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       tabIndex={-1}
       onKeyDown={onRowKeyDown}
       className={cn(
-        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6",
+        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 active:press-scrim pointer-coarse:touch-chrome",
         packPresentation.packRemote && "opacity-60",
       )}
       data-testid="notification-entry"
@@ -444,7 +447,7 @@ function NotificationRowControlButton(
         onClick={props.onClick}
         aria-label={props.label}
         data-testid={props.testId}
-        className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/8 hover:text-foreground active:press-scrim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Check className="size-3.5" aria-hidden />
       </button>

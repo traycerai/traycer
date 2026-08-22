@@ -24,6 +24,13 @@ import type {
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import {
+  claimLinkLoginCodeViaHttp,
+  linkLoginTokenViaHttp,
+  type LinkLoginStatusFetchResult,
+  type MintLinkLoginCodeFetchResult,
+  type RespondLinkLoginFetchResult,
+} from "@traycer-clients/shared/auth/link-login";
 import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
@@ -76,6 +83,58 @@ import { AuthTokenStore } from "./auth-token-store";
 // shared file, then wipes them.
 const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
 const LEGACY_REFRESH_TOKEN_KEY = "traycer.refresh-token";
+
+/**
+ * The kinds a surface actually renders: the CODE VERDICTS, and nothing else.
+ * A completed sign-in speaks for itself, and the two non-verdict outcomes
+ * (`superseded`, `failed`) are either silent or already presented globally.
+ */
+export type LinkLoginFailureKind = Exclude<
+  LinkLoginSignInResult["kind"],
+  "signed-in" | "superseded" | "failed"
+>;
+
+/**
+ * Terminal outcome of {@link AuthService.signInWithLinkCode}. `invalid-code`
+ * covers expired, claimed-elsewhere, and never-existed codes
+ * indistinguishably (the server does not say which); `denied` is the desktop
+ * explicitly rejecting the claim; `timed-out` means the approval window
+ * elapsed with no decision.
+ *
+ * Two members are NOT code verdicts and carry no copy of their own:
+ * `superseded` (the attempt stopped being ours - nothing was projected, say
+ * nothing) and `failed` (the code was approved and the finalization itself
+ * failed - `AuthService` has already projected the global sign-in error, so a
+ * caller adding the code-verdict copy would both duplicate the message and
+ * misdescribe it). `LinkLoginFailureKind` is the set a surface may render.
+ */
+export type LinkLoginSignInResult =
+  | { readonly kind: "signed-in" }
+  /**
+   * The attempt stopped being ours - a newer sign-in superseded it, or the
+   * service was disposed. NOT a failure, and deliberately not presentable:
+   * whoever superseded this attempt owns the surface now, and reporting a
+   * result from a discarded attempt would put its complaint under the
+   * successor's progress. Callers must render nothing for this kind.
+   */
+  | { readonly kind: "superseded" }
+  /**
+   * The claim was approved, and applying the resulting credentials failed on
+   * THIS attempt - an empty token, a rejected persist, or validation that was
+   * rejected or unreachable. A real failure, already surfaced globally.
+   */
+  | { readonly kind: "failed" }
+  | { readonly kind: "invalid-code" }
+  | { readonly kind: "denied" }
+  | { readonly kind: "timed-out" }
+  | { readonly kind: "rate-limited" }
+  | { readonly kind: "network-error" };
+
+/**
+ * How long the phone keeps polling for the desktop's decision before giving
+ * up locally. Matches the server's claim window; the record is gone by then.
+ */
+const LINK_LOGIN_APPROVAL_TIMEOUT_MS = 120_000;
 
 /**
  * Thrown when a read is asked for on behalf of a credential era that is no
@@ -269,6 +328,32 @@ export type DeviceFlowProgressListener = (
   progress: DeviceFlowProgress | null,
 ) => void;
 
+/**
+ * Projected link-login poll progress for the phone's QR sign-in surface, so
+ * the approval wait is a visibly ticking loop rather than an indefinite
+ * spinner. `null` whenever no link attempt is polling.
+ *
+ * `nextPollAtMs` is ABSOLUTE, not a remaining duration: the surface subtracts
+ * its own clock and therefore holds no copy of the poll interval. A server
+ * directive that stretches the wait (a `slow_down` 429 carrying `Retry-After`)
+ * moves this timestamp, so the countdown cannot advertise a cadence the loop
+ * is no longer running at.
+ */
+export interface LinkLoginProgress {
+  readonly nextPollAtMs: number;
+  /**
+   * `waiting` between polls; `checking` while a `/link/token` request is
+   * outstanding; `finalizing` once a poll returned `authorized` and the token
+   * is being validated/persisted — the surface must stop counting down the
+   * moment the approval has actually landed.
+   */
+  readonly phase: "waiting" | "checking" | "finalizing";
+}
+
+export type LinkLoginProgressListener = (
+  progress: LinkLoginProgress | null,
+) => void;
+
 type ValidationOutcome = AuthIdentityValidationResult;
 
 /**
@@ -281,6 +366,43 @@ type SameUserRotateResult =
   | { readonly status: "rotated"; readonly token: string }
   | { readonly status: "signed-out" }
   | { readonly status: "transient" };
+
+/**
+ * How a token finalization ended.
+ *
+ * The distinction that matters is `superseded` vs `failed`, and it is not a
+ * shade of the same thing: `superseded` means the attempt stopped being ours
+ * (an epoch/generation fence, or disposal) and NOTHING was projected, so a
+ * caller must stay silent; `failed` means this attempt was still current and a
+ * real failure was projected through `applyFailure`, so the global sign-in
+ * error is already showing and a caller must not add a second message.
+ * Collapsing them into a boolean is what let a genuine validation or
+ * persistence failure be reported to callers as somebody else's attempt.
+ */
+type TokenApplicationOutcome = "applied" | "superseded" | "failed";
+
+/**
+ * The link flow's terminal result for a token finalization.
+ *
+ * Three outcomes, three answers, and `failed` is the one worth naming: it is a
+ * REAL failure of this attempt - an empty token, a rejected persist, or
+ * validation that was rejected or unreachable - which `applyTokenInternal` has
+ * already projected as the global sign-in error. It comes back as its own kind
+ * rather than as a code verdict because "that code is invalid or expired" is
+ * the wrong sentence for a network blip after the desktop approved.
+ */
+function linkResultForTokenApplication(
+  outcome: TokenApplicationOutcome,
+): LinkLoginSignInResult {
+  switch (outcome) {
+    case "applied":
+      return { kind: "signed-in" };
+    case "failed":
+      return { kind: "failed" };
+    case "superseded":
+      return { kind: "superseded" };
+  }
+}
 
 /**
  * GUI-owned auth service. Drives the sign-in flow through the shell-owned
@@ -413,6 +535,10 @@ export class AuthService {
   private deviceProgress: DeviceFlowProgress | null = null;
   private readonly deviceProgressListeners =
     new Set<DeviceFlowProgressListener>();
+  // Projected link-login poll progress (null unless a link poll is running).
+  private linkLoginProgress: LinkLoginProgress | null = null;
+  private readonly linkLoginProgressListeners =
+    new Set<LinkLoginProgressListener>();
 
   private static readonly scheduleTimeout: (
     handler: () => void,
@@ -443,6 +569,15 @@ export class AuthService {
   private sessionRecoveryTimer: number | null = null;
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
+  // Superseded-save undos whose conditional deletes have not LANDED yet
+  // (in flight or failed): each stale pair may still be durable. Every
+  // adoption path must drain this set before trusting anything it reads —
+  // adopting first would resurrect exactly the zombie credential the
+  // attempt fence dropped. A SET with per-token removal, not a single
+  // slot: overlapping undos (A superseded by B superseded by C) must not
+  // let one undo's settled `kept` clear the record of another undo that is
+  // still failing — that would lose the failing token forever.
+  private readonly pendingUndoTokens = new Set<string>();
 
   constructor(options: AuthServiceOptions) {
     this.runnerHost = options.runnerHost;
@@ -475,9 +610,12 @@ export class AuthService {
 
   /**
    * Refresh the bearer on device wake, since the scheduler's `setTimeout` is
-   * frozen during sleep and would otherwise rot the token past its TTL. Mirrors
-   * `subscribeStreamWakeReconnect`'s two triggers: `window 'online'` (network
-   * back) and `onSystemResumed` (Electron resume). `notifyResumed` is a no-op
+   * frozen while the runtime is - a sleeping machine, or a WebView the OS
+   * suspends when its app leaves the foreground - and would otherwise rot the
+   * token past its TTL. Mirrors `subscribeStreamWakeReconnect`'s two triggers:
+   * `window 'online'` (network back) and `onSystemResumed` (the shell's own
+   * wake signal: Electron resume, or the app foregrounding on mobile - the
+   * app-switch case the `online` fallback cannot see). `notifyResumed` is a no-op
    * while signed out; the resume wiring is best-effort so it can't wedge
    * construction, leaving the `online` listener as the fallback.
    */
@@ -577,7 +715,10 @@ export class AuthService {
         return;
       }
       if (useAuthStore.getState().status !== "signing-in") {
-        useAuthStore.getState().setSigningIn();
+        // A snapshot projected from elsewhere carries no attempt kind. Naming
+        // the device flow keeps the escape hatch this path has always offered:
+        // no attempt of OURS is running, so `signIn()` supersedes nothing here.
+        useAuthStore.getState().setSigningIn("device");
       }
       return;
     }
@@ -983,6 +1124,12 @@ export class AuthService {
       this.scheduleSessionRecovery("recovery:interactive-attempt");
       return;
     }
+    // A failed superseded-save undo left a stale pair durable. Complete that
+    // conditional delete BEFORE reading anything to adopt — otherwise this
+    // very loop would validate and re-adopt the zombie the fence dropped.
+    if (await this.pendingUndoBlocksAdoption("recovery")) {
+      return;
+    }
     let stored: StoredCredentials | null;
     try {
       stored = await this.tokenStore.get();
@@ -1046,6 +1193,12 @@ export class AuthService {
       return;
     }
     if (!this.isIdentityCurrent(generation) || this.hasLiveBearer()) {
+      return;
+    }
+    // Same adoption-time fence re-check as the reconcile tail: an undo that
+    // registered while this tick's validation was in flight must win.
+    if (this.pendingUndoTokens.size > 0) {
+      this.scheduleSessionRecovery("recovery:pending-undo");
       return;
     }
     this.settleSessionRecovery("recovered");
@@ -1186,7 +1339,7 @@ export class AuthService {
     this.settleSessionRecovery("interactive-attempt");
     this.setLastError(null);
     const attempt = this.beginAttempt();
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
     this.runnerHost.beginAuthAttempt();
     let session: DeviceFlowSession | null;
     try {
@@ -1381,7 +1534,8 @@ export class AuthService {
       return;
     }
     if (session.status === "signing-in") {
-      useAuthStore.getState().setSigningIn();
+      // As above: an external session's attempt kind is not carried.
+      useAuthStore.getState().setSigningIn("device");
       return;
     }
     if (session.status === "signed-out") {
@@ -1845,6 +1999,20 @@ export class AuthService {
     return this.runnerHost.requestStepUpChallenge(this.currentBearer);
   }
 
+  /**
+   * Mints a one-time link-login code for the "Link a phone" QR surface. The
+   * raw bearer stays inside this auth boundary; the panel consumes only the
+   * short-lived one-time code, which is itself the thing being displayed.
+   */
+  async mintLinkLoginCode(
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintLinkLoginCode(this.currentBearer, signal);
+  }
+
   async verifyStepUpChallenge(
     code: string,
   ): Promise<RetainedStepUpVerifyFetchResult> {
@@ -2164,6 +2332,16 @@ export class AuthService {
     if (this.isDisposed()) {
       return;
     }
+    // Same fence as the recovery tick: a self-write watcher echo from the
+    // very save whose undo is pending must not become the adoption path that
+    // resurrects it. Runs before the generation capture so a fresh reconcile
+    // request during the retry supersedes this pass normally.
+    if (await this.pendingUndoBlocksAdoption("reconcile")) {
+      return;
+    }
+    if (this.isDisposed()) {
+      return;
+    }
     const identityGen = this.identityGeneration;
     this.reconcileGeneration += 1;
     const reconcileGen = this.reconcileGeneration;
@@ -2212,6 +2390,45 @@ export class AuthService {
     // no-op as the pre-validate check (avoids applySignedIn aborting the live
     // context the reactive path just rotated in place).
     if (stored.token === this.currentBearer) {
+      return;
+    }
+    // Adoption-time fence re-check (synchronous — no interleave between it
+    // and the projection below): the entry fence can pass BEFORE a
+    // superseding finalization even begins its undo, since this reconcile
+    // was triggered by that very write's watcher echo. If an undo registered
+    // while validation was in flight, this pass adopts nothing and the
+    // recovery loop finishes the delete first.
+    if (this.pendingUndoTokens.size > 0) {
+      this.scheduleSessionRecovery("reconcile:pending-undo");
+      return;
+    }
+    await this.projectReconciledSnapshot(
+      stored,
+      outcome,
+      identityGen,
+      reconcileGen,
+    );
+  }
+
+  /**
+   * Adoption tail of {@link runReconcileOnce}, after every local fence has
+   * passed: a STORE re-read mirroring the recovery path's
+   * `storedSessionStillOnDisk`. The local pending-undo set only knows THIS
+   * window's undos — another window's undo registers its quarantine at the
+   * store authority, whose reads then stop serving the pair — so the
+   * validated snapshot is projected only if the store still serves it.
+   */
+  private async projectReconciledSnapshot(
+    stored: StoredCredentials,
+    outcome: ValidationOutcome,
+    identityGen: number,
+    reconcileGen: number,
+  ): Promise<void> {
+    if (!(await this.storedSessionStillOnDisk(stored.token))) {
+      this.scheduleSessionRecovery("reconcile:stored-session-superseded");
+      return;
+    }
+    if (!this.isReconcileCurrent(identityGen, reconcileGen)) {
       return;
     }
     this.applyReconciledOutcome(stored, outcome);
@@ -2385,9 +2602,9 @@ export class AuthService {
     token: string,
     refreshToken: string,
     expectedOAuthEpoch: number | null,
-  ): Promise<boolean> {
+  ): Promise<TokenApplicationOutcome> {
     if (this.disposed) {
-      return false;
+      return "superseded";
     }
     // Captured before the first await. The attempt epoch is consumed before
     // the save/provision awaits below, so this generation is the only fence
@@ -2402,24 +2619,24 @@ export class AuthService {
             expectedEpoch: expectedOAuthEpoch ?? "cold-start",
           },
         );
-        return false;
+        return "superseded";
       }
       appLogger.warn("[auth] OAuth callback delivered an empty token", {});
       this.clearPendingTimeout();
       this.clearActiveAttempt();
       this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-      return false;
+      return "failed";
     }
     if (!this.isAttemptCurrent(expectedOAuthEpoch)) {
       appLogger.debug("[auth] ignored stale OAuth callback before validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
-      return false;
+      return "superseded";
     }
     this.clearPendingTimeout();
     const outcome = await this.validateToken(token);
     if (this.isDisposed()) {
-      return false;
+      return "superseded";
     }
 
     // After the async validation, the state machine may have moved on: a
@@ -2429,12 +2646,9 @@ export class AuthService {
       appLogger.debug("[auth] ignored stale OAuth callback after validation", {
         expectedEpoch: expectedOAuthEpoch ?? "cold-start",
       });
-      return false;
+      return "superseded";
     }
     if (outcome.kind === "valid") {
-      // Consume the attempt so a subsequent replayed device result cannot
-      // re-apply the same token.
-      this.clearActiveAttempt();
       // Interactive sign-in: write the freshly-minted pair + validated identity to
       // the shared credentials file. `signIn` stamps `savedAt` in main and
       // rejects if the write cannot land. This is the file the host's
@@ -2443,6 +2657,12 @@ export class AuthService {
       // connection, closing the UNAUTHORIZED race that would burn refresh tokens.
       // (This subsumes the old best-effort `ensureLocalProvisioning`/`cliLogin`
       // seed, which would now be a second, unsynchronized writer to the same file.)
+      //
+      // The attempt stays ACTIVE through this durable write — it is consumed
+      // only after the post-save fence below passes. The fence must cover the
+      // write itself, not just the projection: a supersession landing mid-save
+      // otherwise leaves this attempt's credentials on disk where a failed
+      // successor's next launch would rehydrate them.
       const signInError: unknown = await this.tokenStore
         .signIn({ token, refreshToken }, identityFromUser(outcome.user))
         .then(
@@ -2452,14 +2672,22 @@ export class AuthService {
       // Checked before acting on the outcome: a transition (or dispose) that
       // landed during the write owns the state now, so neither the signed-in
       // projection nor the failure projection below may run for this stale
-      // finalization.
-      if (!this.isIdentityCurrent(generation)) {
+      // finalization — and the durable write this stale finalization just
+      // made must not survive it either.
+      if (
+        !this.isIdentityCurrent(generation) ||
+        !this.isAttemptCurrent(expectedOAuthEpoch)
+      ) {
         appLogger.debug(
           "[auth] dropped sign-in finalization superseded during token save",
           {},
         );
-        return false;
+        await this.undoSupersededCredentialSave(token);
+        return "superseded";
       }
+      // Consume the attempt now that the save is settled and still ours; a
+      // replayed device result for this epoch is stale from here on.
+      this.clearActiveAttempt();
       if (signInError !== null) {
         // Without the persisted pair the "signed-in" projection would be a
         // lie the next launch cannot rehydrate and the rotate cannot refresh.
@@ -2469,7 +2697,7 @@ export class AuthService {
           { error: describeLogError(signInError) },
         );
         this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-        return false;
+        return "failed";
       }
 
       this.setLastError(null);
@@ -2478,7 +2706,7 @@ export class AuthService {
       // only caller is `finalizeDeviceResult`). Passive token restores use a
       // different path and deliberately never count as sign-ins.
       Analytics.getInstance().track(AnalyticsEvent.SignInSucceeded, null);
-      return true;
+      return "applied";
     }
     // Validation `rejected` OR `network-error`: do not persist. Surface
     // `sign-in-failed` so the header sign-in surface renders a retry CTA.
@@ -2487,7 +2715,79 @@ export class AuthService {
     });
     this.clearActiveAttempt();
     this.applyFailure(AUTH_ERROR_SIGN_IN_FAILED);
-    return false;
+    return "failed";
+  }
+
+  /**
+   * Undo for a credential save whose attempt was superseded mid-write: an
+   * atomic compare-and-delete at the store's own authority (main's file
+   * lock) removes the pair ONLY if the store still holds exactly the token
+   * this stale finalization wrote — any other window's `signIn` serializes
+   * wholly before or after it, so a successor's pair can never be destroyed
+   * by a stale comparison. A failed undo has a real consequence (the stale
+   * pair would rehydrate on a later launch if the successor fails), so it
+   * surfaces through the shared store-fault seam AND is remembered: the
+   * recovery loop completes the delete before adopting anything durable.
+   */
+  private async undoSupersededCredentialSave(token: string): Promise<void> {
+    // Recorded BEFORE the attempt, not on failure: the very write being
+    // undone has already fired the store watcher, so a reconcile can start
+    // while this delete is still in flight — it must hit the fence during
+    // that window too. The fence's own retry is a concurrent idempotent
+    // compare-and-delete, so the overlap is harmless. On success only THIS
+    // token is removed — never a blanket clear, which would drop the record
+    // of a sibling undo that is still failing.
+    this.pendingUndoTokens.add(token);
+    try {
+      await this.tokenStore.deleteIfToken(token);
+      this.pendingUndoTokens.delete(token);
+    } catch (error) {
+      this.markStoreUnavailable("undo-superseded-save", error);
+    }
+  }
+
+  /**
+   * The ONE fence in front of EVERY durable-adoption path — the recovery
+   * tick, the watcher reconcile, and any future reader of the store. While a
+   * superseded-save undo is pending, either the retry completes it now (the
+   * cleaned store may then be trusted) or this pass is refused and the
+   * recovery loop is armed to finish the job. A path that reads durable
+   * credentials without calling this first re-adopts the exact zombie the
+   * attempt fence dropped.
+   */
+  private async pendingUndoBlocksAdoption(trigger: string): Promise<boolean> {
+    if (await this.retryPendingCredentialUndo()) {
+      return false;
+    }
+    if (!this.disposed) {
+      this.scheduleSessionRecovery(`${trigger}:pending-undo`);
+    }
+    return true;
+  }
+
+  /**
+   * Drains the pending-undo set token by token. `true` means the store is
+   * clean: nothing pending, or every retry just settled (`kept` is settled
+   * too — someone else's pair owns the file now and that stale one is
+   * gone). `false` means at least one conditional delete is STILL failing
+   * and nothing durable may be adopted this pass. Removal is strictly
+   * per-token: a settled undo never clears a sibling's record.
+   */
+  private async retryPendingCredentialUndo(): Promise<boolean> {
+    for (const token of [...this.pendingUndoTokens]) {
+      try {
+        const result = await this.tokenStore.deleteIfToken(token);
+        this.pendingUndoTokens.delete(token);
+        appLogger.info("[auth] completed pending superseded-save undo", {
+          result,
+        });
+      } catch (error) {
+        appLogger.warn("[auth] pending superseded-save undo still failing", {
+          error: describeLogError(error),
+        });
+      }
+    }
+    return this.pendingUndoTokens.size === 0;
   }
 
   /**
@@ -2543,6 +2843,188 @@ export class AuthService {
   }
 
   /**
+   * Link-code sign-in, confirm-gated: CLAIMS the scanned public code — which
+   * grants nothing beyond the private polling secret and a spot in front of
+   * the desktop's approve/reject prompt — then polls WITH THAT SECRET until
+   * the desktop decides. An approved poll lands the minted pair through the
+   * SAME validate → persist → signed-in tail as a device-flow authorization
+   * (`applyTokenInternal`), so the resulting session is indistinguishable
+   * from any other sign-in to the rest of the app.
+   *
+   * Runs inside the SAME `Attempt` lifecycle as device sign-in: it registers
+   * as the active attempt (superseding any in-flight one), every post-await
+   * branch is fenced on that attempt identity, and the token tail receives
+   * the attempt epoch. A link attempt superseded by a newer sign-in becomes
+   * a silent no-op — a late approval can never overwrite the newer session,
+   * and a late denial/timeout can never sign it out.
+   */
+  async signInWithLinkCode(code: string): Promise<LinkLoginSignInResult> {
+    if (this.disposed) {
+      return { kind: "superseded" };
+    }
+    this.identityGeneration += 1;
+    this.settleSessionRecovery("interactive-attempt");
+    this.setLastError(null);
+    const attempt = this.beginAttempt();
+    // Global signing-in projection, tagged as a LINK attempt: it disables the
+    // sibling device sign-in action while this claim runs (defense in depth on
+    // top of the fence), and it withholds the device flow's retry escape
+    // hatch, which here would supersede a claim the user is at that moment
+    // being asked to approve on their desktop.
+    useAuthStore.getState().setSigningIn("link");
+
+    const authnBaseUrl = this.runnerHost.authnBaseUrl;
+    // Device identity for the approver's prompt, best first: the shell's
+    // native self-description ("iPhone 16 Pro") where one exists, else the
+    // WebView UA. Carried in the claim BODY because the phone's native HTTP
+    // layer rewrites the transport User-Agent to a generic one that names
+    // nothing.
+    const describer = this.runnerHost.deviceDescriber;
+    const described = describer === null ? null : await describer.describe();
+    // Fenced BEFORE the claim, not only after it. `describe()` is a native
+    // round trip, and a newer sign-in landing during it would otherwise let
+    // this dead attempt spend the account's single live unclaimed code: the QR
+    // still on the desktop screen dies, and the desktop raises an approval
+    // prompt for a claim nobody is waiting on.
+    if (this.isDisposed() || this.activeAttempt !== attempt) {
+      return { kind: "superseded" };
+    }
+    const claimed = await claimLinkLoginCodeViaHttp(
+      authnBaseUrl,
+      code,
+      described ?? navigator.userAgent,
+    );
+    if (this.isDisposed() || this.activeAttempt !== attempt) {
+      return { kind: "superseded" };
+    }
+    if (claimed.kind !== "claimed") {
+      this.clearActiveAttempt();
+      this.applyLinkLoginFailure();
+      if (claimed.kind === "invalid-code" || claimed.kind === "rate-limited") {
+        return { kind: claimed.kind };
+      }
+      return { kind: "network-error" };
+    }
+    return this.pollLinkLoginResult(
+      authnBaseUrl,
+      claimed.secret,
+      claimed.pollIntervalSeconds,
+      attempt,
+    );
+  }
+
+  /**
+   * The claim's poll loop, fenced on `attempt`: a superseded attempt returns
+   * silently without touching global auth state — the superseding flow owns
+   * it now. Terminal outcomes for the CURRENT attempt consume it and project
+   * failure exactly like a failed device attempt.
+   */
+  private async pollLinkLoginResult(
+    authnBaseUrl: string,
+    secret: string,
+    pollIntervalSeconds: number,
+    attempt: Attempt,
+  ): Promise<LinkLoginSignInResult> {
+    const failCurrent = (
+      result: LinkLoginSignInResult,
+    ): LinkLoginSignInResult => {
+      this.clearActiveAttempt();
+      this.setLinkLoginProgress(null);
+      this.applyLinkLoginFailure();
+      return result;
+    };
+    const deadline = Date.now() + LINK_LOGIN_APPROVAL_TIMEOUT_MS;
+    let intervalMs = Math.max(1_000, pollIntervalSeconds * 1_000);
+    let transportFailures = 0;
+    while (Date.now() < deadline) {
+      // Published BEFORE the sleep, off the same `intervalMs` the loop is
+      // about to wait out — so a directive-stretched wait is counted down at
+      // its real length, never at the interval the claim first advertised.
+      const nextPollAtMs = Date.now() + intervalMs;
+      this.setLinkLoginProgress({ nextPollAtMs, phase: "waiting" });
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (
+        this.isDisposed() ||
+        this.activeAttempt !== attempt ||
+        attempt.abortController.signal.aborted
+      ) {
+        return { kind: "superseded" };
+      }
+      this.setLinkLoginProgress({ nextPollAtMs, phase: "checking" });
+      const polled = await linkLoginTokenViaHttp(authnBaseUrl, secret);
+      if (this.isDisposed() || this.activeAttempt !== attempt) {
+        return { kind: "superseded" };
+      }
+      switch (polled.kind) {
+        case "authorized": {
+          this.setLinkLoginProgress({ nextPollAtMs, phase: "finalizing" });
+          // The shared tail re-checks the epoch, consumes the attempt on
+          // success, and drops a finalization superseded mid-persist.
+          const applied = await this.applyTokenInternal(
+            polled.response.token,
+            polled.response.refreshToken,
+            attempt.epoch,
+          );
+          return linkResultForTokenApplication(applied);
+        }
+        case "authorization-pending":
+          transportFailures = 0;
+          // Snap back to the server-directed floor: a transient slow-down
+          // must not leave the cadence ratcheted up for the rest of the
+          // wait — approval is imminent in this state by definition.
+          intervalMs = Math.max(1_000, pollIntervalSeconds * 1_000);
+          continue;
+        case "slow-down":
+          transportFailures = 0;
+          // Follow the directive in both directions rather than ratcheting
+          // monotonically upward.
+          intervalMs = Math.max(
+            1_000,
+            (polled.retryAfterSeconds ?? pollIntervalSeconds) * 1_000,
+          );
+          continue;
+        case "access-denied":
+          return failCurrent({ kind: "denied" });
+        case "invalid-code":
+          return failCurrent({ kind: "invalid-code" });
+        case "network-error":
+          transportFailures += 1;
+          if (transportFailures >= 3) {
+            return failCurrent({ kind: "network-error" });
+          }
+          continue;
+      }
+    }
+    return failCurrent({ kind: "timed-out" });
+  }
+
+  /**
+   * The "Link a phone" panel's view of its current code — whether a phone
+   * has claimed it and the claimant metadata for the confirmation prompt.
+   * The raw bearer stays inside this auth boundary.
+   */
+  async fetchLinkLoginStatus(
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.linkLoginStatus(this.currentBearer, code, signal);
+  }
+
+  /** The panel's approve/reject decision on a claimed code. */
+  async respondLinkLogin(
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.respondLinkLogin(this.currentBearer, code, approve);
+  }
+
+  /**
    * Epoch-currency check used by async finalization paths. Returns true iff
    * the captured epoch still matches the live attempt's epoch. A finalizer that
    * captured epoch `E` no-ops once a newer `signIn()` has replaced the active
@@ -2568,6 +3050,7 @@ export class AuthService {
       attempt.deviceSession.cancel();
     }
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     this.activeAttempt = null;
   }
 
@@ -2671,6 +3154,7 @@ export class AuthService {
     this.errorListeners.clear();
     this.sessionSnapshotListeners.clear();
     this.deviceProgressListeners.clear();
+    this.linkLoginProgressListeners.clear();
   }
 
   /**
@@ -2722,6 +3206,7 @@ export class AuthService {
     this.clearActiveAttempt();
     attempt.deviceSession?.cancel();
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     if (this.starting) {
       this.authResolvedDuringStart = true;
     }
@@ -2793,6 +3278,7 @@ export class AuthService {
     // pass through the interactive entry's clear.
     this.setLastError(null);
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     const liveUserId = this.contextProvider.current()?.identity.userId;
     const profile = profileOverride ?? this.profileFromUser(user);
     const contextMetadata = this.contextMetadataFromUser(user);
@@ -2860,6 +3346,7 @@ export class AuthService {
       return;
     }
     this.setDeviceProgress(null);
+    this.setLinkLoginProgress(null);
     this.refreshScheduler.stop();
     // COMMIT BEFORE EMIT (see `applySignedIn`). `signOut()` announces the
     // null context synchronously and the runtime refreshes the directory
@@ -2955,6 +3442,29 @@ export class AuthService {
     if (this.disposed) {
       return;
     }
+    this.setLastError(error);
+    this.applyInteractiveFailure(error);
+  }
+
+  /**
+   * A link-login claim's terminal failure: the same transition as
+   * `applyFailure`, minus the durable `lastError`.
+   *
+   * The result kind is already returned to the caller, and both link surfaces
+   * render it precisely ("that code is invalid, expired, or already used").
+   * Setting `lastError` too would put the generic "Sign-in failed - please try
+   * again" beside it on the same screen, saying something weaker and, for an
+   * expired code, actively wrong - trying again with a dead code cannot work.
+   * One failure gets one explanation, and the specific one wins.
+   */
+  private applyLinkLoginFailure(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.applyInteractiveFailure(AUTH_ERROR_SIGN_IN_FAILED);
+  }
+
+  private applyInteractiveFailure(error: string): void {
     appLogger.warn("[auth] applying auth failure", {
       errorCode: classifyAuthFailureForLog(error),
     });
@@ -2964,7 +3474,6 @@ export class AuthService {
     Analytics.getInstance().track(AnalyticsEvent.SignInFailed, {
       blocker: SIGN_IN_FAILURE_BLOCKERS[error] ?? "unknown",
     });
-    this.setLastError(error);
     this.applySignedOut();
     // A failed interactive attempt says nothing about the SHARED file - a
     // recoverable stored session may still be sitting there (the entry to
@@ -3018,6 +3527,26 @@ export class AuthService {
   }
 
   /**
+   * Subscribes to link-login poll progress (when the next `/link/token` poll
+   * fires, and whether one is outstanding). Fires synchronously on subscribe
+   * with the current value, then on every change. `null` whenever no link
+   * poll is running.
+   */
+  onLinkLoginProgressChange(handler: LinkLoginProgressListener): Disposable {
+    this.linkLoginProgressListeners.add(handler);
+    handler(this.linkLoginProgress);
+    return {
+      dispose: () => {
+        this.linkLoginProgressListeners.delete(handler);
+      },
+    };
+  }
+
+  getLinkLoginProgress(): LinkLoginProgress | null {
+    return this.linkLoginProgress;
+  }
+
+  /**
    * Re-opens the pre-filled approval page (`verification_uri_complete`, with the
    * user code embedded) for the in-flight device attempt. Backs the sign-in
    * surface's one-click "open approval page" affordance so the user never has to
@@ -3040,6 +3569,23 @@ export class AuthService {
     }
     this.deviceProgress = next;
     for (const handler of this.deviceProgressListeners) {
+      handler(next);
+    }
+  }
+
+  private setLinkLoginProgress(next: LinkLoginProgress | null): void {
+    const current = this.linkLoginProgress;
+    if (
+      current === next ||
+      (current !== null &&
+        next !== null &&
+        current.nextPollAtMs === next.nextPollAtMs &&
+        current.phase === next.phase)
+    ) {
+      return;
+    }
+    this.linkLoginProgress = next;
+    for (const handler of this.linkLoginProgressListeners) {
       handler(next);
     }
   }

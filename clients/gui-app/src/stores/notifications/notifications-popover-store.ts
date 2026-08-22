@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   ALL_NOTIFICATION_CATEGORIES,
   type NotificationCategory,
@@ -14,9 +16,10 @@ interface NotificationsPopoverState {
    * shown at all). Cleared on every subsequent open/close transition. */
   readonly originUnavailable: boolean;
   readonly originUnavailableHostLabel: string | null;
-  /** Recent-only open-session filters. Reset to defaults on every open -
-   * including a programmatic fallback open - never persisted, and never
-   * applied to Attention. */
+  /** Recent-only filters, persisted: the center reopens the way the user
+   * last filtered it, across opens and relaunches, on every shell. Never
+   * applied to Attention. `resetFilters` remains the explicit way back to
+   * the default view. */
   readonly unreadOnly: boolean;
   readonly categories: ReadonlySet<NotificationCategory>;
   readonly setOpen: (next: boolean) => void;
@@ -25,62 +28,105 @@ interface NotificationsPopoverState {
   readonly openWithOriginUnavailable: (hostLabel: string | null) => void;
   readonly setUnreadOnly: (next: boolean) => void;
   readonly toggleCategory: (category: NotificationCategory) => void;
-  /** Explicit "reset filters" affordance for the filter-empty state - the
-   * same default the session applies automatically on open, exposed so the
-   * user can recover from an all-filtered-out Recent view without closing
-   * and reopening the center. */
+  /** Explicit "reset filters" affordance for the filter-empty state, and -
+   * now that the filters persist - the only way the view returns to its
+   * default; opening the center never resets them. */
   readonly resetFilters: () => void;
 }
 
-export const useNotificationsPopoverStore = create<NotificationsPopoverState>(
-  (set) => ({
-    open: false,
-    originUnavailable: false,
-    originUnavailableHostLabel: null,
-    unreadOnly: false,
-    categories: ALL_NOTIFICATION_CATEGORIES,
-    setOpen: (next) => {
-      set(
-        next
-          ? {
-              open: next,
-              unreadOnly: false,
-              categories: ALL_NOTIFICATION_CATEGORIES,
-              originUnavailable: false,
-              originUnavailableHostLabel: null,
-            }
-          : {
-              open: next,
-              originUnavailable: false,
-              originUnavailableHostLabel: null,
-            },
-      );
+const NOTIFICATIONS_FILTER_PERSIST_KEY = persistKey(
+  STORE_KEYS.notificationsFilter,
+);
+
+// Widened read-only view so an `unknown` rehydrated value can be membership-
+// tested without a cast (`ReadonlySet` is covariant in its element reads).
+const CATEGORY_NAMES: ReadonlySet<string> = ALL_NOTIFICATION_CATEGORIES;
+
+function isNotificationCategory(value: unknown): value is NotificationCategory {
+  return typeof value === "string" && CATEGORY_NAMES.has(value);
+}
+
+/**
+ * Restores the persisted filter slice, defaulting any missing or malformed
+ * field rather than rejecting the record wholesale. Unknown category strings
+ * (a removed category from an older build) are dropped; an explicitly empty
+ * persisted set is honored - the filter-empty state owns its own recovery
+ * affordance (`resetFilters`).
+ */
+function restorePersistedFilters(persisted: unknown): {
+  readonly unreadOnly: boolean;
+  readonly categories: ReadonlySet<NotificationCategory>;
+} {
+  if (persisted === null || typeof persisted !== "object") {
+    return { unreadOnly: false, categories: ALL_NOTIFICATION_CATEGORIES };
+  }
+  const record: Record<string, unknown> = { ...persisted };
+  const categories = Array.isArray(record.categories)
+    ? new Set(record.categories.filter(isNotificationCategory))
+    : ALL_NOTIFICATION_CATEGORIES;
+  return {
+    unreadOnly: record.unreadOnly === true,
+    categories,
+  };
+}
+
+export const useNotificationsPopoverStore = create<NotificationsPopoverState>()(
+  persist(
+    (set) => ({
+      open: false,
+      originUnavailable: false,
+      originUnavailableHostLabel: null,
+      unreadOnly: false,
+      categories: ALL_NOTIFICATION_CATEGORIES,
+      setOpen: (next) => {
+        // Open/close transitions touch only the open-cycle state; the filter
+        // slice is durable and survives both directions.
+        set({
+          open: next,
+          originUnavailable: false,
+          originUnavailableHostLabel: null,
+        });
+      },
+      openWithOriginUnavailable: (hostLabel) => {
+        set({
+          open: true,
+          originUnavailable: true,
+          originUnavailableHostLabel: hostLabel,
+        });
+      },
+      setUnreadOnly: (next) => {
+        set({ unreadOnly: next });
+      },
+      toggleCategory: (category) => {
+        set((state) => {
+          const next = new Set(state.categories);
+          if (next.has(category)) {
+            next.delete(category);
+          } else {
+            next.add(category);
+          }
+          return { categories: next };
+        });
+      },
+      resetFilters: () => {
+        set({ unreadOnly: false, categories: ALL_NOTIFICATION_CATEGORIES });
+      },
+    }),
+    {
+      ...basePersistOptions(NOTIFICATIONS_FILTER_PERSIST_KEY),
+      storage: createJSONStorage(() => localStorage),
+      // A `Set` does not survive JSON, so the persisted record carries the
+      // categories as an array; `merge` rebuilds the Set (validating each
+      // entry) on rehydrate. Only the filter slice persists - open-cycle
+      // state and actions come from the initializer.
+      partialize: (state) => ({
+        unreadOnly: state.unreadOnly,
+        categories: [...state.categories],
+      }),
+      merge: (persisted, current) => ({
+        ...current,
+        ...restorePersistedFilters(persisted),
+      }),
     },
-    openWithOriginUnavailable: (hostLabel) => {
-      set({
-        open: true,
-        unreadOnly: false,
-        categories: ALL_NOTIFICATION_CATEGORIES,
-        originUnavailable: true,
-        originUnavailableHostLabel: hostLabel,
-      });
-    },
-    setUnreadOnly: (next) => {
-      set({ unreadOnly: next });
-    },
-    toggleCategory: (category) => {
-      set((state) => {
-        const next = new Set(state.categories);
-        if (next.has(category)) {
-          next.delete(category);
-        } else {
-          next.add(category);
-        }
-        return { categories: next };
-      });
-    },
-    resetFilters: () => {
-      set({ unreadOnly: false, categories: ALL_NOTIFICATION_CATEGORIES });
-    },
-  }),
+  ),
 );

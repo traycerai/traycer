@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/hover-card";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import {
   HostConfigUnsupportedNotice,
   LocalConfigFallbackNotice,
@@ -558,10 +559,16 @@ function TerminalShellGroup(props: {
                 // The WSL caption stacks under the picker in its own column,
                 // so the row top-aligns only while it is shown.
                 showWslCaption ? "items-start" : "items-center",
+                SETTINGS_ROW_STACK.container,
                 props.compact ? "px-4 py-2.5" : "px-5 py-4",
               )}
             >
-              <div className="min-w-0 flex-1 space-y-1">
+              <div
+                className={cn(
+                  "min-w-0 flex-1 space-y-1",
+                  SETTINGS_ROW_STACK.label,
+                )}
+              >
                 <div className="text-ui-sm font-medium text-foreground">
                   Shell program
                 </div>
@@ -569,7 +576,7 @@ function TerminalShellGroup(props: {
                   Pick a shell, or add any program on this machine.
                 </p>
               </div>
-              <div className="flex max-w-full flex-col items-end gap-1.5">
+              <div className="flex max-w-full flex-col items-end gap-1.5 max-md:items-start">
                 <div className="flex max-w-full items-center gap-2">
                   <ShellProgramCombobox
                     value={config.path}
@@ -596,10 +603,16 @@ function TerminalShellGroup(props: {
             <div
               className={cn(
                 "flex flex-wrap items-start justify-between gap-4 border-t border-border/40",
+                SETTINGS_ROW_STACK.container,
                 props.compact ? "px-4 py-2.5" : "px-5 py-4",
               )}
             >
-              <div className="min-w-0 flex-1 space-y-1">
+              <div
+                className={cn(
+                  "min-w-0 flex-1 space-y-1",
+                  SETTINGS_ROW_STACK.label,
+                )}
+              >
                 <div className="text-ui-sm font-medium text-foreground">
                   {`Startup flags for ${programName(config.path)}`}
                 </div>
@@ -609,7 +622,12 @@ function TerminalShellGroup(props: {
                     : `Passed to ${programName(config.path)} each time a terminal opens.`}
                 </p>
               </div>
-              <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+              <div
+                className={cn(
+                  "flex max-w-full flex-wrap items-center justify-end gap-2",
+                  SETTINGS_ROW_STACK.control,
+                )}
+              >
                 <ShellFlagChips
                   args={config.args}
                   disabled={props.pending}

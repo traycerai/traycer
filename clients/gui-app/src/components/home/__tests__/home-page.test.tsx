@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -83,8 +84,16 @@ const homeMocks = vi.hoisted(() => ({
   })),
   composerCommits: [] as ComposerCommit[],
   nextInstanceId: 0,
+  isMobile: false,
   tabActivity: { visible: true, focused: true },
   delayComposerRegistration: false,
+}));
+
+// Drive the viewport branch directly. jsdom reports a desktop width, so this
+// only makes the default explicit - the phone case flips it per test.
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => homeMocks.isMobile,
+  isMobileViewport: () => homeMocks.isMobile,
 }));
 
 vi.mock("@/components/layout/tab-surface-activity-hooks", () => ({
@@ -400,6 +409,7 @@ describe("<HomePage />", () => {
     __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     homeMocks.systemModalOpen = false;
+    homeMocks.isMobile = false;
     homeMocks.navigate.mockReset();
     homeMocks.request.mockReset();
     homeMocks.getActiveHostId.mockReset();
@@ -451,6 +461,7 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    useMobileNavStore.setState({ open: false });
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -495,6 +506,59 @@ describe("<HomePage />", () => {
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "false",
     );
+    queryClient.clear();
+  });
+
+  it("drops the embedded epics list at phone width, keeping the hero and composer", () => {
+    homeMocks.isMobile = true;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    // The hamburger drawer already carries "Recent tasks" + "View all" off the
+    // same useHistoryQuery, so the inline copy is pure duplication here.
+    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.getByTestId("home-hero")).not.toBeNull();
+    expect(screen.getByTestId("landing-composer")).not.toBeNull();
+    queryClient.clear();
+  });
+
+  it("opens the nav drawer from the phone-only View history link", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    // Same drawer the header hamburger opens - that is where "Recent tasks"
+    // lives once the embedded list is dropped at this width.
+    expect(useMobileNavStore.getState().open).toBe(true);
+    queryClient.clear();
+  });
+
+  it("keeps the View history link off the desktop landing page", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId("home-view-history")).toBeNull();
     queryClient.clear();
   });
 
