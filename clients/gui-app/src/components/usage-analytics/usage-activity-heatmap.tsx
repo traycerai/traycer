@@ -45,10 +45,11 @@ function zipWeekdays(
  * GitHub-style activity calendar: one column per week (Sunday-first rows),
  * one tile per day, intensity = the day's metric value quantized to
  * quartiles (`buildUsageActivityCalendar`). Colors come from the
- * `--usage-heat-N` sequential ramp (one hue, light→dark in BOTH modes -
- * darker is busier, as on GitHub) scoped under `.usage-chart-root` beside
- * the categorical palette. Hovering a tile states the day's cost and
- * tokens together, whichever metric is coloring it.
+ * `--usage-heat-N` sequential ramp (one hue; light→dark in light mode,
+ * dark→bright in dark mode - GitHub's own convention, since "busier" means
+ * "further from the surface") scoped under `.usage-chart-root` beside the
+ * categorical palette. Hovering a tile states the day's cost and tokens
+ * together, whichever metric is coloring it.
  * Tiles are marks, not layout, so their fixed pixel size is fine; the grid
  * itself scrolls horizontally rather than squeezing tiles unreadable.
  */
