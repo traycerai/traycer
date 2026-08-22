@@ -269,12 +269,14 @@ export function buildHostStreamClient(params: {
     // that from becoming several OTP dialogs. It resolves `declined` until the
     // provisioning provider is mounted, so dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
-    // Reported to the app-wide flow so it can tell a DELIVERED mint from one
-    // still in flight. `active` is the only positive proof a minted credential
-    // reached the host, and it is what releases the app-wide claim that stops
-    // a second transport minting into the settled-but-not-yet-adopted window.
-    // The renderer's long-lived clients still do no verification of their own;
-    // the next connection's ack settles it.
+    // Kept wired as the one place transports report credential state into,
+    // but the report is deliberately INERT today: an `openAck` state carries
+    // no provenance (which credential, which transport, when), so `active`
+    // must NOT release the app-wide adoption claim - a delayed `active(A)`
+    // observed before A was burned would free B's claim and reopen the
+    // double-mint it exists to prevent. The claim expires on its TTL alone;
+    // see `noteHostCredentialState`'s own doc. If a future frame carries the
+    // credential's identity, this is the seam that starts trusting it.
     onHostCredentialState: noteHostCredentialState,
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than

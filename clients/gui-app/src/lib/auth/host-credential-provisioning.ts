@@ -63,6 +63,75 @@ export function resetHostCredentialProvisioning(): void {
   generation += 1;
   attemptsByHostId.clear();
   awaitingAdoptionByHostId.clear();
+  mintBackoffByHostId.clear();
+}
+
+/**
+ * Escalating floor between COMPLETED mints for one host.
+ *
+ * The re-arm edge (`ws-stream-client` clears its per-host attempt marker on
+ * every transition back into `missing`/`needs-reauth`) deliberately makes the
+ * silent mint repeatable - a burn must be repairable more than once per app
+ * run. But repeatable with only the 60s adoption TTL as a floor means a cloud
+ * that persistently refuses delegated credentials (a server-side bug, a
+ * revoked account in a half-signed-out app) settles into mint -> adopt ->
+ * refuse -> burn -> re-arm -> mint, ~1440 credentials per host per day, each
+ * lap revoking its predecessor. Each lap doubles the wait instead: 1m, 2m,
+ * 4m, ... capped at an hour, and a quiet stretch twice the current wait
+ * resets the ladder so a genuinely recovered cloud gets prompt service.
+ */
+const MINT_BACKOFF_BASE_MS = 60_000;
+const MINT_BACKOFF_MAX_MS = 3_600_000;
+
+const mintBackoffByHostId = new Map<
+  string,
+  {
+    readonly completedMints: number;
+    readonly lastMintedAt: number;
+    readonly generation: number;
+  }
+>();
+
+function mintBackoffWaitMs(completedMints: number): number {
+  if (completedMints <= 1) return 0;
+  return Math.min(
+    MINT_BACKOFF_MAX_MS,
+    MINT_BACKOFF_BASE_MS * 2 ** (completedMints - 2),
+  );
+}
+
+/** Whether a fresh mint for `hostId` must wait out the escalation ladder. */
+function mintInBackoff(hostId: string): boolean {
+  const entry = mintBackoffByHostId.get(hostId);
+  if (entry === undefined) {
+    return false;
+  }
+  if (entry.generation !== generation) {
+    mintBackoffByHostId.delete(hostId);
+    return false;
+  }
+  const waitMs = mintBackoffWaitMs(entry.completedMints);
+  const elapsed = Date.now() - entry.lastMintedAt;
+  if (elapsed >= Math.max(waitMs, MINT_BACKOFF_BASE_MS) * 2) {
+    // Quiet long enough: the flapping stopped. Forget the ladder entirely so
+    // the next genuine loss is served promptly.
+    mintBackoffByHostId.delete(hostId);
+    return false;
+  }
+  return elapsed < waitMs;
+}
+
+function recordCompletedMint(hostId: string): void {
+  const entry = mintBackoffByHostId.get(hostId);
+  const completedMints =
+    entry !== undefined && entry.generation === generation
+      ? entry.completedMints + 1
+      : 1;
+  mintBackoffByHostId.set(hostId, {
+    completedMints,
+    lastMintedAt: Date.now(),
+    generation,
+  });
 }
 
 /**
@@ -188,6 +257,13 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
     // shared promise's own `.then` would run only once.
     return existing.settled.then(existing.claim);
   }
+  if (mintInBackoff(hostId)) {
+    // The escalation ladder says this host has been minting too often to be
+    // healthy. `pending-elsewhere`, not `unavailable`, for the same reason as
+    // the adoption claim above: the caller keeps its attempt, and the next
+    // credential-state edge after the window re-asks.
+    return Promise.resolve({ kind: "pending-elsewhere" });
+  }
   const current = runner;
   if (current === null) {
     return Promise.resolve({ kind: "unavailable" });
@@ -218,6 +294,7 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
           mintedAt: Date.now(),
           generation: startedAt,
         });
+        recordCompletedMint(hostId);
       }
       return outcome;
     });
