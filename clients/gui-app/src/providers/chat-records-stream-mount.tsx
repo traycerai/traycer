@@ -6,10 +6,10 @@ import {
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
+  useStreamHostId,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 
 /**
@@ -54,15 +54,23 @@ import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
  * `peek` rather than `get` so a background delta cannot reorder the MRU and
  * evict the epic the user is actually in.
  */
+/**
+ * A session that stayed open at least this long before closing counts as
+ * healthy, resetting the reopen lane's backoff even if it carried no deltas.
+ * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
+ */
+const HEALTHY_SESSION_RESET_MS = 30_000;
+
 export function ChatRecordsStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("host.chatRecords.subscribe");
-  // Not read by the effect body - it is the REBUILD key. The stream is bound to
-  // whichever host the app-wide client is dialling, and the open-epic sessions
-  // it feeds are rebuilt on a host change too (`EpicSessionProvider`'s session
-  // key), so the subscription has to be torn down and reopened with them rather
-  // than keep pushing a previous host's rows into fresh stores.
-  const hostId = useAddressableHostId();
+  // Both the rebuild key AND the identity `acquireHostConnection` below binds
+  // the reopen lane to - so it MUST come off the same `StreamRuntimeBinding`
+  // as `wsStreamClient`, not a separately-updating resolver
+  // (`useAddressableHostId` reads `readiness.hostId`, which the runtime's own
+  // doc warns can name a different machine during a swap). One binding, one
+  // answer: the lane always belongs to the host the client is dialling.
+  const hostId = useStreamHostId();
 
   useEffect(() => {
     if (
@@ -93,6 +101,7 @@ export function ChatRecordsStreamMount(): ReactNode {
     function openClient(): void {
       if (disposed) return;
       let client: ChatRecordsStreamClient | null = null;
+      let openedAtMs = 0;
       client = new ChatRecordsStreamClient({
         wsStreamClient: streamClient,
         callbacks: {
@@ -105,7 +114,23 @@ export function ChatRecordsStreamMount(): ReactNode {
           },
           onConnectionStatus: (status, reason) => {
             if (currentClient !== client) return;
+            if (status === "open") {
+              openedAtMs = Date.now();
+              return;
+            }
             if (status === "closed") {
+              // Deltas are the only frame this stream carries, so a healthy
+              // but QUIET session would otherwise never reset the lane and
+              // the backoff would ratchet one-way across the client's
+              // lifetime. A session that stayed open past the healthy-dwell
+              // is evidence enough (same shape as the engine's rebuild
+              // pacer's healthy-lifetime reset).
+              if (
+                openedAtMs !== 0 &&
+                Date.now() - openedAtMs >= HEALTHY_SESSION_RESET_MS
+              ) {
+                reopenScheduler.resetBackoff();
+              }
               reopenScheduler.scheduleAfterClose(reason);
             }
           },

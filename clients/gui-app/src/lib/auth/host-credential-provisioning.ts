@@ -76,12 +76,27 @@ export function resetHostCredentialProvisioning(): void {
  * that persistently refuses delegated credentials (a server-side bug, a
  * revoked account in a half-signed-out app) settles into mint -> adopt ->
  * refuse -> burn -> re-arm -> mint, ~1440 credentials per host per day, each
- * lap revoking its predecessor. Each lap doubles the wait instead: 1m, 2m,
- * 4m, ... capped at an hour, and a quiet stretch twice the current wait
- * resets the ladder so a genuinely recovered cloud gets prompt service.
+ * lap revoking its predecessor. Each lap doubles the wait instead - 2m after
+ * the second completed mint, 4m, 8m, ... capped at an hour (the FIRST re-mint
+ * is deliberately free beyond the adoption TTL: one burn-and-replace is the
+ * ordinary recovery this whole flow exists for, and every rung is strictly
+ * above the TTL so the ladder always adds something).
+ *
+ * The quiet-period reset is a FIXED window, decaying ONE rung at a time. A
+ * threshold derived from the current rung, or a reset-to-zero, lets any flap
+ * slower than the threshold farm the reset and pin itself at rung one
+ * forever - the mechanism must not be escapable by simply flapping slower.
+ *
+ * Two honest limits, accepted: the ladder counts MINTED, not DELIVERED (a
+ * provisioned outcome whose delivery leg died still climbs - the module
+ * deliberately trusts no delivery report, see `noteHostCredentialState`), and
+ * it is per-window state (a reload, a second window, or a provider remount
+ * via `resetHostCredentialProvisioning` starts a fresh ladder), so the bound
+ * is per-window, not per-machine.
  */
 const MINT_BACKOFF_BASE_MS = 60_000;
 const MINT_BACKOFF_MAX_MS = 3_600_000;
+const MINT_BACKOFF_QUIET_DECAY_MS = 1_800_000;
 
 const mintBackoffByHostId = new Map<
   string,
@@ -96,7 +111,7 @@ function mintBackoffWaitMs(completedMints: number): number {
   if (completedMints <= 1) return 0;
   return Math.min(
     MINT_BACKOFF_MAX_MS,
-    MINT_BACKOFF_BASE_MS * 2 ** (completedMints - 2),
+    MINT_BACKOFF_BASE_MS * 2 ** (completedMints - 1),
   );
 }
 
@@ -110,15 +125,32 @@ function mintInBackoff(hostId: string): boolean {
     mintBackoffByHostId.delete(hostId);
     return false;
   }
-  const waitMs = mintBackoffWaitMs(entry.completedMints);
-  const elapsed = Date.now() - entry.lastMintedAt;
-  if (elapsed >= Math.max(waitMs, MINT_BACKOFF_BASE_MS) * 2) {
-    // Quiet long enough: the flapping stopped. Forget the ladder entirely so
-    // the next genuine loss is served promptly.
-    mintBackoffByHostId.delete(hostId);
-    return false;
+  let effective = entry;
+  const quietElapsed = Date.now() - entry.lastMintedAt;
+  if (quietElapsed >= MINT_BACKOFF_QUIET_DECAY_MS) {
+    // Quiet stretch: decay one rung per full quiet window rather than
+    // forgetting outright, so a slow flap cannot farm the reset. The
+    // remaining rung is then re-checked below - at the high rungs a single
+    // quiet window is shorter than the wait itself, and decaying must not
+    // double as admission.
+    const decayedRungs = Math.floor(quietElapsed / MINT_BACKOFF_QUIET_DECAY_MS);
+    const completedMints = entry.completedMints - decayedRungs;
+    if (completedMints <= 0) {
+      mintBackoffByHostId.delete(hostId);
+      return false;
+    }
+    effective = {
+      completedMints,
+      lastMintedAt:
+        entry.lastMintedAt + decayedRungs * MINT_BACKOFF_QUIET_DECAY_MS,
+      generation: entry.generation,
+    };
+    mintBackoffByHostId.set(hostId, effective);
   }
-  return elapsed < waitMs;
+  return (
+    Date.now() - effective.lastMintedAt <
+    mintBackoffWaitMs(effective.completedMints)
+  );
 }
 
 function recordCompletedMint(hostId: string): void {

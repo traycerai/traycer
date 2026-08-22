@@ -4,10 +4,10 @@ import { WorktreeChangedStreamClient } from "@traycer-clients/shared/host-transp
 import { acquireHostConnection } from "@traycer-clients/shared/host-client/host-connection-registry";
 import { isReopenableHostStreamClose } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
+  useStreamHostId,
   useStreamMethodSupport,
   useWsStreamClient,
 } from "@/lib/host/stream-runtime-context";
-import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 import {
   createWorktreeChangedInvalidationScheduler,
@@ -15,10 +15,22 @@ import {
   WORKTREE_CHANGED_INVALIDATION_MAX_WAIT_MS,
 } from "@/lib/worktree/worktree-changed-invalidation-scheduler";
 
+/**
+ * A session that stayed open at least this long before closing counts as
+ * healthy, resetting the reopen lane's backoff even if it carried no events.
+ * Mirrors the reconnect engine's rebuild-pacer healthy-lifetime constant.
+ */
+const HEALTHY_SESSION_RESET_MS = 30_000;
+
 export function WorktreeChangedStreamMount(): ReactNode {
   const wsStreamClient = useWsStreamClient();
   const support = useStreamMethodSupport("worktree.changed");
-  const hostId = useAddressableHostId();
+  // Both the rebuild key AND the identity the reopen lane and the query
+  // invalidations below are scoped to - so it must come off the same
+  // `StreamRuntimeBinding` as `wsStreamClient` (one binding, one answer),
+  // never a separately-updating resolver like `useAddressableHostId`, which
+  // can name a different machine mid-swap.
+  const hostId = useStreamHostId();
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -61,6 +73,7 @@ export function WorktreeChangedStreamMount(): ReactNode {
     function openClient(): void {
       if (disposed) return;
       let client: WorktreeChangedStreamClient | null = null;
+      let openedAtMs = 0;
       client = new WorktreeChangedStreamClient({
         wsStreamClient: streamClient,
         callbacks: {
@@ -73,7 +86,20 @@ export function WorktreeChangedStreamMount(): ReactNode {
           },
           onConnectionStatus: (status, reason) => {
             if (currentClient !== client) return;
+            if (status === "open") {
+              openedAtMs = Date.now();
+              return;
+            }
             if (status === "closed") {
+              // Events are the only frame this stream carries; a healthy but
+              // quiet session must still reset the lane, or the backoff
+              // ratchets one-way across the client's lifetime.
+              if (
+                openedAtMs !== 0 &&
+                Date.now() - openedAtMs >= HEALTHY_SESSION_RESET_MS
+              ) {
+                reopenScheduler.resetBackoff();
+              }
               reopenScheduler.scheduleAfterClose(reason);
             }
           },

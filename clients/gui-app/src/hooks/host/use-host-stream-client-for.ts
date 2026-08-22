@@ -266,8 +266,9 @@ export function buildHostStreamClient(params: {
     auth: params.auth,
     // Always the app-wide flow, never a per-caller one: the renderer holds
     // several clients against one host, and the shared module is what keeps
-    // that from becoming several OTP dialogs. It resolves `declined` until the
-    // provisioning provider is mounted, so dev shells and tests are unaffected.
+    // that from becoming several concurrent mints revoking each other. It
+    // resolves `unavailable` until the provisioning provider is mounted, so
+    // dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
     // Kept wired as the one place transports report credential state into,
     // but the report is deliberately INERT today: an `openAck` state carries

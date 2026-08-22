@@ -50,15 +50,20 @@ export type HostCredentialMintOutcome =
     }
   | { readonly kind: "unavailable" }
   /**
-   * Nothing to hand over BECAUSE another transport's credential for this host
-   * is already on its way - so this caller should not treat its attempt as
-   * spent.
+   * Nothing to hand over, and this caller should not treat its attempt as
+   * spent - either because another transport's credential for this host is
+   * already on its way (the adoption claim), or because the app-wide mint
+   * escalation ladder is deferring re-mints for a host that has been minting
+   * too often to be healthy. In the second case there is no delivery in
+   * flight and no timer serving this caller; the next `openAck` after the
+   * window simply asks again (the transport gives its attempt marker back on
+   * this answer, so re-asking needs no state transition).
    *
    * Split out of `unavailable` for one reason: `unavailable` is terminal for
    * the asking client (it has had its one attempt), and that is right for
    * every case it covers - a rejected hostId, an expired sign-in, a mint that
    * failed. It is wrong here, because nothing was attempted and nothing
-   * failed; the app is simply waiting for a delivery already in flight. A
+   * failed; the app is waiting, on a claim or on a backoff window. A
    * transport that burned its single attempt on this answer, and then turned
    * out to be the only surviving one, would leave the host on the client lease
    * with nobody left to ask - the app-wide claim protecting the credential

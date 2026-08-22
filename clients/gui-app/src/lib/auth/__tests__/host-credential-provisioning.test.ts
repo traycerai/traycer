@@ -426,3 +426,223 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     expect(runner).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * The escalation ladder between COMPLETED mints for one host.
+ *
+ * The re-arm edge (`ws-stream-client` clears its per-host attempt marker on
+ * every transition back into `missing`/`needs-reauth`) makes the silent mint
+ * repeatable on purpose - a burn must be repairable more than once per app
+ * run. Left ungoverned beyond the 60s adoption TTL, a cloud that persistently
+ * refuses delegated credentials cycles mint -> adopt -> refuse -> burn ->
+ * re-arm at that 60s floor indefinitely. Each COMPLETED mint instead doubles
+ * the wait before the next one is allowed - 2m after the 2nd completed mint,
+ * 4m, 8m, ... capped at an hour (`mintBackoffWaitMs`:
+ * `completedMints <= 1 -> 0`, else `60_000 * 2 ** (completedMints - 1)`,
+ * capped at `MINT_BACKOFF_MAX_MS`).
+ *
+ * The quiet-period mechanism is DECAY, not a full reset: every full 30-minute
+ * quiet window (`MINT_BACKOFF_QUIET_DECAY_MS`) removes exactly one rung
+ * (`completedMints -= decayedRungs`, `lastMintedAt` advanced by the decayed
+ * windows), and the REMAINING rung is re-checked against its own wait from
+ * that advanced timestamp - a high rung can still be in backoff right after a
+ * decay if its own wait has not elapsed yet. A fixed, per-rung decay (rather
+ * than the old design's reset-to-zero on a threshold that scaled with the
+ * current wait) is what stops a flap slower than that scaling threshold from
+ * farming a full reset and pinning itself at rung one forever.
+ *
+ * Every test here uses fake timers rather than the `Date.now = ...` override
+ * the suites above use, because several of them need to advance PAST the 60s
+ * adoption-claim TTL while staying INSIDE (or outside) the ladder's own,
+ * independently-sized window - the two must be told apart deliberately, not
+ * left to coincide.
+ */
+describe("appHostCredentialMintFlow mint escalation ladder", () => {
+  it("imposes no extra wait after the first completed mint, then escalates 120s -> 240s", async () => {
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder";
+      vi.setSystemTime(0);
+
+      // 1st mint: completedMints becomes 1, and the ladder demands nothing
+      // extra for the very next attempt (`completedMints <= 1 -> 0` wait).
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      // Past the 60s adoption claim, and the ladder still imposes no extra
+      // wait of its own - straight through to the runner.
+      vi.setSystemTime(60_001);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(2);
+      // completedMints is now 2: the ladder's NEXT wait is 120s
+      // (60_000 * 2 ** (2 - 1)).
+
+      vi.setSystemTime(60_001 + 120_000 - 1);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      expect(runner).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(60_001 + 120_000);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(3);
+      // completedMints is now 3: the wait DOUBLES to 240s
+      // (60_000 * 2 ** (3 - 1)).
+      const thirdMintAt = 60_001 + 120_000;
+
+      // Past the 60s adoption claim (which alone would already have cleared)
+      // but still inside the ladder's 240s wait - isolating the ladder from
+      // the adoption claim, since only the ladder can still be blocking here.
+      vi.setSystemTime(thirdMintAt + 150_000);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      expect(runner).toHaveBeenCalledTimes(3);
+
+      vi.setSystemTime(thirdMintAt + 240_000);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a ~3-minute flap cadence still climbs every reachable rung rather than resetting", async () => {
+    // Contrast with the OLD design: a threshold that scaled with the current
+    // wait (`max(wait, 60s) * 2`) could be out-waited by a sufficiently slow
+    // flap, silently resetting completedMints back to zero on every cycle and
+    // pinning the ladder at rung one forever. The fixed 30-minute decay
+    // window cannot be farmed the same way by a cadence this fast - none of
+    // these gaps (at most 4 minutes) come anywhere near 30 minutes, so no
+    // decay fires and every completed mint climbs the ladder exactly on
+    // schedule.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder-flap";
+      // Required wait before each successive mint (mintBackoffWaitMs of the
+      // PRIOR completedMints): 1 -> 0, 2 -> 120s, 3 -> 240s, 4 -> 480s.
+      // Flap just past each one - never long enough to approach the 30-minute
+      // decay window.
+      const requiredWaits = [0, 120_000, 240_000, 480_000];
+      let now = 0;
+      vi.setSystemTime(now);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      let calls = 1;
+      expect(runner).toHaveBeenCalledTimes(calls);
+
+      for (const wait of requiredWaits) {
+        now += Math.max(wait, 60_000) + 1;
+        vi.setSystemTime(now);
+        await appHostCredentialMintFlow({ hostId, reason: "missing" });
+        calls += 1;
+        expect(runner).toHaveBeenCalledTimes(calls);
+      }
+      // completedMints is now 5, having climbed every rung without ever
+      // being reset back to 1 by the interim gaps.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("decays exactly one rung per full 30-minute quiet window, and does not admit until the decayed rung's OWN wait also elapses", async () => {
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder-decay";
+      // Climb to completedMints === 6 using gaps that never approach the
+      // 30-minute decay window: required waits 0, 120s, 240s, 480s, 960s.
+      const requiredWaits = [0, 120_000, 240_000, 480_000, 960_000];
+      let now = 0;
+      vi.setSystemTime(now);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      let calls = 1;
+      expect(runner).toHaveBeenCalledTimes(calls);
+      for (const wait of requiredWaits) {
+        now += Math.max(wait, 60_000) + 1;
+        vi.setSystemTime(now);
+        await appHostCredentialMintFlow({ hostId, reason: "missing" });
+        calls += 1;
+        expect(runner).toHaveBeenCalledTimes(calls);
+      }
+      // completedMints is now 6. Its ladder wait would be
+      // 60_000 * 2 ** 5 = 1_920_000ms - MORE than the 1_800_000ms decay
+      // window, so decay always intervenes before that raw wait is ever
+      // satisfied: at 1_800_000ms elapsed, one rung decays away
+      // (completedMints -> 5, its clock advanced to the decay boundary), and
+      // THAT rung's own wait (960_000ms) governs from there.
+      const sixthMintAt = now;
+
+      // Just short of the decay window: no decay yet, and the raw (undecayed)
+      // wait for rung 6 (1_920_000ms) is nowhere close to satisfied either.
+      vi.setSystemTime(sixthMintAt + 1_800_000 - 1);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      expect(runner).toHaveBeenCalledTimes(calls);
+
+      // Exactly at the decay window: one rung decays (6 -> 5), but the
+      // decayed rung's own wait (960_000ms) has had ZERO time to elapse from
+      // its advanced clock - decaying must not double as admission.
+      vi.setSystemTime(sixthMintAt + 1_800_000);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      expect(runner).toHaveBeenCalledTimes(calls);
+
+      // Still short of the decayed rung's own 960_000ms wait.
+      vi.setSystemTime(sixthMintAt + 1_800_000 + 960_000 - 1);
+      await expect(
+        appHostCredentialMintFlow({ hostId, reason: "missing" }),
+      ).resolves.toEqual({ kind: "pending-elsewhere" });
+      expect(runner).toHaveBeenCalledTimes(calls);
+
+      // Now the decayed rung's own wait has elapsed too: admitted. This is
+      // also the ladder's practical ceiling under this arithmetic - the mint
+      // that lands here increments the (already-decayed) completedMints of 5
+      // back to 6, never organically past it, because any rung whose raw
+      // wait exceeds the fixed decay window is unreachable by waiting alone
+      // (decay always fires first and knocks it back down).
+      vi.setSystemTime(sixthMintAt + 1_800_000 + 960_000);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      calls += 1;
+      expect(runner).toHaveBeenCalledTimes(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resetHostCredentialProvisioning clears the ladder", async () => {
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    vi.useFakeTimers();
+    try {
+      const hostId = "host-ladder-app-reset";
+      vi.setSystemTime(0);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(60_001);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(2);
+      // completedMints is now 2: an un-reset ladder would demand a further
+      // 120s (on top of the 60s adoption claim) before the next mint.
+
+      resetHostCredentialProvisioning();
+      setHostCredentialMintRunner(runner);
+
+      // Barely past the 60s adoption claim the reset mint itself set - if the
+      // ladder had survived the reset this would still be well short of its
+      // 120s wait and resolve `pending-elsewhere` with no runner call.
+      vi.setSystemTime(60_001 + 1);
+      await appHostCredentialMintFlow({ hostId, reason: "missing" });
+      expect(runner).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

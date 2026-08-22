@@ -17,6 +17,15 @@ import { act, cleanup, render } from "@testing-library/react";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
 import type { ChatRecordDelta } from "@traycer-clients/shared/host-transport/chat-records-stream-client";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type {
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import {
+  hostConnectionRefCountForTest,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -25,9 +34,17 @@ import {
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { ChatRecordsStreamMount } from "@/providers/chat-records-stream-mount";
 
+interface OpenedStream {
+  readonly emit: (delta: ChatRecordDelta) => void;
+  readonly emitStatus: (
+    status: StreamConnectionStatus,
+    reason: StreamCloseReason | null,
+  ) => void;
+}
+
 interface StreamState {
   /** One entry per `ChatRecordsStreamClient` construction. */
-  readonly opened: Array<{ readonly emit: (delta: ChatRecordDelta) => void }>;
+  readonly opened: Array<OpenedStream>;
   closes: number;
   support: StreamMethodSupport | null;
   hostId: string | null;
@@ -57,9 +74,18 @@ vi.mock(
   () => ({
     ChatRecordsStreamClient: class {
       constructor(options: {
-        readonly callbacks: { readonly onDelta: (d: ChatRecordDelta) => void };
+        readonly callbacks: {
+          readonly onDelta: (d: ChatRecordDelta) => void;
+          readonly onConnectionStatus: (
+            status: StreamConnectionStatus,
+            reason: StreamCloseReason | null,
+          ) => void;
+        };
       }) {
-        streamState.opened.push({ emit: options.callbacks.onDelta });
+        streamState.opened.push({
+          emit: options.callbacks.onDelta,
+          emitStatus: options.callbacks.onConnectionStatus,
+        });
       }
       close(): void {
         streamState.closes += 1;
@@ -74,10 +100,10 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
   // purpose - see `stubWsStreamClient`.
   useWsStreamClient: () => (streamState.hasClient ? stubWsStreamClient : null),
   useStreamMethodSupport: () => streamState.support,
-}));
-
-vi.mock("@/hooks/host/use-addressable-host-id", () => ({
-  useAddressableHostId: () => streamState.hostId,
+  // The mount now reads its host id off the SAME `StreamRuntimeBinding` as
+  // the client (`useStreamHostId`), not the separately-updating
+  // `useAddressableHostId` - so the stub lives on this mock, not a second one.
+  useStreamHostId: () => streamState.hostId,
 }));
 
 function record(overrides: Partial<ChatRecordSummary>): ChatRecordSummary {
@@ -128,9 +154,33 @@ function emit(delta: ChatRecordDelta): void {
   });
 }
 
+function emitStatus(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): void {
+  const stream = streamState.opened.at(-1);
+  if (stream === undefined) throw new Error("no stream opened");
+  act(() => {
+    stream.emitStatus(status, reason);
+  });
+}
+
+function fatalClose(code: string): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code,
+      reason: `test close: ${code}`,
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  };
+}
+
 afterEach(() => {
   cleanup();
   getOpenEpicRegistry().disposeAll();
+  resetHostConnectionRegistryForTest();
   streamState.opened.length = 0;
   streamState.closes = 0;
   streamState.support = "supported";
@@ -249,5 +299,152 @@ describe("<ChatRecordsStreamMount />", () => {
 
     expect(streamState.closes).toBe(1);
     expect(streamState.opened).toHaveLength(2);
+  });
+});
+
+/**
+ * The reopen lane: a terminal close used to leave this mount's subscription
+ * dead until reload (new agents stopped appearing until the 20s poll's next
+ * success, or not at all while the poll was failing too). It now opens a
+ * reopen lane on the host's shared reconnect engine, mirroring the
+ * notification-family stores (`notifications-session-provider.test.tsx`'s
+ * "reopens activity after a recoverable terminal close").
+ */
+describe("<ChatRecordsStreamMount /> reopen lane", () => {
+  it("rebuilds the client after a reopenable terminal close, once the backoff elapses", () => {
+    vi.useFakeTimers();
+    try {
+      render(<ChatRecordsStreamMount />);
+      expect(streamState.opened).toHaveLength(1);
+
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+      // Not yet - the reopen lane waits out its backoff first.
+      expect(streamState.opened).toHaveLength(1);
+
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(2);
+      expect(streamState.closes).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reopen after a non-reopenable close (CLIENT_CLOSED)", () => {
+    vi.useFakeTimers();
+    try {
+      render(<ChatRecordsStreamMount />);
+      expect(streamState.opened).toHaveLength(1);
+
+      emitStatus("closed", fatalClose("CLIENT_CLOSED"));
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS * 10);
+      });
+      expect(streamState.opened).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disposes the reopen lane and releases the host connection on unmount", () => {
+    vi.useFakeTimers();
+    try {
+      const { unmount } = render(<ChatRecordsStreamMount />);
+      expect(streamState.opened).toHaveLength(1);
+      expect(hostConnectionRefCountForTest("host-A")).toBe(1);
+
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+      unmount();
+      expect(hostConnectionRefCountForTest("host-A")).toBe(0);
+
+      // The reopen timer was armed but not yet fired; disposal on unmount
+      // must cancel it rather than let it construct a client for an unmounted
+      // mount.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS * 10);
+      });
+      expect(streamState.opened).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the reopen lane's backoff after a close that followed a healthy (>=30s open) session", () => {
+    // HEALTHY_SESSION_RESET_MS is module-local (30_000) - not exported, so
+    // pinned here by literal value, same as the provisioning ladder's
+    // private constants above.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      render(<ChatRecordsStreamMount />);
+      expect(streamState.opened).toHaveLength(1);
+
+      // First close never reported "open" at all, so it is not healthy - the
+      // lane's backoff is untouched (still its initial 5s) for THIS
+      // schedule, then doubles to 10s for the next one.
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(2);
+
+      // Second client: report "open", let it dwell >= 30s, then close.
+      emitStatus("open", null);
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+
+      // Without the healthy-dwell reset this close would inherit the doubled
+      // 10s backoff from the first close - advancing only the INITIAL 5s
+      // here is what proves the reset happened.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reset the reopen lane's backoff after a quick (<30s) close", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      render(<ChatRecordsStreamMount />);
+      expect(streamState.opened).toHaveLength(1);
+
+      // First close (also not healthy): schedules at the initial 5s, then
+      // doubles to 10s for the next one.
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(2);
+
+      // Second client: opens, but closes almost immediately - well under the
+      // 30s healthy dwell - so the backoff must NOT reset.
+      emitStatus("open", null);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      emitStatus("closed", fatalClose("UNAUTHORIZED"));
+
+      // The doubled 10s backoff is still in force: the initial 5s alone is
+      // not enough to reopen.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(2);
+
+      // The remaining 5s completes the 10s window.
+      act(() => {
+        vi.advanceTimersByTime(HOST_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      });
+      expect(streamState.opened).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
