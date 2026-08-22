@@ -177,8 +177,7 @@ function parentReferenceLabel(module: GitModuleGroup): string | null {
 }
 
 function moduleHeaderPath(module: GitModuleGroup): string | null {
-  if (module.repoRoot !== null) return module.repoRoot;
-  return module.parentPath;
+  return module.repoRoot;
 }
 
 function moduleHeadLabel(module: GitModuleGroup): string {

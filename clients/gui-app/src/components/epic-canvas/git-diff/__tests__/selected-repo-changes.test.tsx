@@ -481,7 +481,7 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.queryByTestId("git-diff-empty-refresh")).toBeNull();
   });
 
-  it("turns an unmatched dirty gitlink into an unavailable module group", () => {
+  it("turns an unmatched dirty gitlink into an unavailable module group", async () => {
     renderChanges({
       snapshot: snapshotResult(
         response({ files: [file("traycer", normalPointer)], submodules: [] }),
@@ -494,6 +494,11 @@ describe("<SelectedRepoChanges /> module groups", () => {
     expect(screen.getByTestId("git-submodule-unavailable")).toBeDefined();
     expect(screen.queryByText("Submodule reference:")).toBeNull();
     expect(screen.queryByTestId("file-row-/repo-traycer")).toBeNull();
+    const previewText = await expectModuleHeaderPreview(
+      screen.getByTestId("git-module-header-traycer"),
+      "Location in workspace: traycer",
+    );
+    expect(previewText).not.toContain("Repository location:");
   });
 
   it("renders old-host parent-only snapshots without submodule metadata as root file rows", () => {
