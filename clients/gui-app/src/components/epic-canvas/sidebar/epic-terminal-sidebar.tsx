@@ -289,7 +289,11 @@ function TerminalsPanelBodyLive(props: {
   );
   const sessions = reconciled.rows;
   const incompleteFleet = reconciled.incompleteFleet;
-  const showIncompleteFleet = useDelayedTerminalFleetWarning(
+  // The sidebar no longer captions partial fleet coverage - the epic status
+  // pill owns that signal (one amber light, the sentence on hover). The grace
+  // still matters here: until it elapses a catalog that is merely hydrating
+  // must not read as "No terminals yet.", so the loading state holds instead.
+  const fleetGapSettled = useDelayedTerminalFleetWarning(
     incompleteFleet,
     JSON.stringify([activeHostId, epicId]),
   );
@@ -344,7 +348,7 @@ function TerminalsPanelBodyLive(props: {
               failedCreates.length === 0 &&
               (durableAuthority.capability.status === "unknown" ||
                 (incompleteFleet &&
-                  !showIncompleteFleet &&
+                  !fleetGapSettled &&
                   sessions.length === 0) ||
                 (sessions.length === 0 &&
                   (list.isPending ||
@@ -360,7 +364,6 @@ function TerminalsPanelBodyLive(props: {
             isRetrying={list.isFetching}
             onRetry={retryList}
             sessions={sessions}
-            incompleteFleet={showIncompleteFleet}
             failedCreates={failedCreates}
             epicId={epicId}
             tabId={tabId}
@@ -421,7 +424,6 @@ interface TerminalSidebarBodyProps {
   readonly isRetrying: boolean;
   readonly onRetry: () => void;
   readonly sessions: ReadonlyArray<TerminalSidebarSessionRow>;
-  readonly incompleteFleet: boolean;
   readonly failedCreates: ReadonlyArray<EpicTerminalDurableCreateJobView>;
   readonly epicId: string;
   readonly tabId: string;
@@ -517,17 +519,6 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
     );
   }
   if (props.sessions.length === 0 && props.failedCreates.length === 0) {
-    if (props.incompleteFleet) {
-      return (
-        <div
-          className="px-2 py-1.5 text-ui-sm text-muted-foreground"
-          data-testid="epic-terminal-sidebar-incomplete-fleet"
-        >
-          Remote terminal coverage is unavailable. This host has no terminals to
-          show.
-        </div>
-      );
-    }
     return (
       <SidebarPanelEmptyState
         icon={TerminalIcon}
@@ -543,14 +534,6 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
       className="space-y-0.5"
       data-testid="epic-terminal-sidebar-list"
     >
-      {props.incompleteFleet ? (
-        <li
-          className="px-2 py-1.5 text-ui-sm text-muted-foreground"
-          data-testid="epic-terminal-sidebar-incomplete-fleet"
-        >
-          Remote terminals are unavailable. Showing this host only.
-        </li>
-      ) : null}
       {props.sessions.map((row) => (
         <TerminalRow
           key={epicTerminalUiIdentityKey(
