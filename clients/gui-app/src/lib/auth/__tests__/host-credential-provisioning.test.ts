@@ -68,7 +68,12 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
     const results = await Promise.all([a, b, c]);
     // Single delivery: exactly one joiner receives the credential.
     expect(results.filter((r) => r.kind === "provisioned")).toHaveLength(1);
-    expect(results.filter((r) => r.kind === "unavailable")).toHaveLength(2);
+    // Joiners now get `pending-elsewhere`: a credential WAS minted for this
+    // host, so nothing they asked for failed and they must not spend their one
+    // attempt on it.
+    expect(results.filter((r) => r.kind === "pending-elsewhere")).toHaveLength(
+      2,
+    );
     expect(results.find((r) => r.kind === "provisioned")).toEqual(
       provisionedOutcome(),
     );
@@ -99,7 +104,9 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
 
     const results = await Promise.all(joiners);
     expect(results.filter((r) => r.kind === "provisioned")).toHaveLength(1);
-    expect(results.filter((r) => r.kind === "unavailable")).toHaveLength(4);
+    expect(results.filter((r) => r.kind === "pending-elsewhere")).toHaveLength(
+      4,
+    );
   });
 
   it("generation-scopes an in-flight attempt across reset (sign-out) so it resolves unavailable, not handed to the next identity", async () => {
@@ -234,26 +241,30 @@ describe("appHostCredentialMintFlow adoption claim", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("allows the next mint once the host is seen active", async () => {
-    // The claim must not become a latch: a host that adopts and is later
-    // refused again is entitled to another credential.
+  it("allows the next mint once the claim's TTL has passed", async () => {
+    // The claim must not become a latch. This used to be driven by an `active`
+    // report; that release is gone (see `noteHostCredentialState`) because the
+    // report carries nothing to correlate it with, so the TTL is now the only
+    // thing that ends a claim.
     const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
     setHostCredentialMintRunner(runner);
+    const realNow = Date.now;
+    try {
+      await appHostCredentialMintFlow({
+        hostId: "host-cycle",
+        reason: "needs-reauth",
+      });
+      expect(runner).toHaveBeenCalledTimes(1);
 
-    await appHostCredentialMintFlow({
-      hostId: "host-cycle",
-      reason: "needs-reauth",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
-
-    // Positive proof of delivery - the only thing that releases the claim.
-    noteHostCredentialState("host-cycle", "active");
-
-    await appHostCredentialMintFlow({
-      hostId: "host-cycle",
-      reason: "needs-reauth",
-    });
-    expect(runner).toHaveBeenCalledTimes(2);
+      Date.now = () => realNow() + 61_000;
+      await appHostCredentialMintFlow({
+        hostId: "host-cycle",
+        reason: "needs-reauth",
+      });
+      expect(runner).toHaveBeenCalledTimes(2);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   it("does not release the claim on a repeated needs-reauth ack", async () => {
@@ -273,6 +284,51 @@ describe("appHostCredentialMintFlow adoption claim", () => {
       hostId: "host-still-asking",
       reason: "needs-reauth",
     });
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("a held claim answers pending-elsewhere whatever state the host reports", async () => {
+    // Requirement (1) of the TTL-only design: while a claim is held, no
+    // transport may mint - and none may be told `unavailable` either, or it
+    // burns its attempt on a claim it had no part in.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    await appHostCredentialMintFlow({
+      hostId: "host-held",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    for (const reason of ["missing", "needs-reauth"] as const) {
+      expect(
+        await appHostCredentialMintFlow({ hostId: "host-held", reason }),
+      ).toEqual({ kind: "pending-elsewhere" });
+    }
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("an active report does NOT release the claim - only the TTL does", async () => {
+    // The double-mint sequence this closes needs no account switch: sockets
+    // report their `openAck` state independently with no cross-socket
+    // ordering, so a delayed `active(A)` observed before A was burned can be
+    // delivered after B was minted. Released on that, B's claim vanishes and a
+    // third socket's already-formed `needs-reauth` mints C, superseding B.
+    // With nothing on the report to correlate against, it is not trusted.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    await appHostCredentialMintFlow({
+      hostId: "host-stale-active",
+      reason: "needs-reauth",
+    });
+
+    noteHostCredentialState("host-stale-active", "active");
+
+    expect(
+      await appHostCredentialMintFlow({
+        hostId: "host-stale-active",
+        reason: "needs-reauth",
+      }),
+    ).toEqual({ kind: "pending-elsewhere" });
     expect(runner).toHaveBeenCalledTimes(1);
   });
 

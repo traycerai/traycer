@@ -69,41 +69,32 @@ export function resetHostCredentialProvisioning(): void {
  * How long a freshly minted credential is treated as still on its way to the
  * host before another mint is allowed.
  *
- * A ceiling, not a schedule. The claim normally ends the moment a host reports
- * `active`; this only bounds the case where that report never comes - the
- * transport carrying the credential died between the mint and the frame, say -
- * so a host cannot be stranded on the client lease indefinitely by a claim
- * nobody will ever clear.
+ * This is now the ONLY thing that ends a claim - see
+ * {@link noteHostCredentialState} for why no report is trusted to end one
+ * early. So it is a real schedule rather than a backstop, and its size is the
+ * trade: long enough to cover mint-to-adoption on a slow link, short enough
+ * that a host whose delivery genuinely died is asking again within a minute.
  */
 const PENDING_ADOPTION_TTL_MS = 60_000;
 
 /**
- * Hosts whose freshly minted credential has not yet been seen adopted, by the
- * wall-clock instant the mint settled.
+ * Per host: when the claim was taken, and the mint-flow generation it was
+ * taken under.
  *
- * The window this closes is real and narrow: `attemptsByHostId` is cleared when
- * the mint SETTLES, but the host is only provisioned once a transport actually
- * carries the frame to it and it adopts. In between, the app looks to any
- * newly-constructed transport exactly as it does before a first mint - and a
- * per-`WsStreamClient` "already attempted" set cannot help, because a new
+ * The window this closes is real and narrow: `attemptsByHostId` is cleared
+ * when the mint SETTLES, but the host is only provisioned once a transport
+ * actually carries the frame to it and it adopts. In between, the app looks to
+ * any newly-constructed transport exactly as it does before a first mint - and
+ * a per-`WsStreamClient` "already attempted" set cannot help, because a new
  * client starts with an empty one. Two mints then race, and superseding mints
  * can revoke one another, which can leave the host holding neither.
  *
  * Deliberately app-wide, like `attemptsByHostId` beside it and for the same
  * reason: the renderer holds several transports against one host, so any bound
  * kept per transport is not a bound at all.
- */
-/**
- * Per host: when the claim was taken, and the mint-flow generation it was taken
- * under.
  *
- * The GENERATION half exists because `active` arrives on a callback that
- * nothing else orders. A delayed `active` from a transport belonging to the
- * previous account - or reporting a credential from before a burn - can land
- * after a NEW account's mint has settled, and a release keyed on `hostId`
- * alone would free that new claim before its credential was ever adopted,
- * reopening the double-mint this map exists to close. Correlating on the
- * generation makes a stale report about an older epoch simply not match.
+ * The GENERATION half covers a claim outliving the account it was taken for:
+ * it is only ever honoured within its own epoch.
  */
 const awaitingAdoptionByHostId = new Map<
   string,
@@ -111,32 +102,33 @@ const awaitingAdoptionByHostId = new Map<
 >();
 
 /**
- * Reports what a host says about its credential, so the app-wide flow can tell
- * a delivered mint from one still in flight.
+ * Reports what a host says about its credential.
  *
- * `active` is the only positive proof that a minted credential arrived, and it
- * is the only thing that ends a claim early. Any other state means the host is
- * still asking - which does NOT release the claim, because the ask may simply
- * predate the credential now on its way.
+ * DELIBERATELY INERT for claim release, and that is the fix rather than an
+ * omission. `active` looked like positive proof a minted credential had
+ * landed, so it released the claim early - but the report carries no
+ * provenance: not which credential it is about, not which transport observed
+ * it, not when it was produced. Sockets report their `openAck` state
+ * independently with no cross-socket ordering, so a delayed `active(A)` -
+ * observed before A was burned, delivered after B was minted - released B's
+ * claim, and a third socket's already-formed `needs-reauth` then minted C and
+ * superseded B. No account switch is involved, so the generation guard cannot
+ * see it either.
+ *
+ * With nothing on the report to correlate against, the honest move is not to
+ * trust it: the claim's TTL owns expiry on its own. The cost is bounded -
+ * after an adopt-then-burn inside one TTL window, a legitimate re-mint waits
+ * out the remainder - and it is paid in a delay rather than in two credentials
+ * revoking each other.
+ *
+ * Kept as a function, and still called, so the transport keeps one place to
+ * report into if a future frame ever carries the credential's identity.
  */
 export function noteHostCredentialState(
-  hostId: string,
-  state: "missing" | "active" | "needs-reauth",
+  _hostId: string,
+  _state: "missing" | "active" | "needs-reauth",
 ): void {
-  if (state !== "active") {
-    return;
-  }
-  const claim = awaitingAdoptionByHostId.get(hostId);
-  if (claim === undefined) {
-    return;
-  }
-  if (claim.generation !== generation) {
-    // An `active` from before the last reset. It is evidence about a
-    // credential minted for an identity that is gone, so it says nothing about
-    // whether THIS claim's credential has landed.
-    return;
-  }
-  awaitingAdoptionByHostId.delete(hostId);
+  // Intentionally empty. See above.
 }
 
 /**
@@ -243,7 +235,17 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
       return outcome;
     }
     if (claimed) {
-      return { kind: "unavailable" };
+      // A joiner that did not win the credential. `pending-elsewhere`, NOT
+      // `unavailable`: a credential for this host was successfully minted and
+      // is on its way, so nothing this caller asked for failed and it must not
+      // count the ask as its one attempt.
+      //
+      // This is the same liveness hole the claim window has, one step earlier.
+      // The winner can close before delivering - the transport drops an
+      // undeliverable credential outright - leaving a joiner that was told
+      // `unavailable` as the only survivor, permanently unable to ask again
+      // because its own state never transitions.
+      return { kind: "pending-elsewhere" };
     }
     claimed = true;
     return outcome;
