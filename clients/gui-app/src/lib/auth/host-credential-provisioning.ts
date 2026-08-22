@@ -62,6 +62,71 @@ export function setHostCredentialMintRunner(
 export function resetHostCredentialProvisioning(): void {
   generation += 1;
   attemptsByHostId.clear();
+  awaitingAdoptionByHostId.clear();
+}
+
+/**
+ * How long a freshly minted credential is treated as still on its way to the
+ * host before another mint is allowed.
+ *
+ * A ceiling, not a schedule. The claim normally ends the moment a host reports
+ * `active`; this only bounds the case where that report never comes - the
+ * transport carrying the credential died between the mint and the frame, say -
+ * so a host cannot be stranded on the client lease indefinitely by a claim
+ * nobody will ever clear.
+ */
+const PENDING_ADOPTION_TTL_MS = 60_000;
+
+/**
+ * Hosts whose freshly minted credential has not yet been seen adopted, by the
+ * wall-clock instant the mint settled.
+ *
+ * The window this closes is real and narrow: `attemptsByHostId` is cleared when
+ * the mint SETTLES, but the host is only provisioned once a transport actually
+ * carries the frame to it and it adopts. In between, the app looks to any
+ * newly-constructed transport exactly as it does before a first mint - and a
+ * per-`WsStreamClient` "already attempted" set cannot help, because a new
+ * client starts with an empty one. Two mints then race, and superseding mints
+ * can revoke one another, which can leave the host holding neither.
+ *
+ * Deliberately app-wide, like `attemptsByHostId` beside it and for the same
+ * reason: the renderer holds several transports against one host, so any bound
+ * kept per transport is not a bound at all.
+ */
+const awaitingAdoptionByHostId = new Map<string, number>();
+
+/**
+ * Reports what a host says about its credential, so the app-wide flow can tell
+ * a delivered mint from one still in flight.
+ *
+ * `active` is the only positive proof that a minted credential arrived, and it
+ * is the only thing that ends a claim early. Any other state means the host is
+ * still asking - which does NOT release the claim, because the ask may simply
+ * predate the credential now on its way.
+ */
+export function noteHostCredentialState(
+  hostId: string,
+  state: "missing" | "active" | "needs-reauth",
+): void {
+  if (state === "active") {
+    awaitingAdoptionByHostId.delete(hostId);
+  }
+}
+
+/**
+ * Whether a mint for `hostId` is still awaiting adoption, expiring the claim
+ * if it has outlived {@link PENDING_ADOPTION_TTL_MS}.
+ */
+function mintAwaitingAdoption(hostId: string): boolean {
+  const mintedAt = awaitingAdoptionByHostId.get(hostId);
+  if (mintedAt === undefined) {
+    return false;
+  }
+  if (Date.now() - mintedAt >= PENDING_ADOPTION_TTL_MS) {
+    awaitingAdoptionByHostId.delete(hostId);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -81,6 +146,14 @@ const attemptsByHostId = new Map<string, HostCredentialAttempt>();
 
 export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   const hostId = request.hostId;
+  if (mintAwaitingAdoption(hostId)) {
+    // A credential was minted for this host moments ago and has not been seen
+    // adopted yet. The ask that brought us here is stale by construction - the
+    // host formed it before the credential now in flight reached it - and
+    // minting a second one would supersede the first, with each able to revoke
+    // the other. Wait for the delivery already under way.
+    return Promise.resolve({ kind: "unavailable" });
+  }
   const existing = attemptsByHostId.get(hostId);
   if (existing !== undefined) {
     // A second transport noticed the same host mid-mint. Join the first attempt
@@ -110,6 +183,13 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
         return { kind: "unavailable" };
       }
       attemptsByHostId.delete(hostId);
+      if (outcome.kind === "provisioned") {
+        // The attempt is over but the DELIVERY is not: the credential still
+        // has to ride a live socket to the host and be adopted. Hold the claim
+        // across that gap - it is exactly the window a second transport would
+        // otherwise mint into.
+        awaitingAdoptionByHostId.set(hostId, Date.now());
+      }
       return outcome;
     });
 

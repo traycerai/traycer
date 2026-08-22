@@ -990,22 +990,35 @@ export function routeIncompatibleRecovery(
 // every successful adopt/refresh, so it can only be found set while the host
 // genuinely still needs a fresh provisioning.
 //
-// Never throws - doctor probes are advisory, and an unreadable or malformed
-// marker reads as "nothing to report" rather than taking the whole report down.
+// PRESENT-BUT-UNREADABLE IS STILL PRESENT. Tolerating a truncated, hand-edited
+// or permission-denied marker means "do not crash", not "report clean" - the
+// file existing is the verdict, and its contents are only diagnostics. Reading
+// a malformed marker as absent inverted exactly the contract stated above and
+// hid the fault it exists to surface, so only ENOENT is clean; anything else
+// present reports the issue with `unknown` diagnostics.
+//
+// Never throws - doctor probes are advisory and must not take the whole report
+// down.
 async function probeHostCredentialNeedsReauth(
   environment: Environment,
 ): Promise<DoctorIssue | null> {
+  const markerPath = hostNeedsReauthPath(environment);
+  let raw: string | null;
   try {
-    const markerPath = hostNeedsReauthPath(environment);
-    const raw = await readFile(markerPath, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    const marker = isRecord(parsed) ? parsed : {};
-    const reason =
-      typeof marker.reason === "string" && marker.reason.length > 0
-        ? marker.reason
-        : "unknown";
-    const recordedAt =
-      typeof marker.recordedAt === "string" ? marker.recordedAt : "unknown";
+    raw = await readFile(markerPath, "utf8");
+  } catch (err) {
+    if (isFileNotFoundError(err)) {
+      // The only clean answer: this host has no burn on record.
+      return null;
+    }
+    // Present but unreadable (permissions, a device error, a directory in its
+    // place). Something wrote a marker here; report it.
+    raw = null;
+  }
+  try {
+    const marker = parseMarkerFields(raw);
+    const reason = marker.reason;
+    const recordedAt = marker.recordedAt;
     const credentialPresent = await access(
       hostCredentialPath(environment),
     ).then(
@@ -1032,16 +1045,64 @@ async function probeHostCredentialNeedsReauth(
         // True only in the delete-failed shape above. Carried because a
         // support bundle wants to know which of the two it is looking at.
         credentialFilePresent: credentialPresent,
+        // Distinguishes "the host told us why" from "a marker is there and we
+        // could not read it" - the two lead to the same verdict but not to the
+        // same support conversation.
+        markerReadable: raw !== null && reason !== UNKNOWN_MARKER_FIELD,
       },
     };
   } catch {
-    // No marker (the overwhelmingly common case), or one we cannot read.
+    // Nothing above should throw, but a probe that cannot answer must not be
+    // the reason `doctor` fails.
     return null;
   }
 }
 
+const UNKNOWN_MARKER_FIELD = "unknown";
+
+/**
+ * Best-effort read of the marker's diagnostic fields. A `null` body (unreadable
+ * file) or unparseable/incomplete JSON yields `unknown` rather than changing
+ * the verdict - the verdict was already decided by the file existing.
+ */
+function parseMarkerFields(raw: string | null): {
+  readonly reason: string;
+  readonly recordedAt: string;
+} {
+  if (raw === null) {
+    return { reason: UNKNOWN_MARKER_FIELD, recordedAt: UNKNOWN_MARKER_FIELD };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { reason: UNKNOWN_MARKER_FIELD, recordedAt: UNKNOWN_MARKER_FIELD };
+  }
+  const marker = isRecord(parsed) ? parsed : {};
+  return {
+    reason:
+      typeof marker.reason === "string" && marker.reason.length > 0
+        ? marker.reason
+        : UNKNOWN_MARKER_FIELD,
+    recordedAt:
+      typeof marker.recordedAt === "string" && marker.recordedAt.length > 0
+        ? marker.recordedAt
+        : UNKNOWN_MARKER_FIELD,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** ENOENT - the file genuinely is not there, as opposed to unreadable. */
+function isFileNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 // Detects the "file is both there and not found" field shape: the CLI

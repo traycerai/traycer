@@ -145,6 +145,7 @@ describe("runDoctor host credential needs-reauth", () => {
       // and THEN writes the marker. Carried so a support bundle can tell this
       // apart from the delete-failed shape.
       credentialFilePresent: false,
+      markerReadable: true,
     });
   });
 
@@ -182,17 +183,46 @@ describe("runDoctor host credential needs-reauth", () => {
     ).toBe(false);
   });
 
-  it("stays silent for an unreadable marker rather than taking the report down", async () => {
-    // Doctor probes are advisory. A truncated or hand-edited marker must not
-    // turn the whole report into a crash.
+  it("still reports a present-but-malformed marker, with unknown diagnostics", async () => {
+    // PRESENT IS THE VERDICT. Tolerating a truncated or hand-edited marker
+    // means "do not crash", not "report clean" - the file existing is what
+    // says this host burned a credential, and its contents are only ever
+    // diagnostics. Reading a malformed marker as ABSENT inverted the contract
+    // and hid exactly the fault this probe exists to surface, on the machines
+    // most likely to have something wrong with them.
     stageHealthyHostMocks();
     mkdirSync(hostAuthDir(), { recursive: true });
     writeFileSync(join(hostAuthDir(), "needs-reauth.json"), "{not json");
 
     const result = await runProductionDoctor();
 
-    expect(
-      result.issues.some((i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH"),
-    ).toBe(false);
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.details).toMatchObject({
+      reason: "unknown",
+      recordedAt: "unknown",
+      // Names which of the two shapes a support bundle is looking at.
+      markerReadable: false,
+    });
+  });
+
+  it("still reports a marker whose JSON is valid but carries no fields", async () => {
+    stageHealthyHostMocks();
+    mkdirSync(hostAuthDir(), { recursive: true });
+    writeFileSync(join(hostAuthDir(), "needs-reauth.json"), "{}");
+
+    const result = await runProductionDoctor();
+
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.details).toMatchObject({
+      reason: "unknown",
+      recordedAt: "unknown",
+    });
   });
 });

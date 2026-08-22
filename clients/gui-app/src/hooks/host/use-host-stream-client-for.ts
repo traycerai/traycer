@@ -21,7 +21,10 @@ import type { HostEndpointProvider } from "@traycer-clients/shared/host-transpor
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
+import {
+  appHostCredentialMintFlow,
+  noteHostCredentialState,
+} from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
@@ -266,9 +269,13 @@ export function buildHostStreamClient(params: {
     // that from becoming several OTP dialogs. It resolves `declined` until the
     // provisioning provider is mounted, so dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
-    // The renderer's long-lived clients never verify adoption; the next
-    // connection's ack settles it.
-    onHostCredentialState: null,
+    // Reported to the app-wide flow so it can tell a DELIVERED mint from one
+    // still in flight. `active` is the only positive proof a minted credential
+    // reached the host, and it is what releases the app-wide claim that stops
+    // a second transport minting into the settled-but-not-yet-adopted window.
+    // The renderer's long-lived clients still do no verification of their own;
+    // the next connection's ack settles it.
+    onHostCredentialState: noteHostCredentialState,
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The

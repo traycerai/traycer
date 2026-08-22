@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostCredentialMintOutcome } from "@traycer-clients/shared/host-transport/host-credential-mint-flow";
 import {
   appHostCredentialMintFlow,
+  noteHostCredentialState,
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
 } from "../host-credential-provisioning";
@@ -189,5 +190,124 @@ describe("appHostCredentialMintFlow single-flight policy", () => {
     ).resolves.toEqual({ kind: "unavailable" });
 
     expect(runner).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The window between a mint SETTLING and the host actually adopting the
+ * credential.
+ *
+ * `attemptsByHostId` is cleared the moment the mint resolves, but the
+ * credential still has to ride a live socket to the host. In between, the app
+ * looks to any newly-constructed transport exactly as it does before a first
+ * mint - and a per-`WsStreamClient` "already attempted" set cannot close this,
+ * because a fresh client starts with an empty one and the renderer routinely
+ * builds several against one host. Two mints then race, and the server
+ * supersedes older credentials on every mint, so they can revoke one another
+ * and leave the host holding nothing at all.
+ */
+describe("appHostCredentialMintFlow adoption claim", () => {
+  it("refuses a second mint while a freshly minted credential is still in flight", async () => {
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+
+    // Transport 1 mints and receives the credential; the host has NOT adopted
+    // it yet, so it is still reporting `needs-reauth` on any ack in flight.
+    const first = await appHostCredentialMintFlow({
+      hostId: "host-adopting",
+      reason: "needs-reauth",
+    });
+    expect(first.kind).toBe("provisioned");
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    // A DIFFERENT transport - fresh instance, empty per-instance bookkeeping -
+    // sees that same stale `needs-reauth` and asks.
+    const second = await appHostCredentialMintFlow({
+      hostId: "host-adopting",
+      reason: "needs-reauth",
+    });
+
+    expect(second).toEqual({ kind: "unavailable" });
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the next mint once the host is seen active", async () => {
+    // The claim must not become a latch: a host that adopts and is later
+    // refused again is entitled to another credential.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-cycle",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+
+    // Positive proof of delivery - the only thing that releases the claim.
+    noteHostCredentialState("host-cycle", "active");
+
+    await appHostCredentialMintFlow({
+      hostId: "host-cycle",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not release the claim on a repeated needs-reauth ack", async () => {
+    // A host still asking is not proof of delivery - its ask may simply
+    // predate the credential now on its way. Only `active` counts.
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-still-asking",
+      reason: "needs-reauth",
+    });
+    noteHostCredentialState("host-still-asking", "needs-reauth");
+    noteHostCredentialState("host-still-asking", "missing");
+
+    await appHostCredentialMintFlow({
+      hostId: "host-still-asking",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not hold a claim for a mint that produced no credential", async () => {
+    // Nothing is in flight after an `unavailable`, so nothing should be
+    // waited for - a failed attempt must stay retryable by a later transport.
+    const runner = vi.fn((): Promise<HostCredentialMintOutcome> =>
+      Promise.resolve({ kind: "unavailable" }),
+    );
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-failed",
+      reason: "missing",
+    });
+    await appHostCredentialMintFlow({
+      hostId: "host-failed",
+      reason: "missing",
+    });
+
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("a sign-out reset clears an outstanding claim", async () => {
+    const runner = vi.fn(() => Promise.resolve(provisionedOutcome()));
+    setHostCredentialMintRunner(runner);
+    await appHostCredentialMintFlow({
+      hostId: "host-reset",
+      reason: "needs-reauth",
+    });
+
+    resetHostCredentialProvisioning();
+    setHostCredentialMintRunner(runner);
+
+    await appHostCredentialMintFlow({
+      hostId: "host-reset",
+      reason: "needs-reauth",
+    });
+    expect(runner).toHaveBeenCalledTimes(2);
   });
 });
