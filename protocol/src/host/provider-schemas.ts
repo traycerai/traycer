@@ -1422,11 +1422,27 @@ const providerCliStateBaseShape = {
   // exactly as it does today - which is the whole reason they are additive
   // rather than a reshaped `enabled`.
   //
-  // `.optional()` with no `.catch()` default: absent means "this host predates
-  // auto enablement", which the client must be able to tell from any concrete
-  // value (it falls back to the binary switch). A default would erase that.
-  enablementMode: providerEnablementModeSchema.optional(),
-  enablementSource: providerEnablementSourceSchema.optional(),
+  // No `.default()`: absent means "this host predates auto enablement", which
+  // the client must be able to tell from any concrete value (it falls back to
+  // the binary switch). A default would erase that.
+  //
+  // `.catch(undefined)` covers the DIFFERENT case a default would not: a value
+  // that is PRESENT but from a newer host's wider enum. Without it, one
+  // unrecognized member fails the whole `providers.list` response - nothing on
+  // the path to the array element catches, so the client empties its entire
+  // provider list over one field it could simply have ignored. Every sibling
+  // enum on this shape already carries a catch for that reason
+  // (`loginCapability`, `advisory`, `nextRunBinary`, `rateLimitStatus`).
+  //
+  // Version negotiation is supposed to make this unreachable - a newer host
+  // downgrades to the negotiated minor - so this is defense in depth against
+  // the bridge being wrong. That is not hypothetical: this very line's own
+  // v7.1 rollout shipped two such bugs (released rows pinned over a live body;
+  // `downgradeProviderCliStateToV10` missing these two fields, which made whole
+  // rows vanish). Degrading to `undefined` lands the client on the old-host
+  // path, which is a supported, tested state.
+  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
+  enablementSource: providerEnablementSourceSchema.optional().catch(undefined),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -2180,6 +2196,13 @@ export type ProvidersSetEnabledRequestV21 = z.infer<
  */
 export const providersSetEnabledRequestSchemaV22 =
   providersSetEnabledRequestSchemaV21.extend({
+    // Deliberately NO `.catch(undefined)`, unlike the response-side enablement
+    // fields. This is a REQUEST: the host parses it, and swallowing an
+    // unrecognized mode would silently rewrite what the user asked for -
+    // `mode` absent falls back to the legacy `enabled` boolean, so a caller
+    // that said "Auto" would be recorded as sticky on/off. Failing the call is
+    // both honest and recoverable; a response degrades to a read-only display,
+    // a request degrades to a WRONG WRITE. Fail loud here, fail soft there.
     mode: providerEnablementModeSchema.optional(),
   });
 export type ProvidersSetEnabledRequestV22 = z.infer<

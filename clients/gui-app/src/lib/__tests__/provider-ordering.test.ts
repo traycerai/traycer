@@ -66,9 +66,10 @@ describe("orderProvidersByEnablement", () => {
       ...enabledGroup,
       ...disabledGroup,
     ]);
-    // The enabled group is genuinely first: codex sorts after claude-code in
-    // ORDERED_PROVIDERS, so this only holds if the partition - not the
-    // original order - decided position.
+    // `result[0]` proves nothing on its own - codex is already index 0 of
+    // ORDERED_PROVIDERS, so it leads whether or not the partition ran. `grok`
+    // is the real evidence: it sits at index 9 and only reaches position 1 if
+    // the partition - not the original order - decided position.
     expect(result[0]?.providerId).toBe("codex");
     expect(result[1]?.providerId).toBe("grok");
   });

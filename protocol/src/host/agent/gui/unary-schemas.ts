@@ -94,14 +94,22 @@ export const guiHarnessOptionSchema = z.object({
   // `.optional()` rather than a default: an old host omits the key entirely
   // and the client falls back to its `providers.list`-derived classification,
   // so absent and "no verdict" stay distinguishable.
-  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional(),
+  //
+  // `.catch(undefined)` is the separate guard for a value that is PRESENT but
+  // from a newer host's wider enum: without it one unrecognized member fails
+  // the entire `listHarnesses` response and the picker loses every harness,
+  // rather than this one field. Falling back to `undefined` puts the client on
+  // the old-host path it already supports. See the fuller note on the same pair
+  // in `provider-schemas.ts`.
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
   // Tri-state enablement intent behind `enabled`: sticky `"on"`/`"off"` (an
   // explicit user choice that ignores detection) or `"auto"` (enablement
   // derives from whether the host passively detected an account). `enabled`
   // stays the strict boolean EFFECTIVE value, so a client that ignores this
   // field behaves exactly as before. Absent on hosts that predate auto
-  // enablement - the client then renders its binary switch.
-  enablementMode: providerEnablementModeSchema.optional(),
+  // enablement - the client then renders its binary switch. `.catch(undefined)`
+  // for the same reason as `authStatus` above.
+  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
 

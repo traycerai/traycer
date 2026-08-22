@@ -3,6 +3,7 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ReactNode } from "react";
+import { toast } from "sonner";
 import { ProviderList } from "@/components/providers/provider-list";
 import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
@@ -209,7 +210,18 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
       { providerId, profileId: null, createProfile: null },
       {
         onSuccess: (result) => {
-          if (!result.started) return;
+          if (!result.started) {
+            // The RPC succeeded but the host declined to start the login, so
+            // the provider tooling is the limiting factor, not auth (Settings
+            // reports the same outcome as `failureMessages.notStarted`).
+            // Returning silently here left the click with NO feedback at all:
+            // the mutation's own failures already toast through
+            // `toastFromHostError`, so this is the one outcome that could dead
+            // end. Onboarding has no per-row error slot, so it borrows the
+            // channel the errors beside it already use.
+            toast.error("Couldn't start sign-in for this provider");
+            return;
+          }
           awaitLogin.mutate({ providerId, profileId: null });
         },
       },

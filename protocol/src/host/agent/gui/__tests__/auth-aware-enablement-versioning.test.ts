@@ -24,6 +24,7 @@ import {
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
+  type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   providersListDowngradeV7ToV1,
@@ -50,6 +51,8 @@ import {
   providersSetEnabledRequestSchemaV22,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
+  type ProviderEnablementMode,
+  type ProviderEnablementSource,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -61,9 +64,12 @@ import {
  * fill anywhere in this chain is a real regression, not a convenience.
  */
 
+// Derived from the schemas rather than hand-written unions: a hand-written one
+// silently narrows (the first pass omitted `unavailable`, so no test ever
+// exercised it) and a future enum member would go untested by omission.
 interface HarnessOptionOverrides {
-  readonly authStatus?: "authenticated" | "unauthenticated" | "unknown";
-  readonly enablementMode?: "auto" | "on" | "off";
+  readonly authStatus?: GuiHarnessOption["authStatus"];
+  readonly enablementMode?: GuiHarnessOption["enablementMode"];
 }
 
 function harnessOption(id: string, overrides: HarnessOptionOverrides) {
@@ -79,8 +85,8 @@ function harnessOption(id: string, overrides: HarnessOptionOverrides) {
 }
 
 interface ProviderStateOverrides {
-  readonly enablementMode?: "auto" | "on" | "off";
-  readonly enablementSource?: "sticky" | "auto-detected" | "auto-undetected";
+  readonly enablementMode?: ProviderEnablementMode;
+  readonly enablementSource?: ProviderEnablementSource;
 }
 
 function providerState(providerId: string, overrides: ProviderStateOverrides) {
@@ -338,7 +344,7 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
     },
   );
 
-  it("the 7.1 -> v1.0 downgrade still drops a claude-code row cleanly when it carries no enablement fields (unaffected baseline)", () => {
+  it("the 7.1 -> v1.0 downgrade PRESERVES a row carrying no enablement fields, dropping only the post-v1.0 provider (unaffected baseline)", () => {
     const result = providersListDowngradeV7ToV1.downgradeResponse(
       providersListResponseSchema.parse({
         providers: [providerState("claude-code", {}), providerState("grok", {})],
@@ -445,5 +451,81 @@ describe("hostRpcRegistry loads with the auth-aware enablement lines at their ex
     expect(
       hostRpcRegistry["providers.setEnabled"][2].downgradePathsFromLatest[1],
     ).toBe(providersSetEnabledDowngradeV22ToV10);
+  });
+});
+
+// ── 5. Forward tolerance: an unknown enum member degrades one field ─────────
+//
+// The four response-side enablement fields are `.optional().catch(undefined)`.
+// `.optional()` alone is not enough: nothing on the path to the array element
+// catches, so a value a NEWER host minted - a `enablementSource` arm added in
+// some future 7.2, say - would fail the whole response and empty the client's
+// provider list / harness picker over one field it could have ignored.
+//
+// Negotiation is meant to make that unreachable, since a newer host downgrades
+// to the negotiated minor. These tests are the defense-in-depth behind that
+// assumption, which this very line has already broken twice (released rows
+// pinned over a live body; `downgradeProviderCliStateToV10` dropping whole
+// rows). Degrading to `undefined` is the supported old-host path.
+describe("forward tolerance for unknown enum members", () => {
+  it("listHarnesses: an unknown authStatus/enablementMode drops those fields, not the row", () => {
+    const parsed = guiHarnessOptionSchema.parse({
+      id: "claude",
+      label: "claude",
+      available: true,
+      error: null,
+      modes: ["gui"],
+      requiresApiKey: false,
+      authStatus: "some-future-status",
+      enablementMode: "some-future-mode",
+    });
+    // The row survives with its other fields intact...
+    expect(parsed.id).toBe("claude");
+    expect(parsed.available).toBe(true);
+    // ...and the two unreadable fields read exactly like an old host's absence,
+    // which is the fallback the client already implements.
+    expect(parsed.authStatus).toBeUndefined();
+    expect(parsed.enablementMode).toBeUndefined();
+  });
+
+  it("providers.list: an unknown enablementMode/enablementSource drops those fields, not the provider", () => {
+    const response = providersListResponseSchema.parse({
+      providers: [
+        providerState("claude-code", {}),
+        {
+          ...providerState("codex", {}),
+          enablementMode: "some-future-mode",
+          enablementSource: "some-future-source",
+        },
+      ],
+      native: null,
+    });
+    // Critically: BOTH providers survive. Without the catch the unknown member
+    // fails the array element and takes the entire response with it.
+    expect(response.providers.map((p) => p.providerId)).toEqual([
+      "claude-code",
+      "codex",
+    ]);
+    expect(response.providers[1]?.enablementMode).toBeUndefined();
+    expect(response.providers[1]?.enablementSource).toBeUndefined();
+    // `enabled` is untouched - it is a plain boolean and always readable, so
+    // the client still gets the effective verdict even when the explanation
+    // for it is from a vocabulary this build does not have.
+    expect(response.providers[1]?.enabled).toBe(true);
+  });
+
+  it("setEnabled REQUEST rejects an unknown mode rather than swallowing it", () => {
+    // Deliberately asymmetric with the response fields above. A response that
+    // degrades costs a read-only explanation; a REQUEST that degrades would
+    // silently rewrite the user's intent, because an absent `mode` falls back
+    // to the legacy `enabled` boolean - "Auto" would be recorded as sticky.
+    expect(
+      providersSetEnabledRequestSchemaV22.safeParse({
+        providerId: "codex",
+        enabled: true,
+        profileAction: null,
+        mode: "some-future-mode",
+      }).success,
+    ).toBe(false);
   });
 });
