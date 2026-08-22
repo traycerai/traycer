@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { access, lstat, readFile, readlink, stat } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { dirname } from "node:path";
 import { connect, type Socket } from "node:net";
 import {
   cliCredentialsPath,
@@ -1011,8 +1013,24 @@ async function probeHostCredentialNeedsReauth(
       // The only clean answer: this host has no burn on record.
       return null;
     }
-    // Present but unreadable (permissions, a device error, a directory in its
-    // place). Something wrote a marker here; report it.
+    // A read that failed for some reason OTHER than "not there" used to be
+    // read as "present but unreadable", i.e. as a burn. That inference needs
+    // the marker's PARENT to have been inspectable, and it silently assumed
+    // so: on a host whose auth directory is unsearchable, `readFile` answers
+    // EACCES whether or not the file exists, so doctor asserted a burned
+    // credential over a directory that may well be empty - and pointed the
+    // reader at re-provisioning, which cannot fix a permission.
+    const parent = await probeAuthDirectory(dirname(markerPath));
+    if (parent === "absent") {
+      // No directory, so no marker inside it. Clean, for the same reason
+      // ENOENT on the file itself is.
+      return null;
+    }
+    if (parent === "unprobeable") {
+      return authDirectoryInaccessibleIssue(dirname(markerPath));
+    }
+    // Parent is a directory we can search, so the failure really is about
+    // this file: something is there and we cannot read it. Report the burn.
     raw = null;
   }
   try {
@@ -1070,6 +1088,61 @@ async function probeHostCredentialNeedsReauth(
 }
 
 const UNKNOWN_MARKER_FIELD = "unknown";
+
+/**
+ * Whether the directory holding the needs-reauth marker can be inspected at
+ * all, which is the precondition the marker probe's verdict rests on.
+ *
+ * `R_OK | X_OK` because the two failures are different and both matter: a
+ * directory without SEARCH permission makes every `readFile` inside it EACCES
+ * regardless of what it contains, which is exactly the state that turns
+ * "unreadable file" into a false burn. The `isDirectory` check is not
+ * ceremony either - a regular file standing where the auth directory belongs
+ * passes `access` happily while every path under it is ENOTDIR, so access
+ * alone would call that state probeable and re-create the same wrong verdict
+ * through a different door.
+ *
+ * Never throws.
+ */
+async function probeAuthDirectory(
+  dirPath: string,
+): Promise<"ok" | "absent" | "unprobeable"> {
+  try {
+    await access(dirPath, fsConstants.R_OK | fsConstants.X_OK);
+  } catch (err) {
+    return isFileNotFoundError(err) ? "absent" : "unprobeable";
+  }
+  try {
+    const info = await stat(dirPath);
+    return info.isDirectory() ? "ok" : "unprobeable";
+  } catch (err) {
+    return isFileNotFoundError(err) ? "absent" : "unprobeable";
+  }
+}
+
+/**
+ * The INDETERMINATE answer: doctor could not look, and says so.
+ *
+ * Deliberately not `HOST_CREDENTIAL_NEEDS_REAUTH`. That code asserts a burn
+ * and names a repair - open the app and let it re-provision - which does
+ * nothing for a directory the host cannot read. Reporting it here would send
+ * someone to fix a credential over a filesystem permission, and the fix they
+ * were told to apply would appear not to work.
+ */
+function authDirectoryInaccessibleIssue(dirPath: string): DoctorIssue {
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_AUTH_DIR_INACCESSIBLE,
+    severity: "warning",
+    title: "Cannot inspect this host's credential state",
+    message:
+      `This host's auth directory (${dirPath}) could not be read, so doctor cannot tell whether the host's own delegated credential is healthy or was burned. ` +
+      "Check the directory's ownership and permissions - it should be readable and searchable by the user the host runs as. " +
+      "This is not itself a credential fault; it means this one check could not run.",
+    fixAction: null,
+    terminalCommand: null,
+    details: { authDirPath: dirPath },
+  };
+}
 
 /**
  * Best-effort read of the marker's diagnostic fields. A `null` body (unreadable

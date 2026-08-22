@@ -236,3 +236,106 @@ describe("runDoctor host credential needs-reauth", () => {
     });
   });
 });
+
+/**
+ * The THIRD answer, and why two were not enough.
+ *
+ * `readFile(markerPath)` failing for any reason other than ENOENT was read as
+ * "the marker is there and we cannot read it" - i.e. as a burn. That inference
+ * silently assumes the marker's PARENT was inspectable. On a host whose auth
+ * directory is unsearchable (damaged ownership, an ACL, a stray file standing
+ * where the directory belongs), every read inside it fails the same way
+ * WHETHER OR NOT the file exists - so doctor asserted a burned credential over
+ * a directory that may well be empty, and pointed the reader at re-provisioning
+ * the host, which does nothing about a filesystem permission.
+ *
+ * "Only ENOENT is clean" was right about the MARKER. It was wrong to assume the
+ * marker's parent is always probeable.
+ */
+describe("runDoctor when the host auth directory cannot be inspected", () => {
+  it("does NOT claim the credential was burned when the directory is unprobeable", async () => {
+    // The negative direction, and the whole point: the absence of a readable
+    // marker here is not evidence of anything.
+    //
+    // The fixture puts a regular FILE where the auth directory belongs, which
+    // reproduces the shape without chmod - reads under it fail ENOTDIR rather
+    // than ENOENT, exactly as they do inside an unsearchable directory, and
+    // root and permission-ignoring CI filesystems cannot paper over it.
+    stageHealthyHostMocks();
+    mkdirSync(join(workHome, ".traycer", "host"), { recursive: true });
+    writeFileSync(hostAuthDir(), "not a directory");
+
+    const result = await runProductionDoctor();
+
+    expect(
+      result.issues.some((i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH"),
+    ).toBe(false);
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_AUTH_DIR_INACCESSIBLE",
+    );
+    expect(issue).toBeDefined();
+    // Warning, not error: nothing is known to be broken - but nothing is known
+    // to be working either, which is why it is not silence.
+    expect(issue?.severity).toBe("warning");
+    // The repair named must be the one that applies. `fixAction` /
+    // `terminalCommand` stay null because no CLI subcommand fixes a
+    // permission, and the message has to carry the instruction instead.
+    expect(issue?.fixAction).toBeNull();
+    expect(issue?.terminalCommand).toBeNull();
+    expect(issue?.message).toContain(hostAuthDir());
+    expect(issue?.message).toContain("permissions");
+    expect(issue?.details).toMatchObject({ authDirPath: hostAuthDir() });
+  });
+
+  // NOTE ON WHAT IS NOT TESTED HERE, and why. The reviewer's literal case is an
+  // EACCES directory, and there is no honest way to reach that errno in this
+  // suite: chmod is ignored by root and by several CI filesystems (so the test
+  // would pass vacuously exactly where it would otherwise run), and injecting
+  // it means mocking `node:fs/promises` for a suite whose engine touches the
+  // filesystem for a dozen unrelated probes. The fixture above reaches the SAME
+  // branch through ENOTDIR, and that branch is errno-agnostic by construction -
+  // `isFileNotFoundError(err) ? "absent" : "unprobeable"` - so EACCES and
+  // ENOTDIR cannot diverge without the classifier itself changing, which these
+  // cases would catch.
+
+  it("still reports the burn when the directory is fine and only the MARKER is unreadable", async () => {
+    // The behaviour the fix must not cost: a probeable directory holding a
+    // marker we cannot read is still a burn, with unknown diagnostics.
+    // Reproduced with a DIRECTORY standing where the marker file belongs, so
+    // the read fails non-ENOENT while its parent is perfectly searchable.
+    stageHealthyHostMocks();
+    mkdirSync(join(hostAuthDir(), "needs-reauth.json"), { recursive: true });
+
+    const result = await runProductionDoctor();
+
+    const issue = result.issues.find(
+      (i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH",
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe("error");
+    expect(issue?.details).toMatchObject({
+      reason: "unknown",
+      recordedAt: "unknown",
+      markerReadable: false,
+    });
+    expect(
+      result.issues.some((i) => i.code === "HOST_AUTH_DIR_INACCESSIBLE"),
+    ).toBe(false);
+  });
+
+  it("stays clean when the auth directory simply does not exist", async () => {
+    // A host that has never held a credential has no auth directory at all.
+    // That must read as clean, not as "cannot inspect" - the overwhelmingly
+    // common case must never become noise.
+    stageHealthyHostMocks();
+
+    const result = await runProductionDoctor();
+
+    expect(
+      result.issues.some((i) => i.code === "HOST_AUTH_DIR_INACCESSIBLE"),
+    ).toBe(false);
+    expect(
+      result.issues.some((i) => i.code === "HOST_CREDENTIAL_NEEDS_REAUTH"),
+    ).toBe(false);
+  });
+});
