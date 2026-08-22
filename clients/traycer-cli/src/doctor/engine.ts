@@ -1031,11 +1031,15 @@ async function probeHostCredentialNeedsReauth(
       title: "Host credential needs re-authorization",
       message:
         `This host's own delegated credential was rejected in a way refreshing cannot repair (${reason}, recorded ${recordedAt}), ` +
-        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix.",
+        "so the host stopped using it. Until it is replaced, work the host does on your behalf - opening Tasks, notifications, shared artifacts - can fail with sign-in-looking errors that signing in again does not fix. " +
+        "To replace it, open the Traycer desktop app while signed in as this host's owner and let it connect: a connected owner client provisions a new credential on its own, with nothing to confirm and nothing to run here.",
       // NEITHER a fix action NOR a terminal command, and for the same reason:
       // nothing on a command line repairs this. A connected owner client mints
-      // the replacement silently, so the honest instruction is the one already
-      // in the message - open the app.
+      // the replacement silently, so the instruction has to live in the
+      // MESSAGE - which is why the message carries it explicitly. With both
+      // action fields null, this text is the entire recovery path the CLI
+      // report and Desktop's issue card have to offer; a message that only
+      // rules out signing in again leaves the reader with a dead end.
       //
       // `terminalCommand` was `traycer login`, which reads as a repair and is
       // not one: signing the HUMAN in again does not provision the HOST's
