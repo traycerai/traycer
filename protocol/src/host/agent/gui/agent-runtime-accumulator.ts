@@ -375,17 +375,22 @@ function reopensSubagentRun(
 // A late `*.completed` on an already-terminal card keeps every terminal field.
 // It may still fill a `result` no earlier terminal recorded (a root-cascade
 // stop landed first without one and the native completion carries the child's
-// final message) and adopt a parent the card did not yet know (parent identity
-// is enrichable after terminal, exactly as a `*.started` re-emit may enrich
-// it). Anything else is an identity no-op, so `accumulateTurnContent` does not
-// bump `blocksVersion` for it.
+// final message) and adopt an owner the card did not yet know. A KNOWN owner is
+// preserved: unlike a `*.started` re-emit - which carries the full tri-state
+// parent and may legitimately re-parent or clear (see the explicit-null test) -
+// a late or duplicate completion must not hoist a nested card to root by
+// carrying `parentBlockId: null`. Anything else is an identity no-op, so
+// `accumulateTurnContent` does not bump `blocksVersion` for it.
 function mergeLateSubagentTerminal(
   blocks: ContentBlock[],
   existing: SubAgentBlock,
   event: { parentBlockId?: string | null; result?: string },
 ): ContentBlock[] {
   const result = existing.result ?? nullableString(event.result);
-  const parentBlockId = resolveParentBlockId(event, existing);
+  // Preserve a recorded owner; only resolve from the late event when none is
+  // known, so a duplicate completion cannot contradict a known parent.
+  const parentBlockId =
+    existing.parentBlockId ?? resolveParentBlockId(event, existing);
   if (
     result === existing.result &&
     parentBlockId === (existing.parentBlockId ?? null)

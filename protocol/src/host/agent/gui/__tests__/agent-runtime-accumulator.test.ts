@@ -3143,6 +3143,31 @@ describe("subagent terminal monotonicity", () => {
     ).toBe(parented);
   });
 
+  it("a late subagent.completed with parentBlockId null does not hoist a known-parent terminal card to root", () => {
+    const nested = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "completed",
+      result: "done",
+      parentBlockId: "sa-parent",
+    });
+    expect(expectSubAgentBlock(nested[0]).parentBlockId).toBe("sa-parent");
+
+    // A duplicate completion carrying an explicit null owner is noise, not a
+    // re-parent: the known owner is preserved and the event is an identity
+    // no-op.
+    const afterNull = accumulateEvent(nested, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 3,
+      outcome: "completed",
+      parentBlockId: null,
+    });
+    expect(afterNull).toBe(nested);
+    expect(expectSubAgentBlock(afterNull[0]).parentBlockId).toBe("sa-parent");
+  });
+
   it("the new-run discriminator still reopens a terminal card, after which progress and completion apply to the new run", () => {
     let blocks = accumulateEvent(makeBlocks(), {
       type: "subagent.started",
