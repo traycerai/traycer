@@ -16,7 +16,7 @@ import {
 } from "../cli-versions";
 import { CliError } from "../../runner/errors";
 
-function body(overrides: Record<string, unknown> = {}): string {
+function body(overrides: Record<string, unknown>): string {
   return JSON.stringify({
     schemaVersion: 1,
     generatedAt: "2026-05-15T12:00:00Z",
@@ -46,7 +46,7 @@ describe("fetchCliVersions compatibilityEpoch", () => {
   });
 
   it("returns null when the stamp is absent", async () => {
-    fetchTextMock.mockResolvedValue(body());
+    fetchTextMock.mockResolvedValue(body({}));
     expect((await fetchCliVersions()).compatibilityEpoch).toBeNull();
   });
 

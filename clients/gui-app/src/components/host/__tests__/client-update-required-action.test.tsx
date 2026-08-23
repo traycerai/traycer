@@ -361,7 +361,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   function bridgeWith(
     status: "available" | "ready" | "downloading",
     latestCompatibilityEpoch: number | null,
-    latestVersion: string | null = "1.2.0",
+    latestVersion: string | null,
   ): FakeAppUpdatesBridge {
     return new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
@@ -377,7 +377,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   it("a null epoch on a READY snapshot must not render the install affordance", async () => {
     // THE INVERTED ARM, asserted directly rather than via a recovery route:
     // `status: "ready"` used to be enough to offer "Restart to update".
-    const bridge = bridgeWith("ready", null);
+    const bridge = bridgeWith("ready", null, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction requirement={requirement({})} />,
       bridge,
@@ -394,7 +394,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
     ["equal to the floor", 2],
     ["higher than the floor", 3],
   ])("OFFERS a cached update whose epoch is %s", async (_label, epoch) => {
-    const bridge = bridgeWith("available", epoch);
+    const bridge = bridgeWith("available", epoch, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
         requirement={requirement({ minimumCompatibilityEpoch: 2 })}
@@ -409,7 +409,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   });
 
   it("REFUSES a cached update whose epoch is below the floor", async () => {
-    const bridge = bridgeWith("available", 1);
+    const bridge = bridgeWith("available", 1, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
         requirement={requirement({ minimumCompatibilityEpoch: 2 })}
@@ -442,7 +442,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   });
 
   it("REFUSES to offer a stale READY build - the restart would change nothing", async () => {
-    const bridge = bridgeWith("ready", 1);
+    const bridge = bridgeWith("ready", 1, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
         requirement={requirement({ minimumCompatibilityEpoch: 2 })}
@@ -459,7 +459,7 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   });
 
   it("REFUSES to show progress for a stale DOWNLOADING build", async () => {
-    const bridge = bridgeWith("downloading", 1);
+    const bridge = bridgeWith("downloading", 1, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
         requirement={requirement({ minimumCompatibilityEpoch: 2 })}
@@ -742,4 +742,3 @@ describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
     expect(screen.queryByTestId("client-update-required-enable-rc")).toBeNull();
   });
 });
-

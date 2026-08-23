@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
-import type { DesktopAppUpdateSnapshot } from "../../../ipc-contracts/app-update-types";
+import type {
+  DesktopAppUpdateSnapshot,
+  DesktopCompatRecoveryPlan,
+} from "../../../ipc-contracts/app-update-types";
 
 type UpdaterModule = typeof import("../updater");
 
@@ -1890,7 +1893,7 @@ describe("compat recovery: RC probe", () => {
       readonly prerelease: boolean;
       readonly epoch: number | null;
     }>,
-  ): Promise<Awaited<ReturnType<UpdaterModule["resolveCompatRecovery"]>>> {
+  ): Promise<DesktopCompatRecoveryPlan> {
     const fixtures = releases.map((entry) =>
       macReleaseFixture(entry.tag, entry.prerelease),
     );

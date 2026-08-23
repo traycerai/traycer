@@ -1,5 +1,11 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -90,7 +96,103 @@ export function ClientUpdateRequiredAction(props: {
     allowPrerelease: snapshot.allowPrerelease,
   });
   const enableRc = useEnableRcRecovery(bridge);
+  const cachedUpdateAction = renderCachedUpdateAction({
+    bridge,
+    snapshot,
+    cachedUpdateSufficient,
+    openInstallGuidance,
+  });
+  if (cachedUpdateAction !== null) return cachedUpdateAction;
 
+  // THE RC HOP, and the only route in this app that can turn on prereleases.
+  // There is no general Settings toggle, so consent is always given against a
+  // NAMED build that main's probe has already proven clears this exact floor -
+  // never against "the RC channel" in the abstract.
+  //
+  // Reaching this arm means main established all of: the stable feed cannot
+  // help, the rejecting host is itself on the RC line, nothing insufficient is
+  // staged that this platform could not discard, and a sufficient RC candidate
+  // exists and deeply validates. Any one of those failing routes elsewhere.
+  if (bridge !== null && recovery.data?.route === "enable-rc") {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        disabled={enableRc.isPending}
+        data-testid="client-update-required-enable-rc"
+        onClick={() => {
+          enableRc.mutate(bridge);
+        }}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <span>
+            {recovery.data.rcCandidateVersion === null
+              ? "Enable RC updates and update"
+              : `Enable RC updates and get ${recovery.data.rcCandidateVersion}`}
+          </span>
+          {enableRc.isPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </span>
+      </Button>
+    );
+  }
+
+  // macOS WITH AN INSUFFICIENT UPDATE ALREADY STAGED. Squirrel.Mac took the
+  // artifact the moment its download finished and no supported API withdraws
+  // it, so this build WILL apply at the next quit whatever anyone does here.
+  //
+  // The install affordance is withheld - offering "Restart to update" for a
+  // build the host will refuse is the converging-loop button this whole surface
+  // exists to avoid - but the fact is stated rather than hidden, because a user
+  // who drag-installs a fresh build while this app is still running gets the
+  // staged older one written over it at quit. That downgrade window is narrow
+  // and known; the copy is what makes it avoidable.
+  if (recovery.data?.route === "restart-to-clear-staged") {
+    return (
+      <>
+        <p
+          className="w-full text-left text-xs text-muted-foreground"
+          data-testid="client-update-required-staged-note"
+        >
+          {recovery.data.stagedVersion === null
+            ? "An update is already downloaded and will install the next time you quit Traycer - but it is still too old for this host. "
+            : `Traycer ${recovery.data.stagedVersion} is already downloaded and will install the next time you quit - but it is still too old for this host. `}
+          Quit and reopen Traycer to let it apply, then this dialog will offer
+          the next step. If you would rather install a newer build by hand, quit
+          Traycer first.
+        </p>
+        <ReleasesPageButton openExternalLink={openExternalLink} />
+      </>
+    );
+  }
+
+  if (snapshot.status === "checking") {
+    return (
+      <Button type="button" size="sm" variant="default" disabled data-testid="client-update-required-checking">
+        <span className="inline-flex items-center gap-1.5">
+          <span>Checking for updates</span>
+          <AgentSpinningDots className="text-current" testId={undefined} variant={undefined} />
+        </span>
+      </Button>
+    );
+  }
+
+  return <ReleasesPageButton openExternalLink={openExternalLink} />;
+}
+
+function renderCachedUpdateAction(input: {
+  readonly bridge: DesktopAppUpdatesBridge | null;
+  readonly snapshot: DesktopAppUpdateSnapshot;
+  readonly cachedUpdateSufficient: boolean;
+  readonly openInstallGuidance: () => void;
+}): ReactNode | null {
+  const { bridge, snapshot, cachedUpdateSufficient, openInstallGuidance } = input;
   if (bridge !== null && cachedUpdateSufficient) {
     if (snapshot.status === "available") {
       // A blocked location (macOS app outside /Applications) cannot install
@@ -176,122 +278,11 @@ export function ClientUpdateRequiredAction(props: {
       );
     }
   }
-
-  // THE RC HOP, and the only route in this app that can turn on prereleases.
-  // There is no general Settings toggle, so consent is always given against a
-  // NAMED build that main's probe has already proven clears this exact floor -
-  // never against "the RC channel" in the abstract.
-  //
-  // Reaching this arm means main established all of: the stable feed cannot
-  // help, the rejecting host is itself on the RC line, nothing insufficient is
-  // staged that this platform could not discard, and a sufficient RC candidate
-  // exists and deeply validates. Any one of those failing routes elsewhere.
-  if (bridge !== null && recovery.data?.route === "enable-rc") {
-    return (
-      <Button
-        type="button"
-        size="sm"
-        variant="default"
-        disabled={enableRc.isPending}
-        data-testid="client-update-required-enable-rc"
-        onClick={() => {
-          enableRc.mutate(bridge);
-        }}
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <span>
-            {recovery.data.rcCandidateVersion === null
-              ? "Enable RC updates and update"
-              : `Enable RC updates and get ${recovery.data.rcCandidateVersion}`}
-          </span>
-          {enableRc.isPending ? (
-            <AgentSpinningDots
-              className="text-current"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
-        </span>
-      </Button>
-    );
-  }
-
-  // macOS WITH AN INSUFFICIENT UPDATE ALREADY STAGED. Squirrel.Mac took the
-  // artifact the moment its download finished and no supported API withdraws
-  // it, so this build WILL apply at the next quit whatever anyone does here.
-  //
-  // The install affordance is withheld - offering "Restart to update" for a
-  // build the host will refuse is the converging-loop button this whole surface
-  // exists to avoid - but the fact is stated rather than hidden, because a user
-  // who drag-installs a fresh build while this app is still running gets the
-  // staged older one written over it at quit. That downgrade window is narrow
-  // and known; the copy is what makes it avoidable.
-  if (recovery.data?.route === "restart-to-clear-staged") {
-    return (
-      <>
-        <p
-          className="w-full text-left text-xs text-muted-foreground"
-          data-testid="client-update-required-staged-note"
-        >
-          {recovery.data.stagedVersion === null
-            ? "An update is already downloaded and will install the next time you quit Traycer - but it is still too old for this host. "
-            : `Traycer ${recovery.data.stagedVersion} is already downloaded and will install the next time you quit - but it is still too old for this host. `}
-          Quit and reopen Traycer to let it apply, then this dialog will offer
-          the next step. If you would rather install a newer build by hand, quit
-          Traycer first.
-        </p>
-        <ReleasesPageButton openExternalLink={openExternalLink} />
-      </>
-    );
-  }
-
-  if (snapshot.status === "checking") {
-    // A check the user started FROM THE HEADER while this dialog is open -
-    // NOT the one `useUpdateCheckOnBlockingMount` starts below.
-    //
-    // `checkForUpdatesNow` publishes `status: "checking"` only for
-    // `intent === "manual"` (`clients/desktop/src/electron-main/app/updater.ts`);
-    // an automatic check leaves the snapshot `idle` until a result lands. So
-    // the self-started check never renders here - the manual link stays up for
-    // its duration and flips to `Download update` if a build turns up. That
-    // flip is accepted: switching the self-started check to `"manual"` intent
-    // would publish `up-to-date` / `error` into the app-wide snapshot and make
-    // the header narrate an outcome the user never asked for.
-    //
-    // The branch is still worth having for the manual case: rendering "Get the
-    // latest Traycer" under a running check tells someone to go download by
-    // hand a second before their own updater answers.
-    return (
-      <Button
-        type="button"
-        size="sm"
-        variant="default"
-        disabled
-        data-testid="client-update-required-checking"
-      >
-        <span className="inline-flex items-center gap-1.5">
-          <span>Checking for updates</span>
-          <AgentSpinningDots
-            className="text-current"
-            testId={undefined}
-            variant={undefined}
-          />
-        </span>
-      </Button>
-    );
-  }
-
-  // THE FLOOR, reached whenever the updater cannot help: no bridge (web/dev
-  // shell), an install location that cannot be written, an updater that has not
-  // found anything yet, a cached update of an insufficient or unknown
-  // generation with no RC line to fall back to, or the honest corner where the
-  // only sufficient build is a stable release the updater cannot resolve. A
-  // first-party address chosen locally - never one the host supplied.
-  return <ReleasesPageButton openExternalLink={openExternalLink} />;
+  return null;
 }
 
 function ReleasesPageButton(props: {
-  readonly openExternalLink: ReturnType<typeof useRunnerOpenExternalLink>;
+  readonly openExternalLink: UseMutationResult<void, Error, string>;
 }): ReactNode {
   return (
     <Button
@@ -384,7 +375,7 @@ function useCompatRecoveryPlan(input: {
   readonly allowPrerelease: boolean;
 }): { readonly data: DesktopCompatRecoveryPlan | undefined } {
   const { bridge } = input;
-  return useQuery({
+  return useQuery(queryOptions({
     queryKey: runnerQueryKeys.appUpdateCompatRecovery({
       runnerHostScopeId: bridge === null ? 0 : runnerHostQueryScopeId(bridge),
       minimumEpoch: input.minimumEpoch,
@@ -408,7 +399,7 @@ function useCompatRecoveryPlan(input: {
     retry: false,
     staleTime: Infinity,
     gcTime: Infinity,
-  });
+  }));
 }
 
 /**
