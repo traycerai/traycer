@@ -52,6 +52,9 @@ const releasedByWebContents = new WeakMap<
 export function applyAgentBrowserBackgroundPosture(
   webContents: AgentBrowserPostureWebContents,
 ): void {
+  // BT-402: a postured guest is agent-owned and eviction-exempt from the
+  // moment posture applies, not only after some later release mark.
+  releasedByWebContents.set(webContents, false);
   sendPostureCommands(webContents);
   webContents.on("did-navigate", () => {
     if (releasedByWebContents.get(webContents) === true) return;
@@ -64,6 +67,18 @@ export function setAgentBrowserPostureReleased(
   released: boolean,
 ): void {
   releasedByWebContents.set(webContents, released);
+}
+
+/**
+ * BT-402 exemption probe: TRUE while an agent owns this guest's background
+ * posture (postured and not yet released). Guests that never went through
+ * the posture path return false — they are ordinary user tiles and stay
+ * evictable.
+ */
+export function isAgentBrowserPostureActive(
+  webContents: AgentBrowserPostureWebContents,
+): boolean {
+  return releasedByWebContents.get(webContents) === false;
 }
 
 function sendPostureCommands(

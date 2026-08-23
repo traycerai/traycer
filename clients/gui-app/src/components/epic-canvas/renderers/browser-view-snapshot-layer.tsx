@@ -11,7 +11,7 @@ export function BrowserViewSnapshotLayer(props: {
       data-browser-view-snapshot=""
       data-stale={snapshot.stale ? "true" : "false"}
     >
-      {snapshot.dataUrl === null || snapshot.stale ? null : (
+      {snapshot.dataUrl === null ? null : (
         <img
           src={snapshot.dataUrl}
           alt=""

@@ -420,6 +420,12 @@ export interface DesktopBrowserViewBridge {
   ): Promise<BrowserViewOverlayReleaseResult>;
   getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
   setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
+  /**
+   * BT-202 flicker fix: renderer confirms the replacement frame for
+   * `overlayId` is decoded and on screen; main then parks the native view.
+   * Capability-gated (older preloads lack it) — callers must guard.
+   */
+  readonly overlayPaintAck?: (overlayId: string) => Promise<void>;
   applyStorageState(
     input: BrowserViewStorageStateApply,
   ): Promise<BrowserViewStorageStateApplyResult>;
@@ -506,6 +512,7 @@ type BrowserViewBridgeMethodSet = {
   ]: BrowserViewBridgeMethod;
 } & {
   readonly capturePrimaryProfile: BrowserViewBridgeMethod | undefined;
+  readonly overlayPaintAck: BrowserViewBridgeMethod | undefined;
 };
 
 const REQUIRED_BROWSER_VIEW_BRIDGE_METHODS = [
@@ -646,6 +653,7 @@ function readBrowserViewBridgeMethods(
     applyStorageState: readBridgeMethod(value, "applyStorageState"),
     captureStorageState: readBridgeMethod(value, "captureStorageState"),
     capturePrimaryProfile: readBridgeMethod(value, "capturePrimaryProfile"),
+    overlayPaintAck: readBridgeMethod(value, "overlayPaintAck"),
     grantControl: readBridgeMethod(value, "grantControl"),
     revokeControl: readBridgeMethod(value, "revokeControl"),
     executeControlAction: readBridgeMethod(value, "executeControlAction"),
@@ -684,6 +692,10 @@ function createBrowserViewLifecycleBridge(
     setViewportPreset: (input) =>
       callBridgeVoid(value, methods.setViewportPreset, input),
     releaseTile: (input) => callBridgeVoid(value, methods.releaseTile, input),
+    overlayPaintAck: (overlayId: string) =>
+      Promise.resolve(
+        methods.overlayPaintAck.call(value, overlayId),
+      ) as Promise<void>,
   } satisfies Pick<
     DesktopBrowserViewBridge,
     | "upsertTile"
@@ -694,6 +706,7 @@ function createBrowserViewLifecycleBridge(
     | "updateBounds"
     | "setViewportPreset"
     | "releaseTile"
+    | "overlayPaintAck"
   >;
 }
 

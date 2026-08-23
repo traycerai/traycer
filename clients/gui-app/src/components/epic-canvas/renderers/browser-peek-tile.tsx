@@ -51,6 +51,10 @@ import { Button } from "@/components/ui/button";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/visible-tile-registry";
+import {
+  clearBrowserViewSnapshot,
+  publishSelfPaintedTileFrame,
+} from "@/lib/browser-view/browser-overlay-coordinator";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { hasPlatformModKey } from "@/lib/keybindings/chord";
@@ -197,6 +201,19 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     tabId: node.tabId,
     visible,
   });
+  // BT-204: drop this mirror's frame from the shared snapshot store when the
+  // tile goes away so nothing can resurrect stale pixels from it.
+  useEffect(() => {
+    const snapshotKey = {
+      viewTabId: props.viewTabId ?? "",
+      paneId: props.paneId ?? "",
+      tileInstanceId: node.instanceId,
+      pageSessionId: node.id,
+    };
+    return () => {
+      clearBrowserViewSnapshot(snapshotKey);
+    };
+  }, [node.id, node.instanceId, props.paneId, props.viewTabId]);
   const sessionRef = useRef<{
     sendClientFrame: (
       frame: BrowserScreencastClientFrame,
@@ -389,6 +406,20 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         setLifecycle,
         setDetails,
         setFrameSize,
+        onFramePainted: (dataUrl) => {
+          // BT-204: mirror tiles are DOM-painted and never need hiding, but
+          // their latest frame shares the snapshot store with native tiles'
+          // cached frames — one pixel source of truth per tile key.
+          publishSelfPaintedTileFrame(
+            {
+              viewTabId: props.viewTabId ?? "",
+              paneId: props.paneId ?? "",
+              tileInstanceId: node.instanceId,
+              pageSessionId: node.id,
+            },
+            dataUrl,
+          );
+        },
       });
       if (parsed.data.kind === "complete" && parsed.data.cause === "migrated") {
         onMigrated?.();
@@ -1512,6 +1543,8 @@ function handleScreencastFrame(args: {
   readonly setFrameSize: (
     value: { readonly width: number; readonly height: number } | null,
   ) => void;
+  /** BT-204 seam: mirror tiles publish presented frames to the shared store. */
+  readonly onFramePainted: ((dataUrl: string) => void) | null;
 }): void {
   if (args.frame.kind === "started") {
     args.setLifecycle("waiting");
@@ -1523,10 +1556,12 @@ function handleScreencastFrame(args: {
   }
   if (args.frame.kind === "frame") {
     if (args.binaryPayload === null) return;
+    const src = `data:image/jpeg;base64,${bytesToBase64(args.binaryPayload)}`;
     args.setImage({
-      src: `data:image/jpeg;base64,${bytesToBase64(args.binaryPayload)}`,
+      src,
       sequence: args.frame.sequence,
     });
+    args.onFramePainted?.(src);
     return;
   }
   if (args.frame.kind === "stalled") {

@@ -149,6 +149,20 @@ export function setBrowserViewSnapshot(
   emitSnapshotChange(keyId);
 }
 
+/**
+ * BT-204 seam: screencast-mirror tiles own their pixels as plain DOM, so the
+ * occluder never needs to hide them — but their latest frame lands in the
+ * SAME snapshot store as native tiles' cached frames, so a future unified
+ * occluder (or any consumer of "this tile's last known pixels") reads one
+ * API regardless of pixel source.
+ */
+export function publishSelfPaintedTileFrame(
+  key: BrowserViewTileKey,
+  dataUrl: string,
+): void {
+  setBrowserViewSnapshot({ ...key, dataUrl, stale: false });
+}
+
 export function markBrowserViewSnapshotStale(key: BrowserViewTileKey): void {
   const keyId = browserViewTileKeyId(key);
   const snapshot = snapshotsByKeyId.get(keyId);

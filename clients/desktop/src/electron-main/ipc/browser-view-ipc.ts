@@ -39,6 +39,7 @@ import type {
 import { config } from "../../config";
 import { setInAppBrowserBetaEnabledMarker } from "../app/browser-labs-state";
 import {
+  BOUNDS_STREAM_LOG_INTERVAL_MS,
   BrowserViewManager,
   scheduleBrowserViewDebugSnapshot,
   type BrowserViewHostWebContents,
@@ -46,6 +47,8 @@ import {
   type ManagedBrowserView,
   type ManagedContentView,
 } from "../browser-view/browser-view-manager";
+import { hostPlatformFromProcessPlatform } from "../../ipc-contracts/reserved-chords";
+import { installBrowserViewManagerDebug } from "../browser-view/browser-view-manager-debug";
 import {
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
@@ -204,7 +207,19 @@ export function registerBrowserViewIpc(
     capturePrimaryProfileLocalStorage: captureBrowserOriginLocalStorage,
     releaseGraceMs: BROWSER_VIEW_RELEASE_GRACE_MS,
     electronCreateDelayMs: readElectronCreateDelayMs(),
+    boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
+    hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
+
+  // BT-501: E2E-only debug surface. Production never sets TRAYCER_E2E.
+  if (process.env.TRAYCER_E2E === "1") {
+    installBrowserViewManagerDebug({
+      boundsByKeyId: () => manager.debugBoundsByKeyId(),
+      occludedKeyIds: () => manager.debugOccludedKeyIds(),
+      frameCacheStats: () => manager.frameCacheStats(),
+      evictedKeyIds: () => manager.debugEvictedKeyIds(),
+    });
+  }
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewUpsert, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
@@ -303,6 +318,26 @@ export function registerBrowserViewIpc(
     const windowId = readSenderWindowId(bridge, event);
     manager.releaseTile(windowId, parseTileKey(payload));
   });
+
+  // BT-202 flicker fix: renderer confirms the replacement frame is decoded
+  // and on screen; only then does the manager move the native view offscreen.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewOverlayPaintAck,
+    (_event, payload) => {
+      if (!isRecordValue(payload)) return;
+      if (typeof payload.overlayId !== "string") return;
+      manager.paintAckOverlay(payload.overlayId);
+    },
+  );
+
+  // BT-302/BT-303: the renderer is the source of truth for which app chords
+  // outrank guest keystrokes; it pushes its binding tokens at startup.
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewSetReservedChords,
+    (_event, payload) => {
+      manager.setReservedChords(readReservedChordTokens(payload));
+    },
+  );
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewReload, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
@@ -911,13 +946,18 @@ function toBrowserViewHostWebContents(
   if (!isRecord(value)) return null;
   const on = Reflect.get(value, "on");
   const off = Reflect.get(value, "off");
+  const sendInputEvent = Reflect.get(value, "sendInputEvent");
   if (typeof on !== "function" || typeof off !== "function") return null;
+  if (typeof sendInputEvent !== "function") return null;
   return {
     on: (event, listener) => {
       on.call(value, event, listener);
     },
     off: (event, listener) => {
       off.call(value, event, listener);
+    },
+    sendInputEvent: (event) => {
+      sendInputEvent.call(value, event);
     },
   };
 }
@@ -995,4 +1035,15 @@ function readViewportPresetId(value: unknown): BrowserViewViewportPresetId {
 function readFiniteNumber(value: unknown, field: string): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   throw new Error(`Browser view ${field} must be a finite number`);
+}
+
+function readReservedChordTokens(payload: unknown): readonly string[] {
+  if (!isRecordValue(payload)) return [];
+  const raw = payload.tokens;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((token): token is string => typeof token === "string");
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

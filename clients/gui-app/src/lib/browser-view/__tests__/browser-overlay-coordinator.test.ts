@@ -1,6 +1,10 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectBrowserOverlaySurfaces } from "@/lib/browser-view/browser-overlay-coordinator";
+import {
+  collectBrowserOverlaySurfaces,
+  getBrowserViewSnapshot,
+  publishSelfPaintedTileFrame,
+} from "@/lib/browser-view/browser-overlay-coordinator";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -70,5 +74,24 @@ describe("collectBrowserOverlaySurfaces opacity-0 handling", () => {
 
     const surfaces = collectBrowserOverlaySurfaces(document.body);
     expect(surfaces).toHaveLength(1);
+  });
+});
+
+describe("publishSelfPaintedTileFrame (BT-204)", () => {
+  it("lands the mirror frame in the shared snapshot store", () => {
+    const key = {
+      viewTabId: "vt-1",
+      paneId: "pane-1",
+      tileInstanceId: "tile-mirror",
+      pageSessionId: "node-9",
+    };
+    expect(getBrowserViewSnapshot(key)).toBeNull();
+
+    publishSelfPaintedTileFrame(key, "data:image/jpeg;base64,QUJD");
+
+    expect(getBrowserViewSnapshot(key)).toEqual({
+      dataUrl: "data:image/jpeg;base64,QUJD",
+      stale: false,
+    });
   });
 });

@@ -60,6 +60,7 @@ const BASE_KEY: BrowserViewTileKey = {
 class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
   readonly releaseCalls: BrowserViewOverlayRelease[] = [];
+  readonly paintAckCalls: string[] = [];
   private readonly snapshotInvalidationHandlers = new Set<
     (change: BrowserViewSnapshotInvalidatedChange) => void
   >();
@@ -182,6 +183,11 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
       })),
       restoredTiles: [],
     });
+  }
+
+  overlayPaintAck(overlayId: string): Promise<void> {
+    this.paintAckCalls.push(overlayId);
+    return Promise.resolve();
   }
 
   releaseOverlay(
@@ -581,6 +587,16 @@ describe("<BrowserOverlayCoordinator />", () => {
         dataUrl: "data:image/png;base64,toast",
         stale: false,
       });
+    });
+
+    // Flicker fix phase 2: once the replacement frame is applied, the
+    // coordinator acknowledges so main parks the native view. Each overlay
+    // acks its own replacement frame; main-side parking is idempotent.
+    await waitFor(() => {
+      expect(bridge.paintAckCalls.slice().sort()).toEqual([
+        "command-palette",
+        "toast",
+      ]);
     });
 
     commandPalette.remove();

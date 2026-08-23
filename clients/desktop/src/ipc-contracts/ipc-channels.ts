@@ -324,6 +324,13 @@ export const RunnerHostInvoke = {
   browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
   browserViewSetViewportPreset: "runnerHost:browserView:setViewportPreset",
   browserViewRelease: "runnerHost:browserView:release",
+  browserViewSetReservedChords:
+    "runnerHost:browserView:setReservedChords",
+  agentBrowserViewSetReservedChords:
+    "runnerHost:agentBrowserView:setReservedChords",
+  browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
+  agentBrowserViewOverlayPaintAck:
+    "runnerHost:agentBrowserView:overlayPaintAck",
   browserViewReload: "runnerHost:browserView:reload",
   browserViewGoBack: "runnerHost:browserView:goBack",
   browserViewGoForward: "runnerHost:browserView:goForward",

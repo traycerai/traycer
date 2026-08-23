@@ -8,6 +8,7 @@ import {
   setBrowserViewSnapshot,
   subscribeBrowserOverlayLayout,
 } from "@/lib/browser-view/browser-overlay-coordinator";
+import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
 import {
   type BrowserViewOverlayOcclusion,
   type BrowserViewOverlayOcclusionResult,
@@ -23,8 +24,18 @@ import {
 } from "@/lib/browser-view/desktop-agent-browser-view";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 export function BrowserOverlayCoordinatorBridge() {
   const runnerHost = use(RunnerHostContext);
+  useEffect(() => {
+    // BT-303: app chords outrank guest keystrokes; main replaces its whole
+    // set on each call, so this is idempotent across HMR.
+    if (runnerHost !== null) registerReservedBrowserChords(runnerHost);
+  }, [runnerHost]);
   const browserView = useMemo(
     () =>
       runnerHost === null ? null : resolveDesktopBrowserViewBridge(runnerHost),
@@ -109,8 +120,49 @@ function BrowserOverlayCoordinator(props: {
     };
 
     const activeSignaturesByOverlayId = new Map<string, string>();
+    const ackedOverlayIds = new Set<string>();
     let frameId: number | null = null;
     let disposed = false;
+
+    /**
+     * BT-202 flicker fix, phase 2: the native view must not leave the screen
+     * until the replacement frame is DECODED and COMPOSITED. We wait one
+     * frame (commit), give every snapshot <img> a decode budget (capped, so
+     * a broken image can never stall parking), one more frame (paint), then
+     * ack — main moves the view offscreen only after this resolves.
+     */
+    const ackWhenPainted = async (overlayId: string): Promise<void> => {
+      if (ackedOverlayIds.has(overlayId)) return;
+      ackedOverlayIds.add(overlayId);
+      try {
+        const waitFrame = () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        const decodeAll = () =>
+          Promise.all(
+            Array.from(
+              document.querySelectorAll<HTMLImageElement>(
+                "[data-browser-view-snapshot] img",
+              ),
+            ).map((img) =>
+              typeof img.decode === "function"
+                ? img.decode().catch(() => undefined)
+                : Promise.resolve(),
+            ),
+          );
+        await waitFrame();
+        await Promise.race([decodeAll(), sleep(120)]);
+        await waitFrame();
+        const ack = browserView.overlayPaintAck;
+        if (typeof ack === "function") await ack.call(browserView, overlayId);
+      } catch {
+        // A failed ack must never break the occlusion lifecycle; the view
+        // simply stays live until release.
+      } finally {
+        ackedOverlayIds.delete(overlayId);
+      }
+    };
 
     const applyRestoredTiles = (tiles: readonly BrowserViewTileKey[]): void => {
       tiles.forEach((tile) => {
@@ -168,6 +220,7 @@ function BrowserOverlayCoordinator(props: {
             });
             applyRestoredTiles(result.restoredTiles);
           })
+          .then(() => ackWhenPainted(target.overlayId))
           .catch(ignoreBrowserOverlayError);
       });
     };

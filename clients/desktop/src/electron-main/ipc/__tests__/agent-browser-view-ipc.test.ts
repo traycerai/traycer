@@ -27,6 +27,8 @@ function makeUnusedWebContentsStub(): BrowserViewWebContents {
     loadURL: notUsed,
     executeJavaScript: notUsed,
     capturePage: notUsed,
+    beginFrameSubscription: notUsed,
+    endFrameSubscription: notUsed,
     getURL: notUsed,
     getTitle: notUsed,
     isDestroyed: notUsed,

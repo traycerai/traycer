@@ -102,6 +102,12 @@ class FakeWebContents implements BrowserViewWebContents {
     (image: BrowserViewCapturedImage) => void
   > = [];
 
+  beginFrameSubscription(
+    _callback: (image: BrowserViewCapturedImage) => void,
+  ): void {}
+
+  endFrameSubscription(): void {}
+
   setCaptureBytes(bytes: Uint8Array): void {
     this.bytes = bytes;
   }

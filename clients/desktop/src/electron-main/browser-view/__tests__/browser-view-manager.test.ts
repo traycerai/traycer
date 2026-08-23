@@ -39,6 +39,7 @@ import type {
   BrowserAnnotationSessionIpcEvent,
 } from "../../../ipc-contracts/browser-annotation-types";
 import { ANNOTATION_BINDING_NAME } from "../browser-annotation-overlay-script";
+import { applyAgentBrowserBackgroundPosture } from "../agent-browser-posture";
 import type {
   BrowserViewCertificateErrorChange as BrowserSessionCertificateErrorChange,
   BrowserViewDownloadChange as BrowserSessionDownloadChange,
@@ -242,12 +243,35 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
           })
     | null = null;
   private url = "about:blank";
+  readonly frameSubscriptions: Array<
+    (image: BrowserViewCapturedImage) => void
+  > = [];
+  frameSubscriptionEnds = 0;
 
   constructor(
     readonly id: number,
     private readonly readVisible: () => boolean,
   ) {
     super();
+  }
+
+  beginFrameSubscription(
+    callback: (image: BrowserViewCapturedImage) => void,
+  ): void {
+    this.frameSubscriptions.push(callback);
+  }
+
+  endFrameSubscription(): void {
+    this.frameSubscriptionEnds += 1;
+  }
+
+  emitCompositorFrame(image?: BrowserViewCapturedImage): void {
+    const frame =
+      image ??
+      this.buildCaptureImage();
+    this.frameSubscriptions.forEach((callback) => {
+      callback(frame);
+    });
   }
 
   loadURL(url: string): Promise<unknown> {
@@ -295,7 +319,9 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   }
 
   private buildCaptureImage(): BrowserViewCapturedImage {
-    const bytes: Uint8Array = Uint8Array.from([1, 2, 3]);
+    // Real toJPEG results are Buffers; the frame-cache encoder relies on
+    // Buffer#toString("base64"), so the fixture must be one too.
+    const bytes: Buffer = Buffer.from([1, 2, 3]);
     const image: BrowserViewCapturedImage = {
       getSize: () => ({ width: 320, height: 180 }),
       toJPEG: () => bytes,
@@ -453,6 +479,12 @@ class FakeContentView implements ManagedContentView {
 }
 
 class FakeHostWebContents extends EventEmitter {
+  readonly sentInputEvents: Array<{
+    readonly type: "keyDown";
+    readonly keyCode: string;
+    readonly modifiers: readonly string[];
+  }> = [];
+
   on(
     event: "did-start-navigation" | "render-process-gone",
     listener: (...args: unknown[]) => void,
@@ -465,6 +497,18 @@ class FakeHostWebContents extends EventEmitter {
     listener: (...args: unknown[]) => void,
   ): this {
     return super.off(event, listener);
+  }
+
+  sendInputEvent(event: {
+    readonly type: "keyDown";
+    readonly keyCode: string;
+    readonly modifiers?: readonly string[];
+  }): void {
+    this.sentInputEvents.push({
+      type: event.type,
+      keyCode: event.keyCode,
+      modifiers: event.modifiers ?? [],
+    });
   }
 }
 
@@ -564,6 +608,8 @@ interface Harness {
 type HarnessOptions = {
   readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
   readonly electronCreateDelayMs?: number;
+  readonly boundsStreamLogIntervalMs?: number;
+  readonly hostPlatform?: "darwin" | "other";
 };
 
 const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageState"] =
@@ -736,6 +782,8 @@ function createHarnessWithOptions(
       }),
     releaseGraceMs: 10,
     electronCreateDelayMs: harnessOptions?.electronCreateDelayMs ?? 0,
+    boundsStreamLogIntervalMs: harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
+    hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
   };
   return {
     manager: new BrowserViewManager(options),
@@ -900,6 +948,126 @@ describe("BrowserViewManager", () => {
       width: 390,
       height: 844,
     });
+  });
+
+  it("coalesces identical streamed bounds updates to a single setBounds (BT-101)", () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    const view = harness.views[0];
+    const rect = { x: 10, y: 20, width: 300, height: 200 };
+
+    harness.manager.updateBounds("window-1", { ...BASE_KEY, bounds: rect });
+    const appliedAfterFirst = view.bounds.length;
+    for (let i = 0; i < 5; i += 1) {
+      // Streamed echoes of the same rect (sub-pixel jitter rounded away)
+      // must not relayout the guest.
+      harness.manager.updateBounds("window-1", {
+        ...BASE_KEY,
+        bounds: rect,
+      });
+    }
+
+    expect(appliedAfterFirst).toBe(1);
+    expect(view.bounds).toHaveLength(1);
+    expect(view.bounds[0]).toEqual(rect);
+  });
+
+  it("applies each distinct rect in a streamed drag burst and lands on the last (BT-101)", () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    const view = harness.views[0];
+
+    const rects = [
+      { x: 0, y: 0, width: 400, height: 300 },
+      { x: 0, y: 0, width: 420, height: 310 },
+      { x: 2, y: 4, width: 460, height: 340 },
+    ];
+    rects.forEach((bounds) => {
+      harness.manager.updateBounds("window-1", { ...BASE_KEY, bounds });
+    });
+
+    expect(
+      view.bounds.map((bounds) => ({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      })),
+    ).toEqual(rects);
+  });
+
+  it("reapplies identical raw bounds when the viewport preset changes effective geometry (BT-101)", () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    const view = harness.views[0];
+    const containerRect = { x: 0, y: 0, width: 1200, height: 900 };
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: containerRect,
+    });
+    const appliedBeforePresetChange = view.bounds.length;
+
+    harness.manager.setViewportPreset("window-1", {
+      ...BASE_KEY,
+      viewportPreset: "mobile",
+    });
+
+    expect(view.bounds.length).toBe(appliedBeforePresetChange + 1);
+    expect(view.bounds.at(-1)).toMatchObject({ width: 390, height: 844 });
+  });
+
+  it("flushes one aggregate bounds_stream log per interval window (BT-101)", () => {
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => undefined);
+    try {
+      const harness = createHarnessWithOptions({
+        boundsStreamLogIntervalMs: 10,
+      });
+      harness.manager.upsertTile(
+        "window-1",
+        upsert(BASE_KEY, "http://localhost:3000", true),
+      );
+      infoSpy.mockClear();
+
+      harness.manager.updateBounds("window-1", {
+        ...BASE_KEY,
+        bounds: { x: 0, y: 0, width: 400, height: 300 },
+      });
+      // Identical echo coalesces; zero-area update is rejected.
+      harness.manager.updateBounds("window-1", {
+        ...BASE_KEY,
+        bounds: { x: 0, y: 0, width: 400, height: 300 },
+      });
+      harness.manager.updateBounds("window-1", {
+        ...BASE_KEY,
+        bounds: { x: 5, y: 5, width: 0, height: 0 },
+      });
+      vi.advanceTimersByTime(10);
+
+      const streamLogs = infoSpy.mock.calls.filter(
+        (call) => call[0] === "[browser-view] bounds stream",
+      );
+      expect(streamLogs).toHaveLength(1);
+      expect(streamLogs[0]?.[1]).toMatchObject({
+        kind: "bounds_stream",
+        windowMs: 10,
+        received: 3,
+        applied: 1,
+        coalesced: 1,
+        rejected: 1,
+        maxDeltaPx: null,
+      });
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 
   it("opens manual DevTools with a dedicated WebContents", () => {
@@ -2034,7 +2202,23 @@ describe("BrowserViewManager", () => {
     });
 
     expect(view.webContents.captureVisibleStates).toEqual([true]);
-    expect(view.visible).toBe(false);
+    // Two-phase park: pre-ack the view is untouched at real geometry; the
+    // ack then applies the offscreen posture.
+    expect(view.visible).toBe(true);
+    expect(view.bounds.at(-1)).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 500,
+      height: 300,
+    });
+    harness.manager.paintAckOverlay("command-palette");
+    expect(view.visible).toBe(true);
+    expect(view.bounds.at(-1)).toMatchObject({
+      x: -500,
+      y: -300,
+      width: 500,
+      height: 300,
+    });
     expect(result.restoredTiles).toEqual([]);
     expect(result.snapshots).toEqual([
       {
@@ -2069,9 +2253,10 @@ describe("BrowserViewManager", () => {
       overlayId: "dropdown",
       tiles: [BASE_KEY],
     });
+    harness.manager.paintAckOverlay("dialog");
 
     expect(view.webContents.captureVisibleStates).toEqual([true]);
-    expect(view.visible).toBe(false);
+    expect(view.visible).toBe(true);
     expect(harness.manager.snapshotForTests()[0]?.overlayOwnerIds).toEqual([
       "dialog",
       "dropdown",
@@ -2082,7 +2267,7 @@ describe("BrowserViewManager", () => {
         overlayId: "dropdown",
       }),
     ).toEqual({ restoredTiles: [] });
-    expect(view.visible).toBe(false);
+    expect(view.visible).toBe(true);
     expect(harness.manager.snapshotForTests()[0]?.overlayOwnerIds).toEqual([
       "dialog",
     ]);
@@ -2152,6 +2337,522 @@ describe("BrowserViewManager", () => {
     ]);
   });
 
+  it("serves occlusion from the live frame cache without capturePage (BT-202)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    // Visibility pass attached the feed; a compositor frame warms the slot.
+    expect(view.webContents.frameSubscriptions).toHaveLength(1);
+    view.webContents.emitCompositorFrame();
+
+    const result = await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+
+    expect(view.webContents.lifecycle).not.toContain("capturePage");
+    // The cache stores the ENCODED frame (JPEG), not the capturePage PNG.
+    expect(result.snapshots).toEqual([
+      {
+        ...BASE_KEY,
+        dataUrl: `data:image/jpeg;base64,${Buffer.from([1, 2, 3]).toString("base64")}`,
+        stale: false,
+      },
+    ]);
+    // Two-phase park (flicker fix): the view stays at REAL geometry until
+    // the renderer acknowledges the painted replacement frame.
+    expect(view.visible).toBe(true);
+    expect(view.bounds.at(-1)).toMatchObject({ x: 0, y: 0, width: 500, height: 300 });
+
+    harness.manager.paintAckOverlay("palette");
+
+    expect(view.bounds.at(-1)).toMatchObject({ x: -500, y: -300 });
+    expect(view.visible).toBe(true);
+  });
+
+  it("marks cached snapshots stale once the freshness window lapses (BT-202)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    view.webContents.emitCompositorFrame();
+    vi.advanceTimersByTime(400);
+
+    const result = await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+
+    expect(view.webContents.lifecycle).not.toContain("capturePage");
+    expect(result.snapshots[0]).toMatchObject({
+      dataUrl: `data:image/jpeg;base64,${Buffer.from([1, 2, 3]).toString("base64")}`,
+      stale: true,
+    });
+  });
+
+  it("parked tiles do not flip their snapshot stale on paint churn (BT-202 ⌘K white-out)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    view.webContents.emitCompositorFrame();
+    const result = await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+    harness.manager.paintAckOverlay("palette");
+    expect(result.snapshots[0]).toMatchObject({ stale: false });
+    expect(harness.snapshotInvalidations).toEqual([]);
+
+    // The parked view keeps compositing (by design); each frame used to
+    // emit an invalidation that made the renderer drop the frozen <img>
+    // and paint bare background — the reported white-out.
+    view.webContents.emit("paint");
+    view.webContents.emit("paint");
+
+    expect(harness.snapshotInvalidations).toEqual([]);
+
+    // Content-level changes still invalidate.
+    harness.manager.reloadTile("window-1", BASE_KEY);
+    expect(harness.snapshotInvalidations.length).toBeGreaterThanOrEqual(1);
+    expect(harness.snapshotInvalidations.at(-1)).toMatchObject({
+      reason: "reload",
+    });
+    expect(harness.manager.snapshotForTests()[0]).toMatchObject({
+      overlaySnapshotStale: true,
+    });
+  });
+
+  it("release restores the parked view to its real geometry (BT-202)", async () => {    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    view.webContents.emitCompositorFrame();
+    await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+    harness.manager.paintAckOverlay("palette");
+    expect(view.bounds.at(-1)).toMatchObject({ x: -500, y: -300 });
+
+    // Streamed renderer updates while the menu is open must not move the
+    // parked view.
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 40, y: 60, width: 520, height: 320 },
+    });
+    expect(view.bounds.at(-1)).toMatchObject({ x: -500, y: -300 });
+
+    expect(
+      harness.manager.releaseOverlay("window-1", { overlayId: "palette" }),
+    ).toEqual({ restoredTiles: [BASE_KEY] });
+    expect(view.bounds.at(-1)).toMatchObject({
+      x: 40,
+      y: 60,
+      width: 520,
+      height: 320,
+    });
+    expect(view.visible).toBe(true);
+  });
+
+  it("detaches the frame feed when the tile closes (BT-202)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    expect(view.webContents.frameSubscriptions).toHaveLength(1);
+
+    harness.manager.releaseTile("window-1", BASE_KEY);
+
+    expect(view.webContents.frameSubscriptionEnds).toBe(1);
+  });
+
+  it("never blanks the tile before the paint ack (flicker fix)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+
+    await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+
+    // Between occlusion and ack the native view must still be at its real
+    // rect showing live pixels — that is the whole point of the fix.
+    expect(view.bounds.at(-1)).toMatchObject({ x: 0, y: 0 });
+    expect(view.visible).toBe(true);
+  });
+
+  it("duplicate paint acks park exactly once (flicker fix)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+
+    harness.manager.paintAckOverlay("palette");
+    const parkedBounds = view.bounds.length;
+    harness.manager.paintAckOverlay("palette");
+    harness.manager.paintAckOverlay("palette");
+
+    expect(view.bounds.length).toBe(parkedBounds);
+    expect(view.bounds.at(-1)).toMatchObject({ x: -500, y: -300 });
+  });
+
+  it("a late ack after release never parks a restored view (flicker fix)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "palette",
+      tiles: [BASE_KEY],
+    });
+
+    // User dismissed the overlay before the ack round-trip landed.
+    harness.manager.releaseOverlay("window-1", { overlayId: "palette" });
+    harness.manager.paintAckOverlay("palette");
+
+    expect(view.bounds.every((b) => b.x >= 0 && b.y >= 0)).toBe(true);
+    expect(view.visible).toBe(true);
+  });
+
+  it("intercepts reserved chords and replays them into the host renderer (BT-302)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    harness.manager.setReservedChords(["mod+k"]);
+    const preventDefault = vi.fn();
+
+    view.webContents.emit(
+      "before-input-event",
+      { preventDefault },
+      { type: "keyDown", key: "k", meta: true },
+    );
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(harness.windows.get("window-1")?.webContents.sentInputEvents).toEqual(
+      [{ type: "keyDown", keyCode: "K", modifiers: ["meta"] }],
+    );
+  });
+
+  it("lets unreserved keystrokes through to the guest untouched (BT-302)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    harness.manager.setReservedChords(["mod+k"]);
+    const preventDefault = vi.fn();
+
+    // Plain typing and an unregistered chord both pass through.
+    view.webContents.emit(
+      "before-input-event",
+      { preventDefault },
+      { type: "keyDown", key: "k" },
+    );
+    view.webContents.emit(
+      "before-input-event",
+      { preventDefault },
+      { type: "keyDown", key: "t", control: true },
+    );
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(
+      harness.windows.get("window-1")?.webContents.sentInputEvents,
+    ).toEqual([]);
+  });
+
+  it("does not intercept chords that cannot be replayed to the host (BT-302)", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    const view = harness.views[0];
+    // Unprintable/unmappable keys are refused at registration time.
+    harness.manager.setReservedChords(["mod+mediatracknext"]);
+
+    const preventDefault = vi.fn();
+    view.webContents.emit(
+      "before-input-event",
+      { preventDefault },
+      { type: "keyDown", key: "MediaTrackNext", meta: true },
+    );
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(
+      harness.windows.get("window-1")?.webContents.sentInputEvents,
+    ).toEqual([]);
+  });
+
+  it("folds physical Control into mod on non-mac platforms (BT-302)", async () => {
+    const harness = createHarnessWithOptions({ hostPlatform: "other" });
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    harness.manager.setReservedChords(["ctrl+k"]);
+    const view = harness.views[0];
+    const preventDefault = vi.fn();
+
+    view.webContents.emit(
+      "before-input-event",
+      { preventDefault },
+      { type: "keyDown", key: "k", control: true },
+    );
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(harness.windows.get("window-1")?.webContents.sentInputEvents).toEqual(
+      [{ type: "keyDown", keyCode: "K", modifiers: ["control"] }],
+    );
+  });
+
+  function makeHiddenGuestsFixture(): {
+    readonly harness: Harness;
+    readonly views: FakeBrowserView[];
+  } {
+    const harness = createHarness();
+    const views: FakeBrowserView[] = [];
+    ["a", "b", "c"].forEach((suffix, index) => {
+      const key = {
+        ...BASE_KEY,
+        paneId: `pane-${suffix}`,
+        tileInstanceId: `tile-${suffix}`,
+        pageSessionId: `page-${suffix}`,
+      };
+      harness.manager.upsertTile(
+        "window-1",
+        upsert(key, "http://localhost:3000", true),
+      );
+      harness.manager.updateBounds("window-1", {
+        ...key,
+        bounds: { x: index * 10, y: 0, width: 400, height: 300 },
+      });
+      views.push(harness.views[index]);
+      // Distinct show times give distinct recency stamps.
+      vi.advanceTimersByTime(10);
+    });
+    return { harness, views };
+  }
+
+  /** Give a born-hidden guest real recency so MRU order is deterministic. */
+  function cycleGuestThroughVisible(
+    harness: Harness,
+    key: BrowserViewTileKey,
+  ): void {
+    // Upsert FIRST (creates the guest), then give it geometry —
+    // updateBounds is a no-op for unknown keys.
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(key, "http://localhost:3000", true),
+    );
+    harness.manager.updateBounds("window-1", {
+      ...key,
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+    vi.advanceTimersByTime(5);
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(key, "http://localhost:3000", false),
+    );
+  }
+
+  it("evicts the least-recently-visible guest once hidden guests exceed the cap (BT-401)", async () => {
+    const { harness, views } = makeHiddenGuestsFixture();
+    const keys = ["a", "b", "c"].map((suffix) => ({
+      ...BASE_KEY,
+      paneId: `pane-${suffix}`,
+      tileInstanceId: `tile-${suffix}`,
+      pageSessionId: `page-${suffix}`,
+    }));
+
+    // Hide in an order unrelated to show order; recency comes from SHOWS.
+    [keys[1], keys[2], keys[0]].forEach((key) => {
+      harness.manager.upsertTile(
+        "window-1",
+        upsert(key, "http://localhost:3000", false),
+      );
+    });
+    vi.advanceTimersByTime(1);
+
+    expect(harness.views).toHaveLength(3);
+    expect(views[0].webContents.closeCalls).toBe(0);
+
+    // A fourth hidden guest pushes the count one over the cap; the oldest
+    // SHOW (tile-a) must go.
+    const fourthKey = {
+      ...BASE_KEY,
+      paneId: "pane-d",
+      tileInstanceId: "tile-d",
+      pageSessionId: "page-d",
+    };
+    cycleGuestThroughVisible(harness, fourthKey);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(views[0].webContents.closeCalls).toBe(1);
+    expect(views[1].webContents.closeCalls).toBe(0);
+    expect(views[2].webContents.closeCalls).toBe(0);
+    expect(harness.manager.snapshotForTests()).toHaveLength(3);
+  });
+
+  it("exempts agent-postured guests from eviction (BT-402)", async () => {
+    const { harness, views } = makeHiddenGuestsFixture();
+    applyAgentBrowserBackgroundPosture(views[0].webContents);
+    const keys = ["a", "b", "c"].map((suffix) => ({
+      ...BASE_KEY,
+      paneId: `pane-${suffix}`,
+      tileInstanceId: `tile-${suffix}`,
+      pageSessionId: `page-${suffix}`,
+    }));
+    keys.forEach((key) => {
+      harness.manager.upsertTile(
+        "window-1",
+        upsert(key, "http://localhost:3000", false),
+      );
+    });
+
+    const fourthKey = {
+      ...BASE_KEY,
+      paneId: "pane-d",
+      tileInstanceId: "tile-d",
+      pageSessionId: "page-d",
+    };
+    cycleGuestThroughVisible(harness, fourthKey);
+
+    // A fifth hidden guest makes the evictable pool exceed the cap (the
+    // postured guest is exempt and does not count toward it).
+    const fifthKey = {
+      ...BASE_KEY,
+      paneId: "pane-e",
+      tileInstanceId: "tile-e",
+      pageSessionId: "page-e",
+    };
+    cycleGuestThroughVisible(harness, fifthKey);
+    await vi.advanceTimersByTimeAsync(1);
+
+    // The postured (agent-owned) guest survives even though it is the oldest.
+    expect(views[0].webContents.closeCalls).toBe(0);
+    expect(views[1].webContents.closeCalls).toBe(1);
+    expect(harness.manager.snapshotForTests()).toHaveLength(4);
+  });
+
+  it("revisiting an evicted guest builds a fresh one (silent reload, BT-403)", async () => {
+    const { harness, views } = makeHiddenGuestsFixture();
+    const keys = ["a", "b", "c"].map((suffix) => ({
+      ...BASE_KEY,
+      paneId: `pane-${suffix}`,
+      tileInstanceId: `tile-${suffix}`,
+      pageSessionId: `page-${suffix}`,
+    }));
+    keys.forEach((key) => {
+      harness.manager.upsertTile(
+        "window-1",
+        upsert(key, "http://localhost:3000", false),
+      );
+    });
+    const fourthKey = {
+      ...BASE_KEY,
+      paneId: "pane-d",
+      tileInstanceId: "tile-d",
+      pageSessionId: "page-d",
+    };
+    cycleGuestThroughVisible(harness, fourthKey);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(views[0].webContents.closeCalls).toBe(1);
+
+    // Revisit: renderer upserts the same key again; a FRESH guest is built.
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(keys[0], "http://localhost:3000", true),
+    );
+
+    expect(harness.views).toHaveLength(5);
+    expect(views[0].webContents.closeCalls).toBe(1);
+    const revived = harness.views[4];
+    expect(revived.webContents.id).not.toBe(views[0].webContents.id);
+    // The fresh guest has no geometry yet; the renderer's bounds bridge
+    // streams it right after upsert, which is what makes it visible.
+    harness.manager.updateBounds("window-1", {
+      ...keys[0],
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+    expect(revived.visible).toBe(true);
+  });
+
   it("restores overlay-owned views in reverse occlusion order", async () => {
     const harness = createHarness();
     const secondKey: BrowserViewTileKey = {
@@ -2188,33 +2889,6 @@ describe("BrowserViewManager", () => {
         })
         .restoredTiles.map((tile) => tile.tileInstanceId),
     ).toEqual(["tile-2", "tile-1"]);
-  });
-
-  it("invalidates a hidden snapshot when the page repaints", async () => {
-    const harness = createHarness();
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "http://localhost:3000", true),
-    );
-    harness.manager.updateBounds("window-1", {
-      ...BASE_KEY,
-      bounds: { x: 0, y: 0, width: 500, height: 300 },
-    });
-    const view = harness.views[0];
-    await harness.manager.occludeForOverlay("window-1", {
-      overlayId: "toast",
-      tiles: [BASE_KEY],
-    });
-
-    view.webContents.emit("paint");
-
-    expect(harness.snapshotInvalidations.at(-1)).toEqual({
-      ...BASE_KEY,
-      reason: "paint",
-    });
-    expect(harness.manager.snapshotForTests()[0]).toMatchObject({
-      overlaySnapshotStale: true,
-    });
   });
 
   it("guards browser history navigation with Chromium availability", () => {

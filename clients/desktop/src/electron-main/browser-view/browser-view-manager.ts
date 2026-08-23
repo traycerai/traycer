@@ -61,6 +61,26 @@ import type {
   BrowserStorageCaptureWebContents,
 } from "./browser-storage-state";
 import { browserLocalStorageSeedScript } from "./browser-storage-state";
+import { createBoundsStreamStats } from "./bounds-stream-stats";
+import { isAgentBrowserPostureActive } from "./agent-browser-posture";
+import {
+  hostSendKeyCodeForToken,
+  parseReservedChordToken,
+  reservedChordFromKeyEvent,
+  reservedChordMatchesEvent,
+  resolveReservedChordForPlatform,
+  type HostPlatform,
+  type ReservedChord,
+} from "../../ipc-contracts/reserved-chords";
+import {
+  TileFrameCache,
+  defaultTileFrameEncoder,
+  TILE_FRAME_JPEG_QUALITY,
+  TILE_FRAME_MAX_ATTACHED,
+  TILE_FRAME_MAX_DIMENSION,
+  TILE_FRAME_MIN_INTERVAL_MS,
+  TILE_FRAME_STALE_AFTER_MS,
+} from "./tile-frame-cache";
 import { describeLogError, log } from "../app/logger";
 import { BrowserAnnotationSession } from "./browser-annotation-session";
 import { BrowserDebugSession } from "./browser-debug-session";
@@ -71,6 +91,20 @@ import type {
 
 const DEBUG_SNAPSHOT_COALESCE_MS = 16;
 export const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
+// BT-101: aggregate window for the `bounds_stream` perf log. During a resize
+// drag the renderer streams rects every frame; per-call logging would flood
+// the lane, so outcomes accumulate here and flush once per window.
+export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
+
+const encodeCapturedTileFrame =
+  defaultTileFrameEncoder(TILE_FRAME_JPEG_QUALITY, TILE_FRAME_MAX_DIMENSION);
+
+// BT-401: hidden-but-bound tiles keep a full Chromium guest alive; past this
+// cap the least-recently-visible guests are destroyed and later rebuilt from
+// their persisted URL (silent reload) on the next visit.
+export const HIDDEN_GUEST_EVICTION_CAP = 3;
+/** Deferred so a switch's hide→show pair settles before the sweep counts. */
+const EVICTION_SWEEP_DELAY_MS = 0;
 // Ticket 02 fixup: bounds how long a claimed sibling's `closeEntry` waits on
 // another tile's in-flight handoff capture before tearing down its own
 // `webContents` regardless - a hung capture must not block quit.
@@ -151,6 +185,13 @@ export interface BrowserViewWebContents {
       details: BrowserViewWindowOpenDetails,
     ) => BrowserViewWindowOpenResult,
   ): void;
+  /**
+   * Compositor frame feed for the tile-frame cache (BT-201/BT-202). The real
+   * Electron signature also accepts an `onlyDirty` first argument; the
+   * structural single-callback form is what the manager uses.
+   */
+  beginFrameSubscription(callback: (image: BrowserViewCapturedImage) => void): void;
+  endFrameSubscription(): void;
   on(event: string, listener: (...args: unknown[]) => void): void;
   off(event: string, listener: (...args: unknown[]) => void): void;
 }
@@ -228,6 +269,12 @@ export interface BrowserViewHostWebContents {
     event: "did-start-navigation" | "render-process-gone",
     listener: (...args: unknown[]) => void,
   ): void;
+  /** BT-302: replay reserved app chords into the host renderer. */
+  sendInputEvent(event: {
+    readonly type: "keyDown";
+    readonly keyCode: string;
+    readonly modifiers?: readonly string[];
+  }): void;
 }
 
 export interface BrowserViewWindow {
@@ -359,6 +406,10 @@ export interface BrowserViewManagerOptions {
   ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>;
   readonly releaseGraceMs: number;
   readonly electronCreateDelayMs: number;
+  /** Flush window for the aggregate `bounds_stream` perf log. */
+  readonly boundsStreamLogIntervalMs: number;
+  /** Platform used to resolve reserved chords (BT-301). */
+  readonly hostPlatform: HostPlatform;
 }
 
 export interface BrowserViewScheduledTask {
@@ -383,6 +434,15 @@ interface BrowserViewEntry {
   parentWindowId: string | null;
   desiredVisible: boolean;
   bounds: BrowserViewBounds | null;
+  /**
+   * BT-101: last effective rect actually handed to `view.setBounds`. Identical
+   * follow-up updates coalesce to a no-op so a streamed drag burst does not
+   * relayout the guest per frame for unchanged geometry. Invalidated when
+   * anything else moves the view directly (PiP offscreen parking).
+   */
+  lastAppliedBounds: BrowserViewBounds | null;
+  /** BT-401: when this guest was last visible; eviction evicts oldest first. */
+  lastVisibleAtMs: number;
   requestedUrl: string;
   currentUrl: string;
   currentTitle: string;
@@ -396,6 +456,14 @@ interface BrowserViewEntry {
   viewportPreset: BrowserViewViewportPresetId;
   overlayOwnerIds: string[];
   overlaySnapshotStale: boolean;
+  /**
+   * BT-202 two-phase park: true between serving the replacement frame and
+   * the renderer's paint acknowledgement. While pending, the view stays at
+   * its real onscreen geometry so the page never blanks.
+   */
+  overlayAwaitingPaintAck: boolean;
+  /** Set once the parked posture is actually applied (post-ack). */
+  overlayParked: boolean;
   /** Last `visible` value logged by `applyEntryVisibility`, so forensics logging fires only on change. */
   lastLoggedVisible: boolean | null;
   /**
@@ -612,6 +680,30 @@ export class BrowserViewManager {
     [];
   private primaryProfileVisitSequence = 0;
   private pipCaptureEntry: BrowserViewEntry | null = null;
+  private readonly boundsStreamLogIntervalMs: number;
+  private readonly boundsStreamStats = createBoundsStreamStats();
+  private boundsStreamLogTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastFrameCacheStatsSignature: string | null = null;
+  private reservedChords: readonly ReservedChord[] = [];
+  private readonly hostPlatform: HostPlatform;
+  private evictionSweepTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly evictedKeyIdsLog: string[] = [];
+  /**
+   * BT-202: per-tile rolling frame cache feeding overlay occlusion. Slots are
+   * keyed by `entryKeyId`; attached while a tile is bound to a live window.
+   */
+  private readonly tileFrames = new TileFrameCache({
+    minIntervalMs: TILE_FRAME_MIN_INTERVAL_MS,
+    staleAfterMs: TILE_FRAME_STALE_AFTER_MS,
+    maxDimension: TILE_FRAME_MAX_DIMENSION,
+    jpegQuality: TILE_FRAME_JPEG_QUALITY,
+    maxAttached: TILE_FRAME_MAX_ATTACHED,
+    onEvict: (key) => {
+      log.warn("[browser-view] frame cache slot evicted (cap)", { keyId: key });
+    },
+    now: () => Date.now(),
+    encode: encodeCapturedTileFrame,
+  });
 
   constructor(options: BrowserViewManagerOptions) {
     this.createView = options.createView;
@@ -639,6 +731,8 @@ export class BrowserViewManager {
     this.capturePrimaryProfileLocalStorageFromBrowser =
       options.capturePrimaryProfileLocalStorage;
     this.electronCreateDelayMs = options.electronCreateDelayMs;
+    this.boundsStreamLogIntervalMs = options.boundsStreamLogIntervalMs;
+    this.hostPlatform = options.hostPlatform;
     this.offWindowChange = options.onWindowChange(() => {
       this.reconcileWindowVisibility();
     });
@@ -690,6 +784,10 @@ export class BrowserViewManager {
     }
     this.attachToCurrentWindow(entry);
     this.applyEntryVisibility(entry);
+    // BT-401: every upsert can change the hidden set (a tab switch hides the
+    // outgoing tile; a first open can land hidden). The sweep is coalesced,
+    // so this is cheap.
+    this.scheduleEvictionSweep();
   }
 
   async createBackgroundTab(
@@ -952,6 +1050,9 @@ export class BrowserViewManager {
 
   releaseTile(windowId: string, input: BrowserViewTileKey): void {
     const keyId = entryKeyId({ ...input, windowId });
+    // Tile close stops the frame feed even though the durable WebContents
+    // may live on unbound (ticket 05): no tile, no compositor contract.
+    this.tileFrames.detach(keyId);
     const entry = this.entriesByKey.get(keyId);
     if (entry === undefined) {
       return;
@@ -1609,6 +1710,15 @@ export class BrowserViewManager {
     this.offWindowChange();
     this.offDownloadChange();
     this.offCertificateError();
+    if (this.boundsStreamLogTimer !== null) {
+      clearTimeout(this.boundsStreamLogTimer);
+      this.boundsStreamLogTimer = null;
+    }
+    if (this.evictionSweepTimer !== null) {
+      clearTimeout(this.evictionSweepTimer);
+      this.evictionSweepTimer = null;
+    }
+    this.tileFrames.detachAll();
     for (const entry of Array.from(this.entriesByRuntimeKey.values())) {
       void this.closeEntry(entry, "gui-quit");
     }
@@ -1735,6 +1845,8 @@ export class BrowserViewManager {
       parentWindowId: null,
       desiredVisible: false,
       bounds: null,
+      lastAppliedBounds: null,
+      lastVisibleAtMs: 0,
       requestedUrl,
       currentUrl: requestedUrl,
       currentTitle: "",
@@ -1753,6 +1865,8 @@ export class BrowserViewManager {
       viewportPreset,
       overlayOwnerIds: [],
       overlaySnapshotStale: false,
+      overlayAwaitingPaintAck: false,
+      overlayParked: false,
       lastLoggedVisible: null,
       rendererResetPending: false,
       control: null,
@@ -1812,6 +1926,9 @@ export class BrowserViewManager {
     this.cancelDebugSnapshot(entry);
     const previousKeyId = entryKeyId(entry.key);
     const nextKeyId = entryKeyId(key);
+    // The frame-cache slot is keyed by entry key; drop the stale slot so the
+    // next visibility pass re-attaches under the new key (BT-202).
+    this.tileFrames.detach(previousKeyId);
     this.entriesByKey.delete(previousKeyId);
     entry.key = key;
     this.entriesByKey.set(nextKeyId, entry);
@@ -1980,6 +2097,16 @@ export class BrowserViewManager {
   ): void {
     const input = readBeforeInput(args);
     if (input === null) return;
+    // BT-302: reserved app chords win before the guest sees them. The chord
+    // set is registered by the renderer; only interceptable+forwardable
+    // chords are claimed, so pages keep everything the app cannot replay.
+    const reserved = this.matchReservedChord(input);
+    if (reserved !== null) {
+      preventInputDefault(args);
+      this.handleNativeUserInput(entry, "reserved app chord");
+      this.forwardReservedChordToHostWindow(entry, reserved);
+      return;
+    }
     this.handleNativeUserInput(entry, "user took over");
     if (!input.modifier) return;
     const step = browserZoomStepForKey(input.key);
@@ -1990,6 +2117,78 @@ export class BrowserViewManager {
       return;
     }
     this.applyZoomStep(entry, step);
+  }
+
+  private matchReservedChord(input: {
+    readonly key: string;
+    readonly control: boolean;
+    readonly meta: boolean;
+    readonly shift: boolean;
+    readonly alt: boolean;
+  }): ReservedChord | null {
+    if (this.reservedChords.length === 0) return null;
+    const event = reservedChordFromKeyEvent(
+      {
+        key: input.key,
+        control: input.control,
+        meta: input.meta,
+        shift: input.shift,
+        alt: input.alt,
+      },
+      this.hostPlatform,
+    );
+    if (event === null) return null;
+    return (
+      this.reservedChords.find((chord) =>
+        reservedChordMatchesEvent(chord, event),
+      ) ?? null
+    );
+  }
+
+  /**
+   * Replay a matched chord into the owning window's host renderer so its own
+   * keybindings fire as if the guest never had focus. Unforwardable chords
+   * are never intercepted in the first place (see matchReservedChord's
+   * keyCode gate at registration time).
+   */
+  private forwardReservedChordToHostWindow(
+    entry: BrowserViewEntry,
+    chord: ReservedChord,
+  ): void {
+    const keyCode = hostSendKeyCodeForToken(chord.key);
+    if (keyCode === null) return;
+    const window = this.getWindow(entry.key.windowId);
+    const hostWebContents =
+      window === null || window.isDestroyed() ? null : window.webContents;
+    if (hostWebContents === null) return;
+    const modifiers: string[] = [];
+    if (chord.mod) modifiers.push(this.hostPlatform === "darwin" ? "meta" : "control");
+    if (chord.ctrl) modifiers.push("control");
+    if (chord.shift) modifiers.push("shift");
+    if (chord.alt) modifiers.push("alt");
+    hostWebContents.sendInputEvent({
+      type: "keyDown",
+      keyCode,
+      modifiers,
+    });
+  }
+
+  /** BT-303 wire-in: replace the registered chord set at runtime. */
+  setReservedChords(tokens: readonly string[]): void {
+    const parsed: ReservedChord[] = [];
+    for (const token of tokens) {
+      if (typeof token !== "string") continue;
+      const base = parseReservedChordToken(token);
+      if (base === null) continue;
+      // Only claim chords we can actually replay to the host window.
+      if (hostSendKeyCodeForToken(base.key) === null) continue;
+      parsed.push(resolveReservedChordForPlatform(base, this.hostPlatform));
+    }
+    this.reservedChords = parsed;
+    log.info("[browser-view] reserved chords updated", {
+      count: parsed.length,
+      tokens: tokens.filter((token) => typeof token === "string"),
+    });
   }
 
   private handleWindowOpen(
@@ -2150,19 +2349,31 @@ export class BrowserViewManager {
     if (entry.overlayOwnerIds.includes(overlayId)) return null;
 
     if (entry.overlayOwnerIds.length > 0) {
+      // Already parked for another overlay; the view stays offscreen-visible
+      // and no new pixels are needed.
       entry.overlayOwnerIds.push(overlayId);
-      this.applyEntryVisibility(entry);
       return null;
     }
 
-    let dataUrl: string | null = null;
-    try {
-      dataUrl = (await entry.view.webContents.capturePage()).toDataURL();
-    } catch (err) {
-      log.warn("[browser-view] overlay snapshot capture failed", {
-        error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
-      });
+    // BT-202: paint from the rolling frame cache when it has a slot. This is
+    // the instant path (no capture round-trip); `stale` reports whether the
+    // cached frame is older than the freshness window. Only a cold cache
+    // (first-ever occlusion for this tile, or the feed never ran) pays for
+    // capturePage.
+    const cached = this.tileFrames.get(keyId);
+    let dataUrl: string | null = cached?.dataUrl ?? null;
+    let stale = false;
+    if (cached !== null) {
+      stale = !this.tileFrames.isFresh(keyId);
+    } else {
+      try {
+        dataUrl = (await entry.view.webContents.capturePage()).toDataURL();
+      } catch (err) {
+        log.warn("[browser-view] overlay snapshot capture failed", {
+          error: describeLogError(err),
+          webContentsId: entry.view.webContents.id,
+        });
+      }
     }
 
     const activeKeyIds = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
@@ -2172,12 +2383,72 @@ export class BrowserViewManager {
 
     currentEntry.overlayOwnerIds.push(overlayId);
     currentEntry.overlaySnapshotStale = false;
-    currentEntry.view.setVisible(false);
+    // BT-202 flicker fix: DO NOT park here. The native view must stay on
+    // screen until the renderer has DECODED and PAINTED the replacement
+    // frame — otherwise there is a guaranteed multi-frame window where the
+    // page pixels are gone but nothing covers the tile yet (the reported
+    // empty-state flash). The renderer acknowledges via `paintAckOverlay`
+    // once img.decode() settles; only then do we move the view offscreen.
+    currentEntry.overlayAwaitingPaintAck = true;
     return {
       ...toTileKey(currentEntry.key),
       dataUrl,
-      stale: false,
+      stale,
     };
+  }
+
+  /**
+   * BT-202: instead of hiding an occluded view (which stops its compositor
+   * and freezes the frame cache forever), park it fully offscreen while
+   * remaining visible. The renderer paints the snapshot over the vacated
+   * region exactly as before; under long-lived menus the cache keeps
+   * converging toward fresh content instead of freezing at occlusion time.
+   * Unusable geometry falls back to the legacy hide.
+   */
+  /**
+   * BT-202 flicker fix: renderer-side acknowledgement that the replacement
+   * frame for `overlayId`'s tiles is decoded and on screen. Parks every
+   * still-owned, still-pending entry exactly once. Late or duplicate acks —
+   * including after a release — are silent no-ops.
+   */
+  paintAckOverlay(overlayId: string): void {
+    const keyIds = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
+    for (const keyId of keyIds) {
+      const entry = this.entriesByKey.get(keyId);
+      if (entry === undefined) continue;
+      if (!entry.overlayOwnerIds.includes(overlayId)) continue;
+      if (!entry.overlayAwaitingPaintAck) continue;
+      entry.overlayAwaitingPaintAck = false;
+      this.parkEntryForOverlay(entry);
+    }
+  }
+
+  private parkEntryForOverlay(entry: BrowserViewEntry): void {
+    if (
+      entry.bounds === null ||
+      entry.bounds.width <= 0 ||
+      entry.bounds.height <= 0
+    ) {
+      entry.view.setVisible(false);
+      return;
+    }
+    const effective = effectiveViewportBounds(entry.bounds, entry.viewportPreset);
+    if (effective.width <= 0 || effective.height <= 0) {
+      entry.view.setVisible(false);
+      return;
+    }
+    entry.view.setBounds({
+      x: -effective.width,
+      y: -effective.height,
+      width: effective.width,
+      height: effective.height,
+    });
+    // The view now sits offscreen; forget the last onscreen rect so release
+    // re-applies real geometry instead of coalescing against a stale one.
+    entry.lastAppliedBounds = null;
+    entry.overlayParked = true;
+    entry.overlayAwaitingPaintAck = false;
+    entry.view.setVisible(true);
   }
 
   private releaseOverlayEntries(
@@ -2194,10 +2465,11 @@ export class BrowserViewManager {
           (ownerId) => ownerId !== overlayId,
         );
         if (entry.overlayOwnerIds.length > 0) {
-          this.applyEntryVisibility(entry);
           return [];
         }
         entry.overlaySnapshotStale = false;
+        entry.overlayAwaitingPaintAck = false;
+        this.applyEntryBounds(entry);
         this.applyEntryVisibility(entry);
         return [toTileKey(entry.key)];
       });
@@ -2486,6 +2758,10 @@ export class BrowserViewManager {
         width: bounds.width,
         height: bounds.height,
       });
+      // The view now sits offscreen; forget the last onscreen rect so the
+      // next `applyEntryBounds` re-applies real geometry instead of
+      // coalescing against a rect that no longer describes the view.
+      entry.lastAppliedBounds = null;
       entry.view.setVisible(true);
     }
     log.info("[browser-view] pip capture prepared", {
@@ -2589,15 +2865,176 @@ export class BrowserViewManager {
   }
 
   private applyEntryBounds(entry: BrowserViewEntry): void {
+    // Parked under an overlay (BT-202): record nothing here — the renderer
+    // may keep streaming rects while a menu is open, and applying them would
+    // yank the offscreen-parked view back over the popover. The stored
+    // rect is applied by the release path.
+    if (entry.overlayOwnerIds.length > 0) return;
     if (entry.bounds === null) return;
     const bounds = effectiveViewportBounds(entry.bounds, entry.viewportPreset);
-    if (bounds.width > 0 && bounds.height > 0) {
-      entry.view.setBounds(bounds);
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      this.boundsStreamStats.recordRejected();
+      this.armBoundsStreamLogFlush();
+      return;
     }
+    if (
+      entry.lastAppliedBounds !== null &&
+      boundsAreIdentical(bounds, entry.lastAppliedBounds)
+    ) {
+      this.boundsStreamStats.recordCoalesced();
+      this.armBoundsStreamLogFlush();
+      return;
+    }
+    const maxDeltaPx =
+      entry.lastAppliedBounds === null
+        ? null
+        : boundsMaxComponentDelta(entry.lastAppliedBounds, bounds);
+    entry.view.setBounds(bounds);
+    entry.lastAppliedBounds = bounds;
+    this.boundsStreamStats.recordApplied(maxDeltaPx);
+    this.armBoundsStreamLogFlush();
+  }
+
+  /**
+   * BT-101: emit one aggregate `bounds_stream` line per interval window while
+   * bounds updates are flowing. The renderer streams rects every animation
+   * frame during a resize drag; this keeps the perf lane readable while still
+   * exposing call rate, coalesce ratio, and the largest geometry jump.
+   */
+  private armBoundsStreamLogFlush(): void {
+    const flush = (): void => {
+      this.boundsStreamLogTimer = null;
+      const payload = this.boundsStreamStats.drain(
+        this.boundsStreamLogIntervalMs,
+      );
+      if (payload === null) return;
+      log.info("[browser-view] bounds stream", {
+        kind: "bounds_stream",
+        ...payload,
+      });
+      this.logFrameCacheStats();
+    };
+    if (this.boundsStreamLogTimer !== null) return;
+    if (!(this.boundsStreamLogIntervalMs > 0)) {
+      flush();
+      return;
+    }
+    this.boundsStreamLogTimer = setTimeout(
+      flush,
+      this.boundsStreamLogIntervalMs,
+    );
+  }
+
+  /** BT-205: frame-cache counters on the perf lane, deduped while idle. */
+  private logFrameCacheStats(): void {
+    const stats = this.tileFrames.stats();
+    const signature = JSON.stringify(stats);
+    if (signature === this.lastFrameCacheStatsSignature) return;
+    this.lastFrameCacheStatsSignature = signature;
+    log.info("[browser-view] frame cache stats", {
+      kind: "frame_cache_stats",
+      ...stats,
+    });
+  }
+
+  /** Forensics hook for tests and support bundles. */
+  frameCacheStats(): ReturnType<TileFrameCache["stats"]> {
+    return this.tileFrames.stats();
+  }
+
+  /**
+   * BT-401: coalesced macrotask sweep. A tab switch produces hide(A) then
+   * show(B) in quick succession; deferring to a zero-delay timeout lets the
+   * pair settle so re-shown guests never count as hidden.
+   */
+  private scheduleEvictionSweep(): void {
+    if (this.evictionSweepTimer !== null) return;
+    this.evictionSweepTimer = setTimeout(() => {
+      this.evictionSweepTimer = null;
+      this.runEvictionSweep();
+    }, EVICTION_SWEEP_DELAY_MS);
+  }
+
+  private runEvictionSweep(): void {
+    const hidden: BrowserViewEntry[] = [];
+    for (const entry of this.entriesByRuntimeKey.values()) {
+      if (entry.lastLoggedVisible === true) continue;
+      if (entry.status === "dead") continue;
+      if (this.isEntryEvictionExempt(entry)) continue;
+      hidden.push(entry);
+    }
+    const excess = hidden.length - HIDDEN_GUEST_EVICTION_CAP;
+    if (excess <= 0) return;
+    hidden.sort((left, right) => left.lastVisibleAtMs - right.lastVisibleAtMs);
+    const victims = hidden.slice(0, excess);
+    log.info("[browser-view] evicting hidden guests", {
+      cap: HIDDEN_GUEST_EVICTION_CAP,
+      hiddenCount: hidden.length,
+      evicting: victims.map((victim) => entryKeyId(victim.key)),
+    });
+    victims.forEach((victim) => {
+      // BT-403 silent reload: the renderer keeps the tile's last known
+      // title/favicon/URL from prior status events; the next upsert for this
+      // key creates a fresh guest and shows its normal loading skeleton.
+      this.evictedKeyIdsLog.push(entryKeyId(victim.key));
+      victim.status = "dead";
+      victim.statusReason = "evicted-hidden";
+      this.emitStatus(victim);
+      void this.closeEntry(victim, null);
+    });
+  }
+
+  /** BT-501: applied geometry per entry for the E2E debug surface. */
+  debugBoundsByKeyId(): Record<
+    string,
+    { x: number; y: number; width: number; height: number }
+  > {
+    const out: Record<
+      string,
+      { x: number; y: number; width: number; height: number }
+    > = {};
+    for (const [keyId, entry] of this.entriesByKey) {
+      if (entry.lastAppliedBounds === null) continue;
+      out[keyId] = { ...entry.lastAppliedBounds };
+    }
+    return out;
+  }
+
+  /** BT-501: entries currently parked under an overlay owner. */
+  debugOccludedKeyIds(): readonly string[] {
+    const out: string[] = [];
+    for (const [keyId, entry] of this.entriesByKey) {
+      if (entry.overlayOwnerIds.length > 0) out.push(keyId);
+    }
+    return out;
+  }
+
+  /** BT-501: guests evicted by the hidden-guest LRU since startup. */
+  debugEvictedKeyIds(): readonly string[] {
+    return this.evictedKeyIdsLog;
+  }
+
+  private isEntryEvictionExempt(entry: BrowserViewEntry): boolean {
+    if (entry.overlayOwnerIds.length > 0) return true; // parked (BT-202)
+    if (entry.control !== null) return true; // agent holds control grant
+    if (entry.annotationSession !== null) return true;
+    if (this.pipCaptureEntry === entry) return true;
+    if (isAgentBrowserPostureActive(entry.view.webContents)) return true;
+    return false;
   }
 
   private applyEntryVisibility(entry: BrowserViewEntry): void {
     const window = this.getWindow(entry.key.windowId);
+    // A tile parked under an active overlay (BT-202) keeps its
+    // offscreen-visible posture so its compositor keeps feeding the frame
+    // cache; visibility is recomputed when the last owner releases. A dead
+    // tile must never stay parked-visible, so it falls through instead.
+    if (
+      entry.overlayOwnerIds.length > 0 &&
+      entry.status !== "dead"
+    ) {
+      return;
+    }
     const hasUsableBounds =
       entry.bounds !== null &&
       entry.bounds.width > 0 &&
@@ -2612,6 +3049,7 @@ export class BrowserViewManager {
       !window.isDestroyed() &&
       window.isVisible() &&
       !window.isMinimized();
+    const wasVisible = entry.lastLoggedVisible;
     if (entry.lastLoggedVisible !== visible) {
       log.info("[browser-view] visibility changed", {
         keyId: entryKeyId(entry.key),
@@ -2629,6 +3067,51 @@ export class BrowserViewManager {
       entry.lastLoggedVisible = visible;
     }
     entry.view.setVisible(visible);
+    this.syncTileFrameFeed(entry, window);
+    if (visible) {
+      entry.lastVisibleAtMs = Date.now();
+    } else if (wasVisible === true) {
+      // A guest just went from visible to hidden — it may now count against
+      // the eviction cap. Deferred so a switch's hide→show pair settles.
+      this.scheduleEvictionSweep();
+    }
+  }
+
+  /**
+   * BT-202: keep a frame-cache slot subscribed exactly while the tile's
+   * guest can plausibly produce compositor frames - bound to a live window,
+   * wanted visible, usable geometry, not dead. Hidden or detached tiles drop
+   * their subscription; re-attaching is cheap.
+   */
+  private syncTileFrameFeed(
+    entry: BrowserViewEntry,
+    window: BrowserViewWindow | null,
+  ): void {
+    const keyId = entryKeyId(entry.key);
+    const feedLive =
+      entry.desiredVisible &&
+      !entry.rendererResetPending &&
+      entry.bounds !== null &&
+      entry.bounds.width > 0 &&
+      entry.bounds.height > 0 &&
+      entry.status !== "dead" &&
+      !entry.view.webContents.isDestroyed() &&
+      window !== null &&
+      !window.isDestroyed();
+    if (!feedLive) {
+      this.tileFrames.detach(keyId);
+      return;
+    }
+    this.tileFrames.attach(keyId, {
+      beginFrameSubscription: (callback) => {
+        entry.view.webContents.beginFrameSubscription((image) => {
+          callback(image);
+        });
+      },
+      endFrameSubscription: () => {
+        entry.view.webContents.endFrameSubscription();
+      },
+    });
   }
 
   private reconcileWindowVisibility(): void {
@@ -2656,6 +3139,7 @@ export class BrowserViewManager {
     handoffReason: AgentBrowserViewTileHandoffChange["reason"] | null,
   ): Promise<void> {
     const keyId = entryKeyId(entry.key);
+    this.tileFrames.detach(keyId);
     // Claim this entry synchronously, before the `await` below yields
     // control: `closeEntry` is now async (the handoff capture needs a live
     // `webContents`), and every one of its three call sites fires-and-
@@ -2754,6 +3238,14 @@ export class BrowserViewManager {
     reason: string,
   ): void {
     if (entry.overlayOwnerIds.length === 0) return;
+    // BT-202 fix (⌘K white-out): an overlay-parked view stays COMPOSITED on
+    // purpose — that is what keeps its frame cache converging toward fresh
+    // pixels — so per-frame paint churn under an open overlay must not flip
+    // the displayed snapshot to stale. The renderer hides the frozen frame
+    // entirely once stale, leaving only bg-background: exactly the blank
+    // tile users saw behind the command palette. Content-level changes
+    // (navigation, title, crash, load lifecycle) still invalidate.
+    if (reason === "paint") return;
     if (!entry.overlaySnapshotStale) {
       entry.overlaySnapshotStale = true;
     }
@@ -3119,6 +3611,30 @@ function effectiveViewportBounds(
   };
 }
 
+function boundsAreIdentical(
+  left: BrowserViewBounds,
+  right: BrowserViewBounds,
+): boolean {
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+}
+
+function boundsMaxComponentDelta(
+  left: BrowserViewBounds,
+  right: BrowserViewBounds,
+): number {
+  return Math.max(
+    Math.abs(left.x - right.x),
+    Math.abs(left.y - right.y),
+    Math.abs(left.width - right.width),
+    Math.abs(left.height - right.height),
+  );
+}
+
 function toTileKey(key: BrowserViewEntryKey): BrowserViewTileKey {
   return {
     viewTabId: key.viewTabId,
@@ -3210,6 +3726,10 @@ function readFoundInPageResult(args: readonly unknown[]): {
 
 function readBeforeInput(args: readonly unknown[]): {
   readonly key: string;
+  readonly control: boolean;
+  readonly meta: boolean;
+  readonly shift: boolean;
+  readonly alt: boolean;
   readonly modifier: boolean;
 } | null {
   const value = args.find(
@@ -3220,9 +3740,15 @@ function readBeforeInput(args: readonly unknown[]): {
   const key = value.key;
   if (typeof key !== "string") return null;
   if (typeof value.type === "string" && value.type !== "keyDown") return null;
+  const control = value.control === true;
+  const meta = value.meta === true;
   return {
     key,
-    modifier: value.control === true || value.meta === true,
+    control,
+    meta,
+    shift: value.shift === true,
+    alt: value.alt === true,
+    modifier: control || meta || value.shift === true || value.alt === true,
   };
 }
 

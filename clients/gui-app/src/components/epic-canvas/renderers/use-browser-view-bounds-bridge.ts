@@ -9,7 +9,6 @@ import type {
   BrowserViewBoundsUpdate,
   BrowserViewTileKey,
 } from "@/lib/browser-view/desktop-browser-view";
-import { PANEL_RESIZING_CLASS_NAME } from "@/lib/layout/panel-resizing-class";
 
 export interface BrowserViewBoundsBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
@@ -26,6 +25,16 @@ interface UseBrowserViewBoundsBridgeArgs {
  * Shared bounds + overlay-registry bridge for every Electron tile.
  * Both user and agent tiles punch through popovers unless the overlay
  * coordinator knows their live rect, so this hook is capability-agnostic.
+ *
+ * Bounds stream CONTINUOUSLY, including through panel resize drags (BT-102):
+ * the previous behavior froze sends while the layout's resizing class was on
+ * `<html>`, which left the native view at its pre-drag rect compositing over
+ * neighboring tiles until pointer-up. Every ResizeObserver tick updates the
+ * overlay registry immediately and hands an rAF-coalesced rect to the main
+ * process, which drops redundant geometry itself (BT-101). The one-frame IPC
+ * trail this produces during a drag is the accepted physics of the
+ * WebContentsView architecture (ADR 0001 R1); re-tune only if BT-103
+ * measurement shows guest relayout jank at display rate.
  */
 export function useBrowserViewBoundsBridge(
   args: UseBrowserViewBoundsBridgeArgs,
@@ -41,16 +50,14 @@ export function useBrowserViewBoundsBridge(
     });
 
     let frameId: number | null = null;
-    let frozen = document.documentElement.classList.contains(
-      PANEL_RESIZING_CLASS_NAME,
-    );
 
-    const sendBounds = (force: boolean): void => {
+    const sendBounds = (): void => {
       const rect = surface.getBoundingClientRect();
       const bounds = readElementBounds(rect);
       if (bounds.width <= 0 || bounds.height <= 0) return;
-      if (frozen && !force) return;
       updateBrowserOverlayTileRect(tileKey, rectFromDomRect(rect));
+      // Cancel-and-reschedule so a burst of RO ticks during one frame sends
+      // only the newest rect (latest-wins), never a superseded one.
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       frameId = window.requestAnimationFrame(() => {
         frameId = null;
@@ -61,35 +68,19 @@ export function useBrowserViewBoundsBridge(
     };
 
     const resizeObserver = new ResizeObserver(() => {
-      sendBounds(false);
-    });
-    const mutationObserver = new MutationObserver(() => {
-      const nextFrozen = document.documentElement.classList.contains(
-        PANEL_RESIZING_CLASS_NAME,
-      );
-      if (frozen && !nextFrozen) {
-        frozen = false;
-        sendBounds(true);
-        return;
-      }
-      frozen = nextFrozen;
+      sendBounds();
     });
     resizeObserver.observe(surface);
-    mutationObserver.observe(document.documentElement, {
-      attributeFilter: ["class"],
-      attributes: true,
-    });
     window.addEventListener("resize", handleWindowResize, { passive: true });
-    sendBounds(false);
+    sendBounds();
 
     function handleWindowResize(): void {
-      sendBounds(false);
+      sendBounds();
     }
 
     return () => {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
-      mutationObserver.disconnect();
       window.removeEventListener("resize", handleWindowResize);
       unregisterOverlayTile();
     };
