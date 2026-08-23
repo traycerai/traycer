@@ -526,9 +526,27 @@ export function useHostCompatibilityAuthorityReport(
       (verdict.anchoredAt === "success"
         ? compatAnchorAtSuccess.get(hostId)
         : compatAnchorAtFailure.get(hostId)) ?? null;
-    const key = `${hostId}\u0000${verdict.code ?? "compatible"}\u0000${
-      verdict.hostVersion ?? ""
-    }\u0000${probedOnSessionId ?? ""}`;
+    const key = [
+      hostId,
+      verdict.code ?? "compatible",
+      verdict.hostVersion ?? "",
+      probedOnSessionId ?? "",
+      // THE REQUIREMENT IS PART OF THE IDENTITY, not decoration. On the epoch
+      // path `hostVersion` is always null and the code is a bare
+      // `INCOMPATIBLE`, so without this the first four segments are constant
+      // for a given host+session and a materially different verdict - a raised
+      // floor, a requirement that previously failed to parse and dropped to
+      // null - reads as a duplicate and is never reported to the authority.
+      //
+      // The session anchor already covers the common case (a host that updates
+      // gets a new session, hence a new key), which is why this layer is the
+      // second line rather than the first; `leaseEquals` is the one that
+      // actually gates delivery. It is included anyway because the two cases
+      // the anchor does NOT cover are both real: a null-anchored local
+      // transport, and a re-parse that recovers a requirement within one
+      // session.
+      clientCompatibilityKey(verdict.clientCompatibility),
+    ].join("\u0000");
     if (reportedRef.current === key) {
       return;
     }
@@ -576,6 +594,32 @@ export function useHostStatusReprobeOnRowVersionChange(
       exact: true,
     });
   }, [queryClient, hostId, version]);
+}
+
+/**
+ * The identifying members of a structured epoch requirement, as one key
+ * segment.
+ *
+ * Every member is included rather than just the epoch: `minimumKnownClientAppVersion`
+ * and `upgradeChannel` are what the dialog actually PRINTS, so a change in
+ * either is a change the user would see, and `observedClientAppVersionStatus`
+ * selects between the two body copies. `\u0001` separates members because
+ * `\u0000` already separates the outer segments.
+ */
+function clientCompatibilityKey(
+  requirement: ClientCompatibilityRequirement | null,
+): string {
+  if (requirement === null) return "";
+  return [
+    requirement.minimumCompatibilityEpoch,
+    requirement.observedCompatibilityEpoch ?? "",
+    requirement.failure,
+    requirement.observedClientKind ?? "",
+    requirement.observedClientAppVersion ?? "",
+    requirement.observedClientAppVersionStatus,
+    requirement.minimumKnownClientAppVersion ?? "",
+    requirement.upgradeChannel ?? "",
+  ].join("\u0001");
 }
 
 /**

@@ -145,6 +145,12 @@ import {
   type ClientCompatibilityRequirement,
 } from "@traycer/protocol/framework/client-identity";
 
+// Re-exported because it is now part of `SelectionIncompatibility`'s public
+// shape: anything that builds or asserts on a lease detail needs the type, and
+// reaching past this module into the protocol package for one member of a type
+// this module owns is the kind of split import that goes stale.
+export type { ClientCompatibilityRequirement };
+
 /** Major version of this contract. Additive-only within a major. */
 export const SELECTION_AUTHORITY_CONTRACT_VERSION = 1;
 
@@ -584,7 +590,57 @@ export function leaseEquals(
   return (
     a.dead.detail.code === b.dead.detail.code &&
     a.dead.detail.hostVersion === b.dead.detail.hostVersion &&
-    a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion
+    a.dead.detail.minSupportedVersion === b.dead.detail.minSupportedVersion &&
+    clientCompatibilityEquals(
+      a.dead.detail.clientCompatibility,
+      b.dead.detail.clientCompatibility,
+    )
+  );
+}
+
+/**
+ * Whether two incompatibility details describe the same CLIENT-COMPATIBILITY
+ * requirement.
+ *
+ * This has to be part of `leaseEquals` because that function gates whether the
+ * authority broadcasts a `leases` event at all, and on the epoch path the
+ * other three discriminators are nearly constant: `hostVersion` and
+ * `minSupportedVersion` are BOTH always `null` (a fatal frame carries method
+ * canonicals, not version strings - see `describeCompatVerdictForAuthority`),
+ * and the code is a bare `INCOMPATIBLE` whenever the frame carried no
+ * per-method blocking reason. So without this, two materially different
+ * verdicts compare equal and the newer one is never delivered.
+ *
+ * Two reachable ways that bites, both ending in a blocking dialog showing the
+ * WRONG remedy:
+ *
+ *  - A host raises its floor (epoch 2 -> 3) and its minimum-known build moves
+ *    with it. Same code, both versions null - so every window keeps telling
+ *    the user to install the build that satisfied the OLD floor.
+ *  - A requirement that failed to parse dropped to `null`
+ *    (`parseClientCompatibility` is deliberately lossy rather than fatal), and
+ *    a later well-formed one arrives. Same code again, so the UI never leaves
+ *    the generic `update-host` variant for `update-client` - and "Update host"
+ *    cannot fix an outdated client.
+ *
+ * Compared MEMBER BY MEMBER rather than by identity: these objects cross an
+ * IPC boundary and are re-parsed per delivery, so reference equality is always
+ * false and would make every lease event look like a change.
+ */
+function clientCompatibilityEquals(
+  a: ClientCompatibilityRequirement | null,
+  b: ClientCompatibilityRequirement | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.minimumCompatibilityEpoch === b.minimumCompatibilityEpoch &&
+    a.observedCompatibilityEpoch === b.observedCompatibilityEpoch &&
+    a.failure === b.failure &&
+    a.observedClientKind === b.observedClientKind &&
+    a.observedClientAppVersion === b.observedClientAppVersion &&
+    a.observedClientAppVersionStatus === b.observedClientAppVersionStatus &&
+    a.minimumKnownClientAppVersion === b.minimumKnownClientAppVersion &&
+    a.upgradeChannel === b.upgradeChannel
   );
 }
 

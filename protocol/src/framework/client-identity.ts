@@ -95,12 +95,33 @@ export type ClientHandshakeIdentity = {
  *   turn an over-long value into that same unactionable parse failure; the
  *   normalizer bounds them for diagnostics instead, which is the only place
  *   the untrusted text is ever read.
+ *
+ * ANNOTATED `z.ZodType<ClientHandshakeIdentity>` so the schema and the
+ * hand-written type cannot drift apart silently, matching how `mux.ts`
+ * annotates its own wire payload schemas. Unlike
+ * `clientCompatibilityRequirementSchema`, this one has no typed parse
+ * boundary downstream to catch drift for it - the requirement is re-parsed
+ * into a typed return by `parseClientCompatibility`, this is not.
+ *
+ * WHAT THE ANNOTATION ACTUALLY CATCHES, measured rather than assumed
+ * (probe against this repo's zod + tsc):
+ *
+ *   caught:     the type gains a REQUIRED member the schema does not produce
+ *   caught:     a member's value type diverges (`z.string()` vs `number`)
+ *   NOT caught: the type gains an OPTIONAL member the schema does not produce
+ *   NOT caught: the schema gains a member the type does not declare
+ *
+ * Every member here is optional today, so the most likely future drift is one
+ * of the two it does not catch. It is kept because it costs nothing and closes
+ * the other two - not because it makes the pair safe. A new member still has
+ * to be added in both places by hand.
  */
-export const clientHandshakeIdentitySchema = z.object({
-  kind: z.string().optional(),
-  compatibilityEpoch: z.number().optional(),
-  appVersion: z.string().optional(),
-});
+export const clientHandshakeIdentitySchema: z.ZodType<ClientHandshakeIdentity> =
+  z.object({
+    kind: z.string().optional(),
+    compatibilityEpoch: z.number().optional(),
+    appVersion: z.string().optional(),
+  });
 
 /** The client kinds first-party builds declare. */
 export type FirstPartyClientKind = "desktop" | "cli";

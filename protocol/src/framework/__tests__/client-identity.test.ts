@@ -3,6 +3,9 @@ import { z } from "zod";
 import {
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
+  MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
+  STRICT_SEMVER_PATTERN,
+  isStrictSemVer,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
   isValidCompatibilityEpoch,
@@ -144,6 +147,90 @@ describe("client handshake identity", () => {
       appVersion: "not a version at all",
     });
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe("strict SemVer for the diagnostic version", () => {
+  /**
+   * COVERED HERE BECAUSE OSS CI CANNOT SEE THE PARITY SUITE.
+   *
+   * `isStrictSemVer` is exported protocol surface with two consumers that live
+   * in the internal build repo - the host's baked-policy resolver and the
+   * release stamper - and the suite that pins them against each other
+   * (`scripts/__tests__/client-identity-policy-parity.test.mjs`) is in that
+   * repo too. So an OSS-only change to this function has NO coverage at all
+   * from this side, which is precisely the change most likely to be made by
+   * someone who has never seen the internal half.
+   *
+   * The cases are not a sample of realistic versions: they are the exact
+   * inputs on which a looser grammar differs from this one. `semver.valid`
+   * accepts a leading `v` and surrounding whitespace and returns the CLEANED
+   * form, and a naive `\d+` grammar accepts leading zeros - both of which
+   * shipped once and produced artifacts the host refused at startup.
+   */
+  it.each(["1.2.0", "0.0.0", "1.2.0-rc.2", "1.2.0-rc.2+build.7", "10.20.30", "0.0.0-local"])(
+    "accepts %j",
+    (version) => {
+      expect(isStrictSemVer(version)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["a leading v", "v1.2.0"],
+    ["leading whitespace", " 1.2.0"],
+    ["trailing whitespace", "1.2.0 "],
+    ["a tab", "\t1.2.0"],
+    ["an embedded newline", "1.2.0\n"],
+  ])("REFUSES %s (%j) - the grammar is anchored", (_label, version) => {
+    // Anchoring is what makes the release stamper and the host agree: a
+    // validator built on `semver.valid` accepts these and returns a cleaned
+    // string, while whatever wrote the RAW value keeps the original.
+    expect(isStrictSemVer(version)).toBe(false);
+  });
+
+  it.each([
+    ["major", "01.2.3"],
+    ["minor", "1.02.3"],
+    ["patch", "1.2.03"],
+    ["a numeric prerelease identifier", "1.2.3-01"],
+  ])("REFUSES a leading zero in the %s (%j)", (_label, version) => {
+    expect(isStrictSemVer(version)).toBe(false);
+  });
+
+  it.each(["1.2", "1", "1.2.3.4", "not-a-version", "", "1.2.0-", "1.2.0+"])(
+    "REFUSES the malformed %j",
+    (version) => {
+      expect(isStrictSemVer(version)).toBe(false);
+    },
+  );
+
+  it("accepts a version exactly at the diagnostic ceiling and refuses one past it", () => {
+    // The ceiling exists because SemVer places NO bound on prerelease
+    // identifiers: `1.0.0-` plus megabytes of `[0-9A-Za-z-]` is a *valid*
+    // version, and this value reaches a host log line, a fatal payload, and
+    // GUI copy. Asserted at the boundary so the number cannot drift silently.
+    const atCeiling = `1.0.0-${"a".repeat(MAX_DIAGNOSTIC_APP_VERSION_LENGTH - "1.0.0-".length)}`;
+    expect(atCeiling.length).toBe(MAX_DIAGNOSTIC_APP_VERSION_LENGTH);
+    expect(isStrictSemVer(atCeiling)).toBe(true);
+    expect(isStrictSemVer(`${atCeiling}a`)).toBe(false);
+  });
+
+  it("refuses an over-long version that is otherwise perfectly valid SemVer", () => {
+    const overlong = `1.0.0-${"a".repeat(200)}`;
+    expect(overlong.length).toBeGreaterThan(MAX_DIAGNOSTIC_APP_VERSION_LENGTH);
+    expect(isStrictSemVer(overlong)).toBe(false);
+  });
+
+  it("exposes the pattern as a string so a non-TypeScript consumer can mirror it", () => {
+    // The internal release scripts are CommonJS and cannot import this module,
+    // so they hold a mirror keyed to this exact string. Anchors asserted
+    // explicitly: dropping either is how the two would silently diverge.
+    expect(STRICT_SEMVER_PATTERN.startsWith("^")).toBe(true);
+    expect(STRICT_SEMVER_PATTERN.endsWith("$")).toBe(true);
+    expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("1.2.0-rc.2")).toBe(true);
+    expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("v1.2.0-rc.2")).toBe(
+      false,
+    );
   });
 });
 

@@ -91,6 +91,23 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   }
 }
 
+/**
+ * Attaches the bridge to the CONSTRUCTED host, rather than cloning it.
+ *
+ * A `Object.create(proto) + Object.assign` clone copies field VALUES but not
+ * the closures the constructor built over `this`. `MockRunnerHost` builds an
+ * in-process selection authority in its constructor whose `ensureReady`
+ * callback captures the original instance, so a clone shares one authority
+ * that reads and mutates a DIFFERENT object's local-host state. Nothing in
+ * this file drives that authority today, which is exactly why it is worth
+ * removing now: the next spec added here would inherit a helper that hands
+ * back a half-wired host and no failure that points at the helper.
+ *
+ * `appUpdates` is not on `IRunnerHost` - `resolveDesktopAppUpdatesBridge`
+ * reads it with `Reflect.get` - so assigning it onto the instance is how the
+ * capability is expressed, and `Object.assign` returns an intersection that is
+ * already assignable to `IRunnerHost` (no cast needed).
+ */
 function makeHost(appUpdates: DesktopAppUpdatesBridge | null): IRunnerHost {
   const host = new MockRunnerHost({
     signInUrl: "https://example.invalid/signin",
@@ -102,10 +119,7 @@ function makeHost(appUpdates: DesktopAppUpdatesBridge | null): IRunnerHost {
     traycerCli: undefined,
   });
   if (appUpdates === null) return host;
-  const proto = Object.getPrototypeOf(host) as object;
-  return Object.assign(Object.create(proto) as IRunnerHost, host, {
-    appUpdates,
-  });
+  return Object.assign(host, { appUpdates });
 }
 
 function renderAction(
