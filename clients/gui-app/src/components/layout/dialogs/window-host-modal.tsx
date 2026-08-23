@@ -507,14 +507,6 @@ function ClientCompatibilityDetail(props: {
       <span>
         This app: {requirement.observedClientAppVersion ?? "unknown version"}
       </span>
-      {requirement.minimumKnownClientAppVersion === null ? null : (
-        <span>
-          Update to: {requirement.minimumKnownClientAppVersion} or newer
-          {requirement.upgradeChannel === null
-            ? ""
-            : ` (${requirement.upgradeChannel})`}
-        </span>
-      )}
       <span>
         Compatibility generation: host needs{" "}
         {requirement.minimumCompatibilityEpoch}, this app declares{" "}
@@ -575,7 +567,7 @@ function modalCopy(
       description:
         requirement.observedClientAppVersion === null
           ? "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app."
-          : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install ${requirement.minimumKnownClientAppVersion ?? "the latest version"} or newer.`,
+          : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install the latest version.`,
       reportTitle: "Traycer app update required",
       reportMessage:
         "The host refused this app at its client-compatibility epoch gate.",

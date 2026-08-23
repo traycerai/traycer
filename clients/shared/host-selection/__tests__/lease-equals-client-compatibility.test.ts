@@ -38,6 +38,11 @@ function requirement(
     observedClientAppVersionStatus: "valid",
     minimumKnownClientAppVersion: "1.2.0-rc.2",
     upgradeChannel: "rc",
+    // Default is a STABLE host so the per-field table can discriminate on
+    // `hostReleaseChannel: "rc"` as the failover case: same floor, different
+    // line, and that member is exactly what decides whether recovery may
+    // offer an RC opt-in.
+    hostReleaseChannel: "stable",
     ...overrides,
   };
 }
@@ -113,16 +118,44 @@ describe("leaseEquals and the client-compatibility requirement", () => {
     ],
     ["minimumKnownClientAppVersion", { minimumKnownClientAppVersion: "1.3.0" }],
     ["upgradeChannel", { upgradeChannel: "stable" as const }],
+    ["hostReleaseChannel", { hostReleaseChannel: "rc" }],
   ])("reports a change in %s", (_member, overrides) => {
-    // EVERY member, not just the epoch. `minimumKnownClientAppVersion` and
-    // `upgradeChannel` are what the dialog PRINTS, and
-    // `observedClientAppVersionStatus` selects between its two body copies -
-    // so a change in any of them is a change the user would see.
+    // EVERY member, not just the epoch. `hostReleaseChannel` is what decides
+    // whether the recovery surface may offer an RC opt-in at all (failover
+    // from a rejecting stable host to a rejecting RC host at the same floor
+    // is the case that used to compare equal), the deprecated
+    // `minimumKnownClientAppVersion` / `upgradeChannel` are still compared
+    // because a change in any of them is a change the user would see, and
+    // `observedClientAppVersionStatus` selects between the two body copies.
     expect(
       leaseEquals(
         incompatibleLease(requirement({})),
         incompatibleLease(requirement(overrides)),
       ),
+    ).toBe(false);
+  });
+
+  it("treats an omitted hostReleaseChannel as equal to undefined, and unequal to a present line", () => {
+    // OPTIONAL-MEMBER SEMANTICS, the reason the comparison is bare `===`
+    // with no null-coalescing. A host that predates the field and one that
+    // somehow sent `undefined` are the same observation; `"stable"` vs
+    // absent is a real change (the recovery surface just learned which line
+    // the host is on).
+    const { hostReleaseChannel: _dropped, ...rest } = requirement({});
+    const omitted: ClientCompatibilityRequirement = rest;
+    const explicitlyUndefined = requirement({
+      hostReleaseChannel: undefined,
+    });
+    const withStable = requirement({ hostReleaseChannel: "stable" });
+
+    expect(
+      leaseEquals(
+        incompatibleLease(explicitlyUndefined),
+        incompatibleLease(omitted),
+      ),
+    ).toBe(true);
+    expect(
+      leaseEquals(incompatibleLease(withStable), incompatibleLease(omitted)),
     ).toBe(false);
   });
 

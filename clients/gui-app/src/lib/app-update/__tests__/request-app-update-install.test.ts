@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { confirmAppUpdateInstall } from "@/lib/app-update/request-app-update-install";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
 } from "@/lib/windows/types";
 import type { UnsyncedEditsEntry } from "@/stores/epics/open-epic/session-registry";
 import {
@@ -29,6 +31,7 @@ const SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "1.0.0",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -48,8 +51,15 @@ class FakeBridge implements DesktopAppUpdatesBridge {
   ): Promise<DesktopAppUpdateSnapshot> {
     return Promise.resolve(SNAPSHOT);
   }
-  setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateSnapshot> {
-    return Promise.resolve(SNAPSHOT);
+  setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateChannelChange> {
+    return Promise.resolve({ outcome: "changed", snapshot: SNAPSHOT });
+  }
+  resolveCompatRecovery(): Promise<DesktopCompatRecoveryPlan> {
+    return Promise.resolve({
+      route: "manual",
+      rcCandidateVersion: null,
+      stagedVersion: null,
+    });
   }
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot> {
     return Promise.resolve(SNAPSHOT);

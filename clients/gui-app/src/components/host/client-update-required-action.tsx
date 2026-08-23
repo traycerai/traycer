@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -12,10 +13,13 @@ import {
 } from "@/lib/app-update-analytics";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
-import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { hostReleaseChannelAllowsRcRecovery } from "@traycer/protocol/framework/index";
+import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
+import { runnerHostQueryScopeId } from "@/lib/query-keys/runner-mutation-keys";
 import type {
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
 } from "@/lib/windows/types";
 
 /**
@@ -41,11 +45,11 @@ export function ClientUpdateRequiredAction(props: {
    * The host's structured requirement, whole.
    *
    * Two members are read and NEITHER decides compatibility - the host already
-   * decided that. `upgradeChannel` says whether this installation's updater
-   * could ever reach the required build; `minimumKnownClientAppVersion` says
-   * whether a build the updater is ALREADY holding would actually satisfy it.
-   * Nothing here is used as an address to open: the manual destination is the
-   * same first-party page on both channels.
+   * decided that. `minimumCompatibilityEpoch` says whether a build the updater
+   * is ALREADY holding would actually satisfy it; `hostReleaseChannel` says
+   * whether looking on the RC line could possibly find one that does. Nothing
+   * here is used as an address to open: the manual destination is the same
+   * first-party page on every channel.
    */
   readonly requirement: ClientCompatibilityRequirement;
 }): ReactNode {
@@ -59,33 +63,35 @@ export function ClientUpdateRequiredAction(props: {
   //
   // The updater's snapshot is a CACHE. It can be `available` / `downloading` /
   // `ready` for a build found at launch, while the host raised its floor
-  // afterwards - so 1.2.0 sits downloaded, the dialog offers "Restart to
+  // afterwards - so a build sits downloaded, the dialog offers "Restart to
   // update", the app restarts, and the same host rejects it again for the same
   // reason. An update loop that never converges, with a button that looks like
   // the remedy.
-  //
-  // WHEN THIS IS FALSE, THE RELEASES LINK IS THE ONLY RECOVERY - not a
-  // preference, a constraint. Main's `checkForUpdatesNow` returns the current
-  // snapshot before any feed query while it holds an `available` / `ready` /
-  // `downloading` build, whatever the intent, so this surface cannot ask for a
-  // newer candidate and cannot discard the stale one. See
-  // `shouldCheckForUpdates` below for the trace.
   const cachedUpdateSufficient = updateSatisfiesRequirement(
-    snapshot.latestVersion,
-    props.requirement.minimumKnownClientAppVersion,
+    snapshot.latestCompatibilityEpoch,
+    props.requirement.minimumCompatibilityEpoch,
   );
   useUpdateCheckOnBlockingMount(bridge);
 
-  // CHANNEL MISMATCH: the fix is on the RC line and this installation follows
-  // stable, so the in-app updater will keep reporting "up to date" forever
-  // while the host keeps refusing. Route straight to the releases page rather
-  // than offering a Download button that cannot find the build - an updater
-  // that says "no update available" beside "your app is too old" is the most
-  // confusing state this surface can produce.
-  const channelUnreachable =
-    props.requirement.upgradeChannel === "rc" && !snapshot.allowPrerelease;
+  // MAY THIS INSTALLATION LOOK ON THE RC LINE AT ALL? Only the rejecting host
+  // being ON that line authorizes it - `hostReleaseChannelAllowsRcRecovery`
+  // matches the exact string `rc` and treats `stable`, `dev`, an absent field,
+  // and any future line as no. Interpreted HERE, once, and passed to main as a
+  // verdict, so there is never a second place that could decide an unrecognized
+  // channel means RC.
+  const hostAllowsRcRecovery = hostReleaseChannelAllowsRcRecovery(
+    props.requirement.hostReleaseChannel,
+  );
+  const recovery = useCompatRecoveryPlan({
+    bridge,
+    minimumEpoch: props.requirement.minimumCompatibilityEpoch,
+    hostAllowsRcRecovery,
+    candidateSufficient: cachedUpdateSufficient,
+    allowPrerelease: snapshot.allowPrerelease,
+  });
+  const enableRc = useEnableRcRecovery(bridge);
 
-  if (bridge !== null && !channelUnreachable && cachedUpdateSufficient) {
+  if (bridge !== null && cachedUpdateSufficient) {
     if (snapshot.status === "available") {
       // A blocked location (macOS app outside /Applications) cannot install
       // even once downloaded, so it falls through to the link below - the
@@ -171,6 +177,74 @@ export function ClientUpdateRequiredAction(props: {
     }
   }
 
+  // THE RC HOP, and the only route in this app that can turn on prereleases.
+  // There is no general Settings toggle, so consent is always given against a
+  // NAMED build that main's probe has already proven clears this exact floor -
+  // never against "the RC channel" in the abstract.
+  //
+  // Reaching this arm means main established all of: the stable feed cannot
+  // help, the rejecting host is itself on the RC line, nothing insufficient is
+  // staged that this platform could not discard, and a sufficient RC candidate
+  // exists and deeply validates. Any one of those failing routes elsewhere.
+  if (bridge !== null && recovery.data?.route === "enable-rc") {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        disabled={enableRc.isPending}
+        data-testid="client-update-required-enable-rc"
+        onClick={() => {
+          enableRc.mutate(bridge);
+        }}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <span>
+            {recovery.data.rcCandidateVersion === null
+              ? "Enable RC updates and update"
+              : `Enable RC updates and get ${recovery.data.rcCandidateVersion}`}
+          </span>
+          {enableRc.isPending ? (
+            <AgentSpinningDots
+              className="text-current"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </span>
+      </Button>
+    );
+  }
+
+  // macOS WITH AN INSUFFICIENT UPDATE ALREADY STAGED. Squirrel.Mac took the
+  // artifact the moment its download finished and no supported API withdraws
+  // it, so this build WILL apply at the next quit whatever anyone does here.
+  //
+  // The install affordance is withheld - offering "Restart to update" for a
+  // build the host will refuse is the converging-loop button this whole surface
+  // exists to avoid - but the fact is stated rather than hidden, because a user
+  // who drag-installs a fresh build while this app is still running gets the
+  // staged older one written over it at quit. That downgrade window is narrow
+  // and known; the copy is what makes it avoidable.
+  if (recovery.data?.route === "restart-to-clear-staged") {
+    return (
+      <>
+        <p
+          className="w-full text-left text-xs text-muted-foreground"
+          data-testid="client-update-required-staged-note"
+        >
+          {recovery.data.stagedVersion === null
+            ? "An update is already downloaded and will install the next time you quit Traycer - but it is still too old for this host. "
+            : `Traycer ${recovery.data.stagedVersion} is already downloaded and will install the next time you quit - but it is still too old for this host. `}
+          Quit and reopen Traycer to let it apply, then this dialog will offer
+          the next step. If you would rather install a newer build by hand, quit
+          Traycer first.
+        </p>
+        <ReleasesPageButton openExternalLink={openExternalLink} />
+      </>
+    );
+  }
+
   if (snapshot.status === "checking") {
     // A check the user started FROM THE HEADER while this dialog is open -
     // NOT the one `useUpdateCheckOnBlockingMount` starts below.
@@ -208,28 +282,35 @@ export function ClientUpdateRequiredAction(props: {
   }
 
   // THE FLOOR, reached whenever the updater cannot help: no bridge (web/dev
-  // shell), a channel this installation does not follow, an install location
-  // that cannot be written, an updater that has not found anything yet, or a
-  // cached update too OLD to satisfy the host's floor. A first-party address
-  // chosen locally - never one the host supplied.
+  // shell), an install location that cannot be written, an updater that has not
+  // found anything yet, a cached update of an insufficient or unknown
+  // generation with no RC line to fall back to, or the honest corner where the
+  // only sufficient build is a stable release the updater cannot resolve. A
+  // first-party address chosen locally - never one the host supplied.
+  return <ReleasesPageButton openExternalLink={openExternalLink} />;
+}
+
+function ReleasesPageButton(props: {
+  readonly openExternalLink: ReturnType<typeof useRunnerOpenExternalLink>;
+}): ReactNode {
   return (
     <Button
       type="button"
       size="sm"
       variant="default"
-      disabled={openExternalLink.isPending}
+      disabled={props.openExternalLink.isPending}
       data-testid="client-update-required-download-page"
       onClick={() => {
         // ONE destination for both channels. GitHub Releases lists
         // prereleases alongside stable, so an `rc` remedy and a `stable` one
         // are the same page - and it is the only download location this
         // repository can vouch for (see `traycerInfo.releasesPage`).
-        openExternalLink.mutate(traycerInfo.releasesPage);
+        props.openExternalLink.mutate(traycerInfo.releasesPage);
       }}
     >
       <span className="inline-flex items-center gap-1.5">
         <span>Get the latest Traycer</span>
-        {openExternalLink.isPending ? (
+        {props.openExternalLink.isPending ? (
           <AgentSpinningDots
             className="text-current"
             testId={undefined}
@@ -245,41 +326,120 @@ export function ClientUpdateRequiredAction(props: {
  * Whether a build the updater is holding would actually clear the host's
  * floor.
  *
- * Compared with `compareHostVersions` - the shared strict-SemVer comparator,
- * not a string compare - because prerelease ordering is exactly where this
- * gets decided: a required `1.2.0-rc.2` IS satisfied by a cached `1.2.0`
- * (a release outranks its own prereleases), and a required `1.2.0` is NOT
- * satisfied by a cached `1.2.0-rc.2`. `"1.2.0" < "1.2.0-rc.2"` lexically, so a
- * string compare gets both of those backwards.
+ * COMPARED AS EPOCHS, never as versions, and that is the whole substance of
+ * this function. The epoch is a cumulative generation number the release
+ * pipeline stamps into the document each updater resolves; SemVer describes
+ * which build a candidate is, and the two answer different questions. A
+ * `1.3.0` hotfix branched off a pre-epoch line is newer by every version
+ * comparison and still does not clear a floor of 2.
  *
- * Two `true` arms that are not "the version is new enough", and both are
- * deliberate:
+ * `null` IS INSUFFICIENT, and this inverts what this function used to do. Its
+ * predecessor read `minimumKnownClientAppVersion === null` as "the host named
+ * no minimum, so anything satisfies it" - a reasonable reading of a field the
+ * host might decline to fill, and a catastrophic one now that epoch-only policy
+ * leaves that field permanently null. Here `null` means something different:
+ * the candidate's GENERATION could not be established - an unstamped feed, an
+ * unparseable one, or a build reached by electron-updater's deep-validation
+ * fallback rather than the one the release gate proved. Offering an
+ * unknown-generation build as the remedy for a compatibility rejection restarts
+ * the app straight back into the same rejection, so the answer is no.
  *
- *  - The host named NO minimum build (`minimumKnownClientAppVersion: null`).
- *    There is nothing to compare against, and refusing on that basis would
- *    strand a user with no updater path at all over a fact the host declined
- *    to state. The remedy degrades to "install the latest", which is what the
- *    host's own reason already says.
- *
- * And one `false` arm that is not "the version is too old":
- *
- *  - The comparison is INCOMPARABLE, or the updater has no version to offer.
- *    Neither proves the cached build helps, and the cost of being wrong is
- *    asymmetric - a needless trip to the releases page is an inconvenience,
- *    while an install that changes nothing is a restart into the same
- *    rejection.
+ * The cost of being wrong is asymmetric and points the same way: a needless
+ * trip to the releases page is an inconvenience, an install that changes
+ * nothing is a converging-on-nothing loop.
  */
 function updateSatisfiesRequirement(
-  latestVersion: string | null,
-  minimumKnownClientAppVersion: string | null,
+  latestCompatibilityEpoch: number | null,
+  minimumCompatibilityEpoch: number,
 ): boolean {
-  if (minimumKnownClientAppVersion === null) return true;
-  if (latestVersion === null) return false;
-  const comparison = compareHostVersions(
-    latestVersion,
-    minimumKnownClientAppVersion,
-  );
-  return comparison.comparable && comparison.ordering !== "less";
+  if (latestCompatibilityEpoch === null) return false;
+  return latestCompatibilityEpoch >= minimumCompatibilityEpoch;
+}
+
+/**
+ * Asks main where this rejection's recovery should go - see
+ * {@link DesktopCompatRecoveryPlan} for why the decision lives there.
+ *
+ * ⚠ RESOLVING A PLAN HAS A SIDE EFFECT, in the safe direction only: main
+ * discards an insufficient staged artifact wherever the platform permits it, so
+ * a user who quits does not install a build that restarts into this same
+ * dialog. That is why this runs on mount rather than only when the user reaches
+ * for the RC affordance - the moment we learn the staged build is insufficient
+ * is the moment it should stop being armed.
+ *
+ * CACHED FOR THE SESSION (`staleTime`/`gcTime` Infinity) rather than refetched,
+ * because the expensive arm walks GitHub's release pages. The key already
+ * carries every input that changes the answer, so a genuinely new situation -
+ * a check that lands a sufficient candidate, a channel that moves - mints a new
+ * key and probes again on its own. What it deliberately does NOT do is poll for
+ * an RC build that might get published while the dialog is open; the releases
+ * link is the escape hatch for that, and a poller behind a blocking dialog is
+ * the failure mode this whole file keeps avoiding.
+ */
+function useCompatRecoveryPlan(input: {
+  readonly bridge: DesktopAppUpdatesBridge | null;
+  readonly minimumEpoch: number;
+  readonly hostAllowsRcRecovery: boolean;
+  readonly candidateSufficient: boolean;
+  readonly allowPrerelease: boolean;
+}): { readonly data: DesktopCompatRecoveryPlan | undefined } {
+  const { bridge } = input;
+  return useQuery({
+    queryKey: runnerQueryKeys.appUpdateCompatRecovery({
+      runnerHostScopeId: bridge === null ? 0 : runnerHostQueryScopeId(bridge),
+      minimumEpoch: input.minimumEpoch,
+      hostAllowsRcRecovery: input.hostAllowsRcRecovery,
+      candidateSufficient: input.candidateSufficient,
+      allowPrerelease: input.allowPrerelease,
+    }),
+    queryFn: () => {
+      if (bridge === null) {
+        throw new Error("No desktop app-update bridge is available.");
+      }
+      return bridge.resolveCompatRecovery({
+        minimumEpoch: input.minimumEpoch,
+        hostAllowsRcRecovery: input.hostAllowsRcRecovery,
+      });
+    },
+    enabled: bridge !== null,
+    // One attempt. A failed probe is not a verdict about RC, and the component
+    // already routes an unanswered plan to the manual link - retrying would
+    // only make a blocking dialog spend longer being unhelpful.
+    retry: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+}
+
+/**
+ * The RC opt-in itself.
+ *
+ * Invalidates the plan on settle whatever the outcome, and that is not
+ * housekeeping: main can legitimately answer `refused-update-pending` - a
+ * download started between the probe and the click, or (macOS) an artifact
+ * reached native staging in that window - and the correct response is to ask
+ * again rather than to report a failure. Re-resolving routes the user to
+ * `restart-to-clear-staged` or the manual link, which is the honest next step
+ * in both of those cases.
+ */
+function useEnableRcRecovery(bridge: DesktopAppUpdatesBridge | null): {
+  readonly isPending: boolean;
+  readonly mutate: (bridge: DesktopAppUpdatesBridge) => void;
+} {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationKey: runnerMutationKeys.setAllowPrereleaseUpdates(),
+    mutationFn: (target: DesktopAppUpdatesBridge) =>
+      target.setAllowPrerelease(true),
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.appUpdateCompatRecoveryScope(
+          bridge === null ? 0 : runnerHostQueryScopeId(bridge),
+        ),
+      });
+    },
+  });
+  return { isPending: mutation.isPending, mutate: mutation.mutate };
 }
 
 /**

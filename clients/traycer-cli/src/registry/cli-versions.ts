@@ -30,6 +30,24 @@ export interface CliVersionsManifest {
   readonly version: string;
   readonly platforms: Readonly<Record<string, HostPlatformAsset>>;
   readonly releaseNotesUrl: string;
+  /**
+   * The client-compatibility EPOCH of the build this manifest resolves,
+   * stamped by the release pipeline beside `version`.
+   *
+   * ADDITIVE, and `schemaVersion` deliberately stays `1`: the key is one more
+   * top-level member of a document whose reader already drops what it does not
+   * recognize, so an older CLI reading a stamped manifest is unaffected and a
+   * newer CLI reading an unstamped one gets `null`.
+   *
+   * `null` covers absent, malformed, and unreadable alike, and every consumer
+   * must treat all three as INSUFFICIENT. It does NOT mean epoch 1 - mapping a
+   * missing declaration to the legacy generation is honest only for a client a
+   * host observed on the wire, never for a build nobody has run yet. A stale
+   * or lagging CDN copy can therefore only under-report, which routes
+   * conservatively; it can never over-report a build into being offered as a
+   * remedy the host will refuse.
+   */
+  readonly compatibilityEpoch: number | null;
 }
 
 // Single canonical URL - there is no per-environment CLI release stream. Dev
@@ -88,7 +106,47 @@ export async function fetchCliVersions(): Promise<CliVersionsManifest> {
     version: obj.version,
     platforms: obj.platforms as Readonly<Record<string, HostPlatformAsset>>,
     releaseNotesUrl: obj.releaseNotesUrl,
+    compatibilityEpoch: readCompatibilityEpoch(obj.compatibilityEpoch),
   };
+}
+
+/**
+ * The stamped epoch, or `null` for anything this build cannot read as one.
+ *
+ * LENIENT ON PURPOSE, unlike the shape checks above which throw. Those members
+ * are what `cli upgrade` needs to function at all, so a manifest missing them
+ * is genuinely unusable. This one only informs a RECOVERY HINT: refusing the
+ * whole manifest over a bad stamp would break self-upgrade for every user to
+ * improve one sentence of advice, and the conservative reading (`null`, which
+ * every consumer treats as insufficient) already fails in the safe direction.
+ */
+function readCompatibilityEpoch(value: unknown): number | null {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
+  ) {
+    return null;
+  }
+  return value;
+}
+
+/**
+ * The CLI feed's stamped epoch, for the recovery hint - never throwing.
+ *
+ * The caller is already on an error path (a host refused this CLI), and a
+ * network failure there must degrade the ADVICE, not replace the rejection
+ * with a registry error. `null` from an unreachable feed and `null` from an
+ * unstamped one route identically, which is exactly right: in both cases we
+ * cannot establish that `cli upgrade` would deliver a build that clears the
+ * floor.
+ */
+export async function readCliFeedCompatibilityEpoch(): Promise<number | null> {
+  try {
+    return (await fetchCliVersions()).compatibilityEpoch;
+  } catch {
+    return null;
+  }
 }
 
 export function resolveCliAsset(

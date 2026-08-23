@@ -583,6 +583,7 @@ describe("desktop app updater", () => {
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       status: "available",
       latestVersion: "2.0.0",
+      latestCompatibilityEpoch: null,
       downloadProgress: null,
     });
   });
@@ -1143,6 +1144,9 @@ describe("RC release discovery and channel safety", () => {
   });
 
   it("refuses a channel change while an update is ready to install", async () => {
+    // darwin: a natively staged artifact cannot be discarded, so the refusal
+    // STANDS. Windows/AppImage take the discard-then-switch path instead
+    // (see "compat recovery" below).
     const { autoUpdater, preferences, updater } =
       await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
@@ -1735,6 +1739,339 @@ describe("Linux deb/rpm silent-install gating", () => {
     expect(snapshot.errorMessage).toBe(
       "Traycer couldn't download and install the latest update. Please try again in a little while.",
     );
+  });
+});
+
+describe("compat recovery: staged-artifact policy", () => {
+  async function stageReadyBuild(
+    updater: UpdaterModule,
+    autoUpdater: FakeAutoUpdater,
+  ): Promise<void> {
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", {
+        version: "2.0.0",
+        compatibilityEpoch: 1,
+      });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    updater.startUpdateDownload();
+    autoUpdater.emit("update-downloaded", {
+      version: "2.0.0",
+      compatibilityEpoch: 1,
+    });
+    expect(updater.getAppUpdateSnapshot().status).toBe("ready");
+  }
+
+  it("an idle updater on win32 does not disarm quit-install", async () => {
+    // The dialog's common case: nothing is staged and nothing is downloading.
+    // autoInstallOnAppQuit never comes back up within a process once lowered,
+    // so disarming here would cost a later, perfectly good update its
+    // quit-time install to defend against an artifact that does not exist.
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    expect(updater.getAppUpdateSnapshot().status).toBe("idle");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+
+    expect(plan.route).toBe("manual");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+  });
+
+  it("discards an insufficient staged build on non-darwin: disarms quit-install and leaves ready", async () => {
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageReadyBuild(updater, autoUpdater);
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+
+    expect(plan.route).toBe("manual");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+    expect(updater.getAppUpdateSnapshot().status).toBe("idle");
+    expect(updater.getAppUpdateSnapshot().latestCompatibilityEpoch).toBeNull();
+  });
+
+  it("on darwin, an insufficient staged build routes restart-to-clear-staged and mutates nothing", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageReadyBuild(updater, autoUpdater);
+    const before = updater.getAppUpdateSnapshot();
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("restart-to-clear-staged");
+    expect(plan.stagedVersion).toBe("2.0.0");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      latestVersion: before.latestVersion,
+    });
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+    expect(change.outcome).toBe("refused-update-pending");
+  });
+
+  it("on non-darwin, discard-then-switch lets setAllowPrereleaseUpdates succeed", async () => {
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageReadyBuild(updater, autoUpdater);
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+    expect(change.outcome).toBe("changed");
+    expect(updater.getAppUpdateSnapshot().status).toBe("idle");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  });
+
+  it.each(["darwin", "win32", "linux"] as const)(
+    "refuses a channel change while downloading on %s",
+    async (platform) => {
+      setPlatform(platform);
+      const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+      autoUpdater.checkForUpdates.mockImplementation(() => {
+        autoUpdater.emit("update-available", { version: "2.0.0" });
+        return Promise.resolve(null);
+      });
+      await updater.installAutoUpdater(true, makeDeps(true));
+      await updater.checkForUpdatesNow(false, "automatic");
+      updater.startUpdateDownload();
+      expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+      const change = await updater.setAllowPrereleaseUpdates(true);
+      expect(change.outcome).toBe("refused-update-pending");
+      expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+    },
+  );
+
+  it("discard is idempotent", async () => {
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await stageReadyBuild(updater, autoUpdater);
+
+    const first = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+    const second = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+    expect(first.route).toBe("manual");
+    expect(second.route).toBe("manual");
+    expect(updater.getAppUpdateSnapshot().status).toBe("idle");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+  });
+});
+
+describe("compat recovery: RC probe", () => {
+  function stampedYaml(tag: string, epoch: number | null): string {
+    const body = manifestYamlForTag(tag, macZipAssetName(tag));
+    if (epoch === null) return body;
+    return `${body}\ncompatibilityEpoch: ${epoch}\n`;
+  }
+
+  async function probe(
+    updater: UpdaterModule,
+    autoUpdater: FakeAutoUpdater,
+    releases: ReadonlyArray<{
+      readonly tag: string;
+      readonly prerelease: boolean;
+      readonly epoch: number | null;
+    }>,
+  ): Promise<Awaited<ReturnType<UpdaterModule["resolveCompatRecovery"]>>> {
+    const fixtures = releases.map((entry) =>
+      macReleaseFixture(entry.tag, entry.prerelease),
+    );
+    const manifests: Record<string, string> = {};
+    for (const entry of releases) {
+      manifests[entry.tag] = stampedYaml(entry.tag, entry.epoch);
+    }
+    vi.stubGlobal("fetch", fetchRouter(fixtures, manifests));
+    await updater.installAutoUpdater(true, makeDeps(true));
+    autoUpdater.setFeedURL.mockClear();
+    const generationBefore = autoUpdater.setFeedURL.mock.calls.length;
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    expect(autoUpdater.setFeedURL).toHaveBeenCalledTimes(generationBefore);
+    return plan;
+  }
+
+  it("a held sufficient candidate is update-available, even when the host is on RC", async () => {
+    // The shorter path: no channel change, and the probe must not run. A
+    // sufficient RC in the listing would otherwise become enable-rc.
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const fetchMock = fetchRouter(
+      [macReleaseFixture("desktop-v1.2.0-rc.1", true)],
+      {
+        "desktop-v1.2.0-rc.1": stampedYaml("desktop-v1.2.0-rc.1", 2),
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", {
+        version: "1.2.0",
+        compatibilityEpoch: 2,
+      });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    fetchMock.mockClear();
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    expect(plan.route).toBe("update-available");
+    expect(plan.rcCandidateVersion).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("never calls setFeedURL and never bumps channelGeneration", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.2.0-rc.1", prerelease: true, epoch: 2 },
+    ]);
+    expect(plan.route).toBe("enable-rc");
+    expect(plan.rcCandidateVersion).toBe("1.2.0-rc.1");
+    expect(updater.getAppUpdateSnapshot().allowPrerelease).toBe(false);
+  });
+
+  it("skips a stable-tagged candidate even when it is newest and sufficient", async () => {
+    // projectDesktopRelease accepts stable and rc alike; reusing it unfiltered
+    // would turn "Enable RC updates" into a channel switch performed to reach
+    // a STABLE release. The filter keeps that corner a manual link.
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.3.0", prerelease: false, epoch: 2 },
+      { tag: "desktop-v1.2.0-rc.1", prerelease: true, epoch: 1 },
+    ]);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
+  it("skips an unstamped RC candidate (never infers epoch 1)", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.2.0-rc.1", prerelease: true, epoch: null },
+    ]);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
+  it("stops at the 5-manifest budget, even if a later RC would clear the floor", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const releases = [1, 2, 3, 4, 5, 6].map((n) => ({
+      tag: `desktop-v1.2.0-rc.${n}`,
+      prerelease: true,
+      // Newest five (rc.6 … rc.2) are unstamped; the sixth is the sufficient
+      // one. Newest-first means the budget truncates before it is fetched.
+      epoch: n === 1 ? 2 : null,
+    }));
+    const plan = await probe(updater, autoUpdater, releases);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
+  it("already following RC has no second line: insufficient feed → manual, probe not started", async () => {
+    // A sufficient RC exists in the listing. If the already-on-RC short-circuit
+    // were dropped, this would become enable-rc — opting into a channel the
+    // user is already on, to reach a build their feed already could not.
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const fetchMock = fetchRouter(
+      [macReleaseFixture("desktop-v1.2.0-rc.1", true)],
+      {
+        "desktop-v1.2.0-rc.1": stampedYaml("desktop-v1.2.0-rc.1", 2),
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.setAllowPrereleaseUpdates(true);
+    fetchMock.mockClear();
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a probe failure is not a verdict about RC: route manual, do not throw", async () => {
+    setPlatform("darwin");
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("GitHub unreachable"))),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await expect(
+      updater.resolveCompatRecovery({
+        minimumEpoch: 2,
+        hostAllowsRcRecovery: true,
+      }),
+    ).resolves.toEqual({
+      route: "manual",
+      rcCandidateVersion: null,
+      stagedVersion: null,
+    });
+  });
+
+  it("in-flight probes for the same floor share one GitHub walk", async () => {
+    setPlatform("darwin");
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const listingWaits: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn((input: unknown) => {
+      const url = new URL(String(input));
+      if (url.searchParams.has("per_page")) {
+        return new Promise<Response>((resolve) => {
+          listingWaits.push(resolve);
+        });
+      }
+      return Promise.resolve(new Response("Not Found", { status: 404 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    const first = updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    const second = updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    await flushPromises();
+    expect(listingWaits).toHaveLength(1);
+
+    listingWaits[0]?.(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.route).toBe("manual");
+    expect(b.route).toBe("manual");
   });
 });
 

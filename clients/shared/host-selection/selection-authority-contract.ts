@@ -623,6 +623,12 @@ export function leaseEquals(
  *    the generic `update-host` variant for `update-client` - and "Update host"
  *    cannot fix an outdated client.
  *
+ *  - Failover moves the window from a rejecting STABLE host to a rejecting RC
+ *    one at the same floor. Every other member matches; only
+ *    `hostReleaseChannel` moved - and that member is exactly what decides
+ *    whether the recovery surface may offer an RC opt-in at all, so dropping
+ *    the event leaves the dialog offering the wrong route.
+ *
  * Compared MEMBER BY MEMBER rather than by identity: these objects cross an
  * IPC boundary and are re-parsed per delivery, so reference equality is always
  * false and would make every lease event look like a change.
@@ -640,7 +646,12 @@ function clientCompatibilityEquals(
     a.observedClientAppVersion === b.observedClientAppVersion &&
     a.observedClientAppVersionStatus === b.observedClientAppVersionStatus &&
     a.minimumKnownClientAppVersion === b.minimumKnownClientAppVersion &&
-    a.upgradeChannel === b.upgradeChannel
+    a.upgradeChannel === b.upgradeChannel &&
+    // Absent and `undefined` are the same observation on an OPTIONAL member,
+    // so `===` is the right comparison and no null-coalescing is wanted: a
+    // host that predates the field and one that somehow sent `undefined` must
+    // compare equal, while `"stable"` vs absent must not.
+    a.hostReleaseChannel === b.hostReleaseChannel
   );
 }
 

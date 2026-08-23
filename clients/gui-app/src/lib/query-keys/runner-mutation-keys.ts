@@ -133,6 +133,47 @@ export function runnerHostQueryScopeId(runnerHost: object): number {
 export const runnerQueryKeys = {
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
+  /**
+   * Where recovery from a host's client-compatibility rejection should send
+   * this user, as decided by the desktop main process.
+   *
+   * KEYED ON THE INPUTS THAT CHANGE THE ANSWER, and deliberately not on the
+   * whole snapshot. The floor and the RC authorization are the question;
+   * `candidateSufficient` and `allowPrerelease` are the two facts about the
+   * held candidate that flip the route. Keying on `status` / `latestVersion`
+   * as well would mint a fresh key - and so a fresh paginated RC probe - every
+   * time the updater merely re-narrated the same candidate.
+   *
+   * Scoped to the bridge instance the plan was resolved through
+   * (`runnerHostQueryScopeId`), for the same structural-hashing reason every
+   * other runner query is.
+   */
+  appUpdateCompatRecovery: (input: {
+    readonly runnerHostScopeId: number;
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+    readonly candidateSufficient: boolean;
+    readonly allowPrerelease: boolean;
+  }) =>
+    [
+      ...runnerQueryKeys.appUpdateCompatRecoveryScope(input.runnerHostScopeId),
+      input.minimumEpoch,
+      input.hostAllowsRcRecovery,
+      input.candidateSufficient,
+      input.allowPrerelease,
+    ] as const,
+  /**
+   * Every recovery plan resolved through one bridge, as a partial-match prefix.
+   *
+   * The RC opt-in invalidates through THIS rather than through a reconstructed
+   * full key: after a channel change the inputs that identified the entry have
+   * themselves moved, so naming the old key exactly means naming an entry
+   * nobody will read again while leaving the one they will read stale. It is a
+   * prefix EXTENSION above, not a sibling, which is what keeps the partial
+   * match reaching it.
+   */
+  appUpdateCompatRecoveryScope: (runnerHostScopeId: number) =>
+    ["runner.appUpdates.compatRecovery", runnerHostScopeId] as const,
   // The shell's durable answer to "which host id belongs to THIS machine",
   // read once while the host directory bootstraps. Takes the SCOPE ID, not
   // the runner object - see `runnerHostQueryScopeId`.

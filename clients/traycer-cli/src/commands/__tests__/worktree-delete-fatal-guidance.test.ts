@@ -18,7 +18,7 @@ import { fatalCloseToCliError } from "../worktree-delete";
 
 const EPOCH_REASON =
   "This Traycer client is too old for this host. Update the Traycer app or " +
-  "CLI to 1.2.0-rc.2 or newer. Updating the host again will not help. Do not " +
+  "CLI to the latest version. Updating the host again will not help. Do not " +
   "reset Traycer; your agents and history remain stored.";
 
 function epochFatal(): FatalErrorDetails {
@@ -35,8 +35,9 @@ function epochFatal(): FatalErrorDetails {
       observedClientKind: "cli",
       observedClientAppVersion: "1.1.10",
       observedClientAppVersionStatus: "valid",
-      minimumKnownClientAppVersion: "1.2.0-rc.2",
-      upgradeChannel: "rc",
+      minimumKnownClientAppVersion: null,
+      upgradeChannel: null,
+      hostReleaseChannel: "rc",
     },
   };
 }
@@ -66,13 +67,17 @@ describe("worktree-delete fatal close -> CLI guidance", () => {
     expect(error.message).toContain("Updating the host again will not help");
   });
 
-  it("names the observed version, the required generation, and the build to install", () => {
+  it("names the observed version, the required generation, and the generic CLI remedy", () => {
     const error = fatalCloseToCliError(epochFatal());
     expect(error.message).toContain("1.1.10");
     expect(error.message).toContain("generation 1");
     expect(error.message).toContain("requires 2");
-    expect(error.message).toContain("1.2.0-rc.2");
-    expect(error.message).toContain("rc channel");
+    expect(error.message).toContain("Install the latest Traycer CLI");
+    expect(error.message).toContain(
+      "Updating the host again will not help, and no data needs to be reset",
+    );
+    expect(error.message).not.toContain("1.2.0-rc.2");
+    expect(error.message).not.toContain("rc channel");
   });
 
   it("exits nonzero once with the incompatibility code", () => {
