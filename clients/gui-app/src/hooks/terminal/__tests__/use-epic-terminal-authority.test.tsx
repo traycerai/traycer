@@ -143,6 +143,7 @@ function Controller(props: { readonly node: EpicTerminalRef }) {
       data-ref-authority={controller.refAuthority}
       data-capability={controller.capability}
       data-can-mutate={String(controller.canMutate)}
+      data-migration-error={controller.migrationError?.message ?? ""}
     />
   );
 }
@@ -152,6 +153,29 @@ function openRef(ref: EpicTerminalRef): string {
   const viewTabId = store.openEpicTab("epic-1", "Epic");
   store.openTileInTab(viewTabId, ref);
   return viewTabId;
+}
+
+/** Replaces the stored tile with a structurally identical clone (new identity). */
+function cloneStoredRef(viewTabId: string, instanceId: string): void {
+  useEpicCanvasStore.setState((state) => {
+    const canvas = state.canvasByTabId[viewTabId];
+    const current = canvas?.tilesByInstanceId[instanceId];
+    if (canvas === undefined || current === undefined) {
+      throw new Error("expected a stored tile to clone");
+    }
+    return {
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [viewTabId]: {
+          ...canvas,
+          tilesByInstanceId: {
+            ...canvas.tilesByInstanceId,
+            [instanceId]: { ...current },
+          },
+        },
+      },
+    };
+  });
 }
 
 beforeEach(() => {
@@ -227,15 +251,18 @@ describe("useEpicTerminalAuthority", () => {
     authorityState.importLegacy.mockRejectedValue(
       new Error("ENOENT: no such file or directory, realpath '/legacy'"),
     );
-    openRef(ref);
+    const viewTabId = openRef(ref);
 
     const rendered = render(<HookHarness instanceId={ref.instanceId} />);
     await waitFor(() =>
       expect(authorityState.importLegacy).toHaveBeenCalledTimes(1),
     );
-    // Re-render with a structurally identical ref object several times, the
-    // way a canvas write or a mutation-state change would.
+    // Re-render several times, each round replacing the stored ref with a
+    // structurally identical object (a canvas write) on top of the mocked
+    // authority's per-render capability object. Neither identity change is
+    // new evidence, so neither may start another import.
     for (let round = 0; round < 3; round += 1) {
+      cloneStoredRef(viewTabId, ref.instanceId);
       rendered.rerender(<HookHarness instanceId={ref.instanceId} />);
       await Promise.resolve();
       await Promise.resolve();
@@ -243,6 +270,49 @@ describe("useEpicTerminalAuthority", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(authorityState.importLegacy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a prior migration error when a later automatic attempt succeeds", async () => {
+    // Adoption rewrites the ref to host authority, which empties the evidence
+    // and runs the effect cleanup before the success continuation; a success
+    // gated on that cleanup left the old error on screen until manual Retry.
+    const ref = legacyRef("terminal-recovers", "instance-recovers");
+    const winner = projection({ terminalId: ref.id });
+    authorityState.importLegacy.mockRejectedValueOnce(new Error("offline"));
+    const viewTabId = openRef(ref);
+
+    const rendered = render(<HookHarness instanceId={ref.instanceId} />);
+    await waitFor(() =>
+      expect(
+        rendered.getByTestId(`authority-${ref.instanceId}`).dataset
+          .migrationError,
+      ).toBe("offline"),
+    );
+
+    authorityState.importLegacy.mockImplementation(() => {
+      authorityState.terminalsById[ref.id] = winner;
+      return Promise.resolve({ status: "existing", terminal: winner });
+    });
+    // A host reconnect: mutability drops and returns, which is a genuine
+    // evidence change and re-runs the import automatically.
+    authorityState.canMutate = false;
+    rendered.rerender(<HookHarness instanceId={ref.instanceId} />);
+    authorityState.canMutate = true;
+    rendered.rerender(<HookHarness instanceId={ref.instanceId} />);
+
+    await waitFor(() => {
+      expect(
+        useEpicCanvasStore.getState().canvasByTabId[viewTabId]
+          ?.tilesByInstanceId[ref.instanceId],
+      ).toMatchObject({ id: ref.id, authority: "host" });
+    });
+    await waitFor(() =>
+      expect(
+        rendered.getByTestId(`authority-${ref.instanceId}`).dataset
+          .migrationError,
+      ).toBe(""),
+    );
+    expect(authorityState.importLegacy).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates a concurrent import and all local refs adopt its winner", async () => {

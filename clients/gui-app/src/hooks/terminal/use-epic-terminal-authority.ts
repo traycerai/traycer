@@ -155,7 +155,15 @@ export function useEpicTerminalAuthority(args: {
         // earlier failure, so the tile does not keep rendering a resolved
         // error until the user presses Retry. A `preserved` outcome made no
         // attempt, so it leaves the previous error standing.
-        if (disposed || outcome.status === "preserved") return;
+        //
+        // Deliberately NOT gated on `disposed`: adoption rewrites the canvas
+        // ref to host authority, which empties the evidence and runs this
+        // effect's cleanup BEFORE this continuation - so a success that
+        // checked `disposed` would leave a prior failure on screen until the
+        // user pressed Retry (which then has nothing left to import). A
+        // superseding run shares this outcome through the coordinator's
+        // in-flight dedup, and a setState after unmount is a no-op.
+        if (outcome.status === "preserved") return;
         setMigrationError(null);
       })
       .catch((error: unknown) => {
