@@ -1644,6 +1644,16 @@ export function accumulateEvent(
             status: "streaming",
             timestamp: event.timestamp,
             startedAt: event.timestamp,
+            // Keep the identity/owner the prior generation resolved (a Claude
+            // SendMessage continuation reuses it; its restart re-emit may carry
+            // only a placeholder - see the new-run test), but fall back to this
+            // start event when the reopened card is an ORPHAN minted from
+            // `*.completed`/`*.progress` with no identity of its own, so a
+            // nested continuation adopts the name/owner it supplies instead of
+            // reopening unnamed and top-level.
+            name: existing.name ?? event.name,
+            agentType: existing.agentType ?? event.agentType ?? null,
+            parentBlockId: resolveParentBlockId(event, existing),
             task: nullableString(event.task),
             progressUpdates: [],
             result: null,
@@ -1786,18 +1796,24 @@ export function accumulateEvent(
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
         if (reopensSubagentRun(event, existing)) {
+          // Same identity/owner rule as `subagent.started` above: keep the
+          // prior generation's name/owner, but hydrate from this start event
+          // when reopening an orphan card that never learned its own.
+          const name = existing.name ?? event.name;
           return replaceBlock(blocks, event.blockId, {
             ...existing,
             status: "streaming",
             timestamp: event.timestamp,
             startedAt: event.timestamp,
+            name,
+            parentBlockId: resolveParentBlockId(event, existing),
             task: event.intent,
             progressUpdates: [],
             result: null,
             spawnToolCallId: event.spawnToolCallId ?? null,
             stopped: false,
             workflowMeta: {
-              ...emptyWorkflowMeta(existing.name),
+              ...emptyWorkflowMeta(name),
               intent: event.intent,
             },
           });

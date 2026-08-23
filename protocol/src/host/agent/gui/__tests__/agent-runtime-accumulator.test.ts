@@ -3356,20 +3356,28 @@ describe("subagent terminal monotonicity", () => {
     });
     expect(expectSubAgentBlock(blocks[0]).spawnToolCallId).toBeNull();
 
-    // A later continuation on the same block id names its spawn.
+    // A later continuation on the same block id names its spawn and supplies
+    // the identity/owner the orphan card never learned.
     blocks = accumulateEvent(blocks, {
       type: "subagent.started",
       blockId: "sa1",
       timestamp: 2000,
       name: "explorer",
+      agentType: "explore",
       task: "continue",
       spawnToolCallId: "toolu_run2",
+      parentBlockId: "owner-1",
     });
+    // The reopen hydrates name/agentType/parentBlockId from the start event
+    // (the orphan had none), rather than reopening unnamed and top-level.
     expect(expectSubAgentBlock(blocks[0])).toMatchObject({
       status: "streaming",
       startedAt: 2000,
       result: null,
       spawnToolCallId: "toolu_run2",
+      name: "explorer",
+      agentType: "explore",
+      parentBlockId: "owner-1",
     });
     blocks = accumulateEvent(blocks, {
       type: "subagent.progress",
@@ -3418,6 +3426,39 @@ describe("subagent terminal monotonicity", () => {
       name: "explorer",
       task: "the original task",
       spawnToolCallId: "toolu_run1",
+    });
+  });
+
+  it("a continuation workflow.started with a spawn id reopens an orphan-minted terminal card and hydrates its name and owner", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "workflow.completed",
+      blockId: "wf1",
+      timestamp: 1000,
+      outcome: "completed",
+      result: "first",
+    });
+    expect(expectSubAgentBlock(blocks[0]).name).toBeNull();
+
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf1",
+      timestamp: 2000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf2",
+      parentBlockId: "owner-1",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "streaming",
+      startedAt: 2000,
+      result: null,
+      spawnToolCallId: "toolu_wf2",
+      name: "review",
+      parentBlockId: "owner-1",
+    });
+    expect(expectSubAgentBlock(blocks[0]).workflowMeta).toMatchObject({
+      name: "review",
+      intent: "Review the diff",
     });
   });
 });
