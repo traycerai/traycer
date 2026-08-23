@@ -230,6 +230,48 @@ function descendantBlockIds(
   return descendants;
 }
 
+// The finalized status a terminalized sub-agent card's descendants inherit.
+// Derived from the CARD's own - sticky - terminal rather than from the incoming
+// event's outcome: on a duplicate or conflicting completion the card keeps the
+// first terminal it reached, so its subtree must settle to match that terminal
+// and not to whatever the late event claimed. `null` ⇒ the card is not terminal
+// and its subtree keeps running.
+function descendantStatusForTerminalCard(
+  card: SubAgentBlock,
+): FinalizedActionStatus | null {
+  switch (card.status) {
+    case "streaming":
+      return null;
+    case "completed":
+      return "completed";
+    case "superseded":
+      return "superseded";
+    default:
+      // `errored` (a failed OR a stopped run) and `interrupted` both mean the
+      // child's work was cut short.
+      return "interrupted";
+  }
+}
+
+// Settle the subtree of a sub-agent card that has just reached - or already
+// held - a terminal. EVERY `subagent.completed` / `workflow.completed` path
+// funnels through this (card updated, card minted by the orphan fallback, or a
+// late/duplicate terminal merged), so a card whose own `started` was dropped
+// and a descendant replayed after the card went terminal are both settled
+// instead of spinning forever. A no-op when nothing under the card is
+// streaming, so it never bumps `blocksVersion` on its own.
+function settleTerminalSubagentSubtree(
+  blocks: ContentBlock[],
+  blockId: string,
+  timestamp: number,
+): ContentBlock[] {
+  const card = findBlockOfType(blocks, blockId, "subagent");
+  if (card === undefined) return blocks;
+  const status = descendantStatusForTerminalCard(card);
+  if (status === null) return blocks;
+  return finalizeStreamingDescendants(blocks, blockId, timestamp, status);
+}
+
 // Finalize the streaming blocks nested under `rootId` (a just-terminalized
 // sub-agent card), leaving every block OUTSIDE that subtree untouched. A child
 // terminal (`subagent.completed`) settles only the card itself; its nested
@@ -1809,55 +1851,55 @@ export function accumulateEvent(
       const status: "completed" | "errored" =
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
-      if (existing) {
+      let withCard: ContentBlock[];
+      if (existing === undefined) {
+        withCard = [
+          ...blocks,
+          makeSubAgentBlock({
+            blockId: event.blockId,
+            status,
+            stopped,
+            timestamp: event.timestamp,
+            parentBlockId: resolveParentBlockId(event, undefined),
+            // No `started` was seen, so the spawn time is unknown. Leave it
+            // null (rather than the completion time) so the card shows no
+            // duration instead of a misleading "0s" total.
+            startedAt: null,
+            name: null,
+            agentType: null,
+            task: null,
+            progressUpdates: [],
+            result: nullableString(event.result),
+            spawnToolCallId: null,
+            workflowMeta: null,
+          }),
+        ];
+      } else if (isTerminalSubagentBlock(existing)) {
         // Every terminal field - status, stopped, timestamp, parentage - is
         // sticky once terminal: a duplicate or conflicting completion only ever
         // fills a still-null result (see mergeLateSubagentTerminal).
-        if (isTerminalSubagentBlock(existing)) {
-          return mergeLateSubagentTerminal(blocks, existing, event);
-        }
-        const updated = {
+        withCard = mergeLateSubagentTerminal(blocks, existing, event);
+      } else {
+        withCard = replaceBlock(blocks, event.blockId, {
           ...existing,
           status,
           stopped,
           result: event.result ?? existing.result,
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
-        };
-        const withCard = replaceBlock(blocks, event.blockId, updated);
-        // The child terminal settles only the card. Finalize its still-
-        // streaming nested tool/command/file descendants too - they have no
-        // terminal event of their own once the child's `turn.*` is suppressed -
-        // scoped to this card's subtree so unrelated root/sibling blocks keep
-        // running. A clean finish completes them; a fail/stop cuts them off.
-        return finalizeStreamingDescendants(
-          withCard,
-          event.blockId,
-          event.timestamp,
-          status === "completed" ? "completed" : "interrupted",
-        );
+        });
       }
-      return [
-        ...blocks,
-        makeSubAgentBlock({
-          blockId: event.blockId,
-          status,
-          stopped,
-          timestamp: event.timestamp,
-          parentBlockId: resolveParentBlockId(event, undefined),
-          // No `started` was seen, so the spawn time is unknown. Leave it null
-          // (rather than the completion time) so the card shows no duration
-          // instead of a misleading "0s" total.
-          startedAt: null,
-          name: null,
-          agentType: null,
-          task: null,
-          progressUpdates: [],
-          result: nullableString(event.result),
-          spawnToolCallId: null,
-          workflowMeta: null,
-        }),
-      ];
+      // The terminal settles only the card itself. Its nested tool / command /
+      // file descendants have no terminal event of their own once the child's
+      // `turn.*` is suppressed, so settle the whole subtree here - on every
+      // path, including a card minted by the orphan fallback above and a
+      // descendant replayed after the card had already gone terminal. Scoped to
+      // this card's subtree, so unrelated root and sibling blocks keep running.
+      return settleTerminalSubagentSubtree(
+        withCard,
+        event.blockId,
+        event.timestamp,
+      );
     }
 
     case "workflow.started": {
@@ -1996,44 +2038,52 @@ export function accumulateEvent(
       const status: "completed" | "errored" =
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
-      if (existing) {
+      let withCard: ContentBlock[];
+      if (existing === undefined) {
+        withCard = [
+          ...blocks,
+          makeSubAgentBlock({
+            blockId: event.blockId,
+            status,
+            stopped,
+            timestamp: event.timestamp,
+            parentBlockId: resolveParentBlockId(event, undefined),
+            // No `started` was seen, so the spawn time is unknown. Leave it
+            // null (rather than the completion time) so the card shows no
+            // duration instead of a misleading "0s" total.
+            startedAt: null,
+            name: null,
+            agentType: null,
+            task: null,
+            progressUpdates: [],
+            result: nullableString(event.result),
+            spawnToolCallId: null,
+            workflowMeta: emptyWorkflowMeta(null),
+          }),
+        ];
+      } else if (isTerminalSubagentBlock(existing)) {
         // Every terminal field - status, stopped, timestamp, parentage - is
         // sticky once terminal: a duplicate or conflicting completion only ever
         // fills a still-null result (see mergeLateSubagentTerminal).
-        if (isTerminalSubagentBlock(existing)) {
-          return mergeLateSubagentTerminal(blocks, existing, event);
-        }
-        const updated = {
+        withCard = mergeLateSubagentTerminal(blocks, existing, event);
+      } else {
+        withCard = replaceBlock(blocks, event.blockId, {
           ...existing,
           status,
           stopped,
           result: event.result ?? existing.result,
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
-        };
-        return replaceBlock(blocks, event.blockId, updated);
+        });
       }
-      return [
-        ...blocks,
-        makeSubAgentBlock({
-          blockId: event.blockId,
-          status,
-          stopped,
-          timestamp: event.timestamp,
-          parentBlockId: resolveParentBlockId(event, undefined),
-          // No `started` was seen, so the spawn time is unknown. Leave it null
-          // (rather than the completion time) so the card shows no duration
-          // instead of a misleading "0s" total.
-          startedAt: null,
-          name: null,
-          agentType: null,
-          task: null,
-          progressUpdates: [],
-          result: nullableString(event.result),
-          spawnToolCallId: null,
-          workflowMeta: emptyWorkflowMeta(null),
-        }),
-      ];
+      // Same subtree settle as `subagent.completed`: a workflow run's card is
+      // the same block type, so anything nested under it settles with it. A
+      // no-op when nothing is nested there.
+      return settleTerminalSubagentSubtree(
+        withCard,
+        event.blockId,
+        event.timestamp,
+      );
     }
 
     default: {

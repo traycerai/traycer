@@ -3489,6 +3489,83 @@ describe("subagent terminal monotonicity", () => {
     expect(byId.get("root-tool")?.status).toBe("streaming");
   });
 
+  it("an orphan-minted terminal card still settles descendants accumulated before it", () => {
+    // The child's `subagent.started` was dropped, so its activity arrives
+    // first and the card is minted by the `completed` fallback. Its subtree
+    // must settle with it rather than spinning forever.
+    const blocks = applyEvents(makeBlocks(), [
+      {
+        type: "file_change.started",
+        blockId: "sa1-file",
+        parentBlockId: "sa1",
+        timestamp: 1,
+        filePath: "/repo/a.ts",
+        operation: "modify",
+      },
+      {
+        type: "tool_call.started",
+        blockId: "sa1-tool",
+        parentBlockId: "sa1",
+        timestamp: 2,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 3,
+        outcome: "stopped",
+      },
+    ]);
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("sa1")).toMatchObject({ status: "errored", stopped: true });
+    expect(byId.get("sa1-file")?.status).toBe("interrupted");
+    expect(byId.get("sa1-tool")?.status).toBe("interrupted");
+  });
+
+  it("a descendant replayed after the card went terminal is settled by the next completion, matching the card's sticky terminal", () => {
+    let blocks = applyEvents(makeBlocks(), [
+      { type: "subagent.started", blockId: "sa1", timestamp: 1, name: "x" },
+      {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 2,
+        outcome: "stopped",
+      },
+      // Out-of-order / replayed child activity lands after the terminal.
+      {
+        type: "tool_call.started",
+        blockId: "late-tool",
+        parentBlockId: "sa1",
+        timestamp: 3,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+    ]);
+    expect(blocks.find((block) => block.blockId === "late-tool")?.status).toBe(
+      "streaming",
+    );
+
+    // A duplicate completion - even one claiming a CLEAN outcome - settles the
+    // stranded descendant to match the card's sticky terminal (stopped), not
+    // to the late event's claim.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 4,
+      outcome: "completed",
+    });
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("sa1")).toMatchObject({
+      status: "errored",
+      stopped: true,
+      timestamp: 2,
+    });
+    expect(byId.get("late-tool")?.status).toBe("interrupted");
+  });
+
   it("a cleanly completed child finalizes a leftover streaming descendant as completed", () => {
     let blocks = accumulateEvent(makeBlocks(), {
       type: "subagent.started",
