@@ -29,7 +29,9 @@ import {
   clearChatTimelineVisibleRows,
 } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import {
+  chatTimelineKeySequence,
   computeStableChatTimelineRows,
+  didChatTimelineKeySequenceChange,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
@@ -272,10 +274,9 @@ export const ChatTimeline = memo(function ChatTimeline({
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
-  const { result: rows, keySequenceChanged } = useStableChatTimelineRows(
-    listRef,
-    messages,
-  );
+  const rows = useStableChatTimelineRows(listRef, messages);
+
+  const keySequenceChanged = useCommittedKeySequenceChanged(listRef, rows);
 
   // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
   // hook's own doc comment. Bottom-follow is owned entirely here now -
@@ -526,6 +527,18 @@ const stableChatTimelineRowsCache = new WeakMap<
   StableChatTimelineRowsState
 >();
 
+/**
+ * The row key sequence each mounted timeline last RENDERED, keyed by that
+ * mount's `listRef` exactly as `stableChatTimelineRowsCache` is. Written only
+ * from a layout effect, so a render React discards never advances it - which
+ * is the whole point of keeping it separate from the row-reuse cache above,
+ * whose entry is published during render by design.
+ */
+const committedChatTimelineKeysCache = new WeakMap<
+  RefObject<LegendListRef | null>,
+  ReadonlyArray<string>
+>();
+
 /** Returns a structurally-shared copy of `rows`: for each row whose content
  *  hasn't changed since last call, the previous object reference is reused.
  *  `messages` is rebuilt wholesale on every store update (every streaming
@@ -535,24 +548,58 @@ const stableChatTimelineRowsCache = new WeakMap<
  *  `stableChatTimelineRowsCache`'s own doc comment for the cache shape and
  *  why it stays correct under a discarded speculative render.
  *
- *  The state's `keySequenceChanged` survives that same scenario for a reason
- *  of its own: a pass that changes nothing returns `previous` by identity, so
- *  re-running this on rows a discarded render has already cached answers as it
- *  did the first time instead of reporting the move as already settled. A
- *  stale `true` is inert - the library only consults the data channel on a
- *  pass where it saw the array change. */
+ *  Row reuse is all this decides. Anything that has to reason about what the
+ *  list last RENDERED - the key sequence the MVCP data channel rides - reads
+ *  `committedChatTimelineKeysCache` instead, precisely because this entry is
+ *  published during render and a discarded render can move it. */
 function useStableChatTimelineRows(
   listRef: RefObject<LegendListRef | null>,
   rows: ReadonlyArray<ChatMessageModel>,
-): StableChatTimelineRowsState {
+): ReadonlyArray<ChatMessageModel> {
   return useMemo(() => {
     const previous =
       stableChatTimelineRowsCache.get(listRef) ??
       EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE;
     const next = computeStableChatTimelineRows(rows, previous);
     stableChatTimelineRowsCache.set(listRef, next);
-    return next;
+    return next.result;
   }, [rows, listRef]);
+}
+
+/**
+ * Whether `rows` moves rows relative to the sequence this timeline last
+ * actually RENDERED - the signal `maintainVisibleContentPosition` rides.
+ *
+ * The baseline is published from a layout effect, never from render, and that
+ * is the whole design: React discards renders, and a baseline a discarded one
+ * advanced makes the real render that replaces it compare against a sequence
+ * nothing ever rendered. Concretely - committed `[A,B]`, a discarded render of
+ * `[A,B,C]`, then a real `[A,B,C']` - a render-time baseline would compare
+ * three keys against three, call the genuine insertion settled content, and
+ * hand it to the library with its anchor off. A discarded render runs no
+ * layout effect, so it cannot move this.
+ *
+ * `listRef` is used only as the per-mount map key, exactly as
+ * `stableChatTimelineRowsCache` uses it; its `current` is never read here.
+ */
+function useCommittedKeySequenceChanged(
+  listRef: RefObject<LegendListRef | null>,
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  const keySequenceChanged = useMemo(
+    () =>
+      didChatTimelineKeySequenceChange(
+        committedChatTimelineKeysCache.get(listRef),
+        rows,
+      ),
+    [listRef, rows],
+  );
+
+  useLayoutEffect(() => {
+    committedChatTimelineKeysCache.set(listRef, chatTimelineKeySequence(rows));
+  }, [listRef, rows]);
+
+  return keySequenceChanged;
 }
 
 /**

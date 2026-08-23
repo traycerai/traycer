@@ -1260,4 +1260,35 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
       size: true,
     });
   });
+
+  it("retires the data channel once the moved sequence has been rendered", async () => {
+    const messages = makeMessages(6);
+    const { rerenderMessages } = renderTimeline({ messages });
+    await settleLegendList();
+
+    const withRowRemoved = messages.filter((_, index) => index !== 1);
+    act(() => {
+      rerenderMessages(withRowRemoved, undefined);
+    });
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: true,
+      size: true,
+    });
+
+    // A token on top of the new sequence. The baseline advanced when the
+    // removal COMMITTED, so this is content-only and needs no anchor.
+    const streamed = withRowRemoved.map((message, index) =>
+      index === withRowRemoved.length - 1
+        ? { ...message, content: `${message.content} more` }
+        : { ...message },
+    );
+    act(() => {
+      rerenderMessages(streamed, undefined);
+    });
+
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: false,
+      size: true,
+    });
+  });
 });
