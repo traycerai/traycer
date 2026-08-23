@@ -9,12 +9,25 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
 export interface StableChatTimelineRowsState {
   readonly byId: ReadonlyMap<string, ChatMessage>;
   readonly result: ReadonlyArray<ChatMessage>;
+  /**
+   * Whether this state's row KEYS differ, in order or in count, from the ones
+   * it superseded - a row inserted, removed, or moved, as opposed to a row
+   * whose content changed in place. A streaming reply produces a continuous
+   * run of the latter and must not be mistaken for the former; see
+   * `ChatTimeline`'s `maintainVisibleContentPosition` for what reads this.
+   *
+   * A pass that changes nothing returns the previous state untouched, so
+   * re-running this computation on rows it has already seen answers exactly
+   * as it did the first time rather than reporting the move as settled.
+   */
+  readonly keySequenceChanged: boolean;
 }
 
 export const EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE: StableChatTimelineRowsState =
   {
     byId: new Map(),
     result: [],
+    keySequenceChanged: false,
   };
 
 /**
@@ -31,6 +44,11 @@ export function computeStableChatTimelineRows(
 ): StableChatTimelineRowsState {
   const next = new Map<string, ChatMessage>();
   let anyChanged = rows.length !== previous.byId.size;
+  // A first population is not a move: there is no rendered row set the new one
+  // could have shifted, so nothing downstream has a position to preserve.
+  const isFirstPopulation = previous.result.length === 0;
+  let keySequenceChanged =
+    !isFirstPopulation && rows.length !== previous.result.length;
 
   const result = rows.map((row, index) => {
     const prevRow = previous.byId.get(row.id);
@@ -42,10 +60,19 @@ export function computeStableChatTimelineRows(
     if (!anyChanged && previous.result[index] !== nextRow) {
       anyChanged = true;
     }
+    // Compared by INDEX, so a reorder counts even when the set of ids is
+    // identical - the timeline moves rows as well as adding and dropping them.
+    if (
+      !keySequenceChanged &&
+      !isFirstPopulation &&
+      previous.result[index]?.id !== row.id
+    ) {
+      keySequenceChanged = true;
+    }
     return nextRow;
   });
 
-  return anyChanged ? { byId: next, result } : previous;
+  return anyChanged ? { byId: next, result, keySequenceChanged } : previous;
 }
 
 type ChatMessageComparableField = Exclude<keyof ChatMessage, "id">;

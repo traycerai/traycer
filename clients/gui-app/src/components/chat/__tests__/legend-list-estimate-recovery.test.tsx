@@ -299,9 +299,12 @@ describe("LegendList estimate recovery", () => {
    * paints inside the grown row's band.
    *
    * The two cases below are the same sequence under the two MVCP
-   * configurations. They pin the transcript's `data: false` and, in the second
-   * case, hold the reproduction that made it necessary - so this stays a
-   * regression suite rather than a description of current behavior.
+   * configurations. They pin the channel the transcript selects for a
+   * same-key token and, in the second case, hold the reproduction that made
+   * it necessary - so this stays a regression suite rather than a description
+   * of current behavior. The parked-anchor describe that follows pins the
+   * other arm, and the two together are why the channel is chosen per commit
+   * instead of being turned off outright.
    */
   describe("streaming growth after a data change", () => {
     async function streamTokenThenGrowRow(
@@ -352,6 +355,84 @@ describe("LegendList estimate recovery", () => {
 
       const settled = positionGapsAndSizes(list);
       expect(settled.gaps).toEqual(settled.sizes);
+    });
+  });
+
+  /**
+   * The other half of the contract. A transcript is not append-only: rows are
+   * removed when a settled turn's last segment is suppressed, moved when a
+   * setup card reaches its anchor, and dropped when a steer nests into its
+   * assistant turn or a branch edit lands. A reader parked below one of those
+   * has nothing else holding their place - the scroller sets
+   * `overflow-anchor: none`, so the browser's own anchoring is off - which is
+   * what the data channel is for, and why it is selected rather than removed.
+   */
+  describe("a row removed above a parked reader", () => {
+    const ANCHOR_KEY = "row-22";
+
+    async function viewportOffsetAcrossRemoval(
+      maintainVisibleContentPosition: MaintainVisibleContentPositionConfig<Row>,
+    ): Promise<{ readonly before: number; readonly after: number }> {
+      const listRef = createRef<LegendListRef | null>();
+      const data = rows(40);
+      const { rerender } = render(
+        createTranscriptList(data, listRef, maintainVisibleContentPosition),
+      );
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      // Park the reader well down the list, detached from both edges. The
+      // scroll promise settles on the virtual clock, so it is fired here and
+      // awaited by the settle below rather than directly.
+      act(() => {
+        void list.scrollToIndex({ animated: false, index: 20 });
+      });
+      await settleLegendList();
+
+      const offsetOf = (): number => {
+        const state = list.getState();
+        const position = state.positionByKey(ANCHOR_KEY);
+        if (position === undefined) {
+          throw new Error(`${ANCHOR_KEY} left the list`);
+        }
+        return position - state.scroll;
+      };
+      const before = offsetOf();
+
+      // A row ABOVE the parked one disappears. Everything below it shifts up
+      // by that row's height unless the scroll offset is corrected to match.
+      rerender(
+        createTranscriptList(
+          data.filter((row) => row.id !== "row-5"),
+          listRef,
+          maintainVisibleContentPosition,
+        ),
+      );
+      await settleLegendList();
+
+      return { after: offsetOf(), before };
+    }
+
+    it("holds the parked row at the same viewport offset with the data channel on", async () => {
+      const { before, after } = await viewportOffsetAcrossRemoval({
+        data: true,
+        size: true,
+      });
+
+      expect(after).toBeCloseTo(before, 0);
+    });
+
+    it("shifts the parked row when the data channel is off", async () => {
+      const { before, after } = await viewportOffsetAcrossRemoval({
+        data: false,
+        size: true,
+      });
+
+      // The regression a blanket `data: false` would have shipped: the reader
+      // is moved by the height of the row that vanished above them.
+      expect(after).not.toBeCloseTo(before, 0);
     });
   });
 });

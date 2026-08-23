@@ -143,11 +143,23 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
-/** Module scope so the config keeps one identity for the list's lifetime.
- *  `size` on, `data` off - see the prop's own comment for why. `data` is the
- *  library's own default-off channel; the boolean shorthand would opt in. */
-const CHAT_TIMELINE_MVCP: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+/** The two configurations the timeline alternates between, at module scope so
+ *  each keeps one identity and a commit that does not move between them hands
+ *  the list the same object. See the prop itself for what selects which. */
+const CHAT_TIMELINE_MVCP_SIZE_ONLY: MaintainVisibleContentPositionConfig<ChatMessageModel> =
   { data: false, size: true };
+const CHAT_TIMELINE_MVCP_WITH_DATA: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+  { data: true, size: true };
+
+/** Both arms are pinned by the prop-capture cases in `chat-timeline.test.tsx`,
+ *  which observe what the list actually received rather than calling this. */
+function resolveChatTimelineMvcp(
+  keySequenceChanged: boolean,
+): MaintainVisibleContentPositionConfig<ChatMessageModel> {
+  return keySequenceChanged
+    ? CHAT_TIMELINE_MVCP_WITH_DATA
+    : CHAT_TIMELINE_MVCP_SIZE_ONLY;
+}
 
 // M4 (ticket 16 spacer alignment): the old 40px header/footer were
 // unsanctioned drift (decision log #30).
@@ -260,7 +272,10 @@ export const ChatTimeline = memo(function ChatTimeline({
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
-  const rows = useStableChatTimelineRows(listRef, messages);
+  const { result: rows, keySequenceChanged } = useStableChatTimelineRows(
+    listRef,
+    messages,
+  );
 
   // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
   // hook's own doc comment. Bottom-follow is owned entirely here now -
@@ -408,24 +423,37 @@ export const ChatTimeline = memo(function ChatTimeline({
         // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
         // The separate `isAtEnd` calculation owns the 1px edge tolerance.
         maintainScrollAtEndThreshold={0}
-        // SIZE keeps a detached reader pixel-stable when content above the
-        // viewport changes height - the only channel anything here depends on
-        // (a nested chain-open in find, a row remeasuring above the reader).
+        // SIZE is always on: it keeps a detached reader pixel-stable when
+        // content above the viewport changes HEIGHT - a nested chain-open in
+        // find, a row remeasuring above the reader.
         //
-        // DATA is off because it is not free: the library arms an MVCP anchor
-        // lock on every pass where the data array changed structurally, and
-        // while that lock is held it stops recalculating item positions inline
-        // and defers the recalculation to an animation frame. A transcript
-        // streaming a reply hands the library a structurally-changed array on
-        // every token, which re-arms the lock faster than its 300ms TTL can
-        // retire it, so the lock is held for the whole stream. Each row that
-        // grows is laid out by the browser immediately while the offsets of
-        // the rows after it are only rewritten a frame later - so the frame in
-        // between paints those rows inside the grown row's band and they
-        // overlap until the deferred pass lands. The channel buys anchoring
-        // across inserts and removals mid-list, which an append-only
-        // transcript never needs.
-        maintainVisibleContentPosition={CHAT_TIMELINE_MVCP}
+        // DATA rides the key sequence, because the two things it is asked to
+        // tell apart arrive on the same signal. The library treats any row
+        // object it cannot prove equal as a structural data change, and while
+        // that channel is on it arms an MVCP anchor lock on every such pass.
+        // A held lock stops the library recalculating item positions inline
+        // and defers them to an animation frame; a row that grows is laid out
+        // by the browser immediately while the offsets of the rows after it
+        // are only rewritten a frame later, so the frame in between paints
+        // those rows inside the grown row's band. A streaming reply hands over
+        // a changed array on every token, well inside the lock's 300ms expiry,
+        // so leaving DATA on holds that lock - and that overlap - for the
+        // whole stream.
+        //
+        // The rows themselves distinguish the two: a streaming token changes a
+        // row's CONTENT in place, while an insert, a removal, or a move
+        // changes the sequence of row KEYS. Only the latter can shift what a
+        // detached reader is looking at, and only the latter needs the anchor,
+        // so the channel is on for exactly those commits. Off, positions are
+        // recalculated inline and stay coherent before the browser paints.
+        //
+        // Deliberately NOT `itemsAreEqual`: the library reuses that same
+        // comparator to decide whether a mounted container refreshes its item
+        // data, so calling same-key rows equal would freeze a streaming row's
+        // rendered content in place.
+        maintainVisibleContentPosition={resolveChatTimelineMvcp(
+          keySequenceChanged,
+        )}
         onItemSizeChanged={handleItemSizeChanged}
         onScroll={handleScroll}
         onMetricsChange={handleMetricsChange}
@@ -505,18 +533,25 @@ const stableChatTimelineRowsCache = new WeakMap<
  *  -style adjust-state-during-render retry would cost a genuine extra render
  *  pass on that hot path, not just a Strict Mode dev artifact. See
  *  `stableChatTimelineRowsCache`'s own doc comment for the cache shape and
- *  why it stays correct under a discarded speculative render. */
+ *  why it stays correct under a discarded speculative render.
+ *
+ *  The state's `keySequenceChanged` survives that same scenario for a reason
+ *  of its own: a pass that changes nothing returns `previous` by identity, so
+ *  re-running this on rows a discarded render has already cached answers as it
+ *  did the first time instead of reporting the move as already settled. A
+ *  stale `true` is inert - the library only consults the data channel on a
+ *  pass where it saw the array change. */
 function useStableChatTimelineRows(
   listRef: RefObject<LegendListRef | null>,
   rows: ReadonlyArray<ChatMessageModel>,
-): ReadonlyArray<ChatMessageModel> {
+): StableChatTimelineRowsState {
   return useMemo(() => {
     const previous =
       stableChatTimelineRowsCache.get(listRef) ??
       EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE;
     const next = computeStableChatTimelineRows(rows, previous);
     stableChatTimelineRowsCache.set(listRef, next);
-    return next.result;
+    return next;
   }, [rows, listRef]);
 }
 
