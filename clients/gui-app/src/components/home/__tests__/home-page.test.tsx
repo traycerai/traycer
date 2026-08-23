@@ -36,6 +36,7 @@ import {
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
+import { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -231,6 +232,11 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           : composer.closest("[data-primary-focus-scope='true']");
       if (
         activityEnabled &&
+        // Mirrors the real editor's own gate: becoming active is not a user
+        // gesture, so the installed mobile app never takes focus from it. The
+        // mock carries it so a surface-driven focus is the only thing left that
+        // could raise the keyboard here.
+        !isMobileApp() &&
         !paneActivationFocusIntent.shouldYieldAutoFocus() &&
         (focusScope === null ||
           document.activeElement === null ||
@@ -462,6 +468,7 @@ describe("<HomePage />", () => {
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
     useMobileNavStore.setState({ open: false });
+    setMobileApp(false);
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -907,6 +914,34 @@ describe("<HomePage />", () => {
 
       unregisterInactive();
       inactiveComposer.remove();
+      queryClient.clear();
+    });
+
+    // The installed mobile app's rule: only a gesture may raise the software
+    // keyboard. The landing surface reaches both endpoints through their focus
+    // registries, so neither endpoint's own guard is on this path - the guard
+    // has to be here, and these two cases are what hold it.
+    it("takes no focus on the mobile app when the landing surface becomes focused", async () => {
+      setMobileApp(true);
+      useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+      useLandingDraftStore.getState().setActiveDraft("draft-a");
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      // The composer IS registered and active - without that this would pass on
+      // a surface that simply had no endpoint to focus.
+      const submit = await screen.findByTestId("landing-submit");
+      expect(document.activeElement).not.toBe(submit);
+      expect(document.body.contains(submit)).toBe(true);
+      queryClient.clear();
+    });
+
+    it("leaves a maximized landing terminal unfocused on the mobile app", async () => {
+      setMobileApp(true);
+      seedFocusedLandingTerminal(true);
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      const terminal = await screen.findByTestId("landing-terminal-panel-slot");
+      expect(document.activeElement).not.toBe(terminal);
       queryClient.clear();
     });
 

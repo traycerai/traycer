@@ -16,6 +16,7 @@ import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
 import { focusRegisteredActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { isMobileApp } from "@/lib/mobile-app";
 import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
 import {
   landingTerminalLayoutFor,
@@ -109,42 +110,18 @@ export function LandingDraftSurface() {
     if (!newlyFocused || paneActivationFocusIntent.shouldYieldAutoFocus()) {
       return;
     }
-
-    const terminalState = useLandingTerminalStore.getState();
-    const layout = landingTerminalLayoutFor(
-      terminalState,
-      draftId ?? "unbound-landing-page",
+    // The surface becoming focused is not a user gesture, and on the installed
+    // mobile app that alone must not raise the software keyboard - the same
+    // rule the composer's own autofocus obeys, restated here because this path
+    // reaches the composer and the terminal through their focus REGISTRIES and
+    // therefore never runs their guards. Explicit focus (tapping the composer,
+    // tapping the terminal) is unaffected: it is the gesture the rule asks for.
+    if (isMobileApp()) return;
+    restoreLandingSurfaceFocus(
+      draftId,
+      surfaceRef.current,
+      focusRestorationTargetRef.current,
     );
-    if (layout.panelOpen && layout.maximized) {
-      const instanceId = terminalState.activeInstanceId;
-      if (instanceId !== null) {
-        focusTerminalInstance(instanceId);
-        return;
-      }
-    }
-
-    const surface = surfaceRef.current;
-    const previous = focusRestorationTargetRef.current;
-    if (
-      surface !== null &&
-      previous !== null &&
-      previous.isConnected &&
-      surface.contains(previous)
-    ) {
-      previous.focus({ preventScroll: true });
-      if (
-        document.activeElement === previous ||
-        (document.activeElement !== null &&
-          previous.contains(document.activeElement))
-      ) {
-        return;
-      }
-    }
-    // The local Tiptap editor may not have registered yet
-    // (`immediatelyRender: false`). Never fall back to a retained inactive
-    // split partner here; if no active endpoint exists, the local editor's own
-    // autofocus effect will run as soon as it registers.
-    focusRegisteredActiveComposer();
   }, [draftId, paneActivationFocusIntent, surfaceEffectivelyFocused]);
 
   return (
@@ -234,6 +211,55 @@ export function LandingDraftSurface() {
       )}
     </div>
   );
+}
+
+/**
+ * Puts the caret back where this surface last had it, in the order the surface
+ * itself ranks its endpoints: a maximized terminal owns the pane outright, then
+ * the element that actually held focus, then the active composer.
+ *
+ * A module function rather than an inline effect body so the effect above stays
+ * a list of GUARDS - who may restore, and when - with the ranking read on its
+ * own.
+ */
+function restoreLandingSurfaceFocus(
+  draftId: string | null,
+  surface: HTMLDivElement | null,
+  previous: HTMLElement | null,
+): void {
+  const terminalState = useLandingTerminalStore.getState();
+  const layout = landingTerminalLayoutFor(
+    terminalState,
+    draftId ?? "unbound-landing-page",
+  );
+  if (layout.panelOpen && layout.maximized) {
+    const instanceId = terminalState.activeInstanceId;
+    if (instanceId !== null) {
+      focusTerminalInstance(instanceId);
+      return;
+    }
+  }
+
+  if (
+    surface !== null &&
+    previous !== null &&
+    previous.isConnected &&
+    surface.contains(previous)
+  ) {
+    previous.focus({ preventScroll: true });
+    if (
+      document.activeElement === previous ||
+      (document.activeElement !== null &&
+        previous.contains(document.activeElement))
+    ) {
+      return;
+    }
+  }
+  // The local Tiptap editor may not have registered yet
+  // (`immediatelyRender: false`). Never fall back to a retained inactive split
+  // partner here; if no active endpoint exists, the local editor's own
+  // autofocus effect will run as soon as it registers.
+  focusRegisteredActiveComposer();
 }
 
 function renderLandingWorkspaceControls(
