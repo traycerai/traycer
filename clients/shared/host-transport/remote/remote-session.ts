@@ -302,9 +302,16 @@ export interface RemoteSessionOptions<
    * (`active-remote-sessions.ts`). Kind, epoch and build version are process
    * constants - updating the application restarts the process - so two
    * consumers in one process can never want different identities on one host,
-   * and keying on it would only fragment the cache. Pinned by
-   * `remote-session-identity.test.ts` so a future field that is NOT a process
-   * constant cannot be added here unnoticed.
+   * and keying on it would only fragment the cache.
+   *
+   * NOTHING TESTS THAT EXCLUSION, and it is worth knowing which way the gap
+   * runs. `remote-session.test.ts > RemoteSession client identity` pins that
+   * the value reaches the wire on every dial and redial; it does not - and
+   * from inside one process cannot - observe the cache key. So a future field
+   * here that is NOT a process constant (a window id, a per-consumer label)
+   * would be silently inherited by every cache hit from whichever consumer
+   * built the session first. Keep this type to process constants, or key the
+   * cache on it.
    */
   readonly clientIdentity: FirstPartyClientIdentity;
 }

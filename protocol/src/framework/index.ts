@@ -187,8 +187,11 @@ export type {
 export {
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
+  MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
+  STRICT_SEMVER_PATTERN,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
+  isStrictSemVer,
   isValidCompatibilityEpoch,
   toClientHandshakeIdentity,
 } from "./client-identity";

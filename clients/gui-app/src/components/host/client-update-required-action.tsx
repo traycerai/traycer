@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/app-update-analytics";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { ClientUpgradeChannel } from "@traycer/protocol/framework/index";
+import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
 
 /**
  * THE remedy for a host that refused this client at its compatibility-epoch
@@ -36,8 +37,10 @@ export function ClientUpdateRequiredAction(props: {
    * The channel the required build was published on, from the host's
    * structured requirement. `null` when the host did not say.
    *
-   * It is used ONLY to pick between two first-party links, never to decide
-   * whether the app is compatible and never as an address to open.
+   * It is used ONLY to decide whether this installation's updater could ever
+   * reach the required build - never to decide whether the app is compatible,
+   * and never as an address to open. The manual destination below is the same
+   * first-party page on both channels.
    */
   readonly upgradeChannel: ClientUpgradeChannel | null;
 }): ReactNode {
@@ -46,6 +49,7 @@ export function ClientUpdateRequiredAction(props: {
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
+  useUpdateCheckOnBlockingMount(bridge);
 
   // CHANNEL MISMATCH: the fix is on the RC line and this installation follows
   // stable, so the in-app updater will keep reporting "up to date" forever
@@ -142,6 +146,30 @@ export function ClientUpdateRequiredAction(props: {
     }
   }
 
+  if (snapshot.status === "checking") {
+    // A check this surface itself may have started (see the effect above).
+    // Rendering the external link under it would tell a user to go download
+    // by hand a second before the updater answers.
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        disabled
+        data-testid="client-update-required-checking"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <span>Checking for updates</span>
+          <AgentSpinningDots
+            className="text-current"
+            testId={undefined}
+            variant={undefined}
+          />
+        </span>
+      </Button>
+    );
+  }
+
   // THE FLOOR, reached whenever the updater cannot help: no bridge (web/dev
   // shell), a channel this installation does not follow, an install location
   // that cannot be written, or simply an updater that has not found anything
@@ -154,11 +182,11 @@ export function ClientUpdateRequiredAction(props: {
       disabled={openExternalLink.isPending}
       data-testid="client-update-required-download-page"
       onClick={() => {
-        openExternalLink.mutate(
-          props.upgradeChannel === "rc"
-            ? traycerInfo.releasesPage
-            : traycerInfo.mainWebsiteDownload,
-        );
+        // ONE destination for both channels. GitHub Releases lists
+        // prereleases alongside stable, so an `rc` remedy and a `stable` one
+        // are the same page - and it is the only download location this
+        // repository can vouch for (see `traycerInfo.releasesPage`).
+        openExternalLink.mutate(traycerInfo.releasesPage);
       }}
     >
       <span className="inline-flex items-center gap-1.5">
@@ -173,4 +201,64 @@ export function ClientUpdateRequiredAction(props: {
       </span>
     </Button>
   );
+}
+
+/**
+ * Asks the updater ONCE, on mount, when it has never been asked.
+ *
+ * The desktop DOES auto-check at launch (`installAutoUpdater` ->
+ * `checkForUpdatesNow(isDev, "automatic")` in
+ * `clients/desktop/src/electron-main/app/updater.ts`), so most of the time the
+ * updater has already answered by the time anyone sees this surface. But that
+ * check is gated on `canCheckForUpdates` and happens exactly once, while this
+ * surface is reachable hours later - a host can activate a floor, or a user can
+ * point at a different host, long into a session. In those cases the updater
+ * has genuinely never been asked, and without this the user is sent to download
+ * by hand while their own updater could have delivered the build.
+ *
+ * IT READS THE BRIDGE, NOT THE RENDERED SNAPSHOT, and that is the whole
+ * correctness of it. `useDesktopAppUpdates` primes its store ASYNCHRONOUSLY,
+ * so the first render of any consumer sees the module's default
+ * `idle / lastCheckedAt: null` placeholder no matter what the main process
+ * actually holds. Deciding from that placeholder would fire a redundant check
+ * on every single mount - precisely the loop this is supposed to avoid - and
+ * would do it invisibly, because the placeholder and a genuinely-unchecked
+ * updater are the same object shape.
+ *
+ * Two guards, closing different loops:
+ *
+ *  - `lastCheckedAt !== null` on the AUTHORITATIVE snapshot means a check has
+ *    already happened in this process. "up-to-date" and "error" are real
+ *    answers; re-asking them would turn a blocking dialog into a poller.
+ *  - `requested` is a per-mount ref, so a re-render (this dialog re-renders on
+ *    every lease delivery) cannot start a second read while the first is in
+ *    flight.
+ *
+ * Both rejections are swallowed deliberately: the failure mode is "the manual
+ * link is what the user gets", which is where the component was heading
+ * anyway. An updater error stacked on top of "your app is too old" adds noise
+ * to a state that already has one clear instruction.
+ */
+function useUpdateCheckOnBlockingMount(
+  bridge: DesktopAppUpdatesBridge | null,
+): void {
+  const requested = useRef(false);
+  useEffect(() => {
+    if (bridge === null || requested.current) return;
+    requested.current = true;
+    let cancelled = false;
+    void bridge
+      .getSnapshot()
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (snapshot.status !== "idle" || snapshot.lastCheckedAt !== null) {
+          return;
+        }
+        return bridge.checkForUpdates("automatic").then(() => undefined);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
 }

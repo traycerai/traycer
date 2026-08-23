@@ -19,9 +19,14 @@ import { getClientAppVersion } from "@/lib/app-version";
  * The fallback is gated on `import.meta.env.DEV` and NOT applied to a
  * production bundle, deliberately. A released renderer whose stamp went
  * missing must report "no version" - which the host records as
- * `observedClientAppVersionStatus: "invalid"/"missing"` and which the release
- * check below refuses to publish - rather than quietly wearing a
+ * `observedClientAppVersionStatus: "missing"` - rather than quietly wearing a
  * developer-looking string that reads like it was meant.
+ *
+ * A production bundle should never get here at all: the desktop release runs
+ * `scripts/validate-client-identity-release.cjs desktop --version=...` (build
+ * repo) before packaging, which refuses a missing or non-strict-SemVer
+ * `DESKTOP_VERSION`. This branch is the behaviour if that gate is ever
+ * bypassed, not a substitute for it.
  */
 export const LOCAL_CLIENT_APP_VERSION = "0.0.0-local";
 
