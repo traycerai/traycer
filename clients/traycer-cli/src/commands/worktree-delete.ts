@@ -31,6 +31,7 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 // Stream timing knobs, mirroring `traycer monitor`. A worktree delete is a
 // one-shot: it runs a teardown script (which can be slow) then removes the
@@ -164,6 +165,7 @@ async function runWorktreeDelete(
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
   const attempt = await runDeleteCommand(worktreePath, ctx, client);

@@ -6,6 +6,7 @@ import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { OpenFrameBearerSource } from "../../../auth/bearer-source";
 import { createRemoteHostTransport } from "../create-remote-transport";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const emptyRpcRegistry: VersionedRpcRegistry = defineVersionedRpcRegistry({});
 const emptyStreamRegistry: VersionedStreamRpcRegistry =
@@ -20,6 +21,7 @@ function transportFor(bearerSource: OpenFrameBearerSource | null) {
     VersionedRpcRegistry,
     VersionedStreamRpcRegistry
   >({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     hostId: "host-null-bearer-test",
     userId: "user-null-bearer-test",
     relayAttachUrl: "wss://relay.invalid/attach",

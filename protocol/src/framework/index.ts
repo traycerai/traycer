@@ -173,6 +173,26 @@ export {
   hostRestartIntentSchema,
 } from "./ws-protocol";
 
+// ---- Client handshake identity + compatibility epoch --------------------- //
+
+export type {
+  ClientCompatibilityFailure,
+  ClientCompatibilityRequirement,
+  ClientHandshakeIdentity,
+  ClientUpgradeChannel,
+  FirstPartyClientIdentity,
+  FirstPartyClientKind,
+} from "./client-identity";
+
+export {
+  CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+  LEGACY_CLIENT_COMPATIBILITY_EPOCH,
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  isValidCompatibilityEpoch,
+  toClientHandshakeIdentity,
+} from "./client-identity";
+
 export type {
   ManifestRegistry,
   SplitConnectionManifest,

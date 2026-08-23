@@ -88,6 +88,7 @@ import type {
   StreamCloseReason,
   StreamFrameEnvelope,
 } from "../../i-stream-session";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -253,6 +254,15 @@ class FakeRelayHost {
   private readonly connections: FakeConnection[] = [];
   /** Every bearer presented across all `open` frames, in arrival order. */
   readonly openBearers: string[] = [];
+  /**
+   * The `clientIdentity` on every `open`, index-aligned with `openBearers`.
+   *
+   * Captured raw (`unknown`) rather than typed, deliberately: what a suite
+   * needs to prove is that the transport PUT IT ON THE WIRE, and a typed slot
+   * would let an absent field read as a shape mismatch rather than as the
+   * missing key it is.
+   */
+  readonly openIdentities: unknown[] = [];
   /** Params carried by every logical subscribe, including reconnect replay. */
   readonly subscribeParams: unknown[] = [];
   /** Schema version carried beside each logical subscribe. */
@@ -632,6 +642,7 @@ class FakeRelayHost {
         : "";
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
+    this.openIdentities.push(message.json?.clientIdentity);
     const decision = this.decideOpen(bearer, openIndex);
     if (decision.kind === "ack") {
       await this.sendMux(connection, {
@@ -902,8 +913,77 @@ function buildSessionOptions(
     webSocketFactory: relay.factory,
     requestId: () => `req-${(nextRequestId += 1)}`,
     evidence: NO_TRANSPORT_EVIDENCE,
+    clientIdentity: TEST_CLIENT_IDENTITY,
   };
 }
+
+describe("RemoteSession client identity", () => {
+  it(
+    "sends the configured identity on the session open frame, and again on every redial",
+    async () => {
+      // The redial half is the part worth driving rather than reasoning
+      // about: each attach re-authenticates and is therefore re-admitted from
+      // scratch, so an identity sent only on the first `open` would leave
+      // every reconnect looking like a legacy client to a floored host.
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? {
+              kind: "fatal",
+              details: { ...unauthorizedDetails(), retryable: true },
+            }
+          : { kind: "ack" };
+      const session = new RemoteSession(
+        buildSessionOptions(relay, lease, {
+          revalidateForReconnect: () => Promise.resolve("rotated" as const),
+        }),
+      );
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openIdentities.length).toBeGreaterThanOrEqual(2);
+        for (const identity of relay.openIdentities) {
+          expect(identity).toEqual({
+            kind: TEST_CLIENT_IDENTITY.kind,
+            compatibilityEpoch: TEST_CLIENT_IDENTITY.compatibilityEpoch,
+            appVersion: TEST_CLIENT_IDENTITY.appVersion,
+          });
+        }
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "omits only a null appVersion, never the identity or the epoch",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        clientIdentity: {
+          kind: "cli",
+          compatibilityEpoch: 2,
+          appVersion: null,
+        },
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openIdentities[0]).toEqual({
+          kind: "cli",
+          compatibilityEpoch: 2,
+        });
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
 
 describe("RemoteSession UNAUTHORIZED session-fatal recovery", () => {
   it(
@@ -1367,6 +1447,7 @@ describe("RemoteSession plan-restricted entitlement denial", () => {
         webSocketFactory: relay.factory,
         requestId: () => `req-${(nextRequestId += 1)}`,
         evidence: NO_TRANSPORT_EVIDENCE,
+        clientIdentity: TEST_CLIENT_IDENTITY,
       });
       const streamClient = new RemoteStreamClient(session);
       let closedEvents = 0;

@@ -92,6 +92,11 @@ import {
   type SessionOpenPayload,
 } from "@traycer/protocol/host-transport/mux";
 import {
+  toClientHandshakeIdentity,
+  type ClientHandshakeIdentity,
+  type FirstPartyClientIdentity,
+} from "@traycer/protocol/framework/client-identity";
+import {
   ChunkReassembler,
   ChunkReassemblyError,
   OutboundChunkSource,
@@ -284,6 +289,24 @@ export interface RemoteSessionOptions<
    * `NO_TRANSPORT_EVIDENCE`.
    */
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * WHO THIS CLIENT IS, sent on the session `open` frame and re-sent on every
+   * redial (each attach re-authenticates, so each is re-gated).
+   *
+   * Required for the same reason the two local transports' is: an absent
+   * identity reads to the host as legacy epoch 1, and a defaulted value here
+   * would let a composition root ship a build a floored host terminally
+   * refuses, with nothing at compile time to catch it.
+   *
+   * IT IS DELIBERATELY NOT PART OF THE SESSION CACHE KEY
+   * (`active-remote-sessions.ts`). Kind, epoch and build version are process
+   * constants - updating the application restarts the process - so two
+   * consumers in one process can never want different identities on one host,
+   * and keying on it would only fragment the cache. Pinned by
+   * `remote-session-identity.test.ts` so a future field that is NOT a process
+   * constant cannot be added here unnoticed.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 /**
@@ -456,6 +479,11 @@ export class RemoteSession<
   private readonly clientManifests: SessionManifests;
   /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
   private readonly clientRpcMerged: ConnectionManifest;
+  /**
+   * Serialized once: every member is a process constant, and this frame is
+   * rebuilt on every redial.
+   */
+  private readonly clientIdentity: ClientHandshakeIdentity;
 
   private phase: SessionPhase = "idle";
   private connectGeneration = 0;
@@ -641,6 +669,7 @@ export class RemoteSession<
       rpcSplit.manifest,
       rpcSplit.optionalManifest,
     );
+    this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.dialFailures = new DialFailureLog({
       label: `remote session (host ${options.hostId})`,
       now: () => Date.now(),
@@ -1672,6 +1701,7 @@ export class RemoteSession<
         SESSION_CAPABILITY_BODY_COMPRESSION,
         SESSION_CAPABILITY_FINE_CREDITS,
       ],
+      clientIdentity: this.clientIdentity,
     };
     this.enqueueMessage(connection, {
       type: MuxFrameType.OPEN,

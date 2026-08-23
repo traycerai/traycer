@@ -29,6 +29,7 @@ import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { GUI_CLIENT_IDENTITY } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -251,6 +252,7 @@ export function buildHostStreamClient(params: {
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
       evidence: transportEvidenceRelay,
+      clientIdentity: GUI_CLIENT_IDENTITY,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -291,6 +293,7 @@ export function buildHostStreamClient(params: {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: GUI_CLIENT_IDENTITY,
   });
 }
 

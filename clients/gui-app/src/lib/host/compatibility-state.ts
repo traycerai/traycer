@@ -8,6 +8,7 @@ import {
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
 import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
@@ -543,6 +544,7 @@ export function useHostCompatibilityAuthorityReport(
               code: verdict.code,
               hostVersion: verdict.hostVersion,
               minSupportedVersion: verdict.minSupportedVersion,
+              clientCompatibility: verdict.clientCompatibility,
             },
     });
   }, [compatibility, hostId]);
@@ -586,6 +588,12 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
   readonly hostVersion: string | null;
   readonly minSupportedVersion: string | null;
   /**
+   * The host's structured epoch rejection, carried through intact. `null` on
+   * every other arm - a compatible verdict has nothing to require, and a
+   * manifest disagreement is a different failure with a different remedy.
+   */
+  readonly clientCompatibility: ClientCompatibilityRequirement | null;
+  /**
    * Which capture slot holds THIS verdict's anchor. Carried on the verdict
    * rather than re-derived at the read, so the arm that produced the answer
    * and the slot that was written when it resolved cannot drift apart.
@@ -611,6 +619,14 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
       // put a number in front of the user that names nothing they can act on.
       hostVersion: null,
       minSupportedVersion: null,
+      // THE ONE FIELD THAT SURVIVES THE FATAL INTACT. Everything else on this
+      // arm is deliberately flattened or nulled, because a fatal frame's
+      // method canonicals are not version strings - but this member IS the
+      // host's own structured statement of what it needs, and re-deriving any
+      // part of it here would be inventing.
+      clientCompatibility:
+        compatibility.error.fatalDetails?.clientCompatibilityRequirement ??
+        null,
       // Rides `probe.error`, so its anchor was captured at rejection.
       anchoredAt: "failure",
     };
@@ -620,6 +636,7 @@ function describeCompatVerdictForAuthority(compatibility: HostCompatibility): {
       code: null,
       hostVersion: compatibility.hostStatus.hostVersion,
       minSupportedVersion: null,
+      clientCompatibility: null,
       // Rides `probe.data` - fresh OR held - so its anchor is whatever the
       // last SUCCESSFUL resolution captured. A failed refetch in between
       // leaves this slot alone, which is what makes a held verdict keep the

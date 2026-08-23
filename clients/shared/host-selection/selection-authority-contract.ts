@@ -140,8 +140,28 @@
  * domain code.
  */
 
+import {
+  clientCompatibilityRequirementSchema,
+  type ClientCompatibilityRequirement,
+} from "@traycer/protocol/framework/client-identity";
+
 /** Major version of this contract. Additive-only within a major. */
 export const SELECTION_AUTHORITY_CONTRACT_VERSION = 1;
+
+/**
+ * The epoch-rejection detail, or `null` when it is absent or malformed.
+ *
+ * Absent is the ordinary case in two populations that must both keep working:
+ * a host that predates the epoch gate, and any incompatibility that was a
+ * method-manifest disagreement rather than an epoch rejection.
+ */
+function parseClientCompatibility(
+  value: unknown,
+): ClientCompatibilityRequirement | null {
+  if (value === undefined || value === null) return null;
+  const parsed = clientCompatibilityRequirementSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 /** A wire record: a non-null object that is not an array. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -253,6 +273,24 @@ export interface SelectionIncompatibility {
   code: string;
   hostVersion: string | null;
   minSupportedVersion: string | null;
+  /**
+   * Present exactly when the host refused this client at its COMPATIBILITY
+   * EPOCH gate, rather than over a method-manifest disagreement - see
+   * `ClientCompatibilityRequirement`.
+   *
+   * Carried all the way to the UI rather than collapsed into `code`, because
+   * the two failures call for OPPOSITE remedies and the surface has to be able
+   * to tell them apart before it draws a button. A manifest disagreement can
+   * legitimately mean "update the host"; an epoch rejection never does - the
+   * host is the newer leg by construction - and offering Update host there is
+   * an action that can only fail while implying the user is fixing the right
+   * machine.
+   *
+   * `null` for every other incompatibility, including one reported by a host
+   * that predates the gate (which strips the field at its own copy of the
+   * fatal schema).
+   */
+  clientCompatibility: ClientCompatibilityRequirement | null;
 }
 
 /**
@@ -443,6 +481,16 @@ export function parseSelectionEvidenceReport(
               typeof detailRecord["minSupportedVersion"] === "string"
                 ? detailRecord["minSupportedVersion"]
                 : null,
+            // Parsed through the protocol's own schema rather than field by
+            // field, and DROPPED to `null` on any mismatch instead of
+            // failing the whole verdict. A malformed member here must not
+            // cost the authority the incompatibility report itself - the
+            // fallback is the generic version-skew copy, which is worse than
+            // the epoch copy but far better than a host whose deadness is
+            // never recorded.
+            clientCompatibility: parseClientCompatibility(
+              detailRecord["clientCompatibility"],
+            ),
           },
           at,
         };
@@ -575,6 +623,12 @@ export function parseLeaseSnapshot(raw: unknown): HostLeaseSnapshot | null {
               typeof detailRecord["minSupportedVersion"] === "string"
                 ? detailRecord["minSupportedVersion"]
                 : null,
+            // Same drop-to-null-on-mismatch rule as the evidence parser
+            // above: losing the epoch detail costs the UI its specific copy,
+            // losing the whole lease would cost it the deadness.
+            clientCompatibility: parseClientCompatibility(
+              detailRecord["clientCompatibility"],
+            ),
           },
         },
       };

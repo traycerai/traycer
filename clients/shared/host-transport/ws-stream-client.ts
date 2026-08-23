@@ -24,6 +24,11 @@ import type {
   FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
 import {
+  toClientHandshakeIdentity,
+  type ClientHandshakeIdentity,
+  type FirstPartyClientIdentity,
+} from "@traycer/protocol/framework/client-identity";
+import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
@@ -133,6 +138,19 @@ export interface WsStreamClientOptions<
   readonly pongTimeoutMs: number;
   readonly initialBackoffMs: number;
   readonly maxBackoffMs: number;
+  /**
+   * WHO THIS CLIENT IS, sent on every `open` frame this transport writes -
+   * including every reconnect, since each redial re-authenticates and is
+   * therefore re-gated by the host.
+   *
+   * Required, not defaulted, for the same reason `evidence` is: a new
+   * construction site has to answer the question rather than inherit a silent
+   * answer. An absent identity reads to the host as legacy epoch 1, which a
+   * floored host terminally refuses - so a defaulted value here would let a
+   * composition root ship a build that cannot connect, with nothing at
+   * compile time to say so.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 /**
@@ -226,6 +244,12 @@ export class WsStreamClient<
   readonly instanceId: string;
 
   private readonly options: WsStreamClientOptions<Registry>;
+  /**
+   * Serialized once here rather than per session: every member is a process
+   * constant, and this client hands the same value to every session it owns
+   * and to every one of their redials.
+   */
+  private readonly clientIdentity: ClientHandshakeIdentity;
   private readonly ownedSessions = new Set<StreamSession<Registry>>();
   private readonly methodSupport = new Map<string, StreamMethodSupport>();
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
@@ -313,6 +337,7 @@ export class WsStreamClient<
 
   constructor(options: WsStreamClientOptions<Registry>) {
     this.options = options;
+    this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
     this.instanceId = `stream-client-${nextStreamClientId}`;
     nextStreamClientId += 1;
   }
@@ -376,6 +401,7 @@ export class WsStreamClient<
       pongTimeoutMs: this.options.pongTimeoutMs,
       initialBackoffMs: this.options.initialBackoffMs,
       maxBackoffMs: this.options.maxBackoffMs,
+      clientIdentity: this.clientIdentity,
       onDispose: () => removeSession(),
       onManifest: (manifest, subscribedMethod, support) =>
         this.applyHostManifest(manifest, subscribedMethod, support),
@@ -1054,6 +1080,12 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly pongTimeoutMs: number;
   readonly initialBackoffMs: number;
   readonly maxBackoffMs: number;
+  /**
+   * Already projected to the wire shape by the owning client: every session
+   * this client opens sends the same process constant, so it is serialized
+   * once rather than per session and per redial.
+   */
+  readonly clientIdentity: ClientHandshakeIdentity;
   readonly onDispose: () => void;
   readonly onManifest: (
     manifest: ConnectionManifest,
@@ -1631,6 +1663,7 @@ class StreamSession<
       kind: "open",
       token,
       manifest,
+      clientIdentity: this.config.clientIdentity,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
