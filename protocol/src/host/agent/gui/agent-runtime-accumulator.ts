@@ -1810,9 +1810,9 @@ export function accumulateEvent(
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
       if (existing) {
-        // Status / stopped / timestamp are sticky once terminal: a duplicate or
-        // conflicting completion only ever fills a still-null result or a
-        // not-yet-known parent (see mergeLateSubagentTerminal).
+        // Every terminal field - status, stopped, timestamp, parentage - is
+        // sticky once terminal: a duplicate or conflicting completion only ever
+        // fills a still-null result (see mergeLateSubagentTerminal).
         if (isTerminalSubagentBlock(existing)) {
           return mergeLateSubagentTerminal(blocks, existing, event);
         }
@@ -1997,9 +1997,9 @@ export function accumulateEvent(
         event.outcome === "completed" ? "completed" : "errored";
       const stopped = event.outcome === "stopped";
       if (existing) {
-        // Status / stopped / timestamp are sticky once terminal: a duplicate or
-        // conflicting completion only ever fills a still-null result or a
-        // not-yet-known parent (see mergeLateSubagentTerminal).
+        // Every terminal field - status, stopped, timestamp, parentage - is
+        // sticky once terminal: a duplicate or conflicting completion only ever
+        // fills a still-null result (see mergeLateSubagentTerminal).
         if (isTerminalSubagentBlock(existing)) {
           return mergeLateSubagentTerminal(blocks, existing, event);
         }
