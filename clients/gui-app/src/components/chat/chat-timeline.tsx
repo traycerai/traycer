@@ -9,7 +9,11 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import {
+  LegendList,
+  type LegendListRef,
+  type MaintainVisibleContentPositionConfig,
+} from "@legendapp/list/react";
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import {
@@ -139,6 +143,12 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
+/** Module scope so the config keeps one identity for the list's lifetime.
+ *  `size` on, `data` off - see the prop's own comment for why. `data` is the
+ *  library's own default-off channel; the boolean shorthand would opt in. */
+const CHAT_TIMELINE_MVCP: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+  { data: false, size: true };
+
 // M4 (ticket 16 spacer alignment): the old 40px header/footer were
 // unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
@@ -222,9 +232,11 @@ export interface ChatTimelineProps {
  * unchanged. Bottom-follow is a strict 1px edge, owned by
  * `useChatTimelineFollowLatch` (see that module) rather than LegendList's
  * own `maintainScrollAtEnd`, which this component never enables.
- * `maintainVisibleContentPosition` stays on unconditionally - it keeps an
- * already-detached reader's view pixel-stable against unrelated growth,
- * which never pulls toward the tail. There is no app-owned scroll mode here.
+ * `maintainVisibleContentPosition` stays on unconditionally, but only on its
+ * SIZE channel - it keeps an already-detached reader's view pixel-stable
+ * against unrelated growth, which never pulls toward the tail. See the prop
+ * itself for why the data channel is off. There is no app-owned scroll mode
+ * here.
  */
 export const ChatTimeline = memo(function ChatTimeline({
   messages,
@@ -396,7 +408,24 @@ export const ChatTimeline = memo(function ChatTimeline({
         // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
         // The separate `isAtEnd` calculation owns the 1px edge tolerance.
         maintainScrollAtEndThreshold={0}
-        maintainVisibleContentPosition
+        // SIZE keeps a detached reader pixel-stable when content above the
+        // viewport changes height - the only channel anything here depends on
+        // (a nested chain-open in find, a row remeasuring above the reader).
+        //
+        // DATA is off because it is not free: the library arms an MVCP anchor
+        // lock on every pass where the data array changed structurally, and
+        // while that lock is held it stops recalculating item positions inline
+        // and defers the recalculation to an animation frame. A transcript
+        // streaming a reply hands the library a structurally-changed array on
+        // every token, which re-arms the lock faster than its 300ms TTL can
+        // retire it, so the lock is held for the whole stream. Each row that
+        // grows is laid out by the browser immediately while the offsets of
+        // the rows after it are only rewritten a frame later - so the frame in
+        // between paints those rows inside the grown row's band and they
+        // overlap until the deferred pass lands. The channel buys anchoring
+        // across inserts and removals mid-list, which an append-only
+        // transcript never needs.
+        maintainVisibleContentPosition={CHAT_TIMELINE_MVCP}
         onItemSizeChanged={handleItemSizeChanged}
         onScroll={handleScroll}
         onMetricsChange={handleMetricsChange}

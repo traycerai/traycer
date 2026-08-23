@@ -1211,9 +1211,13 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();
     expect(legendListPolicyProps.last?.maintainScrollAtEndThreshold).toBe(0);
-    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toBe(
-      true,
-    );
+    // MVCP's size channel only. The data channel arms an anchor lock that
+    // defers position recalculation to an animation frame, and a streaming
+    // transcript re-arms it on every token - see the prop's own comment.
+    expect(legendListPolicyProps.last?.maintainVisibleContentPosition).toEqual({
+      data: false,
+      size: true,
+    });
     expect(legendListPolicyProps.last?.maintainScrollAtEnd).toBeUndefined();
   });
 });

@@ -1,8 +1,13 @@
 import { createRef } from "react";
 import { act, cleanup, render } from "@testing-library/react";
-import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import {
+  LegendList,
+  type LegendListRef,
+  type MaintainVisibleContentPositionConfig,
+} from "@legendapp/list/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  advanceLegendListFrames,
   advanceLegendListTime,
   installLegendListTestClock,
   installLegendListViewportMetrics,
@@ -79,6 +84,46 @@ function createTestList(
       renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
     />
   );
+}
+
+/** `ChatTimeline`'s own maintain configuration, on a bare list. The transcript
+ *  never passes the library's `maintainScrollAtEnd` (it owns bottom-follow
+ *  itself), so the only maintain behavior under test is MVCP. */
+function createTranscriptList(
+  data: readonly Row[],
+  listRef: React.RefObject<LegendListRef | null>,
+  maintainVisibleContentPosition: MaintainVisibleContentPositionConfig<Row>,
+) {
+  return (
+    <LegendList
+      ref={listRef}
+      data={data}
+      estimatedItemSize={90}
+      getItemType={() => "assistant"}
+      keyExtractor={(item) => item.id}
+      maintainScrollAtEndThreshold={0}
+      maintainVisibleContentPosition={maintainVisibleContentPosition}
+      recycleItems={false}
+      renderItem={({ item }) => <div data-index={item.id}>{item.id}</div>}
+    />
+  );
+}
+
+/** Every row starts exactly where the previous one ends. A row whose offset
+ *  was computed from a size a sibling has already invalidated paints on top of
+ *  that sibling. */
+function positionGapsAndSizes(list: LegendListRef): {
+  readonly gaps: number[];
+  readonly sizes: number[];
+} {
+  const state = list.getState();
+  const gaps: number[] = [];
+  const sizes: number[] = [];
+  for (let index = 0; index < 11; index += 1) {
+    gaps.push(state.positionAtIndex(index + 1) - state.positionAtIndex(index));
+    sizes.push(state.sizeAtIndex(index));
+  }
+  return { gaps, sizes };
 }
 
 describe("LegendList estimate recovery", () => {
@@ -241,15 +286,72 @@ describe("LegendList estimate recovery", () => {
       }
     });
 
-    const state = list.getState();
-    const gaps: number[] = [];
-    const sizes: number[] = [];
-    for (let index = 0; index < 11; index += 1) {
-      gaps.push(
-        state.positionAtIndex(index + 1) - state.positionAtIndex(index),
-      );
-      sizes.push(state.sizeAtIndex(index));
-    }
+    const { gaps, sizes } = positionGapsAndSizes(list);
     expect(gaps).toEqual(sizes);
+  });
+
+  /**
+   * A streaming reply hands the list a structurally-changed array on every
+   * token while the row it is appending to keeps growing. Both halves land in
+   * the same commit, so the offsets of the rows after the growing one have to
+   * be rewritten before the browser paints - the browser has already laid that
+   * row out at its new height, and any row still carrying its previous offset
+   * paints inside the grown row's band.
+   *
+   * The two cases below are the same sequence under the two MVCP
+   * configurations. They pin the transcript's `data: false` and, in the second
+   * case, hold the reproduction that made it necessary - so this stays a
+   * regression suite rather than a description of current behavior.
+   */
+  describe("streaming growth after a data change", () => {
+    async function streamTokenThenGrowRow(
+      maintainVisibleContentPosition: MaintainVisibleContentPositionConfig<Row>,
+    ): Promise<LegendListRef> {
+      const listRef = createRef<LegendListRef | null>();
+      const { rerender } = render(
+        createTranscriptList(rows(12), listRef, maintainVisibleContentPosition),
+      );
+      await settleLegendList();
+
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      const measuredSize = list.getState().getAverageItemSizes()
+        .assistant.average;
+
+      // One token: same keys, fresh row objects. With no `itemsAreEqual` the
+      // library reads that as a structural data change, exactly as a live
+      // transcript does on every token.
+      rerender(
+        createTranscriptList(rows(12), listRef, maintainVisibleContentPosition),
+      );
+      act(() => {
+        list.setItemSize("row-3", { height: measuredSize * 3, width: 800 });
+      });
+      return list;
+    }
+
+    it("rewrites positions in the same commit under the transcript's config", async () => {
+      const list = await streamTokenThenGrowRow({ data: false, size: true });
+
+      const { gaps, sizes } = positionGapsAndSizes(list);
+      expect(gaps).toEqual(sizes);
+    });
+
+    it("leaves positions a frame stale once the data channel arms the MVCP anchor lock", async () => {
+      const list = await streamTokenThenGrowRow({ data: true, size: true });
+
+      // The lock is armed by the data change and holds for 300ms, re-armed by
+      // every further token. While it is held the library stops recalculating
+      // positions inline and defers the pass to an animation frame, so the row
+      // after the grown one still carries its previous offset.
+      const stale = positionGapsAndSizes(list);
+      expect(stale.gaps).not.toEqual(stale.sizes);
+
+      await advanceLegendListFrames(1);
+
+      const settled = positionGapsAndSizes(list);
+      expect(settled.gaps).toEqual(settled.sizes);
+    });
   });
 });
