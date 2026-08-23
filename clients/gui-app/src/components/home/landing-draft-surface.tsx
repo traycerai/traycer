@@ -171,7 +171,6 @@ export function LandingDraftSurface() {
           to zero and then clip against this container's overflow-hidden. */}
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] overflow-hidden max-md:grid-rows-[auto_minmax(0,1fr)_minmax(0,1.4fr)]">
         <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
-
           <HostUpdateBanner className={undefined} />
         </div>
 
