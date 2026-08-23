@@ -179,9 +179,14 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
     }
   });
 
-  it("shows a pending state while checking rather than the manual link", async () => {
-    // Rendering "Get the latest Traycer" under a running check tells a user to
-    // go download by hand a second before their own updater answers.
+  it("shows a pending state for a MANUAL check in flight, not the manual link", async () => {
+    // The reachable case is a check started from the header while this dialog
+    // is open. It is NOT the check this surface starts: `checkForUpdatesNow`
+    // publishes `status: "checking"` only for `intent === "manual"`, so the
+    // self-started automatic one leaves the snapshot `idle` and the manual
+    // link stays up for its duration. Rendering "Get the latest Traycer" under
+    // a running check would tell someone to download by hand a second before
+    // their own updater answers.
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       status: "checking",

@@ -147,9 +147,21 @@ export function ClientUpdateRequiredAction(props: {
   }
 
   if (snapshot.status === "checking") {
-    // A check this surface itself may have started (see the effect above).
-    // Rendering the external link under it would tell a user to go download
-    // by hand a second before the updater answers.
+    // A check the user started FROM THE HEADER while this dialog is open -
+    // NOT the one `useUpdateCheckOnBlockingMount` starts below.
+    //
+    // `checkForUpdatesNow` publishes `status: "checking"` only for
+    // `intent === "manual"` (`clients/desktop/src/electron-main/app/updater.ts`);
+    // an automatic check leaves the snapshot `idle` until a result lands. So
+    // the self-started check never renders here - the manual link stays up for
+    // its duration and flips to `Download update` if a build turns up. That
+    // flip is accepted: switching the self-started check to `"manual"` intent
+    // would publish `up-to-date` / `error` into the app-wide snapshot and make
+    // the header narrate an outcome the user never asked for.
+    //
+    // The branch is still worth having for the manual case: rendering "Get the
+    // latest Traycer" under a running check tells someone to go download by
+    // hand a second before their own updater answers.
     return (
       <Button
         type="button"
@@ -230,9 +242,24 @@ export function ClientUpdateRequiredAction(props: {
  *  - `lastCheckedAt !== null` on the AUTHORITATIVE snapshot means a check has
  *    already happened in this process. "up-to-date" and "error" are real
  *    answers; re-asking them would turn a blocking dialog into a poller.
+ *
+ *    ONE GAP, deliberately left open: an AUTOMATIC check that ERRORS publishes
+ *    nothing at all (`emitCheckErrorFromCatch` returns early for non-manual
+ *    intent), so `lastCheckedAt` stays `null` and the next mount of this
+ *    dialog asks again. That is one request per mount, bounded by the ref
+ *    below and by main's own `checkInFlight` dedupe - not a loop - and asking
+ *    again after a failed check is the behaviour you would want anyway. The
+ *    alternative, tracking "we already tried" in renderer state, would survive
+ *    neither a reload nor a second window.
  *  - `requested` is a per-mount ref, so a re-render (this dialog re-renders on
  *    every lease delivery) cannot start a second read while the first is in
  *    flight.
+ *
+ * The intent stays `"automatic"`. A `"manual"` check would render the pending
+ * state below - which is the only reason to want it - but it also publishes
+ * `checking`, then `up-to-date` or `error`, into the APP-WIDE snapshot every
+ * other update surface reads. A dialog quietly making the header announce
+ * "Traycer is up to date" is worse than a brief link-then-button flip.
  *
  * Both rejections are swallowed deliberately: the failure mode is "the manual
  * link is what the user gets", which is where the component was heading
