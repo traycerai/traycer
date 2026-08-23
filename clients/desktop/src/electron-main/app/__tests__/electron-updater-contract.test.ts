@@ -30,12 +30,52 @@ import { DownloadedUpdateHelper } from "electron-updater/out/DownloadedUpdateHel
  */
 
 /**
+ * The package that DECLARES the pin, which is not necessarily the directory the
+ * vendored source is installed under.
+ *
+ * Bun hoists `electron-updater` to the repository root whenever nothing forces
+ * a nested copy, so {@link findUpdaterInstallRoot} below can legitimately land
+ * on the workspace root - whose `package.json` does not mention
+ * `electron-updater` at all. Reading the pin from there asserted against the
+ * wrong manifest and would fail (or throw on a missing `dependencies`) for a
+ * reason having nothing to do with the contract under test.
+ *
+ * Identified by NAME rather than by path depth, so it is correct from any
+ * working directory the suite might be invoked in.
+ */
+const DESKTOP_PACKAGE_NAME = "@traycer-clients/desktop";
+
+function findDesktopPackageJson(): string {
+  let dir = process.cwd();
+  for (let depth = 0; depth < 8; depth += 1) {
+    for (const candidate of [
+      join(dir, "package.json"),
+      join(dir, "clients", "desktop", "package.json"),
+    ]) {
+      if (!existsSync(candidate)) continue;
+      const parsed: unknown = JSON.parse(readFileSync(candidate, "utf8"));
+      if (readStringField(parsed, "name") === DESKTOP_PACKAGE_NAME) {
+        return candidate;
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(
+    `could not locate ${DESKTOP_PACKAGE_NAME}'s package.json from ${process.cwd()}`,
+  );
+}
+
+/**
+ * Where the vendored source actually lives, which may be a hoisted root.
+ *
  * Located by walking up from the working directory rather than from
  * `import.meta.url`, which under Vite's module runner is not a `file:` URL and
  * makes `fileURLToPath` throw. Walking up also means the suite works whether it
  * is invoked from this package or from the repo root.
  */
-function findDesktopRoot(): string {
+function findUpdaterInstallRoot(): string {
   let dir = process.cwd();
   for (let depth = 0; depth < 8; depth += 1) {
     if (existsSync(join(dir, "node_modules", "electron-updater", "out"))) {
@@ -50,11 +90,28 @@ function findDesktopRoot(): string {
   );
 }
 
-const DESKTOP_ROOT = findDesktopRoot();
-const UPDATER_OUT = join(DESKTOP_ROOT, "node_modules", "electron-updater", "out");
+const UPDATER_OUT = join(
+  findUpdaterInstallRoot(),
+  "node_modules",
+  "electron-updater",
+  "out",
+);
+const DESKTOP_PACKAGE_JSON = findDesktopPackageJson();
 
 function readOut(rel: string): string {
   return readFileSync(join(UPDATER_OUT, rel), "utf8");
+}
+
+/** One narrowing step from `unknown`, shared by the JSON readers below. */
+function readField(value: unknown, key: string): unknown {
+  if (value === null || typeof value !== "object") return undefined;
+  const record: Record<string, unknown> = { ...value };
+  return record[key];
+}
+
+function readStringField(value: unknown, key: string): string | null {
+  const field = readField(value, key);
+  return typeof field === "string" ? field : null;
 }
 
 /**
@@ -70,10 +127,9 @@ function customKey(value: object): unknown {
 
 describe("electron-updater 6.8.9 vendored contracts", () => {
   it("pins the dependency this suite is describing", () => {
-    const pkg = JSON.parse(
-      readFileSync(join(DESKTOP_ROOT, "package.json"), "utf8"),
-    ) as { dependencies: { "electron-updater": string } };
-    expect(pkg.dependencies["electron-updater"]).toBe("^6.8.9");
+    const pkg: unknown = JSON.parse(readFileSync(DESKTOP_PACKAGE_JSON, "utf8"));
+    expect(readStringField(readField(pkg, "dependencies"), "electron-updater"))
+      .toBe("^6.8.9");
   });
 
   it("BaseUpdater re-reads autoInstallOnAppQuit INSIDE the registered quit callback", () => {

@@ -5,6 +5,7 @@ import {
   useQuery,
   useQueryClient,
   type UseMutationResult,
+  type UseQueryResult,
 } from "@tanstack/react-query";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import { hostReleaseChannelAllowsRcRecovery } from "@traycer/protocol/framework/
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { runnerHostQueryScopeId } from "@/lib/query-keys/runner-mutation-keys";
 import type {
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
   DesktopCompatRecoveryPlan,
@@ -88,14 +90,17 @@ export function ClientUpdateRequiredAction(props: {
   const hostAllowsRcRecovery = hostReleaseChannelAllowsRcRecovery(
     props.requirement.hostReleaseChannel,
   );
-  const recovery = useCompatRecoveryPlan({
+  const recovery = useAppUpdateResolveCompatRecoveryPlan({
     bridge,
     minimumEpoch: props.requirement.minimumCompatibilityEpoch,
     hostAllowsRcRecovery,
     candidateSufficient: cachedUpdateSufficient,
     allowPrerelease: snapshot.allowPrerelease,
+    // The held candidate's status is part of the plan's identity - see the key
+    // builder for why omitting it silently skips main's discard/disarm.
+    candidateStatus: snapshot.status,
   });
-  const enableRc = useEnableRcRecovery(bridge);
+  const enableRc = useAppUpdateEnableRcRecovery(bridge);
   const cachedUpdateAction = renderCachedUpdateAction({
     bridge,
     snapshot,
@@ -367,13 +372,14 @@ function updateSatisfiesRequirement(
  * link is the escape hatch for that, and a poller behind a blocking dialog is
  * the failure mode this whole file keeps avoiding.
  */
-function useCompatRecoveryPlan(input: {
+function useAppUpdateResolveCompatRecoveryPlan(input: {
   readonly bridge: DesktopAppUpdatesBridge | null;
   readonly minimumEpoch: number;
   readonly hostAllowsRcRecovery: boolean;
   readonly candidateSufficient: boolean;
   readonly allowPrerelease: boolean;
-}): { readonly data: DesktopCompatRecoveryPlan | undefined } {
+  readonly candidateStatus: DesktopAppUpdateSnapshot["status"];
+}): UseQueryResult<DesktopCompatRecoveryPlan> {
   const { bridge } = input;
   return useQuery(queryOptions({
     queryKey: runnerQueryKeys.appUpdateCompatRecovery({
@@ -382,6 +388,7 @@ function useCompatRecoveryPlan(input: {
       hostAllowsRcRecovery: input.hostAllowsRcRecovery,
       candidateSufficient: input.candidateSufficient,
       allowPrerelease: input.allowPrerelease,
+      candidateStatus: input.candidateStatus,
     }),
     queryFn: () => {
       if (bridge === null) {
@@ -413,12 +420,15 @@ function useCompatRecoveryPlan(input: {
  * `restart-to-clear-staged` or the manual link, which is the honest next step
  * in both of those cases.
  */
-function useEnableRcRecovery(bridge: DesktopAppUpdatesBridge | null): {
-  readonly isPending: boolean;
-  readonly mutate: (bridge: DesktopAppUpdatesBridge) => void;
-} {
+function useAppUpdateEnableRcRecovery(
+  bridge: DesktopAppUpdatesBridge | null,
+): UseMutationResult<
+  DesktopAppUpdateChannelChange,
+  Error,
+  DesktopAppUpdatesBridge
+> {
   const queryClient = useQueryClient();
-  const mutation = useMutation({
+  return useMutation({
     mutationKey: runnerMutationKeys.setAllowPrereleaseUpdates(),
     mutationFn: (target: DesktopAppUpdatesBridge) =>
       target.setAllowPrerelease(true),
@@ -430,7 +440,6 @@ function useEnableRcRecovery(bridge: DesktopAppUpdatesBridge | null): {
       });
     },
   });
-  return { isPending: mutation.isPending, mutate: mutation.mutate };
 }
 
 /**

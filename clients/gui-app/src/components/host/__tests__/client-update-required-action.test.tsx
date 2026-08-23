@@ -122,7 +122,11 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
     Promise.resolve(this.snapshot),
   );
 
-  constructor(readonly snapshot: DesktopAppUpdateSnapshot) {}
+  private readonly handlers = new Set<
+    (snapshot: DesktopAppUpdateSnapshot) => void
+  >();
+
+  constructor(public snapshot: DesktopAppUpdateSnapshot) {}
 
   /**
    * Delivers the snapshot to the store immediately on subscribe.
@@ -134,8 +138,19 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose(): void;
   } {
+    this.handlers.add(handler);
     queueMicrotask(() => handler(this.snapshot));
-    return { dispose: () => undefined };
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  /** A later push from main - the update check landing after mount. */
+  push(next: DesktopAppUpdateSnapshot): void {
+    this.snapshot = next;
+    for (const handler of this.handlers) handler(next);
   }
 }
 
@@ -649,17 +664,56 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
       />,
       bridge,
     );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("client-update-required-enable-rc"),
-      ).toBeTruthy();
+    // Role query, not a test id: this is an interactive control, and its
+    // ACCESSIBLE NAME is the thing the user reads before consenting to a
+    // channel change. Asserting on the name is what pins that the build is
+    // actually named in the offer.
+    const rcButton = await screen.findByRole("button", {
+      name: /Enable RC updates and get 1\.2\.0-rc\.4/u,
     });
-    expect(screen.getByTestId("client-update-required-enable-rc").textContent).toContain(
-      "1.2.0-rc.4",
-    );
-    fireEvent.click(screen.getByTestId("client-update-required-enable-rc"));
+    fireEvent.click(rcButton);
     await waitFor(() => {
       expect(bridge.setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("re-resolves the plan when a check lands an insufficient candidate after mount", async () => {
+    // THE SIDE-EFFECT REGRESSION, not a caching nicety. The plan is cached at
+    // `staleTime: Infinity`, and resolving one is what discards an insufficient
+    // staged artifact, disarms quit-time install, and produces the macOS
+    // staged-update warning.
+    //
+    // Opening sequence: the dialog mounts while the mount-triggered check is
+    // still in flight, so the first plan resolves against NOTHING held. The
+    // check then lands an INSUFFICIENT candidate. `candidateSufficient` is
+    // still false and `allowPrerelease` has not moved - so without the held
+    // candidate's status in the key, main is never asked again and every one of
+    // those side effects is silently skipped.
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.resolveCompatRecovery).toHaveBeenCalledTimes(1);
+    });
+
+    bridge.push({
+      ...IDLE_SNAPSHOT,
+      sequence: 2,
+      status: "available",
+      latestVersion: "1.2.0",
+      latestCompatibilityEpoch: 1,
+      lastCheckedAt: "2026-06-15T00:00:01.000Z",
+      lastCheckIntent: "automatic",
+    });
+
+    await waitFor(() => {
+      expect(bridge.resolveCompatRecovery).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -695,12 +749,9 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
       />,
       bridge,
     );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("client-update-required-enable-rc"),
-      ).toBeTruthy();
-    });
-    fireEvent.click(screen.getByTestId("client-update-required-enable-rc"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Enable RC updates/u }),
+    );
     await waitFor(() => {
       expect(
         screen.getByTestId("client-update-required-staged-note"),

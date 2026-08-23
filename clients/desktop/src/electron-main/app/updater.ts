@@ -856,6 +856,27 @@ function discardStagedUpdate(): DesktopAppUpdateSnapshot {
 const MAX_RC_RECOVERY_MANIFEST_FETCHES = 5;
 
 /**
+ * Wall-clock ceiling for the whole RC probe.
+ *
+ * The fetch-count budget above bounds how many requests are made; it does not
+ * bound how long one of them takes. A stalled TCP connection never rejects, so
+ * without a deadline the `manual` fallback this design leans on is simply never
+ * reached and the blocking dialog sits on a spinner indefinitely - the one
+ * outcome every arm of this surface is written to avoid.
+ *
+ * THE WHOLE PROBE, not per request, and deliberately: the two fetch helpers are
+ * shared with the shipping discovery path (`resolveDesktopReleaseFeed`), and
+ * threading a signal through them would change update behaviour well outside
+ * this recovery flow. Racing the composed probe bounds the answer without
+ * touching either.
+ *
+ * The loser of the race is abandoned rather than cancelled - its socket closes
+ * when the runtime gives up - which is acceptable because the probe is
+ * read-only and mutates nothing on timeout.
+ */
+const RC_RECOVERY_PROBE_DEADLINE_MS = 15_000;
+
+/**
  * In-flight RC probes, keyed by the floor they are probing for.
  *
  * Every window renders its own copy of the blocking recovery surface, and they
@@ -955,9 +976,25 @@ export async function resolveCompatRecovery(input: {
   if (!input.hostAllowsRcRecovery) {
     return manualRecoveryPlan();
   }
-  // Read live rather than from `held`: a discard above re-emitted the snapshot,
-  // and this is the channel as it stands now.
-  if (currentSnapshot.allowPrerelease) {
+  // AN ACTIVE DOWNLOAD FORECLOSES THE RC HOP, whatever the probe would find.
+  // `performChannelChange` refuses unconditionally while a transfer is in
+  // flight - there is no `CancellationToken` plumbed, so that refusal cannot be
+  // relaxed - and offering `enable-rc` here would put up a button whose only
+  // possible outcome is `refused-update-pending`, reported to the user as
+  // nothing happening at all. The download settles on its own; recovery
+  // re-resolves and reaches the RC offer then.
+  if (downloadInProgress || currentSnapshot.status === "downloading") {
+    return manualRecoveryPlan();
+  }
+  // THE PERSISTED PREFERENCE, not `currentSnapshot.allowPrerelease`. Those two
+  // can disagree - `getAppUpdateSnapshot` exists precisely to reconcile them on
+  // every read - and reading the unreconciled field here inverts this guard:
+  // with a stale `false` beside a persisted `true`, the short-circuit does not
+  // fire, the probe runs against the feed the user is ALREADY on, and the
+  // dialog offers an opt-in they already have. `setAllowPrereleaseUpdates(true)`
+  // then answers `unchanged` - a button that reports success and changes
+  // nothing, which is exactly what this guard exists to prevent.
+  if (prereleaseUpdatesEnabled()) {
     // Already following RC, so the feed checked above WAS the RC feed. There is
     // no second line left to look on; this is the honest corner where the
     // manual link is the remedy.
@@ -1013,20 +1050,53 @@ async function probeRcRecoveryCandidate(
   if (existing !== undefined) {
     return existing;
   }
-  const probe = runRcRecoveryProbe(minimumEpoch).catch((error: unknown) => {
-    // A probe failure is not a verdict about RC - it is "we could not find
-    // out". Route it exactly like "nothing found": the manual link. Surfacing a
-    // discovery error on top of "your app is too old" adds noise to a state
-    // that already has one clear instruction.
-    log.warn("[updater] RC recovery probe failed", error);
-    return null;
-  });
+  const probe = withRcRecoveryProbeDeadline(runRcRecoveryProbe(minimumEpoch))
+    .catch((error: unknown) => {
+      // A probe failure is not a verdict about RC - it is "we could not find
+      // out". Route it exactly like "nothing found": the manual link. Surfacing
+      // a discovery error on top of "your app is too old" adds noise to a state
+      // that already has one clear instruction.
+      log.warn("[updater] RC recovery probe failed", error);
+      return null;
+    });
   rcRecoveryProbesInFlight.set(minimumEpoch, probe);
   try {
     return await probe;
   } finally {
     rcRecoveryProbesInFlight.delete(minimumEpoch);
   }
+}
+
+/**
+ * Resolves to the probe's answer, or to `null` once
+ * {@link RC_RECOVERY_PROBE_DEADLINE_MS} elapses - whichever happens first.
+ *
+ * Timing out is reported as "no sufficient RC candidate", which is the same
+ * conservative answer a failed probe gives. It is never reported as an error:
+ * the caller's only use for the distinction would be to show it, and a network
+ * diagnostic stacked on "your app is too old" is noise in a state that already
+ * has one clear instruction.
+ *
+ * The timer is unref'd so a probe running as the app quits cannot hold the
+ * process open, and cleared on the winning path so a resolved probe leaves no
+ * pending handle behind.
+ */
+function withRcRecoveryProbeDeadline(
+  probe: Promise<DesktopReleaseCandidate | null>,
+): Promise<DesktopReleaseCandidate | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<DesktopReleaseCandidate | null>((resolve) => {
+    timer = setTimeout(() => {
+      log.warn("[updater] RC recovery probe timed out", {
+        deadlineMs: RC_RECOVERY_PROBE_DEADLINE_MS,
+      });
+      resolve(null);
+    }, RC_RECOVERY_PROBE_DEADLINE_MS);
+    timer.unref?.();
+  });
+  return Promise.race([probe, deadline]).finally(() => {
+    if (timer !== null) clearTimeout(timer);
+  });
 }
 
 async function runRcRecoveryProbe(
@@ -1039,6 +1109,21 @@ async function runRcRecoveryProbe(
   const all = await collectDesktopReleaseCandidates(coordinate);
   const releaseCandidates = all
     .filter((candidate) => candidate.version.includes("-rc."))
+    // NEWER THAN THE RUNNING BUILD, or the offer cannot be honoured. This
+    // updater never sets `autoUpdater.allowDowngrade`, so electron-updater
+    // reports a candidate at or below `CURRENT_VERSION` as "not available" -
+    // and the failure lands AFTER the user has already consented to the RC
+    // channel, leaving them switched over with nothing to install and no
+    // explanation. Epoch and SemVer are independent (that is the whole design),
+    // so a sufficient-epoch RC that is older by version is a real shape: a
+    // release line predating an epoch backport produces exactly one.
+    //
+    // Strictly `> 0`, which also fails closed on an unparseable version:
+    // `compareHostVersions` (the cli-discovery numeric form used throughout
+    // this file) returns 0 for anything it cannot parse, and 0 is not newer.
+    .filter(
+      (candidate) => compareHostVersions(candidate.version, CURRENT_VERSION) > 0,
+    )
     .sort((a, b) => compareHostVersions(b.version, a.version));
   const token = PRIVATE_UPDATE_TOKEN.trim();
   const channelFile = platformChannelFile();

@@ -154,6 +154,25 @@ export const runnerQueryKeys = {
     readonly hostAllowsRcRecovery: boolean;
     readonly candidateSufficient: boolean;
     readonly allowPrerelease: boolean;
+    /**
+     * The held candidate's status, or `"none"` when the updater holds nothing.
+     *
+     * ⚠ THIS SEGMENT IS NOT A CACHE-EFFICIENCY DETAIL - it is what makes
+     * `resolveCompatRecovery`'s SIDE EFFECTS run when they are needed. Resolving
+     * a plan discards an insufficient staged artifact and disarms quit-time
+     * install, and on macOS it is what produces the `restart-to-clear-staged`
+     * warning.
+     *
+     * Without it, the very common opening sequence silently skips all of that:
+     * the dialog mounts, the plan resolves while the mount-triggered update
+     * check is still in flight (nothing held, so `candidateSufficient: false`),
+     * and the check then lands an INSUFFICIENT candidate. `candidateSufficient`
+     * is still `false` and `allowPrerelease` has not moved, so the key is
+     * unchanged, the `staleTime: Infinity` entry is reused, and main is never
+     * asked again - leaving a Windows user with a staged build still armed to
+     * install on quit, and a macOS user with no warning that one will.
+     */
+    readonly candidateStatus: string;
   }) =>
     [
       ...runnerQueryKeys.appUpdateCompatRecoveryScope(input.runnerHostScopeId),
@@ -161,6 +180,7 @@ export const runnerQueryKeys = {
       input.hostAllowsRcRecovery,
       input.candidateSufficient,
       input.allowPrerelease,
+      input.candidateStatus,
     ] as const,
   /**
    * Every recovery plan resolved through one bridge, as a partial-match prefix.

@@ -1787,6 +1787,33 @@ describe("compat recovery: staged-artifact policy", () => {
     expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
   });
 
+  it("disarms quit-install for an insufficient candidate that is only available", async () => {
+    // The third of three quit-install outcomes on non-darwin, and the one with
+    // no other coverage: nothing is staged yet, but a candidate IS held. The
+    // artifact has not landed, so `updateArtifactStaged` is false and the
+    // staged-discard branch does not run - only `holdsCandidate` reaches the
+    // disarm. Deleting that branch keeps both neighbouring tests green.
+    setPlatform("win32");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    autoUpdater.emit("update-available", {
+      version: "2.0.0",
+      compatibilityEpoch: 1,
+    });
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(true);
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: false,
+    });
+
+    expect(plan.route).toBe("manual");
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
+    // The snapshot is NOT transitioned here - nothing was staged to discard.
+    expect(updater.getAppUpdateSnapshot().status).toBe("available");
+  });
+
   it("discards an insufficient staged build on non-darwin: disarms quit-install and leaves ready", async () => {
     setPlatform("win32");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
@@ -1912,6 +1939,113 @@ describe("compat recovery: RC probe", () => {
     expect(autoUpdater.setFeedURL).toHaveBeenCalledTimes(generationBefore);
     return plan;
   }
+
+  it("returns manual when the probe's network wait exceeds its deadline", async () => {
+    // A stalled request never rejects, so without a wall-clock ceiling the
+    // `manual` fallback is unreachable and the blocking dialog sits on a
+    // spinner forever - the one outcome every arm of this surface avoids.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    autoUpdater.setFeedURL.mockClear();
+    // Never settles, and never rejects. That is the shape a hung socket has.
+    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+
+    vi.useFakeTimers();
+    try {
+      const pending = updater.resolveCompatRecovery({
+        minimumEpoch: 2,
+        hostAllowsRcRecovery: true,
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      const plan = await pending;
+      expect(plan.route).toBe("manual");
+      expect(plan.rcCandidateVersion).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    // Still read-only on the timeout path.
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+  });
+
+  it("skips an RC that clears the floor but is not newer than the running build", async () => {
+    // The running build is `1.0.0-test` (see the electron mock). A sufficient
+    // RC that is OLDER by SemVer is a real shape - a release line predating an
+    // epoch backport produces one - and this updater never sets
+    // `allowDowngrade`, so electron-updater would report it as not available
+    // AFTER the user had already consented to the RC channel. Offering it is
+    // therefore a promise that cannot be kept.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.0.0-rc.1", prerelease: true, epoch: 2 },
+    ]);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
+  it("still offers an RC that clears the floor and IS newer", async () => {
+    // The control for the case above: same epoch, newer version, so the offer
+    // is one electron-updater can actually honour.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v2.0.0-rc.1", prerelease: true, epoch: 2 },
+    ]);
+    expect(plan.route).toBe("enable-rc");
+    expect(plan.rcCandidateVersion).toBe("2.0.0-rc.1");
+  });
+
+  it("does not offer the RC hop while a download is in flight", async () => {
+    // `performChannelChange` refuses unconditionally while a transfer is
+    // active - no CancellationToken is plumbed - so an `enable-rc` button here
+    // could only ever return `refused-update-pending`, which the dialog shows
+    // as nothing happening at all.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter(
+        [macReleaseFixture("desktop-v2.0.0-rc.1", true)],
+        { "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2) },
+      ),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    autoUpdater.emit("update-available", {
+      version: "1.5.0",
+      compatibilityEpoch: 1,
+    });
+    updater.startUpdateDownload();
+    expect(updater.getAppUpdateSnapshot().status).toBe("downloading");
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+  });
+
+  it("short-circuits on the PERSISTED channel, not the snapshot's copy", async () => {
+    // `currentSnapshot.allowPrerelease` can lag `prereleaseUpdatesEnabled()` -
+    // `getAppUpdateSnapshot` reconciles them on every read for that reason.
+    // Reading the unreconciled field would let the probe run against the feed
+    // the user is ALREADY on and offer an opt-in they already have, whose
+    // `setAllowPrereleaseUpdates(true)` then answers `unchanged`.
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter(
+        [macReleaseFixture("desktop-v2.0.0-rc.1", true)],
+        { "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2) },
+      ),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.setAllowPrereleaseUpdates(true);
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+  });
 
   it("a held sufficient candidate is update-available, even when the host is on RC", async () => {
     // The shorter path: no channel change, and the probe must not run. A

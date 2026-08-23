@@ -1,3 +1,4 @@
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import { releaseManifestUrl } from "../config";
 import { fetchText } from "./fetch-resource";
@@ -121,14 +122,11 @@ export async function fetchCliVersions(): Promise<CliVersionsManifest> {
  * every consumer treats as insufficient) already fails in the safe direction.
  */
 function readCompatibilityEpoch(value: unknown): number | null {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value <= 0
-  ) {
-    return null;
-  }
-  return value;
+  // Same scalar rule the host's admission gate applies, from the same place -
+  // see the desktop carrier reader for why this is not re-derived per client.
+  return typeof value === "number" && isValidCompatibilityEpoch(value)
+    ? value
+    : null;
 }
 
 /**

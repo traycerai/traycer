@@ -16,6 +16,7 @@ import type {
   UpdateFileInfo,
   UpdateInfo,
 } from "electron-updater/out/types";
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
 
 // electron-updater's HTTP executor reads a `redirect` field the node `http`
@@ -336,14 +337,14 @@ export function readCompatibilityEpoch(value: unknown): number | null {
     return null;
   }
   const candidate: unknown = value["compatibilityEpoch"];
-  if (
-    typeof candidate !== "number" ||
-    !Number.isSafeInteger(candidate) ||
-    candidate <= 0
-  ) {
-    return null;
-  }
-  return candidate;
+  // SCALAR VALIDITY comes from the protocol package, which is where the host's
+  // own admission gate reads it from. Re-deriving "positive safe integer" here
+  // is how the desktop and the CLI drifted into two copies of one rule; the
+  // record-field extraction above is the only part that is genuinely local to
+  // this carrier shape.
+  return typeof candidate === "number" && isValidCompatibilityEpoch(candidate)
+    ? candidate
+    : null;
 }
 
 /**

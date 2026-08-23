@@ -656,7 +656,14 @@ function clientCompatibilityKey(
     requirement.observedClientAppVersionStatus,
     requirement.minimumKnownClientAppVersion,
     requirement.upgradeChannel,
-    requirement.hostReleaseChannel,
+    // `?? null` because this member is OPTIONAL on the wire, not nullable: a
+    // host predating the field omits the key entirely, so the value here is
+    // `string | undefined` while every other segment is `string | number |
+    // null`. Mapping absent to `null` keeps the array's fixed-length,
+    // no-coalescing-to-empty-string property intact - `null` and `""` still
+    // serialize differently, which is what stops two materially different
+    // requirements from colliding onto one key.
+    requirement.hostReleaseChannel ?? null,
   ];
 }
 
