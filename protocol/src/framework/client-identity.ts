@@ -167,8 +167,27 @@ export type ClientCompatibilityFailure =
   | "invalid-epoch"
   | "below-minimum";
 
-/** Which release line the remedy lives on. */
-export type ClientUpgradeChannel = "stable" | "rc";
+/**
+ * Which release line the remedy lives on.
+ *
+ * Exported as VALUES, not only as a type, because the channel has runtime
+ * readers outside this package: a host validates the channel baked into its own
+ * config at startup, and the release tooling validates the one it is about to
+ * stamp. A type-only export leaves each of those hand-writing `"stable"` and
+ * `"rc"`, which is how a third channel gets added here and silently rejected
+ * there.
+ */
+export const CLIENT_UPGRADE_CHANNELS = ["stable", "rc"] as const;
+export type ClientUpgradeChannel = (typeof CLIENT_UPGRADE_CHANNELS)[number];
+
+export function isClientUpgradeChannel(
+  value: unknown,
+): value is ClientUpgradeChannel {
+  return (
+    typeof value === "string" &&
+    (CLIENT_UPGRADE_CHANNELS as readonly string[]).includes(value)
+  );
+}
 
 /**
  * The structured half of an epoch rejection, carried additively on
@@ -198,7 +217,7 @@ export const clientCompatibilityRequirementSchema = z.object({
   observedClientAppVersion: z.string().nullable(),
   observedClientAppVersionStatus: z.enum(["valid", "missing", "invalid"]),
   minimumKnownClientAppVersion: z.string().nullable(),
-  upgradeChannel: z.enum(["stable", "rc"]).nullable(),
+  upgradeChannel: z.enum(CLIENT_UPGRADE_CHANNELS).nullable(),
 });
 
 /**

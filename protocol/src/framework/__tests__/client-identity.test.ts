@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  CLIENT_UPGRADE_CHANNELS,
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
   MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
@@ -8,6 +9,7 @@ import {
   isStrictSemVer,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
+  isClientUpgradeChannel,
   isValidCompatibilityEpoch,
   toClientHandshakeIdentity,
   type ClientCompatibilityRequirement,
@@ -374,5 +376,48 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
         minimumCompatibilityEpoch: 2.5,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("the upgrade-channel contract as runtime values", () => {
+  /**
+   * The channel had a type-only export, so every RUNTIME reader outside this
+   * package - a host validating its own baked config at startup, the release
+   * tooling validating what it is about to stamp - had to hand-write the pair
+   * of literals. These assertions are what make the exported values the single
+   * definition rather than a second one that happens to agree today.
+   */
+
+  it("is the same set the wire schema accepts", () => {
+    for (const channel of CLIENT_UPGRADE_CHANNELS) {
+      expect(
+        clientCompatibilityRequirementSchema.safeParse({
+          ...REQUIREMENT,
+          upgradeChannel: channel,
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects a channel the wire schema also rejects", () => {
+    // Both directions on one value: a spelling no channel carries must fail the
+    // guard AND the schema, or a host would admit a config the wire cannot
+    // describe.
+    expect(isClientUpgradeChannel("beta")).toBe(false);
+    expect(
+      clientCompatibilityRequirementSchema.safeParse({
+        ...REQUIREMENT,
+        upgradeChannel: "beta",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("guards every declared channel and nothing else", () => {
+    for (const channel of CLIENT_UPGRADE_CHANNELS) {
+      expect(isClientUpgradeChannel(channel)).toBe(true);
+    }
+    for (const notAChannel of [null, undefined, 2, "", "STABLE", ["rc"]]) {
+      expect(isClientUpgradeChannel(notAChannel)).toBe(false);
+    }
   });
 });

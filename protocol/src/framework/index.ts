@@ -185,12 +185,14 @@ export type {
 } from "./client-identity";
 
 export {
+  CLIENT_UPGRADE_CHANNELS,
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
   MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
   STRICT_SEMVER_PATTERN,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
+  isClientUpgradeChannel,
   isStrictSemVer,
   isValidCompatibilityEpoch,
   toClientHandshakeIdentity,
