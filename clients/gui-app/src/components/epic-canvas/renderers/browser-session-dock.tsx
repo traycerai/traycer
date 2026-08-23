@@ -863,6 +863,7 @@ function useBrowserSessions(
       if (!parsed.success) return;
       handleBrowserSessionsFrame({
         frame: parsed.data,
+        chatId,
         setItems: (value) => {
           setStreamState((current) => {
             const currentItems = current.client === client ? current.items : [];
@@ -1124,8 +1125,10 @@ function handleBrowserSessionsFrame(args: {
   readonly pendingCloses: Map<string, PendingCloseRequest>;
   readonly browserView: DesktopBrowserViewBridge | null;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+  readonly chatId: string | null;
 }): void {
-  if (handleElectronBrowserTabFrame(args.frame)) return;
+  if (handleElectronBrowserTabFrame(args.frame, { chatId: args.chatId }))
+    return;
   if (
     handlePrimaryProfileCaptureFrame({
       frame: args.frame,

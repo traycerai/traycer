@@ -19,6 +19,9 @@ import {
   type AgentTabDisposition,
 } from "./agent-tab-surfacing";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { browserTileNameForUrl } from "./browser-link-routing-core";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type {
   AgentBrowserViewCdpDispatch,
   AgentBrowserViewCdpResult,
@@ -92,6 +95,28 @@ const backgroundBridgeByEpicHost = new Map<
   string,
   ElectronBrowserBackgroundTabBridge
 >();
+/**
+ * Ticket 38 step 2 (GUI side): foreground creates whose source anchor is a
+ * BACKGROUND view cannot split from a source pane. The fallback opens the
+ * host-minted durable id (frame.tabId) as a session-addressed tile in the
+ * owning chat canvas instead; this map parks the create's requestId per
+ * session until that tile's own registration settles so the ack carries
+ * the right tabId.
+ */
+const pendingForegroundCreatesBySession = new Map<
+  string,
+  { readonly requestId: string; readonly startedAt: number }
+>();
+
+function sweepPendingForegroundCreates(): void {
+  const now = Date.now();
+  for (const [sessionId, entry] of pendingForegroundCreatesBySession) {
+    if (now - entry.startedAt > 10_000) {
+      pendingForegroundCreatesBySession.delete(sessionId);
+    }
+  }
+}
+
 const createRequestsByRegistrationKey = new Map<
   string,
   {
@@ -231,6 +256,7 @@ export function replayElectronBrowserTabRegistrations(
 
 export function handleElectronBrowserTabFrame(
   frame: BrowserSessionsServerFrame,
+  ctx?: { readonly chatId?: string | null },
 ): boolean {
   if (frame.kind === "actionAck") {
     const pending = pendingHandoffAcks.get(frame.requestId);
@@ -240,7 +266,7 @@ export function handleElectronBrowserTabFrame(
     return true;
   }
   if (frame.kind === "createElectronTab") {
-    return handleCreateElectronTab(frame);
+    return handleCreateElectronTab(frame, ctx);
   }
   if (frame.kind === "releaseElectronTab") {
     releaseElectronTab(frame);
@@ -267,6 +293,25 @@ export function handleElectronBrowserTabFrame(
   });
   record.tabId = frame.tabId;
   notifyBindingListeners();
+  const parkedForegroundCreate = pendingForegroundCreatesBySession.get(
+    frame.sessionId,
+  );
+  if (
+    parkedForegroundCreate !== undefined &&
+    frame.tabId !== null
+  ) {
+    pendingForegroundCreatesBySession.delete(frame.sessionId);
+    // The host activated this tab's record before replying, so its
+    // step-3 create-gate will accept this ack.
+    sendForRecord(record, {
+      kind: "electronTabCreated",
+      hasBinaryPayload: false,
+      requestId: parkedForegroundCreate.requestId,
+      sessionId: frame.sessionId,
+      tabId: frame.tabId,
+      reason: null,
+    });
+  }
   const key = registrationKey(frame.sessionId, frame.registrationId);
   const createRequest = createRequestsByRegistrationKey.get(key);
   const durableStartedAt = Date.now();
@@ -438,20 +483,71 @@ function handleElectronTabRegistrationFailed(
   record?.onActivatedHeadless?.(frame.tabId);
 }
 
+/**
+ * Ticket 38 step 2 - the ONLY foreground path. The host mints the durable
+ * tab id and carries it on the frame; identity is independent of how the
+ * view is presented. The sibling opens as a session-addressed tile in the
+ * requesting chat's canvas (the same mechanism as the browser sidebar),
+ * and its own registration carries requestedTabId back so the host's
+ * provisioning record activates and the parked create request acks with
+ * the real id. Precondition failures ack null with a precise reason
+ * instead of falling into any alternate creation mechanism.
+ */
 function handleCreateElectronTab(
   frame: Extract<BrowserSessionsServerFrame, { kind: "createElectronTab" }>,
+  ctx?: { readonly chatId?: string | null },
 ): boolean {
   if (frame.background === true) {
     return handleBackgroundElectronTabCreate(frame);
   }
-  const source = findElectronBrowserTabBinding(
+
+  const anchorRecord =
+    findElectronBrowserTabBinding(frame.sessionId, frame.sourceTabId) ??
+    (typeof frame.tabId === "string"
+      ? findElectronBrowserTabBinding(frame.sessionId, frame.tabId)
+      : null);
+
+  const fail = (reason: string): boolean => {
+    if (anchorRecord !== null) {
+      sendForRecord(anchorRecord, {
+        kind: "electronTabCreated",
+        hasBinaryPayload: false,
+        requestId: frame.requestId,
+        sessionId: frame.sessionId,
+        tabId: null,
+        reason,
+      });
+      return true;
+    }
+    // No channel to answer on; upstream's honest fallback owns it.
+    return false;
+  };
+
+  if (typeof frame.tabId !== "string") {
+    return fail(
+      "Host sent no durable tab id on createElectronTab (pre-mint contract violation).",
+    );
+  }
+  sweepPendingForegroundCreates();
+  const existing = findElectronBrowserTabBinding(
     frame.sessionId,
-    frame.sourceTabId,
+    frame.tabId,
   );
-  if (source === null) return false;
-  // Agent-initiated foreground creates are the only producers of this frame,
-  // so the preference is applied exactly here. Without a resolvable epic the
-  // disposition cannot be computed (older host); keep the historical split.
+  if (existing !== null && existing.requestedTabId === frame.tabId) {
+    // Retry after a partially-settled attempt: this tab is live here.
+    sendForRecord(existing, {
+      kind: "electronTabCreated",
+      hasBinaryPayload: false,
+      requestId: frame.requestId,
+      sessionId: frame.sessionId,
+      tabId: frame.tabId,
+      reason: null,
+    });
+    return true;
+  }
+
+  // Presentation preference (pip / tile / off), applied by the GUI only -
+  // identity was already settled by the host's mint on the frame.
   const disposition: AgentTabDisposition =
     frame.epicId === undefined || frame.hostId === undefined
       ? { action: "tile", suppressReason: null }
@@ -461,57 +557,104 @@ function handleCreateElectronTab(
           manualPipActive: isManualPipActive(frame.epicId),
         });
   trackAgentTabSurfaced(disposition, "electron-create");
-  const { epicId, hostId } = frame;
+
+  const epicId = frame.epicId;
+  const hostId = frame.hostId;
   if (
     disposition.action !== "tile" &&
     epicId !== undefined &&
     hostId !== undefined &&
     createHiddenElectronTab(frame, {
-      requestedTabId: null,
+      // Claim the host-minted id directly - no placeholder runtime key or
+      // post-registration rekey needed under the pre-mint contract.
+      requestedTabId: frame.tabId,
       onRegistered:
         disposition.action === "float"
-          ? (tabId) =>
+          ? (registeredTabId) =>
               openAgentTabInPip({
                 epicId,
                 hostId,
                 sessionId: frame.sessionId,
-                tabId,
+                tabId: registeredTabId,
               })
           : null,
     })
   ) {
     return true;
   }
-  const tile = placeAgentElectronTile({
-    viewTabId: source.tileKey.viewTabId,
-    anchorPaneId: source.tileKey.paneId,
-    hostId: source.hostId,
-    sessionId: frame.sessionId,
-    url: frame.url,
-    runtime: source.background === true ? "primary" : "isolated",
-  });
-  if (tile === null) {
-    sendForRecord(source, {
-      kind: "electronTabCreated",
-      hasBinaryPayload: false,
-      requestId: frame.requestId,
+
+  // Visible placement. Preferred shape: group into the session's existing
+  // pane when one is reachable from the anchor record.
+  const sourceRecord =
+    findElectronBrowserTabBinding(frame.sessionId, frame.sourceTabId);
+  const viewTabId =
+    ctx?.chatId != null ? findViewTabForChat(ctx.chatId) : undefined;
+  if (
+    sourceRecord !== null &&
+    placeAgentElectronTile({
+      viewTabId: sourceRecord.tileKey.viewTabId,
+      anchorPaneId: sourceRecord.tileKey.paneId,
+      hostId: sourceRecord.hostId,
       sessionId: frame.sessionId,
-      tabId: null,
-      reason: "The source browser tile is no longer available.",
-    });
+      url: frame.url,
+      runtime: sourceRecord.background === true ? "primary" : "isolated",
+    }) !== null
+  ) {
     return true;
   }
-  // The placed tile mounts and registers under `registrationId = tile.id`;
-  // key the pending create so that registration acks THIS request.
-  createRequestsByRegistrationKey.set(
-    registrationKey(frame.sessionId, tile.id),
-    {
+
+  // Otherwise: session-addressed viewport into the requesting chat's canvas
+  // (the same mechanism as the browser sidebar's open). The parked create
+  // acks once this tile's own registration settles.
+  if (viewTabId !== undefined) {
+    pendingForegroundCreatesBySession.set(frame.sessionId, {
       requestId: frame.requestId,
-      ready: Promise.resolve(),
       startedAt: Date.now(),
-    },
-  );
-  return true;
+    });
+    useEpicCanvasStore
+      .getState()
+      .prepareOpenTileInTabFocusTarget(
+        viewTabId,
+        makeBrowserSessionTileRef({
+          name: browserTileNameForUrl(frame.url),
+          hostId: frame.hostId ?? "",
+          sessionId: frame.sessionId,
+          tabId: frame.tabId,
+        }),
+      );
+    return true;
+  }
+  if (viewTabId !== undefined) {
+    pendingForegroundCreatesBySession.set(frame.sessionId, {
+      requestId: frame.requestId,
+      startedAt: Date.now(),
+    });
+    useEpicCanvasStore
+      .getState()
+      .prepareOpenTileInTabFocusTarget(
+        viewTabId,
+        makeBrowserSessionTileRef({
+          name: browserTileNameForUrl(frame.url),
+          hostId: frame.hostId ?? "",
+          sessionId: frame.sessionId,
+          tabId: frame.tabId,
+        }),
+      );
+    return true;
+  }
+  return fail("No epic-canvas is hosting this chat.");
+}
+
+/** The epic-canvas view tab whose canvas contains the chat node. */
+function findViewTabForChat(chatId: string): string | undefined {
+  const state = useEpicCanvasStore.getState();
+  for (const [viewTabId, canvas] of Object.entries(state.canvasByTabId)) {
+    if (canvas === undefined) continue;
+    for (const tile of Object.values(canvas.tilesByInstanceId)) {
+      if ((tile as { id?: unknown }).id === chatId) return viewTabId;
+    }
+  }
+  return undefined;
 }
 
 function handleBackgroundElectronTabCreate(

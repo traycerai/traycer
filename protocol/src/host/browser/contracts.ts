@@ -598,6 +598,14 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     sessionId: z.string(),
     sourceTabId: z.string(),
     url: z.string(),
+    /**
+     * Ticket 38 step 2: the host mints the durable tab id at create time
+     * and carries it here. Renderers thread it into their
+     * `registerElectronTab` echo as `requestedTabId`; hosts claim it on a
+     * null echo for back-compat and treat any other value as a typed
+     * identity violation.
+     */
+    tabId: z.string().optional(),
     background: z.boolean().optional(),
     epicId: z.string().optional(),
     hostId: z.string().optional(),
