@@ -3596,6 +3596,107 @@ describe("subagent terminal monotonicity", () => {
     expect(byId.get("sa1-tool")?.status).toBe("completed");
   });
 
+  it("a clean parent completion leaves a still-running nested sub-agent (and its subtree) streaming, so the nested card's own terminal still lands", () => {
+    // Option B one level down: detached work outlives the scope that spawned
+    // it, exactly as a clean turn.completed leaves a backgrounded subagent
+    // running at the root.
+    let blocks = applyEvents(makeBlocks(), [
+      { type: "subagent.started", blockId: "A", timestamp: 1, name: "a" },
+      {
+        type: "subagent.started",
+        blockId: "B",
+        parentBlockId: "A",
+        timestamp: 2,
+        name: "b",
+      },
+      {
+        type: "tool_call.started",
+        blockId: "B-tool",
+        parentBlockId: "B",
+        timestamp: 3,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      // A turn-scoped descendant of A, which SHOULD settle with A.
+      {
+        type: "tool_call.started",
+        blockId: "A-tool",
+        parentBlockId: "A",
+        timestamp: 4,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "subagent.completed",
+        blockId: "A",
+        timestamp: 5,
+        outcome: "completed",
+      },
+    ]);
+    let byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("A")?.status).toBe("completed");
+    expect(byId.get("A-tool")?.status).toBe("completed");
+    expect(byId.get("B")?.status).toBe("streaming");
+    expect(byId.get("B-tool")?.status).toBe("streaming");
+
+    // Because B was never force-completed, its own terminal still applies -
+    // terminal monotonicity would otherwise have made a wrong "completed"
+    // permanent and swallowed this failure.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "B",
+      timestamp: 6,
+      outcome: "failed",
+      result: "boom",
+    });
+    byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("B")).toMatchObject({ status: "errored", result: "boom" });
+    expect(byId.get("B-tool")?.status).toBe("interrupted");
+  });
+
+  it("a clean parent completion leaves a background-marked descendant streaming, but a cut-short parent takes everything", () => {
+    const backgrounded: ReadonlyArray<RuntimeEvent> = [
+      { type: "subagent.started", blockId: "A", timestamp: 1, name: "a" },
+      {
+        type: "command.started",
+        blockId: "bg",
+        parentBlockId: "A",
+        timestamp: 2,
+        command: "sleep 100",
+        backgroundTask: true,
+      },
+    ];
+    const clean = applyEvents(makeBlocks(), [
+      ...backgrounded,
+      {
+        type: "subagent.completed",
+        blockId: "A",
+        timestamp: 3,
+        outcome: "completed",
+      },
+    ]);
+    expect(clean.find((block) => block.blockId === "bg")?.status).toBe(
+      "streaming",
+    );
+
+    // A stopped parent is a cut-short, mirroring turn.stopped: detached work
+    // cannot keep running once the scope was torn down.
+    const stopped = applyEvents(makeBlocks(), [
+      ...backgrounded,
+      {
+        type: "subagent.completed",
+        blockId: "A",
+        timestamp: 3,
+        outcome: "stopped",
+      },
+    ]);
+    expect(stopped.find((block) => block.blockId === "bg")?.status).toBe(
+      "interrupted",
+    );
+  });
+
   it("a child terminal leaves an already-terminalized nested descendant untouched (children-first cascade)", () => {
     let blocks = accumulateEvent(makeBlocks(), {
       type: "subagent.started",

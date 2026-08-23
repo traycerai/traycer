@@ -269,7 +269,26 @@ function settleTerminalSubagentSubtree(
   if (card === undefined) return blocks;
   const status = descendantStatusForTerminalCard(card);
   if (status === null) return blocks;
-  return finalizeStreamingDescendants(blocks, blockId, timestamp, status);
+  // Option B, one level down. A CLEAN parent completion leaves DETACHED work
+  // running - a nested sub-agent card, a background-marked tool/command, and
+  // their subtrees - exactly as a clean `turn.completed` does at the root (see
+  // `reopenStreamingSubagentBlocks`): that work outlives the scope that spawned
+  // it and must keep reading "running" until its OWN terminal arrives. Claiming
+  // it finished here would be doubly wrong now that terminal state is sticky -
+  // the nested card's real failure/stop could never correct it. Only turn-scoped
+  // descendants settle. A cut-short parent (failed / stopped / interrupted /
+  // superseded) still takes everything with it, mirroring `turn.stopped`.
+  const preserved =
+    status === "completed"
+      ? streamingDetachedBlockIds(blocks)
+      : new Set<string>();
+  return finalizeStreamingDescendants(
+    blocks,
+    blockId,
+    timestamp,
+    status,
+    preserved,
+  );
 }
 
 // Finalize the streaming blocks nested under `rootId` (a just-terminalized
@@ -280,18 +299,22 @@ function settleTerminalSubagentSubtree(
 // they would spin forever while the root turn keeps running. Scoped by
 // `parentBlockId` ancestry, so an individually stopped child never finalizes a
 // sibling child or a root-level block. Nested descendants that already reached
-// their own terminal (children-first cascade, §14) are skipped by identity.
+// their own terminal (children-first cascade, §14) are skipped by identity, and
+// anything in `preservedIds` is left streaming (detached work outliving a clean
+// parent completion - see `settleTerminalSubagentSubtree`).
 function finalizeStreamingDescendants(
   blocks: ContentBlock[],
   rootId: string,
   timestamp: number,
   actionStatus: FinalizedActionStatus,
+  preservedIds: ReadonlySet<string>,
 ): ContentBlock[] {
   const ids = descendantBlockIds(blocks, rootId);
   if (ids.size === 0) return blocks;
   let hasUpdates = false;
   const next = blocks.map((block) => {
-    if (!ids.has(block.blockId)) return block;
+    if (!ids.has(block.blockId) || preservedIds.has(block.blockId))
+      return block;
     const finalized = finalizeStreamingBlock(block, timestamp, actionStatus);
     if (finalized !== block) hasUpdates = true;
     return finalized;
