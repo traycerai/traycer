@@ -348,13 +348,6 @@ function isTerminalSubagentBlock(block: SubAgentBlock): boolean {
   return block.status !== "streaming";
 }
 
-// A late `*.completed` on an already-terminal card keeps every terminal field.
-// It may still fill a `result` no earlier terminal recorded (a root-cascade
-// stop landed first without one and the native completion carries the child's
-// final message) and adopt a parent the card did not yet know (parent identity
-// is enrichable after terminal, exactly as a `*.started` re-emit may enrich
-// it). Anything else is an identity no-op, so `accumulateTurnContent` does not
-// bump `blocksVersion` for it.
 // Does this `*.started` begin a NEW run on an existing card? Primarily the
 // explicit discriminator (`isNewSubagentRun`: a different non-null spawn id).
 // One more case: a TERMINAL card that never learned a spawn id (minted by the
@@ -379,6 +372,13 @@ function reopensSubagentRun(
   );
 }
 
+// A late `*.completed` on an already-terminal card keeps every terminal field.
+// It may still fill a `result` no earlier terminal recorded (a root-cascade
+// stop landed first without one and the native completion carries the child's
+// final message) and adopt a parent the card did not yet know (parent identity
+// is enrichable after terminal, exactly as a `*.started` re-emit may enrich
+// it). Anything else is an identity no-op, so `accumulateTurnContent` does not
+// bump `blocksVersion` for it.
 function mergeLateSubagentTerminal(
   blocks: ContentBlock[],
   existing: SubAgentBlock,
