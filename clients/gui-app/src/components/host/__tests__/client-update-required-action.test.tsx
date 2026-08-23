@@ -560,15 +560,18 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
     expect(bridge.checkForUpdates).not.toHaveBeenCalled();
   });
 
-  it("does NOT ask mid-download or mid-install, however stale the build", async () => {
-    for (const snapshot of [
-      { status: "downloading" as const, installInFlight: false },
-      { status: "ready" as const, installInFlight: true },
-    ]) {
-      cleanup();
+  // The status literals need the explicit tuple type: inferred from the rows
+  // alone they widen to `string`, which `DesktopAppUpdateSnapshot` refuses.
+  it.each<[string, DesktopAppUpdateSnapshot["status"], boolean]>([
+    ["mid-download", "downloading", false],
+    ["mid-install", "ready", true],
+  ])(
+    "does NOT ask %s, however stale the build",
+    async (_label, status, installInFlight) => {
       const bridge = new FakeAppUpdatesBridge({
         ...IDLE_SNAPSHOT,
-        ...snapshot,
+        status,
+        installInFlight,
         latestVersion: "1.2.0",
         allowPrerelease: true,
         lastCheckedAt: "2026-06-15T00:00:00.000Z",
@@ -584,6 +587,6 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
       });
       await flushMicrotasks();
       expect(bridge.checkForUpdates).not.toHaveBeenCalled();
-    }
-  });
+    },
+  );
 });
