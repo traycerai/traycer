@@ -438,35 +438,25 @@ function reopensSubagentRun(
 }
 
 // A late `*.completed` on an already-terminal card keeps every terminal field.
-// It may still fill a `result` no earlier terminal recorded (a root-cascade
+// It may still fill a `result` no earlier terminal recorded - a root-cascade
 // stop landed first without one and the native completion carries the child's
-// final message) and adopt an owner the card did not yet know. A KNOWN owner is
-// preserved: unlike a `*.started` re-emit - which carries the full tri-state
-// parent and may legitimately re-parent or clear (see the explicit-null test) -
-// a late or duplicate completion must not hoist a nested card to root by
-// carrying `parentBlockId: null`. Anything else is an identity no-op, so
+// final message. It deliberately does NOT touch parentage: accumulated state
+// stores `parentBlockId` as `string | null`, which cannot distinguish a card
+// whose owner is UNKNOWN from one confirmed top-level, so any adopt-when-absent
+// rule here would also re-nest a card that was started with an explicit
+// `parentBlockId: null`. Parentage has a tri-state-correct channel of its own -
+// `*.started`, whose `resolveParentBlockId` applies even to a terminal card
+// (omitted preserves, `null` un-nests, a string nests) - so nothing is lost by
+// leaving it alone. Anything but a result fill is an identity no-op, so
 // `accumulateTurnContent` does not bump `blocksVersion` for it.
 function mergeLateSubagentTerminal(
   blocks: ContentBlock[],
   existing: SubAgentBlock,
-  event: { parentBlockId?: string | null; result?: string },
+  event: { result?: string },
 ): ContentBlock[] {
   const result = existing.result ?? nullableString(event.result);
-  // Preserve a recorded owner; only resolve from the late event when none is
-  // known, so a duplicate completion cannot contradict a known parent.
-  const parentBlockId =
-    existing.parentBlockId ?? resolveParentBlockId(event, existing);
-  if (
-    result === existing.result &&
-    parentBlockId === (existing.parentBlockId ?? null)
-  ) {
-    return blocks;
-  }
-  return replaceBlock(blocks, existing.blockId, {
-    ...existing,
-    result,
-    parentBlockId,
-  });
+  if (result === existing.result) return blocks;
+  return replaceBlock(blocks, existing.blockId, { ...existing, result });
 }
 
 // Appends a new workflow activity entry, skipping a consecutive duplicate

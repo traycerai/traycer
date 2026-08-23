@@ -3117,40 +3117,38 @@ describe("subagent terminal monotonicity", () => {
     expect(again).toBe(blocks);
   });
 
-  it("a late subagent.completed may adopt a parent the terminal card did not yet know", () => {
-    const completed = accumulateEvent(streamingCard(), {
+  it("a late subagent.completed never re-parents a terminal card, in either direction", () => {
+    // Accumulated state cannot tell "owner unknown" from "confirmed root" -
+    // both are `parentBlockId: null` - so a completion never touches parentage.
+    const rootChild = accumulateEvent(streamingCard(), {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 2,
       outcome: "completed",
       result: "done",
+      parentBlockId: null,
     });
-    const parented = accumulateEvent(completed, {
+    expect(expectSubAgentBlock(rootChild[0]).parentBlockId).toBeNull();
+
+    // A confirmed-root card is NOT nested by a duplicate completion naming a
+    // parent, and the event is an identity no-op.
+    const afterParent = accumulateEvent(rootChild, {
       type: "subagent.completed",
       blockId: "sa1",
       timestamp: 3,
       outcome: "failed",
       parentBlockId: "sa-parent",
     });
-    expect(expectSubAgentBlock(parented[0])).toMatchObject({
+    expect(afterParent).toBe(rootChild);
+    expect(expectSubAgentBlock(afterParent[0])).toMatchObject({
       status: "completed",
       result: "done",
       timestamp: 2,
-      parentBlockId: "sa-parent",
+      parentBlockId: null,
     });
-    // Re-sending the same parent is an identity no-op.
-    expect(
-      accumulateEvent(parented, {
-        type: "subagent.completed",
-        blockId: "sa1",
-        timestamp: 4,
-        outcome: "completed",
-        parentBlockId: "sa-parent",
-      }),
-    ).toBe(parented);
-  });
 
-  it("a late subagent.completed with parentBlockId null does not hoist a known-parent terminal card to root", () => {
+    // ...and the mirror: a nested card is not hoisted to root by a duplicate
+    // completion carrying an explicit null owner.
     const nested = accumulateEvent(streamingCard(), {
       type: "subagent.completed",
       blockId: "sa1",
@@ -3160,10 +3158,6 @@ describe("subagent terminal monotonicity", () => {
       parentBlockId: "sa-parent",
     });
     expect(expectSubAgentBlock(nested[0]).parentBlockId).toBe("sa-parent");
-
-    // A duplicate completion carrying an explicit null owner is noise, not a
-    // re-parent: the known owner is preserved and the event is an identity
-    // no-op.
     const afterNull = accumulateEvent(nested, {
       type: "subagent.completed",
       blockId: "sa1",
@@ -3173,6 +3167,45 @@ describe("subagent terminal monotonicity", () => {
     });
     expect(afterNull).toBe(nested);
     expect(expectSubAgentBlock(afterNull[0]).parentBlockId).toBe("sa-parent");
+  });
+
+  it("a late subagent.started still re-parents a terminal card (the tri-state channel)", () => {
+    // Parentage enrichment after terminal remains possible through `*.started`,
+    // which carries the full tri-state: omitted preserves, a string nests, an
+    // explicit null un-nests. A result fill by a late completion is unaffected.
+    let blocks = accumulateEvent(streamingCard(), {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2,
+      outcome: "completed",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 3,
+      name: "explorer",
+      parentBlockId: "sa-parent",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      status: "completed",
+      timestamp: 2,
+      parentBlockId: "sa-parent",
+    });
+
+    // A late completion still fills a still-null result without touching the
+    // parent the started event established.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 4,
+      outcome: "completed",
+      result: "final message",
+    });
+    expect(expectSubAgentBlock(blocks[0])).toMatchObject({
+      result: "final message",
+      parentBlockId: "sa-parent",
+      timestamp: 2,
+    });
   });
 
   it("the new-run discriminator still reopens a terminal card, after which progress and completion apply to the new run", () => {
