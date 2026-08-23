@@ -125,71 +125,136 @@ export function finalizeStatusForTerminalEvent(
 //
 // `actionStatus` is applied to action blocks (tool_call/command/file_change/
 // subagent); text/reasoning are always "completed".
+// Finalize a SINGLE streaming block per its type - the terminal-status mapping
+// shared by `finalizeStreamingActionBlocks` (whole row) and
+// `finalizeStreamingDescendants` (one sub-agent subtree). approval/interview
+// are resolved out-of-band and left untouched; a non-streaming block is
+// returned by identity, so callers detect "no change" by reference equality.
+function finalizeStreamingBlock(
+  block: ContentBlock,
+  timestamp: number,
+  actionStatus: FinalizedActionStatus,
+): ContentBlock {
+  if (
+    block.status !== "streaming" ||
+    block.type === "approval" ||
+    block.type === "interview"
+  ) {
+    return block;
+  }
+  // For tool_call/command, keep the start timestamp stable. Tool calls also
+  // carry immutable `startedAt`; `timestamp` advances only when their own
+  // terminal event arrives, which lets background command cards derive a
+  // post-completion duration.
+  if (block.type === "tool_call" || block.type === "command") {
+    return { ...block, status: actionStatus };
+  }
+  // file_change/subagent are action blocks too, but treat `timestamp` as
+  // completion (no live elapsed anchor) - advance it to the turn-end time.
+  if (block.type === "file_change" || block.type === "subagent") {
+    return { ...block, status: actionStatus, timestamp };
+  }
+  // A plan left streaming at turn end never received an explicit
+  // plan.completed. Flip its block status to completed AND promote planStatus
+  // out of "drafting" to the terminal "ready" - otherwise the card shows a
+  // frozen "Drafting" spinner forever. Keep the start timestamp (plans carry
+  // no live elapsed anchor).
+  if (block.type === "plan") {
+    return {
+      ...block,
+      status: "completed" as const,
+      planStatus: block.planStatus === "drafting" ? "ready" : block.planStatus,
+    };
+  }
+  // A compaction still in flight at turn end never reported a boundary, so it
+  // folded nothing. Marking it "completed" would claim a result it never
+  // produced - the silent version of a failed compaction. Compaction is not an
+  // action block, so `interrupted`/`superseded` are not in its schema;
+  // `errored` is the honest terminal state.
+  if (block.type === "compaction") {
+    return {
+      ...block,
+      status: "errored" as const,
+      error: block.error ?? "Compaction did not finish",
+      timestamp,
+    };
+  }
+  // text/reasoning are content, not actions: a partial thought/sentence is
+  // not a failure. Always "completed", with `timestamp` advanced to turn-end
+  // so a derived duration ("Thought for Xs") spans first delta → turn end.
+  return { ...block, status: "completed" as const, timestamp };
+}
+
 export function finalizeStreamingActionBlocks(
   blocks: ContentBlock[],
   timestamp: number,
   actionStatus: FinalizedActionStatus,
 ): ContentBlock[] {
   let hasUpdates = false;
-
   const finalizedBlocks = blocks.map((block) => {
-    if (
-      block.status === "streaming" &&
-      block.type !== "approval" &&
-      block.type !== "interview"
-    ) {
-      hasUpdates = true;
-      // For tool_call/command, keep the start timestamp stable. Tool calls also
-      // carry immutable `startedAt`; `timestamp` advances only when their own
-      // terminal event arrives, which lets background command cards derive a
-      // post-completion duration.
-      if (block.type === "tool_call" || block.type === "command") {
-        return { ...block, status: actionStatus };
-      }
-      // file_change/subagent are action blocks too, but treat `timestamp` as
-      // completion (no live elapsed anchor) - advance it to the turn-end time.
-      if (block.type === "file_change" || block.type === "subagent") {
-        return { ...block, status: actionStatus, timestamp };
-      }
-      // A plan left streaming at turn end never received an explicit
-      // plan.completed. Flip its block status to completed AND promote
-      // planStatus out of "drafting" to the terminal "ready" - otherwise the
-      // card shows a frozen "Drafting" spinner forever. Keep the start
-      // timestamp (plans carry no live elapsed anchor).
-      if (block.type === "plan") {
-        return {
-          ...block,
-          status: "completed" as const,
-          planStatus:
-            block.planStatus === "drafting" ? "ready" : block.planStatus,
-        };
-      }
-      // A compaction still in flight at turn end never reported a boundary, so
-      // it folded nothing. The content fallthrough below would mark it
-      // "completed" and the bar would claim a result it never produced - the
-      // silent version of a failed compaction, with no error line to contradict
-      // it. Compaction is not an action block, so `interrupted`/`superseded` are
-      // not in its schema; `errored` is the honest terminal state. No harness
-      // leaves a compaction running across a turn end (each yields its own
-      // terminal event first), so this only ever fires on a genuine cut-short.
-      if (block.type === "compaction") {
-        return {
-          ...block,
-          status: "errored" as const,
-          error: block.error ?? "Compaction did not finish",
-          timestamp,
-        };
-      }
-      // text/reasoning are content, not actions: a partial thought/sentence is
-      // not a failure. Always "completed", with `timestamp` advanced to turn-end
-      // so a derived duration ("Thought for Xs") spans first delta → turn end.
-      return { ...block, status: "completed" as const, timestamp };
-    }
-
-    return block;
+    const finalized = finalizeStreamingBlock(block, timestamp, actionStatus);
+    if (finalized !== block) hasUpdates = true;
+    return finalized;
   });
-
   return hasUpdates ? finalizedBlocks : blocks;
+}
+
+// The block ids nested (at any depth) under `rootId`, following `parentBlockId`.
+function descendantBlockIds(
+  blocks: ContentBlock[],
+  rootId: string,
+): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const block of blocks) {
+    const parent = block.parentBlockId ?? null;
+    if (parent === null) continue;
+    const siblings = childrenByParent.get(parent);
+    if (siblings === undefined) {
+      childrenByParent.set(parent, [block.blockId]);
+    } else {
+      siblings.push(block.blockId);
+    }
+  }
+  const descendants = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined) break;
+    for (const child of childrenByParent.get(id) ?? []) {
+      if (!descendants.has(child)) {
+        descendants.add(child);
+        stack.push(child);
+      }
+    }
+  }
+  return descendants;
+}
+
+// Finalize the streaming blocks nested under `rootId` (a just-terminalized
+// sub-agent card), leaving every block OUTSIDE that subtree untouched. A child
+// terminal (`subagent.completed`) settles only the card itself; its nested
+// tool/command/file blocks carry no terminal event of their own once the child
+// session's `turn.*` is suppressed (see `subagent-nesting.ts`), so without this
+// they would spin forever while the root turn keeps running. Scoped by
+// `parentBlockId` ancestry, so an individually stopped child never finalizes a
+// sibling child or a root-level block. Nested descendants that already reached
+// their own terminal (children-first cascade, §14) are skipped by identity.
+function finalizeStreamingDescendants(
+  blocks: ContentBlock[],
+  rootId: string,
+  timestamp: number,
+  actionStatus: FinalizedActionStatus,
+): ContentBlock[] {
+  const ids = descendantBlockIds(blocks, rootId);
+  if (ids.size === 0) return blocks;
+  let hasUpdates = false;
+  const next = blocks.map((block) => {
+    if (!ids.has(block.blockId)) return block;
+    const finalized = finalizeStreamingBlock(block, timestamp, actionStatus);
+    if (finalized !== block) hasUpdates = true;
+    return finalized;
+  });
+  return hasUpdates ? next : blocks;
 }
 
 // Option B (backgrounded work): restore any subagent block, or any background-
@@ -1769,7 +1834,18 @@ export function accumulateEvent(
           parentBlockId: resolveParentBlockId(event, existing),
           timestamp: event.timestamp,
         };
-        return replaceBlock(blocks, event.blockId, updated);
+        const withCard = replaceBlock(blocks, event.blockId, updated);
+        // The child terminal settles only the card. Finalize its still-
+        // streaming nested tool/command/file descendants too - they have no
+        // terminal event of their own once the child's `turn.*` is suppressed -
+        // scoped to this card's subtree so unrelated root/sibling blocks keep
+        // running. A clean finish completes them; a fail/stop cuts them off.
+        return finalizeStreamingDescendants(
+          withCard,
+          event.blockId,
+          event.timestamp,
+          status === "completed" ? "completed" : "interrupted",
+        );
       }
       return [
         ...blocks,

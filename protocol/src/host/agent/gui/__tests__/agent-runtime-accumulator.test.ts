@@ -20,6 +20,13 @@ function makeBlocks(): ContentBlock[] {
   return [];
 }
 
+function applyEvents(
+  blocks: ContentBlock[],
+  events: ReadonlyArray<RuntimeEvent>,
+): ContentBlock[] {
+  return events.reduce((acc, event) => accumulateEvent(acc, event), blocks);
+}
+
 type TextBlock = Extract<ContentBlock, { type: "text" }>;
 type ReasoningBlock = Extract<ContentBlock, { type: "reasoning" }>;
 type ToolCallBlock = Extract<ContentBlock, { type: "tool_call" }>;
@@ -3367,6 +3374,156 @@ describe("subagent terminal monotonicity", () => {
         update: "late",
       }),
     ).toBe(late);
+  });
+
+  it("an individually stopped child finalizes its whole subtree while the root turn keeps running and sibling/root blocks stay streaming", () => {
+    // sa1 (stopped child) with a two-deep descendant chain and a file edit; a
+    // sibling child sa2 with its own tool; and a top-level root tool. Only the
+    // root turn is NOT terminated - no turn.stopped follows.
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = applyEvents(blocks, [
+      {
+        type: "tool_call.started",
+        blockId: "sa1-tool",
+        parentBlockId: "sa1",
+        timestamp: 2,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "command.started",
+        blockId: "sa1-cmd",
+        parentBlockId: "sa1-tool",
+        timestamp: 3,
+        command: "rg TODO",
+      },
+      {
+        type: "file_change.started",
+        blockId: "sa1-file",
+        parentBlockId: "sa1",
+        timestamp: 4,
+        filePath: "/repo/a.ts",
+        operation: "modify",
+      },
+      {
+        type: "subagent.started",
+        blockId: "sa2",
+        timestamp: 5,
+        name: "reviewer",
+      },
+      {
+        type: "tool_call.started",
+        blockId: "sa2-tool",
+        parentBlockId: "sa2",
+        timestamp: 6,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "tool_call.started",
+        blockId: "root-tool",
+        timestamp: 7,
+        toolName: "Bash",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 8,
+        outcome: "stopped",
+      },
+    ]);
+
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    // sa1's whole subtree is finalized (its nested blocks had no terminal of
+    // their own once the child's turn.* was suppressed).
+    expect(byId.get("sa1")).toMatchObject({ status: "errored", stopped: true });
+    expect(byId.get("sa1-tool")?.status).toBe("interrupted");
+    expect(byId.get("sa1-cmd")?.status).toBe("interrupted");
+    expect(byId.get("sa1-file")?.status).toBe("interrupted");
+    // The sibling child and the root-level tool keep running - the finalize is
+    // scoped to sa1's subtree, not the whole row.
+    expect(byId.get("sa2")?.status).toBe("streaming");
+    expect(byId.get("sa2-tool")?.status).toBe("streaming");
+    expect(byId.get("root-tool")?.status).toBe("streaming");
+  });
+
+  it("a cleanly completed child finalizes a leftover streaming descendant as completed", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = applyEvents(blocks, [
+      {
+        type: "tool_call.started",
+        blockId: "sa1-tool",
+        parentBlockId: "sa1",
+        timestamp: 2,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 3,
+        outcome: "completed",
+        result: "done",
+      },
+    ]);
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    expect(byId.get("sa1")).toMatchObject({ status: "completed" });
+    expect(byId.get("sa1-tool")?.status).toBe("completed");
+  });
+
+  it("a child terminal leaves an already-terminalized nested descendant untouched (children-first cascade)", () => {
+    let blocks = accumulateEvent(makeBlocks(), {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1,
+      name: "explorer",
+    });
+    blocks = applyEvents(blocks, [
+      {
+        type: "tool_call.started",
+        blockId: "sa1-tool",
+        parentBlockId: "sa1",
+        timestamp: 2,
+        toolName: "read_file",
+        input: {},
+        agentMessageSend: null,
+      },
+      // The nested tool reached its own terminal first (children-first, §14).
+      {
+        type: "tool_call.completed",
+        blockId: "sa1-tool",
+        parentBlockId: "sa1",
+        timestamp: 3,
+        toolName: "read_file",
+        agentMessageSend: null,
+        imageResults: [],
+      },
+      {
+        type: "subagent.completed",
+        blockId: "sa1",
+        timestamp: 4,
+        outcome: "stopped",
+      },
+    ]);
+    const byId = new Map(blocks.map((block) => [block.blockId, block]));
+    // Not repainted to "interrupted" - it was already completed.
+    expect(byId.get("sa1-tool")?.status).toBe("completed");
+    expect(byId.get("sa1")).toMatchObject({ status: "errored", stopped: true });
   });
 
   it("a continuation subagent.started with a spawn id reopens a terminal card that never learned one (orphan-minted)", () => {

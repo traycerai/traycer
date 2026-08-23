@@ -21,7 +21,10 @@ import { deriveToolInputSummary, toSummaryLine } from "./tool-input-summary";
 // for `steer.submitted` / `compaction.errored` - so a leaked child lifecycle
 // event would interrupt the root's own in-flight work or inject a root-level
 // steer / compaction card. The only public child terminal is
-// `subagent.completed`, which the converter emits itself. `error` is suppressed
+// `subagent.completed`, which the converter emits itself; the accumulator
+// finalizes that child's still-streaming nested tool/command/file descendants
+// when it settles the card (`finalizeStreamingDescendants`), so suppressing the
+// child `turn.*` here does not strand them spinning. `error` is suppressed
 // because the adapters treat a top-level `error` as terminal for the chat turn -
 // a sub-agent's own failure must close only that sub-agent, never the parent
 // turn. `approval.*` is deliberately NOT here: child approvals are routed
