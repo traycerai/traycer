@@ -526,11 +526,28 @@ export function useHostCompatibilityAuthorityReport(
       (verdict.anchoredAt === "success"
         ? compatAnchorAtSuccess.get(hostId)
         : compatAnchorAtFailure.get(hostId)) ?? null;
-    const key = [
+    // JSON, not a delimiter join. Every segment below is either
+    // host-controlled (`code`, `hostVersion`, and the requirement's
+    // `observedClientKind` / `observedClientAppVersion` - all peer-asserted
+    // text the host merely normalizes) or nullable. A delimiter join gets both
+    // wrong: `null` and `""` collapse to the same segment, and a separator
+    // character inside a value shifts every field boundary after it, so two
+    // materially different verdicts can produce one key. Where that lands is
+    // `reportedRef` below silently dropping the newer one, leaving the
+    // authority on stale client-compatibility data for the rest of the
+    // session.
+    //
+    // `JSON.stringify` over a fixed-length ARRAY is what makes it
+    // unambiguous: positions are fixed so no field can absorb another's
+    // value, `null` serializes as `null` and `""` as `""`, and any character
+    // inside a string is escaped rather than read as structure. An object
+    // literal would work too, but only because V8 happens to preserve
+    // insertion order - an array does not rely on that.
+    const key = JSON.stringify([
       hostId,
-      verdict.code ?? "compatible",
-      verdict.hostVersion ?? "",
-      probedOnSessionId ?? "",
+      verdict.code,
+      verdict.hostVersion,
+      probedOnSessionId,
       // THE REQUIREMENT IS PART OF THE IDENTITY, not decoration. On the epoch
       // path `hostVersion` is always null and the code is a bare
       // `INCOMPATIBLE`, so without this the first four segments are constant
@@ -546,7 +563,7 @@ export function useHostCompatibilityAuthorityReport(
       // transport, and a re-parse that recovers a requirement within one
       // session.
       clientCompatibilityKey(verdict.clientCompatibility),
-    ].join("\u0000");
+    ]);
     if (reportedRef.current === key) {
       return;
     }
@@ -597,29 +614,41 @@ export function useHostStatusReprobeOnRowVersionChange(
 }
 
 /**
- * The identifying members of a structured epoch requirement, as one key
- * segment.
+ * The identifying members of a structured epoch requirement, as one nested
+ * key segment.
  *
- * Every member is included rather than just the epoch: `minimumKnownClientAppVersion`
- * and `upgradeChannel` are what the dialog actually PRINTS, so a change in
- * either is a change the user would see, and `observedClientAppVersionStatus`
- * selects between the two body copies. `\u0001` separates members because
- * `\u0000` already separates the outer segments.
+ * Every member is included rather than just the epoch:
+ * `minimumKnownClientAppVersion` and `upgradeChannel` are what the dialog
+ * actually PRINTS, so a change in either is a change the user would see, and
+ * `observedClientAppVersionStatus` selects between the two body copies.
+ *
+ * A FIXED-LENGTH ARRAY, and `null` is preserved rather than coalesced. Two of
+ * these members - `observedClientKind` and `observedClientAppVersion` - are
+ * the host's normalization of text the PEER supplied, so they can legitimately
+ * be `null`, be empty, or contain any character at all. Under the previous
+ * `??  ""` + delimiter join, `null` and `""` produced identical keys and a
+ * value containing the separator shifted every field after it; either way two
+ * different requirements could collide, and a collision here means the newer
+ * verdict is dropped and the authority keeps the stale one.
+ *
+ * Returned as a nested array rather than a pre-joined string so the outer
+ * `JSON.stringify` does the escaping once, at one level, with no separator
+ * anywhere in the scheme.
  */
 function clientCompatibilityKey(
   requirement: ClientCompatibilityRequirement | null,
-): string {
-  if (requirement === null) return "";
+): readonly (string | number | null)[] | null {
+  if (requirement === null) return null;
   return [
     requirement.minimumCompatibilityEpoch,
-    requirement.observedCompatibilityEpoch ?? "",
+    requirement.observedCompatibilityEpoch,
     requirement.failure,
-    requirement.observedClientKind ?? "",
-    requirement.observedClientAppVersion ?? "",
+    requirement.observedClientKind,
+    requirement.observedClientAppVersion,
     requirement.observedClientAppVersionStatus,
-    requirement.minimumKnownClientAppVersion ?? "",
-    requirement.upgradeChannel ?? "",
-  ].join("\u0001");
+    requirement.minimumKnownClientAppVersion,
+    requirement.upgradeChannel,
+  ];
 }
 
 /**

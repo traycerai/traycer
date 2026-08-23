@@ -11,8 +11,12 @@ import {
   trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import type { ClientUpgradeChannel } from "@traycer/protocol/framework/index";
-import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
+import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import type {
+  DesktopAppUpdateSnapshot,
+  DesktopAppUpdatesBridge,
+} from "@/lib/windows/types";
 
 /**
  * THE remedy for a host that refused this client at its compatibility-epoch
@@ -34,20 +38,41 @@ import type { DesktopAppUpdatesBridge } from "@/lib/windows/types";
  */
 export function ClientUpdateRequiredAction(props: {
   /**
-   * The channel the required build was published on, from the host's
-   * structured requirement. `null` when the host did not say.
+   * The host's structured requirement, whole.
    *
-   * It is used ONLY to decide whether this installation's updater could ever
-   * reach the required build - never to decide whether the app is compatible,
-   * and never as an address to open. The manual destination below is the same
-   * first-party page on both channels.
+   * Two members are read and NEITHER decides compatibility - the host already
+   * decided that. `upgradeChannel` says whether this installation's updater
+   * could ever reach the required build; `minimumKnownClientAppVersion` says
+   * whether a build the updater is ALREADY holding would actually satisfy it.
+   * Nothing here is used as an address to open: the manual destination is the
+   * same first-party page on both channels.
    */
-  readonly upgradeChannel: ClientUpgradeChannel | null;
+  readonly requirement: ClientCompatibilityRequirement;
 }): ReactNode {
   const { bridge, snapshot } = useDesktopAppUpdates();
   const openExternalLink = useRunnerOpenExternalLink();
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
+  );
+
+  // WOULD THE UPDATE THE UPDATER IS HOLDING ACTUALLY FIX THIS?
+  //
+  // The updater's snapshot is a CACHE. It can be `available` / `downloading` /
+  // `ready` for a build found at launch, while the host raised its floor
+  // afterwards - so 1.2.0 sits downloaded, the dialog offers "Restart to
+  // update", the app restarts, and the same host rejects it again for the same
+  // reason. An update loop that never converges, with a button that looks like
+  // the remedy.
+  //
+  // WHEN THIS IS FALSE, THE RELEASES LINK IS THE ONLY RECOVERY - not a
+  // preference, a constraint. Main's `checkForUpdatesNow` returns the current
+  // snapshot before any feed query while it holds an `available` / `ready` /
+  // `downloading` build, whatever the intent, so this surface cannot ask for a
+  // newer candidate and cannot discard the stale one. See
+  // `shouldCheckForUpdates` below for the trace.
+  const cachedUpdateSufficient = updateSatisfiesRequirement(
+    snapshot.latestVersion,
+    props.requirement.minimumKnownClientAppVersion,
   );
   useUpdateCheckOnBlockingMount(bridge);
 
@@ -58,9 +83,9 @@ export function ClientUpdateRequiredAction(props: {
   // that says "no update available" beside "your app is too old" is the most
   // confusing state this surface can produce.
   const channelUnreachable =
-    props.upgradeChannel === "rc" && !snapshot.allowPrerelease;
+    props.requirement.upgradeChannel === "rc" && !snapshot.allowPrerelease;
 
-  if (bridge !== null && !channelUnreachable) {
+  if (bridge !== null && !channelUnreachable && cachedUpdateSufficient) {
     if (snapshot.status === "available") {
       // A blocked location (macOS app outside /Applications) cannot install
       // even once downloaded, so it falls through to the link below - the
@@ -184,8 +209,9 @@ export function ClientUpdateRequiredAction(props: {
 
   // THE FLOOR, reached whenever the updater cannot help: no bridge (web/dev
   // shell), a channel this installation does not follow, an install location
-  // that cannot be written, or simply an updater that has not found anything
-  // yet. A first-party address chosen locally - never one the host supplied.
+  // that cannot be written, an updater that has not found anything yet, or a
+  // cached update too OLD to satisfy the host's floor. A first-party address
+  // chosen locally - never one the host supplied.
   return (
     <Button
       type="button"
@@ -213,6 +239,47 @@ export function ClientUpdateRequiredAction(props: {
       </span>
     </Button>
   );
+}
+
+/**
+ * Whether a build the updater is holding would actually clear the host's
+ * floor.
+ *
+ * Compared with `compareHostVersions` - the shared strict-SemVer comparator,
+ * not a string compare - because prerelease ordering is exactly where this
+ * gets decided: a required `1.2.0-rc.2` IS satisfied by a cached `1.2.0`
+ * (a release outranks its own prereleases), and a required `1.2.0` is NOT
+ * satisfied by a cached `1.2.0-rc.2`. `"1.2.0" < "1.2.0-rc.2"` lexically, so a
+ * string compare gets both of those backwards.
+ *
+ * Two `true` arms that are not "the version is new enough", and both are
+ * deliberate:
+ *
+ *  - The host named NO minimum build (`minimumKnownClientAppVersion: null`).
+ *    There is nothing to compare against, and refusing on that basis would
+ *    strand a user with no updater path at all over a fact the host declined
+ *    to state. The remedy degrades to "install the latest", which is what the
+ *    host's own reason already says.
+ *
+ * And one `false` arm that is not "the version is too old":
+ *
+ *  - The comparison is INCOMPARABLE, or the updater has no version to offer.
+ *    Neither proves the cached build helps, and the cost of being wrong is
+ *    asymmetric - a needless trip to the releases page is an inconvenience,
+ *    while an install that changes nothing is a restart into the same
+ *    rejection.
+ */
+function updateSatisfiesRequirement(
+  latestVersion: string | null,
+  minimumKnownClientAppVersion: string | null,
+): boolean {
+  if (minimumKnownClientAppVersion === null) return true;
+  if (latestVersion === null) return false;
+  const comparison = compareHostVersions(
+    latestVersion,
+    minimumKnownClientAppVersion,
+  );
+  return comparison.comparable && comparison.ordering !== "less";
 }
 
 /**
@@ -278,9 +345,7 @@ function useUpdateCheckOnBlockingMount(
       .getSnapshot()
       .then((snapshot) => {
         if (cancelled) return;
-        if (snapshot.status !== "idle" || snapshot.lastCheckedAt !== null) {
-          return;
-        }
+        if (!shouldCheckForUpdates(snapshot)) return;
         return bridge.checkForUpdates("automatic").then(() => undefined);
       })
       .catch(() => undefined);
@@ -288,4 +353,42 @@ function useUpdateCheckOnBlockingMount(
       cancelled = true;
     };
   }, [bridge]);
+}
+
+/**
+ * Whether asking the updater again could change this surface's answer.
+ *
+ * EXACTLY ONE reason to ask: the updater has NEVER been asked - `idle` with no
+ * `lastCheckedAt`. The launch check is gated on `canCheckForUpdates` and fires
+ * once, while this surface is reachable hours later, so a genuinely
+ * never-checked updater is worth one request.
+ *
+ * NOT a reason to ask, and this is the part worth knowing before anyone adds
+ * one: the updater already HOLDING a build that cannot clear the host's floor.
+ * That looks like the obvious second case - the user is on the releases link
+ * while their own updater is seemingly one request away from the right build -
+ * but the request cannot do anything. `checkForUpdatesNow` in
+ * `clients/desktop/src/electron-main/app/updater.ts` returns the current
+ * snapshot BEFORE any feed query when the status is `ready`, `downloading`, or
+ * `available`, for EVERY intent (the `available` arm says so in as many
+ * words). Only a channel change moves that snapshot back to a re-queryable
+ * state, and it runs its own check. So asking here would dispatch an IPC that
+ * provably changes nothing, and a renderer test could only ever assert that
+ * the bridge recorded the call.
+ *
+ * The releases link is therefore the ONLY recovery past a stale cached build,
+ * and the render gate above is what makes sure the user is sent there rather
+ * than offered a build that restarts into the same rejection. Making the
+ * in-app updater recover that case means changing main to discard an
+ * `available` candidate on re-check - a desktop-side product decision, not
+ * something this surface can reach.
+ *
+ * Also not a reason: an updater that already answered "nothing here"
+ * (`idle` / `up-to-date` / `unavailable` / `error` after a check). That is a
+ * real answer, and re-asking it on every mount is the poller the per-mount ref
+ * exists to prevent.
+ */
+function shouldCheckForUpdates(snapshot: DesktopAppUpdateSnapshot): boolean {
+  if (snapshot.installInFlight) return false;
+  return snapshot.status === "idle" && snapshot.lastCheckedAt === null;
 }

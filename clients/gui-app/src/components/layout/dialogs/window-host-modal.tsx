@@ -308,9 +308,7 @@ function NarrationActions(
           that this app is the outdated leg. There is deliberately no
           `Update host` beside it - see `ClientUpdateRequiredAction`. */}
       {props.variant.kind === "update-client" ? (
-        <ClientUpdateRequiredAction
-          upgradeChannel={props.variant.requirement.upgradeChannel}
-        />
+        <ClientUpdateRequiredAction requirement={props.variant.requirement} />
       ) : null}
       {props.onUpdateHost === null ? null : (
         <Button

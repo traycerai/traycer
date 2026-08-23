@@ -176,6 +176,72 @@ describe("compat verdict dedupe and the client-compatibility requirement", () =>
     expect(reported).toHaveLength(1);
   });
 
+  it("distinguishes null from the empty string in a peer-supplied member", () => {
+    // `observedClientKind` and `observedClientAppVersion` are the host's
+    // normalization of text the PEER sent, so `null` ("the client did not
+    // say") and `""` are different observations that a `?? ""` coalesce made
+    // identical. A collision here drops the newer verdict and leaves the
+    // authority on the stale one for the rest of the session.
+    const reported = driveVerdicts([
+      incompatible(requirement({ observedClientKind: null })),
+      incompatible(requirement({ observedClientKind: "" })),
+    ]);
+    expect(reported).toHaveLength(2);
+  });
+
+  it("distinguishes a null requirement from one whose members are all empty", () => {
+    const reported = driveVerdicts([
+      incompatible(undefined),
+      incompatible(
+        requirement({
+          observedCompatibilityEpoch: null,
+          observedClientKind: "",
+          observedClientAppVersion: "",
+          minimumKnownClientAppVersion: "",
+        }),
+      ),
+    ]);
+    expect(reported).toHaveLength(2);
+  });
+
+  it.each([
+    ["a NUL separator", "\u0000"],
+    ["the nested separator", "\u0001"],
+    ["a JSON quote", '"'],
+    ["a backslash", "\\"],
+  ])(
+    "does not let %j inside a peer-supplied member shift field boundaries",
+    (_label, separator) => {
+      // THE COLLISION, constructed rather than described. Under a delimiter
+      // join these two requirements serialize to the same key: the separator
+      // inside `observedClientKind` closes that field early and the remainder
+      // is read as the next one. `JSON.stringify` escapes it instead, so the
+      // positions cannot move.
+      //
+      // These two members are the REACHABLE ones. The outer `code` segment is
+      // not free text - `describeCompatVerdictForAuthority` builds it from a
+      // constrained `RpcErrorCode` plus one of three fixed `blocking`
+      // literals - and `hostVersion` is always null on this arm, so neither
+      // can carry a separator. `observedClientKind` and
+      // `observedClientAppVersion` can: the host truncates and trims them but
+      // does not restrict which characters a peer may send.
+      const first = requirement({
+        observedClientKind: `desktop${separator}1.1.10`,
+        observedClientAppVersion: "9.9.9",
+      });
+      const second = requirement({
+        observedClientKind: "desktop",
+        observedClientAppVersion: `1.1.10${separator}9.9.9`,
+      });
+      const reported = driveVerdicts([
+        incompatible(first),
+        incompatible(second),
+      ]);
+      expect(reported).toHaveLength(2);
+      expect(reported[1]?.observedClientKind).toBe("desktop");
+    },
+  );
+
   it("does not report anything for a non-verdict state", () => {
     // `checking` / `failed` are not statements about COMPATIBILITY, and
     // reporting one would launder a transport failure into a

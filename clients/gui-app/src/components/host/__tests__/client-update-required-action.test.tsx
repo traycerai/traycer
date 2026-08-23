@@ -12,6 +12,7 @@ import type {
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
 } from "@/lib/windows/types";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
 
 /**
  * The remedy on the blocking "Update Traycer to continue" surface.
@@ -44,6 +45,27 @@ afterEach(cleanup);
  */
 async function flushMicrotasks(): Promise<void> {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
+}
+
+/**
+ * The host's structured requirement. `minimumKnownClientAppVersion` is the one
+ * the version-sufficiency specs below vary: it is what a cached update has to
+ * clear before this surface will offer it.
+ */
+function requirement(
+  overrides: Partial<ClientCompatibilityRequirement>,
+): ClientCompatibilityRequirement {
+  return {
+    minimumCompatibilityEpoch: 2,
+    observedCompatibilityEpoch: 1,
+    failure: "below-minimum",
+    observedClientKind: "desktop",
+    observedClientAppVersion: "1.1.10",
+    observedClientAppVersionStatus: "valid",
+    minimumKnownClientAppVersion: "1.2.0",
+    upgradeChannel: "stable",
+    ...overrides,
+  };
 }
 
 const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
@@ -142,7 +164,9 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
   it("asks the updater once when it has never been asked", async () => {
     const bridge = new FakeAppUpdatesBridge(IDLE_SNAPSHOT);
     renderAction(
-      <ClientUpdateRequiredAction upgradeChannel="stable" />,
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: null })}
+      />,
       bridge,
     );
     await waitFor(() => {
@@ -167,7 +191,9 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       lastCheckIntent: "automatic",
     });
     renderAction(
-      <ClientUpdateRequiredAction upgradeChannel="stable" />,
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: null })}
+      />,
       bridge,
     );
     await waitFor(() => {
@@ -182,7 +208,9 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       cleanup();
       const bridge = new FakeAppUpdatesBridge({ ...IDLE_SNAPSHOT, status });
       renderAction(
-        <ClientUpdateRequiredAction upgradeChannel="stable" />,
+        <ClientUpdateRequiredAction
+          requirement={requirement({ minimumKnownClientAppVersion: null })}
+        />,
         bridge,
       );
       await waitFor(() => {
@@ -206,7 +234,9 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
       status: "checking",
     });
     renderAction(
-      <ClientUpdateRequiredAction upgradeChannel="stable" />,
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: null })}
+      />,
       bridge,
     );
     await waitFor(() => {
@@ -221,7 +251,12 @@ describe("<ClientUpdateRequiredAction /> update check on mount", () => {
 
   it("never asks when there is no updater bridge at all", async () => {
     // Web/dev shells. The manual link is the whole answer there.
-    renderAction(<ClientUpdateRequiredAction upgradeChannel="stable" />, null);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ upgradeChannel: "stable" })}
+      />,
+      null,
+    );
     await Promise.resolve();
     expect(
       screen.getByTestId("client-update-required-download-page"),
@@ -241,7 +276,9 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
     for (const channel of ["stable", "rc"] as const) {
       cleanup();
       renderAction(
-        <ClientUpdateRequiredAction upgradeChannel={channel} />,
+        <ClientUpdateRequiredAction
+          requirement={requirement({ upgradeChannel: channel })}
+        />,
         null,
       );
       expect(
@@ -260,7 +297,12 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
       allowPrerelease: false,
       latestVersion: "1.1.11",
     });
-    renderAction(<ClientUpdateRequiredAction upgradeChannel="rc" />, bridge);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ upgradeChannel: "rc" })}
+      />,
+      bridge,
+    );
     await waitFor(() => {
       expect(bridge.getSnapshot).toHaveBeenCalled();
     });
@@ -278,7 +320,18 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
       latestVersion: "1.2.0-rc.2",
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
     });
-    renderAction(<ClientUpdateRequiredAction upgradeChannel="rc" />, bridge);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({
+          upgradeChannel: "rc",
+          // The build the cache is holding IS the one the host asks for, so
+          // this spec stays about updater-vs-link preference rather than
+          // about version sufficiency (covered in its own describe below).
+          minimumKnownClientAppVersion: "1.2.0-rc.2",
+        })}
+      />,
+      bridge,
+    );
     await waitFor(() => {
       expect(
         screen.getByTestId("client-update-required-download"),
@@ -287,5 +340,250 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
     expect(
       screen.queryByTestId("client-update-required-download-page"),
     ).toBeNull();
+  });
+});
+
+describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
+  /**
+   * THE CACHED UPDATE IS NOT AUTOMATICALLY THE REMEDY.
+   *
+   * The updater's snapshot is a cache: it can hold an `available` /
+   * `downloading` / `ready` build found at launch while the host raised its
+   * floor afterwards. Offering that build produces a restart into the SAME
+   * rejection - an update loop that never converges, behind a button that
+   * looks like the fix.
+   *
+   * Compared with the shared strict-SemVer comparator rather than by string,
+   * because prerelease ordering decides two of these cases and a lexical
+   * compare gets both backwards.
+   */
+  function bridgeWith(
+    status: "available" | "ready" | "downloading",
+    latestVersion: string | null,
+  ): FakeAppUpdatesBridge {
+    return new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      status,
+      latestVersion,
+      allowPrerelease: true,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+  }
+
+  it.each([
+    ["greater", "1.3.0", "1.2.0"],
+    ["equal", "1.2.0", "1.2.0"],
+    ["a release over the required prerelease", "1.2.0", "1.2.0-rc.2"],
+    ["a later prerelease", "1.2.0-rc.3", "1.2.0-rc.2"],
+  ])(
+    "OFFERS a cached update that is %s (%s >= %s)",
+    async (_label, latestVersion, required) => {
+      const bridge = bridgeWith("available", latestVersion);
+      renderAction(
+        <ClientUpdateRequiredAction
+          requirement={requirement({ minimumKnownClientAppVersion: required })}
+        />,
+        bridge,
+      );
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("client-update-required-download"),
+        ).toBeTruthy();
+      });
+    },
+  );
+
+  it.each([
+    ["older", "1.2.0", "1.3.0"],
+    ["a prerelease of the required release", "1.2.0-rc.2", "1.2.0"],
+    ["an earlier prerelease", "1.2.0-rc.1", "1.2.0-rc.2"],
+    ["unparseable", "not-a-version", "1.2.0"],
+  ])(
+    "REFUSES a cached update that is %s (%s < %s) and shows the releases page",
+    async (_label, latestVersion, required) => {
+      const bridge = bridgeWith("available", latestVersion);
+      renderAction(
+        <ClientUpdateRequiredAction
+          requirement={requirement({ minimumKnownClientAppVersion: required })}
+        />,
+        bridge,
+      );
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("client-update-required-download-page"),
+        ).toBeTruthy();
+      });
+      expect(
+        screen.queryByTestId("client-update-required-download"),
+      ).toBeNull();
+      // And it must not have been downloaded on our behalf either.
+      expect(bridge.downloadUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it("REFUSES to offer a stale READY build - the restart would change nothing", async () => {
+    // The worst arm: `ready` means the insufficient build is already
+    // downloaded, so "Restart to update" is one click from a restart into the
+    // same rejection.
+    const bridge = bridgeWith("ready", "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("client-update-required-install")).toBeNull();
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES to show progress for a stale DOWNLOADING build", async () => {
+    const bridge = bridgeWith("downloading", "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.queryByTestId("client-update-required-downloading"),
+    ).toBeNull();
+  });
+
+  it("OFFERS the cached update when the host named no minimum build", async () => {
+    // Nothing to compare against. Refusing here would strand the user with no
+    // updater path at all over a fact the host declined to state, and the
+    // host's own reason already degrades to "install the latest version".
+    const bridge = bridgeWith("available", "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: null })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("REFUSES a cached update the updater cannot name", async () => {
+    // `latestVersion: null` with an `available` status - nothing proves the
+    // build helps, and an install that changes nothing costs a restart.
+    const bridge = bridgeWith("available", null);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    });
+  });
+});
+
+describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a build", () => {
+  /**
+   * A cached build - stale or not - is a state this surface CANNOT ask past.
+   *
+   * `checkForUpdatesNow` returns the current snapshot before any feed query
+   * while the status is `available` / `ready` / `downloading`, for every
+   * intent, so a request here would be a no-op IPC and a test asserting it
+   * would only prove the bridge recorded the call. These specs pin the
+   * restraint instead: the render gate sends the user to the releases page,
+   * and nothing pretends the updater could have been coaxed into helping.
+   */
+  it("does NOT ask when the updater is holding an INSUFFICIENT build either", async () => {
+    // The tempting case, and the one that must stay restrained: the cached
+    // 1.2.0 cannot clear a floor of 1.3.0, so it looks like a re-check is one
+    // request from the answer. Main would return this same snapshot without
+    // touching the feed, so the request buys nothing - the releases link the
+    // render gate falls through to IS the recovery.
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      status: "available",
+      latestVersion: "1.2.0",
+      allowPrerelease: true,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await flushMicrotasks();
+    expect(bridge.checkForUpdates).not.toHaveBeenCalled();
+    // ...and the user still has a way out.
+    expect(
+      screen.getByTestId("client-update-required-download-page"),
+    ).toBeTruthy();
+  });
+
+  it("does NOT ask when the updater is holding a SUFFICIENT build", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      status: "available",
+      latestVersion: "1.3.0",
+      allowPrerelease: true,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await flushMicrotasks();
+    expect(bridge.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it("does NOT ask mid-download or mid-install, however stale the build", async () => {
+    for (const snapshot of [
+      { status: "downloading" as const, installInFlight: false },
+      { status: "ready" as const, installInFlight: true },
+    ]) {
+      cleanup();
+      const bridge = new FakeAppUpdatesBridge({
+        ...IDLE_SNAPSHOT,
+        ...snapshot,
+        latestVersion: "1.2.0",
+        allowPrerelease: true,
+        lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      });
+      renderAction(
+        <ClientUpdateRequiredAction
+          requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+        />,
+        bridge,
+      );
+      await waitFor(() => {
+        expect(bridge.getSnapshot).toHaveBeenCalled();
+      });
+      await flushMicrotasks();
+      expect(bridge.checkForUpdates).not.toHaveBeenCalled();
+    }
   });
 });
