@@ -161,6 +161,7 @@ const INCOMPAT_DETAIL: SelectionIncompatibility = {
   code: "protocol-major-behind",
   hostVersion: "1.0.0",
   minSupportedVersion: "2.0.0",
+  clientCompatibility: null,
 };
 
 const EMPTY_FLEET_SEED = {

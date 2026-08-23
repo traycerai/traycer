@@ -15,6 +15,7 @@ const DEAD_REASONS: readonly HostLeaseDeadState[] = [
       code: "protocol-major-behind",
       hostVersion: null,
       minSupportedVersion: null,
+      clientCompatibility: null,
     },
   },
 ];

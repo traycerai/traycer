@@ -46,6 +46,7 @@ import type {
   ClientFrame,
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
  * Released-peer handshake smoke: drives the REAL shipped transports
@@ -259,6 +260,7 @@ function createReleasedPeerClient(
     sockets,
     authority: authorityForContext(ctx),
     client: new WsRpcClient<typeof hostRpcRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostRpcRegistry,
       requestId: () => requestId,
       webSocketFactory: factory,
@@ -383,6 +385,7 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof hostRpcRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: hostRpcRegistry,
           requestId: () => "req-smoke",
           webSocketFactory: factory,
@@ -444,6 +447,7 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineFallbackRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: baselineFallbackRegistry,
           requestId: () => "req-fallback-smoke",
           webSocketFactory: factory,
@@ -515,6 +519,7 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineUnsupportedRegistry>({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: baselineUnsupportedRegistry,
           requestId: () => "req-unsupported-smoke",
           webSocketFactory: factory,
@@ -582,6 +587,7 @@ describe.skipIf(baselines.length === 0)(
         };
         const ctx = makeRequestContext("token-smoke");
         const client = new WsStreamClient({
+          clientIdentity: TEST_CLIENT_IDENTITY,
           registry: hostStreamRpcRegistry,
           endpoint: () => mockLocalHostEntry,
           bearer: () => ctx.credentials,

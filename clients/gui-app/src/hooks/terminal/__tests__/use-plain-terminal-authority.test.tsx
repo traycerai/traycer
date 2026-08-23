@@ -60,6 +60,7 @@ vi.mock("@/hooks/host/use-host-capability-probe", () => ({
 }));
 
 import { usePlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const HOST_ID = "host-authority";
 const SCOPE = { kind: "epic", epicId: "epic-1" } as const;
@@ -198,6 +199,7 @@ class ControlledStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor(private support: StreamMethodSupport) {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
@@ -277,6 +279,7 @@ class LogicalOrderingStreamClient extends WsStreamClient<HostStreamRpcRegistry> 
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

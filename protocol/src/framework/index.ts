@@ -173,6 +173,31 @@ export {
   hostRestartIntentSchema,
 } from "./ws-protocol";
 
+// ---- Client handshake identity + compatibility epoch --------------------- //
+
+export type {
+  ClientCompatibilityFailure,
+  ClientCompatibilityRequirement,
+  ClientHandshakeIdentity,
+  ClientUpgradeChannel,
+  FirstPartyClientIdentity,
+  FirstPartyClientKind,
+} from "./client-identity";
+
+export {
+  CLIENT_UPGRADE_CHANNELS,
+  CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+  LEGACY_CLIENT_COMPATIBILITY_EPOCH,
+  MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
+  STRICT_SEMVER_PATTERN,
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  isClientUpgradeChannel,
+  isStrictSemVer,
+  isValidCompatibilityEpoch,
+  toClientHandshakeIdentity,
+} from "./client-identity";
+
 export type {
   ManifestRegistry,
   SplitConnectionManifest,

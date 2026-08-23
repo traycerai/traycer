@@ -31,6 +31,8 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
 import { writeStderr } from "../runner/std-write";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
+import { clientCompatibilityRecoveryHint } from "../host/compat-recovery";
 
 // Stream timing knobs, mirroring `traycer monitor`. A worktree delete is a
 // one-shot: it runs a teardown script (which can be slow) then removes the
@@ -164,6 +166,7 @@ async function runWorktreeDelete(
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
   const attempt = await runDeleteCommand(worktreePath, ctx, client);
@@ -468,7 +471,13 @@ function streamDroppedCliError(): CliError {
  * A host that simply lacks the newer method never reaches here - that is an
  * `onUnsupported` hand-off to the released stream, not a failure.
  */
-function fatalCloseToCliError(details: FatalErrorDetails): CliError {
+/**
+ * Exported for its own suite: the message this builds is the ONLY thing a CLI
+ * user sees when a worktree-delete stream is fatally closed, and its epoch arm
+ * is a sentence that has to not contradict the host's own reason. Driving that
+ * through the whole stream harness would test the harness.
+ */
+export function fatalCloseToCliError(details: FatalErrorDetails): CliError {
   if (details.code === "UNAUTHORIZED") {
     return cliError({
       code: CLI_ERROR_CODES.AUTH_REJECTED,
@@ -482,9 +491,26 @@ function fatalCloseToCliError(details: FatalErrorDetails): CliError {
     details.code === "INCOMPATIBLE" ||
     details.code === "DOWNGRADE_UNSUPPORTED"
   ) {
+    // AN EPOCH REJECTION MUST NOT GET THE GENERIC TAIL. The host's own reason
+    // on that path says, verbatim, "Updating the host again will not help" -
+    // and the generic tail then says "update the host or CLI", in the same
+    // sentence. The user is told two opposite things and the wrong one is
+    // actionable.
+    //
+    // The structured hint replaces the tail rather than adding to it: it
+    // already names the observed version, the required generation and the
+    // build to install, which is strictly more than "the versions do not
+    // match". The generic tail stays for every OTHER incompatibility, where
+    // either side genuinely may be the stale one.
+    const epochHint = clientCompatibilityRecoveryHint(
+      details.clientCompatibilityRequirement ?? null,
+    );
     return cliError({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: `traycer: ${details.reason} - update the host or CLI so their worktree delete versions match.`,
+      message:
+        epochHint === null
+          ? `traycer: ${details.reason} - update the host or CLI so their worktree delete versions match.`
+          : `traycer: ${details.reason} - ${epochHint}.`,
       details: null,
       exitCode: 1,
     });

@@ -1,4 +1,7 @@
-import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  FirstPartyClientIdentity,
+  VersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   BearerSourceProvider,
@@ -67,6 +70,17 @@ export interface CreateRemoteTransportOptions<
    * reporter that outlives its consumer.
    */
   readonly evidence: TransportEvidenceReporter;
+  /**
+   * WHO THIS CLIENT IS - see `RemoteSessionOptions.clientIdentity`.
+   *
+   * Deliberately NOT part of the cache identity above, unlike `authRecovery` /
+   * `authEpoch`. Those two vary per consumer, so inheriting the first
+   * acquirer's value is a real hazard; this one cannot vary at all - kind,
+   * epoch and build version are process constants and updating the
+   * application restarts the process - so a cache hit inheriting it is
+   * inheriting the only value any consumer could have passed.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 export interface RemoteHostTransport<
@@ -154,6 +168,7 @@ export function createRemoteHostTransport<
         webSocketFactory: options.webSocketFactory,
         requestId: options.requestId,
         evidence: options.evidence,
+        clientIdentity: options.clientIdentity,
       });
     },
   );

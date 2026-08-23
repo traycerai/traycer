@@ -1,4 +1,7 @@
-import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
+import type {
+  ClientCompatibilityRequirement,
+  IncompatibilityUpgradeGuidance,
+} from "@traycer/protocol/framework/index";
 import {
   PACKAGE_MANAGER_UPGRADE_HINT,
   type CliInstallSource,
@@ -103,6 +106,49 @@ function summarize(
   // DOWNGRADE_UNSUPPORTED): fall back to the conservative restart-then-update
   // path rather than guessing which side is stale.
   return "Restart the host ('traycer host restart'); if the mismatch persists, update both the host and this client.";
+}
+
+/**
+ * The facts a user needs when the host refused this CLI at its
+ * client-compatibility EPOCH gate, rather than over a method-manifest
+ * disagreement.
+ *
+ * It TAKES PRECEDENCE over the guidance-derived hints below, and does not
+ * merely add to them, because those hints answer "which side is stale" by
+ * reading two booleans. Here the host has already answered that question and
+ * gone further: it named the generation it needs, what this CLI declared, and
+ * the earliest published build that fixes it. Restating "this CLI is out of
+ * date" beside that would be the vaguer of two answers, printed second.
+ *
+ * The observed version is the HOST's normalized view (`null` when it could not
+ * read one), not `resolveCliVersion`. Printing what the host actually saw is
+ * what makes a mis-stamped build diagnosable from one line of output.
+ *
+ * Returns `null` when this was not an epoch rejection, which includes every
+ * host that predates the gate.
+ */
+export function clientCompatibilityRecoveryHint(
+  requirement: ClientCompatibilityRequirement | null,
+): string | null {
+  if (requirement === null) return null;
+  const observedVersion =
+    requirement.observedClientAppVersion ?? "an unknown version";
+  const target =
+    requirement.minimumKnownClientAppVersion === null
+      ? "the latest CLI"
+      : `${requirement.minimumKnownClientAppVersion} or newer${
+          requirement.upgradeChannel === null
+            ? ""
+            : ` on the ${requirement.upgradeChannel} channel`
+        }`;
+  return (
+    `this CLI is too old for that host - it is running ${observedVersion} ` +
+    `and declares compatibility generation ` +
+    `${requirement.observedCompatibilityEpoch ?? "none"}, ` +
+    `while the host requires ${requirement.minimumCompatibilityEpoch}. ` +
+    `Install ${target}. Updating the host again will not help, and no data ` +
+    `needs to be reset`
+  );
 }
 
 // Source-agnostic one-liner for callers that surface the verdict without an

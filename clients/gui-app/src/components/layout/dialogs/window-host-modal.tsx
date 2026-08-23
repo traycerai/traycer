@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { HostBootCard } from "@/components/centered-card";
 import { BELOW_APP_HEADER_TOP_CLASS } from "@/components/layout/header/app-header-height";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
+import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
@@ -302,6 +303,13 @@ function NarrationActions(
       {props.variant.kind === "plan-restricted" ? (
         <PlanRestrictedUpgradeAction />
       ) : null}
+      {/* The app updater IS the remedy here, and it is unconditional: this
+          variant only exists because the host stated, in structured terms,
+          that this app is the outdated leg. There is deliberately no
+          `Update host` beside it - see `ClientUpdateRequiredAction`. */}
+      {props.variant.kind === "update-client" ? (
+        <ClientUpdateRequiredAction requirement={props.variant.requirement} />
+      ) : null}
       {props.onUpdateHost === null ? null : (
         <Button
           type="button"
@@ -379,6 +387,9 @@ function WindowHostModalBody(props: {
 }): ReactNode {
   if (props.variant.kind === "update-host") {
     return <IncompatibleDetail variant={props.variant} />;
+  }
+  if (props.variant.kind === "update-client") {
+    return <ClientCompatibilityDetail variant={props.variant} />;
   }
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
@@ -465,6 +476,54 @@ function IncompatibleDetail(props: {
   );
 }
 
+/**
+ * The host's own structured requirement, printed as facts rather than folded
+ * into the sentence above it.
+ *
+ * The epoch numbers are HERE and not in the headline, deliberately: a user
+ * acts on an application update, not on an internal protocol generation. They
+ * belong in the block someone screenshots for support, where "needs generation
+ * 2, this app declares 1" is exactly what triage needs.
+ *
+ * `observedClientAppVersion` is the HOST's normalized view of what this app
+ * reported, not `getClientAppVersion()`. That is the point of printing it: if
+ * the two disagree, the bug is in what this build sends, and reading the local
+ * value here would hide precisely that.
+ */
+function ClientCompatibilityDetail(props: {
+  readonly variant: Extract<
+    WindowNarrationVariant,
+    { readonly kind: "update-client" }
+  >;
+}): ReactNode {
+  const { requirement } = props.variant;
+  return (
+    <div
+      // align-ok: a labelled list whose labels only line up on one left edge,
+      // same as `IncompatibleDetail` above.
+      className="flex w-full flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      data-testid="window-host-modal-client-compatibility-detail"
+    >
+      <span>
+        This app: {requirement.observedClientAppVersion ?? "unknown version"}
+      </span>
+      {requirement.minimumKnownClientAppVersion === null ? null : (
+        <span>
+          Update to: {requirement.minimumKnownClientAppVersion} or newer
+          {requirement.upgradeChannel === null
+            ? ""
+            : ` (${requirement.upgradeChannel})`}
+        </span>
+      )}
+      <span>
+        Compatibility generation: host needs{" "}
+        {requirement.minimumCompatibilityEpoch}, this app declares{" "}
+        {requirement.observedCompatibilityEpoch ?? "none"}
+      </span>
+    </div>
+  );
+}
+
 interface WindowHostModalCopy {
   readonly title: string;
   readonly description: string;
@@ -503,6 +562,24 @@ function modalCopy(
       reportTitle: "No host available on this plan",
       reportMessage: "Every host on this account is plan-restricted.",
       reportCode: "HOST_PLAN_RESTRICTED",
+    };
+  }
+  if (variant.kind === "update-client") {
+    const { requirement } = variant;
+    return {
+      title: "Update Traycer to continue",
+      // Two bodies, split on whether the host could identify what this app is
+      // running. Naming the observed version is what makes the instruction
+      // checkable ("am I on 1.1.10?"); when the host could not read it, saying
+      // so is more honest than a sentence with a blank in it.
+      description:
+        requirement.observedClientAppVersion === null
+          ? "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app."
+          : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install ${requirement.minimumKnownClientAppVersion ?? "the latest version"} or newer.`,
+      reportTitle: "Traycer app update required",
+      reportMessage:
+        "The host refused this app at its client-compatibility epoch gate.",
+      reportCode: "CLIENT_INCOMPATIBLE",
     };
   }
   if (variant.kind === "update-host") {
