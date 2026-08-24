@@ -739,49 +739,54 @@ describe("resolveLandingTerminalLaunchCwd", () => {
   });
 });
 
-describe("closeAllTabs", () => {
+describe("retainPendingKillsForHosts", () => {
   beforeEach(() => {
     useLandingTerminalStore.getState().resetForTests();
   });
 
-  it("tombstones every tab in one write and returns them for killing", () => {
+  it("drops tombstones whose host is outside the retained set", () => {
     const store = useLandingTerminalStore.getState();
     store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
     store.addTab(tab({ instanceId: "b", sessionId: "s-b", hostId: HOST_B }));
-
-    const closed = useLandingTerminalStore
-      .getState()
-      .closeAllTabs(LANDING_PAGE_ID);
-
-    // Tombstone-first durability: the refs are gone AND every session is
-    // tombstoned by the time the caller gets them back to kill, so a reload
-    // racing the kills can never re-adopt a closed shell as an orphan.
-    expect(closed.map((entry) => entry.instanceId)).toEqual(["a", "b"]);
-    const state = useLandingTerminalStore.getState();
-    expect(state.tabs).toEqual([]);
-    expect(state.activeInstanceId).toBeNull();
-    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
-      false,
-    );
-    expect(state.pendingKills).toEqual([
+    store.closeTab(LANDING_PAGE_ID, "a");
+    store.closeTab(LANDING_PAGE_ID, "b");
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: HOST_A, sessionId: "s-a" },
       { hostId: HOST_B, sessionId: "s-b" },
     ]);
+
+    useLandingTerminalStore
+      .getState()
+      .retainPendingKillsForHosts(new Set([HOST_A]));
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: HOST_A, sessionId: "s-a" },
+    ]);
   });
 
-  it("is a no-op with no tabs open", () => {
-    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
+  it("keeps the same array reference when every tombstoned host is retained", () => {
+    const store = useLandingTerminalStore.getState();
+    store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
+    store.closeTab(LANDING_PAGE_ID, "a");
+    const before = useLandingTerminalStore.getState().pendingKills;
 
-    expect(
-      useLandingTerminalStore.getState().closeAllTabs(LANDING_PAGE_ID),
-    ).toEqual([]);
+    useLandingTerminalStore
+      .getState()
+      .retainPendingKillsForHosts(new Set([HOST_A, HOST_B]));
+
+    // No dropped entry means the updater returns the untouched `state`
+    // object, so zustand's `Object.is` bail-out skips the write entirely -
+    // this is what keeps a settled directory from re-rendering every
+    // `pendingKills` subscriber on each poll.
+    expect(useLandingTerminalStore.getState().pendingKills).toBe(before);
+  });
+
+  it("is a no-op when there are no tombstones to retain", () => {
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    expect(
-      landingTerminalLayoutFor(
-        useLandingTerminalStore.getState(),
-        LANDING_PAGE_ID,
-      ).panelOpen,
-    ).toBe(true);
+
+    useLandingTerminalStore.getState().retainPendingKillsForHosts(new Set());
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
   });
 });
 

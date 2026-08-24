@@ -275,6 +275,30 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     };
   }, []);
 
+  // Tombstone GC. Every tombstone is drained by the host it names, so one for a
+  // host that has LEFT the account can never drain: it would rest in persisted
+  // state forever and keep an authority probe mounted below for a machine that
+  // will never answer.
+  //
+  // Absence from the directory is read as deregistration, not unreachability.
+  // `directory.list()` is the unfiltered registry snapshot - an offline host
+  // stays listed (its picker row says `offline`) - and its tombstone must
+  // survive exactly so the drain above can fire when it returns.
+  //
+  // Two snapshots are therefore NOT evidence of departure and are skipped: a
+  // directory that has not resolved, and an EMPTY fleet. Empty is a real
+  // transient, not a hypothetical: the host publishes during boot and arrives
+  // as a later `onChange`, and a boot-time empty fetch being served to late
+  // consumers is the 2026-07-14 incident `useHostPickerList` carries
+  // `staleTime: 0` for. Acting on one here would silently abandon every closed
+  // shell at launch - the one failure this GC must never cause.
+  useEffect(() => {
+    if (directoryHostIds.length === 0) return;
+    useLandingTerminalStore
+      .getState()
+      .retainPendingKillsForHosts(new Set(directoryHostIds));
+  }, [directoryHostIds]);
+
   useEffect(() => {
     const entries = directory.data ?? [];
     const currentDrainable = new Map(

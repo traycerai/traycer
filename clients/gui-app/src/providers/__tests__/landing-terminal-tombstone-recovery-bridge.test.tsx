@@ -546,4 +546,75 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       vi.useRealTimers();
     }
   });
+
+  it("drops a tombstone once the settled directory no longer lists its host", async () => {
+    // host-b stays listed (the default fixture); the tombstone below names a
+    // DIFFERENT host that has left the account entirely - deregistration,
+    // not merely offline.
+    mocks.entries = [offlineHost];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-gone", sessionId: "session-gone" },
+    ]);
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    });
+  });
+
+  it("does not drop a tombstone when the directory snapshot has zero entries (unresolved query or a genuine empty fleet)", async () => {
+    // An unresolved query and a real boot-time empty fleet both produce a
+    // zero-length `directory.data`, and the bridge treats them identically:
+    // the host that owns this tombstone publishes during boot and arrives as
+    // a LATER snapshot, so acting on either would abandon a live shell.
+    mocks.entries = [];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "boot-tab",
+      sessionId: "session-boot",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "boot-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-boot" },
+    ]);
+  });
+
+  it("keeps a tombstone for a host that is offline but still listed in the directory", async () => {
+    mocks.entries = [offlineHost];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "offline-tab",
+      sessionId: "session-offline",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "offline-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-offline" },
+    ]);
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
 });

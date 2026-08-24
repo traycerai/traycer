@@ -79,15 +79,6 @@ export interface LandingTerminalStoreState {
     landingPageId: string,
     instanceId: string,
   ) => LandingTerminalTabRef | null;
-  /**
-   * Atomically tombstones then removes every tab, returning the removed refs so
-   * the caller can dispatch one kill each. Same durability contract as
-   * {@link closeTab}: the tombstones are written before any kill leaves the
-   * renderer, so a reload mid-kill can never re-adopt a closed shell.
-   */
-  readonly closeAllTabs: (
-    landingPageId: string,
-  ) => ReadonlyArray<LandingTerminalTabRef>;
   /** Removes a self-exited tab without asking the host to kill it again. */
   readonly removeExitedTab: (landingPageId: string, instanceId: string) => void;
   readonly applyReconciliation: (
@@ -97,6 +88,20 @@ export interface LandingTerminalStoreState {
     collapseWhenEmpty: boolean,
   ) => void;
   readonly clearPendingKill: (hostId: string, sessionId: string) => void;
+  /**
+   * Drops tombstones whose host is no longer in the account's fleet.
+   *
+   * A tombstone is drained by the host it names; one for a DEREGISTERED host
+   * can never drain, so it would sit in persisted state forever and keep an
+   * authority probe mounted for a machine that will never answer. Deregistration
+   * is the only clearing condition, mirroring how a surface host pin is cleared:
+   * an offline host is still in the fleet and its tombstone must survive, since
+   * draining on its return is the entire point.
+   *
+   * Callers must pass a SETTLED fleet - never a loading or empty directory
+   * snapshot, which would read as "every host left" and abandon live shells.
+   */
+  readonly retainPendingKillsForHosts: (hostIds: ReadonlySet<string>) => void;
   readonly rekeyTab: (instanceId: string, sessionId: string) => void;
   readonly adoptHostTerminal: (
     instanceId: string,
@@ -313,26 +318,6 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
         });
         return closed;
       },
-      closeAllTabs: (_landingPageId) => {
-        const closed = get().tabs;
-        if (closed.length === 0) return [];
-        set((state) => ({
-          tabs: [],
-          activeInstanceId: null,
-          pendingKills: closed.reduce(
-            (pending: ReadonlyArray<LandingTerminalPendingKill>, tab) =>
-              hasPendingKill(pending, tab.hostId, tab.sessionId)
-                ? pending
-                : [
-                    ...pending,
-                    { hostId: tab.hostId, sessionId: tab.sessionId },
-                  ],
-            state.pendingKills,
-          ),
-          ...collapseLayoutsForEmptyTerminalSet(state),
-        }));
-        return closed;
-      },
       removeExitedTab: (_landingPageId, instanceId) =>
         set((state) => {
           const tabs = state.tabs.filter(
@@ -370,6 +355,14 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               pending.hostId !== hostId || pending.sessionId !== sessionId,
           ),
         })),
+      retainPendingKillsForHosts: (hostIds) =>
+        set((state) => {
+          const pendingKills = state.pendingKills.filter((pending) =>
+            hostIds.has(pending.hostId),
+          );
+          if (pendingKills.length === state.pendingKills.length) return state;
+          return { pendingKills };
+        }),
       rekeyTab: (instanceId, sessionId) =>
         set((state) => ({
           tabs: state.tabs.map((tab) =>
