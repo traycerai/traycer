@@ -17,7 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -357,7 +357,12 @@ vi.mock("@pierre/trees/react", () => ({
     readonly itemHeight: number | undefined;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
-    capturedItemHeight = options.itemHeight;
+    // Mount-captured, exactly like the real hook's `useState(() => new
+    // FileTree(options))`. Recording it per RENDER instead would make the row
+    // geometry look reactive here when it is not, and the viewport-transition
+    // case below would pass without the body ever having been rebuilt.
+    const [itemHeightAtConstruction] = useState(() => options.itemHeight);
+    capturedItemHeight = itemHeightAtConstruction;
     return { model: mockModel };
   },
 }));
@@ -1369,6 +1374,58 @@ describe("reveal in sidebar", () => {
  */
 describe("file tree on a touch viewport", () => {
   const TAB_ID = "tab-1";
+  const MOBILE_WIDTH = 390;
+  const DESKTOP_WIDTH = 1024;
+
+  // The shared setup's `matchMedia` never notifies, which is right for suites
+  // that only need one width. Crossing the breakpoint mid-test needs a real
+  // one: `useIsMobileViewport` is a `useSyncExternalStore` over this event, so
+  // without it a width change reaches no render at all.
+  const breakpointListeners = new Set<() => void>();
+  function installLiveMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: window.innerWidth < 768,
+        media: query,
+        onchange: null,
+        addEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.add(listener);
+        },
+        removeEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.delete(listener);
+        },
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function restoreInertMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+    for (const listener of [...breakpointListeners]) listener();
+  }
+
   let openPermanentSpy: Mock<
     (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
   >;
@@ -1407,10 +1464,9 @@ describe("file tree on a touch viewport", () => {
       prepareOpenTileInTabFocusTarget: openPermanentSpy,
       prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
     });
-    Object.defineProperty(window, "innerWidth", {
-      configurable: true,
-      value: 390,
-    });
+    breakpointListeners.clear();
+    installLiveMatchMedia();
+    setViewportWidth(MOBILE_WIDTH);
   });
 
   afterEach(() => {
@@ -1419,9 +1475,11 @@ describe("file tree on a touch viewport", () => {
     useFileTreeStore.setState({ expandedPathsByScope: {} });
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     pinnedStreamBindingRef.value = null;
+    breakpointListeners.clear();
+    restoreInertMatchMedia();
     Object.defineProperty(window, "innerWidth", {
       configurable: true,
-      value: 1024,
+      value: DESKTOP_WIDTH,
     });
   });
 
@@ -1461,5 +1519,19 @@ describe("file tree on a touch viewport", () => {
       TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
     );
+  });
+
+  it("rebuilds the tree when the window crosses the breakpoint, rather than leaving the other class's rows", () => {
+    setViewportWidth(DESKTOP_WIDTH);
+    renderPanel(new MockWsStreamClient("unknown"));
+    expect(capturedItemHeight).toBeUndefined();
+
+    act(() => {
+      setViewportWidth(MOBILE_WIDTH);
+    });
+
+    // Only a rebuilt model can report this: the mocked hook, like the real
+    // one, reads `itemHeight` once at construction.
+    expect(capturedItemHeight).toBe(44);
   });
 });

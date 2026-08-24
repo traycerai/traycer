@@ -124,9 +124,9 @@ const SEARCH_DEBOUNCE_MS = 200;
  * shell's hit-area stylesheet cannot reach - so the row itself has to be the
  * 44px target the rest of the phone surfaces use (`min-h-11`).
  *
- * Read once: `useFileTree` constructs the model from its options on first
- * render and exposes no height setter, so a viewport that flips mid-session
- * keeps the height it mounted with until the panel remounts.
+ * `useFileTree` constructs its model from these options once and exposes no
+ * height setter, so the body is keyed on the viewport class to rebuild it -
+ * see {@link FileTreePanelBodyForWorkspace}.
  */
 const TOUCH_TREE_ROW_HEIGHT_PX = 44;
 
@@ -508,9 +508,23 @@ export function FileTreePanelBodyForWorkspace(
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  // Keyed on the viewport CLASS, which is the one remount this body wants.
+  // Pierre reads `density` / `itemHeight` when it constructs the model and
+  // offers no setter for either, and its row height is not merely painted -
+  // it is the virtualizer's arithmetic (total height, sticky-row tops, scroll
+  // offsets), so re-painting the CSS variables alone would leave the layout
+  // disagreeing with the positions. Without the key a window crossing the
+  // breakpoint gets the other class's filter box over rows that kept their
+  // original geometry. Expansion survives the rebuild - it is persisted per
+  // (epic, host, workspace) and re-seeded on the next reset; the filter query
+  // does not, which is the right answer for a layout change.
+  const isTouchViewport = useIsMobileViewport();
   return (
     <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
-      <FileTreeBodyForResolvedHost {...props} />
+      <FileTreeBodyForResolvedHost
+        key={isTouchViewport ? "touch" : "pointer"}
+        {...props}
+      />
     </StreamRuntimeContext.Provider>
   );
 }
