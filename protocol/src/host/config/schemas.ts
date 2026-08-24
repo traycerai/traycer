@@ -115,6 +115,9 @@ export const configDetectedShellSchema = z.object({
   isDefault: z.boolean(),
   source: z.enum(["detected", "added"]),
   missing: z.boolean(),
+  // Optional both ways: absent from hosts predating the probe, and absent on
+  // every healthy or non-WSL row. See `DetectedShell.wslHealth`.
+  wslHealth: z.enum(["not-installed", "no-distro"]).optional(),
 });
 export type ConfigDetectedShell = z.infer<typeof configDetectedShellSchema>;
 

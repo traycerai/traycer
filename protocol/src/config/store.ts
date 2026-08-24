@@ -26,6 +26,7 @@ import {
   type ShellEntry,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
+import { probeWslHealthCached } from "./wsl-health";
 import { isShellExecutablePathSupported } from "./shell-executable";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
@@ -396,7 +397,35 @@ export async function listShells(): Promise<readonly DetectedShell[]> {
         )),
       })),
   );
-  return [...detected, ...entryRows].sort(sortShellsDefaultFirst);
+  return annotateWslHealth(
+    [...detected, ...entryRows].sort(sortShellsDefaultFirst),
+    isWindows,
+  );
+}
+
+/**
+ * Attaches {@link DetectedShell.wslHealth} to every `wsl.exe` row when WSL is
+ * not actually usable, so pickers can warn (and refuse) instead of offering a
+ * shell that prints usage text and exits. One probe covers all rows - every
+ * `wsl.exe` path is the same system binary. Gated on the REAL platform rather
+ * than the mockable `osPlatform()` so simulated-win32 detection tests never
+ * spawn a live process, and best-effort like the rest of listing: a probe that
+ * cannot answer degrades to unannotated rows.
+ */
+async function annotateWslHealth(
+  rows: readonly DetectedShell[],
+  isWindows: boolean,
+): Promise<readonly DetectedShell[]> {
+  if (!isWindows || process.platform !== "win32") return rows;
+  const isWslRow = (row: DetectedShell): boolean =>
+    nodePath.win32.basename(row.path).toLowerCase() === "wsl.exe";
+  const first = rows.find(isWslRow);
+  if (first === undefined) return rows;
+  const health = await probeWslHealthCached(first.path).catch(() => undefined);
+  if (health === undefined) return rows;
+  return rows.map((row) =>
+    isWslRow(row) ? { ...row, wslHealth: health } : row,
+  );
 }
 
 // Oldest on-disk shape we know how to migrate from. A file whose `version`

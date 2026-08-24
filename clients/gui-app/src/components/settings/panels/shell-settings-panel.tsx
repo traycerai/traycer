@@ -434,6 +434,8 @@ function ShellSettingsPanelBody(props: {
         configError={controller.configError}
         onRetryConfig={controller.retryConfig}
         shells={shells}
+        onRefreshShells={controller.refreshShells}
+        shellsRefreshing={controller.shellsRefreshing}
         probeSource={controller.probeSource}
         pending={shellPending}
         saveTarget={shellSaveTarget}
@@ -506,6 +508,8 @@ function TerminalShellGroup(props: {
   readonly configError: HostRpcError | null;
   readonly onRetryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
+  readonly onRefreshShells: () => void;
+  readonly shellsRefreshing: boolean;
   readonly probeSource: ShellProbeSource;
   readonly pending: boolean;
   readonly saveTarget: ShellSaveTarget | null;
@@ -581,6 +585,8 @@ function TerminalShellGroup(props: {
                     onAdd={props.onAddShell}
                     onRemove={props.onRemoveShell}
                     onUseSystemDefault={props.onUseSystemDefault}
+                    onRefresh={props.onRefreshShells}
+                    refreshing={props.shellsRefreshing}
                   />
                   <TransientSaveIndicator
                     pending={
@@ -590,7 +596,9 @@ function TerminalShellGroup(props: {
                     testId="settings-shell-program-saving-spinner"
                   />
                 </div>
-                {showWslCaption ? <WslAgentCaption /> : null}
+                {showWslCaption ? (
+                  <WslCaptionSlot path={config.path} shells={props.shells} />
+                ) : null}
               </div>
             </div>
             <div
@@ -680,6 +688,86 @@ function WslAgentCaption() {
           Choosing WSL here changes the shell for new terminal tabs. It does not
           move the Traycer host or agents into WSL.
         </p>
+        <a
+          href={WSL_INSTALL_DOCS_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
+        >
+          Install Traycer in WSL
+        </a>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+/**
+ * The one caption slot under a WSL shell pick. The configured shell can
+ * already BE a broken WSL (picked before it broke, or set via the CLI); the
+ * list's health annotation is the only signal, so this escalates from the
+ * quiet "applies to terminal tabs only" scoping note to "terminals won't
+ * start at all" with the remedy when the list flags the configured path.
+ */
+function WslCaptionSlot(props: {
+  readonly path: string;
+  readonly shells: readonly ConfigDetectedShell[];
+}) {
+  const health = props.shells.find(
+    (shell) => shell.path.toLowerCase() === props.path.toLowerCase(),
+  )?.wslHealth;
+  if (health !== undefined) return <WslUnavailableCaption health={health} />;
+  return <WslAgentCaption />;
+}
+
+/**
+ * The caption when the CONFIGURED shell is a WSL that cannot host a terminal:
+ * a new tab would spawn wsl.exe, which prints usage text (the installer stub)
+ * or "no distributions" and exits immediately - the user experiences terminals
+ * that never start. Red, not amber: this is not a trade-off note like
+ * `WslAgentCaption`, it is "your terminals are broken until you act", and the
+ * hover card carries the one command that fixes it.
+ */
+function WslUnavailableCaption(props: {
+  readonly health: "not-installed" | "no-distro";
+}) {
+  const notInstalled = props.health === "not-installed";
+  return (
+    <HoverCard>
+      <HoverCardTrigger asChild>
+        <span
+          data-testid="settings-shell-wsl-unavailable"
+          className="inline-flex cursor-default items-center gap-1.5 text-ui-xs text-muted-foreground"
+        >
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-[var(--term-ansi-red)]"
+          />
+          {notInstalled
+            ? "WSL isn't installed — terminals won't start"
+            : "WSL has no Linux distribution — terminals won't start"}
+          <a
+            href={WSL_INSTALL_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Install Traycer in WSL"
+            className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Info className="size-3" />
+          </a>
+        </span>
+      </HoverCardTrigger>
+      <HoverCardContent
+        align="end"
+        className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
+      >
+        <p className="text-muted-foreground">
+          {notInstalled
+            ? "wsl.exe on this machine is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
+            : "WSL runs, but no Linux distribution is registered, so a terminal tab exits immediately. Run the command below, then re-detect shells."}
+        </p>
+        <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
+          {notInstalled ? "wsl --install" : "wsl --install -d Ubuntu"}
+        </code>
         <a
           href={WSL_INSTALL_DOCS_URL}
           target="_blank"
