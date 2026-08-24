@@ -39,7 +39,12 @@ import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
-import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import {
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
+import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   openerActionLeaf,
@@ -52,16 +57,18 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 
-function terminalWorkspaceLeaf(
-  ctx: CommandContext,
-  target: { readonly hostId: string; readonly cwd: string },
-  label: string,
-  hostClient: HostClient<HostRpcRegistry>,
-): CommandItem {
+function terminalWorkspaceLeaf(props: {
+  readonly ctx: CommandContext;
+  readonly target: { readonly hostId: string; readonly cwd: string };
+  readonly label: string;
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly status: WorktreeFolderRowBadge | null;
+}): CommandItem {
+  const { ctx, target, label, hostClient, status } = props;
   // Cmdk can invoke a selected row twice before its view rerenders. Keep this
   // synchronous per-leaf latch so one workspace selection creates one terminal.
   let hasLaunched = false;
-  return openerActionLeaf({
+  const leaf = openerActionLeaf({
     id: `open:terminals:new:${target.hostId}:${encodeURIComponent(target.cwd)}`,
     label,
     keywords: [target.cwd, "new", "terminal", "workspace"],
@@ -92,6 +99,9 @@ function terminalWorkspaceLeaf(
       });
     },
   });
+  if (status === null) return leaf;
+  const statusBadge = `${status.label.charAt(0).toUpperCase()}${status.label.slice(1)}`;
+  return { ...leaf, statusBadge, description: status.detail };
 }
 
 function terminalWorkspaceCheckingHint(
@@ -166,22 +176,21 @@ function terminalWorkspaceLeaves(
   const visibleRows = rowsWithoutResolvedMissing.filter(
     (row) => row.hostId === hostId,
   );
-  const selectableRows = visibleRows.filter(
-    (row) => row.disabledReason === null,
-  );
+  const selectableRows = visibleRows.filter(isBrowsable);
   const checkingRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && isWorkspaceResolvePending(row),
   );
   const disabledRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && !isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && !isWorkspaceResolvePending(row),
   );
   const leaves = selectableRows.map((row) =>
-    terminalWorkspaceLeaf(
+    terminalWorkspaceLeaf({
       ctx,
-      { hostId: row.hostId, cwd: row.runningDir },
-      row.runningDir,
+      target: { hostId: row.hostId, cwd: row.runningDir },
+      label: row.runningDir,
       hostClient,
-    ),
+      status: worktreeFolderRowBadge(row),
+    }),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
   const disabledHints = disabledRows.map(terminalWorkspaceDisabledHint);
@@ -200,12 +209,13 @@ function terminalWorkspaceLeaves(
     workspace.folderlessCwd !== null
   ) {
     return [
-      terminalWorkspaceLeaf(
+      terminalWorkspaceLeaf({
         ctx,
-        { hostId, cwd: workspace.folderlessCwd },
-        workspace.folderlessCwd,
+        target: { hostId, cwd: workspace.folderlessCwd },
+        label: workspace.folderlessCwd,
         hostClient,
-      ),
+        status: null,
+      }),
     ];
   }
   if (rowsWithoutResolvedMissing.length === 0) {

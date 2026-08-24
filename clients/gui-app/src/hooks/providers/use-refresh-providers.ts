@@ -42,6 +42,14 @@ export function useRefreshProviders(): () => Promise<void> {
       onMutate: () => ({ hostId: client.getActiveHostId() }),
       onSuccess: async (data: ProvidersListResponse, _variables, ctx) => {
         if (ctx.hostId === null) return;
+        // Drops the harness catalogs alongside the list, which is what makes
+        // good on this hook's contract under auto-enablement: a refresh can
+        // now change which providers are available at all - a terminal
+        // sign-in completing is observed exactly here - so the catalogs must
+        // move with it. `PROVIDER_INVALIDATIONS` already names both, and the
+        // commit helper invalidates every entry except `providers.list`, so
+        // this single call covers it. Invalidating them again here would
+        // re-stale what it just refetched.
         await commitAuthoritativeProvidersList({
           queryClient,
           hostId: ctx.hostId,

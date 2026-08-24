@@ -26,11 +26,14 @@ import {
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
+  listGuiHarnessesResponseSchemaV70,
+  listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
+  providersListResponseSchemaV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -57,6 +60,16 @@ const FIXTURES = {
   "agent.gui.listHarnesses@4.0": dump(listGuiHarnessesResponseSchemaV40),
   "agent.gui.listHarnesses@5.0": dump(listGuiHarnessesResponseSchemaV50),
   "agent.gui.listHarnesses@6.0": dump(listGuiHarnessesResponseSchemaV60),
+  // v7.0 froze when v7.1 opened for the auth-aware enablement row fields. Up
+  // to that point the 2.1-6.0 rows above were `guiHarnessOptionSchema.extend({
+  // id })` - a pinned id over the LIVE body - so these dumps were only ever
+  // half-frozen. They now share the hand-frozen `guiHarnessOptionBaseShapeV70`
+  // and are byte-identical to what they were, which is why the freeze added
+  // rows here without changing any existing one.
+  "agent.gui.listHarnesses@7.0": dump(listGuiHarnessesResponseSchemaV70),
+  // The head line, pinned for the same reason `providers.list@7.1` is: growth
+  // of the live row now has nothing else to fail against.
+  "agent.gui.listHarnesses@7.1": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),
@@ -79,24 +92,30 @@ const FIXTURES = {
   // line, so this row is the one that gets to prevent the leak instead of
   // recording it, and it is what mechanizes "freeze line N before N ships".
   //
-  // It dumps the LIVE schema deliberately. v7.0 points there because it is the
-  // head (v8.0 opened above it for the version-manager fields while both were
-  // unreleased; the release collapsed the two back into one), so the live shape
-  // IS what a v7.0 peer will decode. The dump is DEEP - it walks
-  // `providerProfileSchema`, `providerNativeCapabilitiesSchema`,
-  // `nativeListResultSchema` and every other sub-schema this line reaches - so
-  // growth ANYWHERE beneath it fails this snapshot rather than quietly changing
-  // what v7.0 serializes. When it fails, do not regenerate to green: hand-freeze
-  // this line and open v8.0 against live.
+  // THAT PREVENTION WORKED, and this row now dumps the FROZEN v7.0 schema
+  // rather than the live one. When the auth-aware enablement fields
+  // (`enablementMode`/`enablementSource`) were added to
+  // `providerCliStateBaseShape`, this row went red exactly as designed; the
+  // response was to hand-freeze v7.0 under the reserved `V70` names and open
+  // v7.1 against live, NOT to regenerate this row. Its dump is unchanged.
   //
-  // The freeze is a v7.0 one and takes `V70` names - v7.0 is the line that
-  // stops being head - NOT `V80`, which belongs to the new head still pointing
-  // at the canonical schemas. Those `V70` names are currently held by the
-  // pre-image this line had before the version-manager fields arrived, so it
-  // has to be renamed out of the way first; `providersListRequestSchemaBeforeV70`
-  // below is the naming precedent for that. `host/registry.ts` (above
-  // `providersListV70`) states this procedure in full - keep the two in step.
-  "providers.list@7.0": dump(providersListResponseSchema),
+  // A MINOR, not the v8.0 this text used to prescribe: `versioned-rpc.ts`
+  // rejects a major bump that is not a breaking change, and two optional
+  // fields are not one. v8.0 remains right for the growth this text had in
+  // mind (new ids/enum values on a host->client catalog payload).
+  //
+  // The dump is DEEP - it walks `providerProfileSchema`,
+  // `providerNativeCapabilitiesSchema`, `nativeListResultSchema` and every
+  // other sub-schema this line reaches, all of which `providerCliStateSchemaV70`
+  // deliberately still references live - so growth ANYWHERE beneath it fails
+  // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
+  // `*V70Preimage` shapes are the precedent); do not regenerate to green.
+  "providers.list@7.0": dump(providersListResponseSchemaV70),
+  // The head line. It inherits v7.0's old job here: it dumps the LIVE schema,
+  // so the FIRST attempt to grow the live shape goes red on this row rather
+  // than on the release that ships the growth. Same response then applies -
+  // freeze the line that stopped being head, open the next one.
+  "providers.list@7.1": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was

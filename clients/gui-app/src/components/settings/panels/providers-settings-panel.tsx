@@ -3,6 +3,8 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
+  type ProviderEnablementMode,
+  type ProviderEnablementSource,
 } from "@traycer/protocol/host/provider-schemas";
 import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -16,6 +18,13 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
@@ -736,6 +745,8 @@ function TraycerSubscriptionForProvider({
   return <TraycerSubscriptionSection />;
 }
 
+const ENABLEMENT_FLOOR_HINT = "At least one provider must stay enabled.";
+
 function ProviderEnableSwitch(props: {
   readonly id: string;
   readonly providerId: ProviderCliState["providerId"];
@@ -751,7 +762,7 @@ function ProviderEnableSwitch(props: {
   const disablingLast = enabled && props.enabledProviderCount <= 1;
   return (
     <TooltipWrapper
-      label={disablingLast ? "At least one provider must stay enabled." : null}
+      label={disablingLast ? ENABLEMENT_FLOOR_HINT : null}
       side="top"
       sideOffset={undefined}
       align={undefined}
@@ -771,6 +782,158 @@ function ProviderEnableSwitch(props: {
       </span>
     </TooltipWrapper>
   );
+}
+
+/**
+ * The secondary line under the control while a provider is in Auto: what
+ * detection actually decided, and why.
+ *
+ * Auto is the only mode whose outcome the control itself does not state - "On"
+ * and "Off" ARE their outcome - and without this the user is looking at a
+ * provider that says "Auto" and is either usable or not for reasons the screen
+ * never mentions. `"sticky"` returns null for that reason rather than
+ * restating the selected mode back at them.
+ */
+function autoEnablementDetail(
+  source: ProviderEnablementSource | undefined,
+): string | null {
+  if (source === "auto-detected") return "Auto · enabled — account detected";
+  if (source === "auto-undetected") {
+    return "Auto · disabled — no account detected";
+  }
+  return null;
+}
+
+/**
+ * The legacy boolean to send alongside an explicit `mode`.
+ *
+ * `providers.setEnabled@2.2` keeps `enabled` REQUIRED (demoting it would break
+ * released 2.1 peers), and the 2.2 -> 1.0 downgrade drops `mode` and forwards
+ * this. So it is not filler: it is what a v1.0 host acts on, and it has to be
+ * the honest binary reading of the same gesture. `"auto"` has no binary
+ * equivalent, so it forwards the effective value the provider has right now -
+ * "leave it as it is" - rather than guessing at a verdict only the host can
+ * compute.
+ */
+function legacyEnabledForMode(
+  mode: ProviderEnablementMode,
+  currentlyEnabled: boolean,
+): boolean {
+  if (mode === "on") return true;
+  if (mode === "off") return false;
+  return currentlyEnabled;
+}
+
+const ENABLEMENT_MODE_LABELS: Readonly<Record<ProviderEnablementMode, string>> =
+  {
+    auto: "Auto",
+    on: "On",
+    off: "Off",
+  };
+
+/**
+ * The three-way Auto/On/Off control, and the old-host fallback to the binary
+ * switch.
+ *
+ * `enablementMode` absent means the host predates `providers.list@7.1` and has
+ * no tri-state to edit - rendering the three-way control there would offer a
+ * choice the host cannot store, and "Auto" would silently mean whatever the
+ * legacy flag already said. The binary switch is the honest control for that
+ * host, which is why the fallback keys on the FIELD rather than on a version
+ * number.
+ *
+ * The one-enabled floor keeps its existing shape: it blocks the explicit
+ * disable, measured against the EFFECTIVE set (`state.enabled`), which is what
+ * `enabledProviderCount` counts. Switching to Auto is deliberately not gated
+ * by it - the outcome is the host's to compute and the client would be
+ * guessing - and `traycer` anchors the floor in practice, since its passive
+ * verdict is a constant `authenticated`.
+ */
+function ProviderEnablementControl(props: {
+  readonly id: string;
+  readonly providerId: ProviderCliState["providerId"];
+  readonly enabled: boolean;
+  readonly mode: ProviderEnablementMode | undefined;
+  readonly source: ProviderEnablementSource | undefined;
+  readonly isPending: boolean;
+  readonly enabledProviderCount: number;
+  readonly onSetEnabled: (
+    providerId: ProviderCliState["providerId"],
+    enabled: boolean,
+  ) => void;
+  readonly onSetMode: (
+    providerId: ProviderCliState["providerId"],
+    mode: ProviderEnablementMode,
+  ) => void;
+}) {
+  const { id, providerId, enabled, mode, isPending, onSetMode } = props;
+  if (mode === undefined) {
+    return (
+      <div className="flex shrink-0 items-center gap-2 text-ui-sm">
+        <label htmlFor={id} className="text-muted-foreground">
+          {enabled ? "Enabled" : "Disabled"}
+        </label>
+        <ProviderEnableSwitch
+          id={id}
+          providerId={providerId}
+          enabled={enabled}
+          isPending={isPending}
+          enabledProviderCount={props.enabledProviderCount}
+          onSetEnabled={props.onSetEnabled}
+        />
+      </div>
+    );
+  }
+  const blockingDisable = enabled && props.enabledProviderCount <= 1;
+  const detail = mode === "auto" ? autoEnablementDetail(props.source) : null;
+  return (
+    <div className="flex shrink-0 flex-col items-end gap-1">
+      <div className="flex items-center gap-2 text-ui-sm">
+        <label htmlFor={id} className="text-muted-foreground">
+          Availability
+        </label>
+        <Select
+          value={mode}
+          onValueChange={(next) => {
+            const chosen = parseEnablementMode(next);
+            if (chosen === null || isPending) return;
+            if (chosen === "off" && blockingDisable) return;
+            onSetMode(providerId, chosen);
+          }}
+          disabled={isPending}
+        >
+          <SelectTrigger id={id} size="sm" className="min-w-0">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">{ENABLEMENT_MODE_LABELS.auto}</SelectItem>
+            <SelectItem value="on">{ENABLEMENT_MODE_LABELS.on}</SelectItem>
+            {/* Disabled rather than hidden: the floor is a rule about the
+                whole set, so a vanishing option would read as this provider
+                not supporting Off at all. */}
+            <SelectItem value="off" disabled={blockingDisable}>
+              {ENABLEMENT_MODE_LABELS.off}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      {detail === null ? null : (
+        <span className="text-ui-xs text-muted-foreground">{detail}</span>
+      )}
+      {blockingDisable ? (
+        <span className="text-ui-xs text-muted-foreground">
+          {ENABLEMENT_FLOOR_HINT}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Narrows a `Select` value back to the mode union - the primitive hands back
+ *  a bare string, and this is the only place that widening is undone. */
+function parseEnablementMode(value: string): ProviderEnablementMode | null {
+  if (value === "auto" || value === "on" || value === "off") return value;
+  return null;
 }
 
 function ProviderDetail({
@@ -825,6 +988,25 @@ function ProviderDetail({
         : defaultSelectedProfileId(state.profiles),
   );
   const setEnabled = useProvidersSetEnabled();
+  // Whether the detail pane below the header is inert - the Account and
+  // Profiles controls included.
+  //
+  // Keyed on the MODE, not on effective `enabled`, and that distinction is the
+  // whole point. Under auto-enablement `enabled: false` has two completely
+  // different causes: the user said Off, or the user said Auto and no account
+  // was detected. Only the first is a refusal. Blanking the pane for the second
+  // disables the very controls that start a sign-in, so a returning user whose
+  // Auto provider went quiet after a sign-out had to first flip the persistent
+  // mode to On just to reach the button that would have made Auto resolve on
+  // its own - and would then be left with a sticky On they never wanted.
+  //
+  // On a host below `providers.list@7.1` there is no mode to read and no
+  // auto-derived disable to distinguish, so it falls back to the effective
+  // boolean, which is exactly today's behavior there.
+  const detailPaneInert =
+    state.enablementMode === undefined
+      ? !state.enabled
+      : state.enablementMode === "off";
   const canAddProfile = providerCanStartProfileOauth(
     state,
     isSelectedHostLocal,
@@ -878,34 +1060,43 @@ function ProviderDetail({
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2 text-ui-sm">
-          <label htmlFor={switchId} className="text-muted-foreground">
-            {state.enabled ? "Enabled" : "Disabled"}
-          </label>
-          <ProviderEnableSwitch
-            id={switchId}
-            providerId={providerId}
-            enabled={state.enabled}
-            isPending={setEnabled.isPending}
-            enabledProviderCount={enabledProviderCount}
-            onSetEnabled={(id, enabled) =>
-              // Plain enable/disable - never a native mutation or profile
-              // rename/remove/recolor/drift-ack.
-              setEnabled.mutate({
-                providerId: id,
-                enabled,
-                profileAction: null,
-              })
-            }
-          />
-        </div>
+        <ProviderEnablementControl
+          id={switchId}
+          providerId={providerId}
+          enabled={state.enabled}
+          mode={state.enablementMode}
+          source={state.enablementSource}
+          isPending={setEnabled.isPending}
+          enabledProviderCount={enabledProviderCount}
+          onSetEnabled={(id, enabled) =>
+            // Plain enable/disable - never a native mutation or profile
+            // rename/remove/recolor/drift-ack. No `mode`: this arm only runs
+            // on a host that has none, and sending one there would be a field
+            // its contract cannot carry.
+            setEnabled.mutate({
+              providerId: id,
+              enabled,
+              profileAction: null,
+            })
+          }
+          onSetMode={(id, mode) =>
+            setEnabled.mutate({
+              providerId: id,
+              // Required on the wire and load-bearing on the downgrade to
+              // v1.0 - see `legacyEnabledForMode`.
+              enabled: legacyEnabledForMode(mode, state.enabled),
+              profileAction: null,
+              mode,
+            })
+          }
+        />
       </div>
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-opacity",
-          state.enabled ? "" : "pointer-events-none opacity-50",
+          detailPaneInert ? "pointer-events-none opacity-50" : "",
         )}
-        {...(!state.enabled ? { inert: true } : {})}
+        {...(detailPaneInert ? { inert: true } : {})}
       >
         {/* Nothing renders between the provider header and the tab rail. The
             API-key card used to sit here, above the bar, so a provider's only
