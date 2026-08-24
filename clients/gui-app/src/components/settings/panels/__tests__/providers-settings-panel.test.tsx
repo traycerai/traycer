@@ -2673,6 +2673,95 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  describe("detail pane inert gate: mode, not effective enabled", () => {
+    function singleProvider(overrides: {
+      readonly enabled: boolean;
+      readonly enablementMode?: "auto" | "on" | "off";
+      readonly enablementSource?:
+        "sticky" | "auto-detected" | "auto-undetected";
+    }): void {
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: overrides.enabled,
+            enablementMode: overrides.enablementMode,
+            enablementSource: overrides.enablementSource,
+          },
+        ],
+      };
+    }
+
+    // Load-bearing: an `auto` provider with no detected account is
+    // `enabled: false` too. Gating the pane on `!state.enabled` instead of
+    // the mode would re-inert exactly this row, blocking the sign-in control
+    // that is the only way out of "no account detected".
+    it("leaves the pane reachable for an auto-undetected provider even though enabled is false", () => {
+      singleProvider({
+        enabled: false,
+        enablementMode: "auto",
+        enablementSource: "auto-undetected",
+      });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).toBeNull();
+      expect(container.querySelector(".pointer-events-none")).toBeNull();
+    });
+
+    it("makes the pane inert when the mode is explicitly Off", () => {
+      singleProvider({ enabled: false, enablementMode: "off" });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      expect(container.querySelector(".pointer-events-none")).not.toBeNull();
+    });
+
+    it("leaves the pane reachable when the mode is On", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).toBeNull();
+    });
+
+    it("falls back to !enabled on an old host with no enablementMode", () => {
+      singleProvider({ enabled: false });
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      unmount();
+
+      singleProvider({ enabled: true });
+      const { container: container2 } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container2.querySelector("[inert]")).toBeNull();
+    });
+  });
+
   it("renders capability-driven tabs and hides unsupported ones", () => {
     providerMocks.listResult.data = {
       providers: [

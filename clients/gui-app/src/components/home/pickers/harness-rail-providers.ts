@@ -250,10 +250,34 @@ export function railHarnessDegraded(
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
   return (
-    isHarnessRowSignedOut(harness) ||
+    (isHarnessRowSignedOut(harness) && !harnessRowExplicitlyOff(harness)) ||
     degradedHarnessIds.has(harness.id) ||
     (!harness.available && harness.requiresApiKey)
   );
+}
+
+/**
+ * The one enablement state the row's signed-out verdict must NOT reach.
+ *
+ * `railHarnessVisible` ORs degradation INTO visibility, which is what keeps a
+ * signed-out provider browseable so the user can fix it. Applied to a provider
+ * the user deliberately switched OFF, that same OR resurrects it: it is
+ * unavailable AND signed out, so it would come back as a "setup required" tab
+ * for an account nobody asked to be reminded about.
+ *
+ * Keyed on the MODE, deliberately not on effective `enabled`. Those differ on
+ * exactly the row this feature exists for: an `auto` provider with no detected
+ * account is `enabled: false` too, and it must stay visible - that is the
+ * "sign in to enable" offer. Only `off` is the user having said no.
+ *
+ * This is the same guard `providerNeedsPickerReauth` already applies on the
+ * `providers.list` arm (`provider.enabled && …`); without it here the two arms
+ * of this predicate disagree about disabled providers. On a host below
+ * `agent.gui.listHarnesses@7.1` the field is absent - so is `authStatus`, and
+ * the first operand is already false.
+ */
+function harnessRowExplicitlyOff(harness: HarnessOption): boolean {
+  return harness.enablementMode === "off";
 }
 
 /**

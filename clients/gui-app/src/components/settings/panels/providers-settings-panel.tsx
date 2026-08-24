@@ -988,6 +988,25 @@ function ProviderDetail({
         : defaultSelectedProfileId(state.profiles),
   );
   const setEnabled = useProvidersSetEnabled();
+  // Whether the detail pane below the header is inert - the Account and
+  // Profiles controls included.
+  //
+  // Keyed on the MODE, not on effective `enabled`, and that distinction is the
+  // whole point. Under auto-enablement `enabled: false` has two completely
+  // different causes: the user said Off, or the user said Auto and no account
+  // was detected. Only the first is a refusal. Blanking the pane for the second
+  // disables the very controls that start a sign-in, so a returning user whose
+  // Auto provider went quiet after a sign-out had to first flip the persistent
+  // mode to On just to reach the button that would have made Auto resolve on
+  // its own - and would then be left with a sticky On they never wanted.
+  //
+  // On a host below `providers.list@7.1` there is no mode to read and no
+  // auto-derived disable to distinguish, so it falls back to the effective
+  // boolean, which is exactly today's behavior there.
+  const detailPaneInert =
+    state.enablementMode === undefined
+      ? !state.enabled
+      : state.enablementMode === "off";
   const canAddProfile = providerCanStartProfileOauth(
     state,
     isSelectedHostLocal,
@@ -1075,9 +1094,9 @@ function ProviderDetail({
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col transition-opacity",
-          state.enabled ? "" : "pointer-events-none opacity-50",
+          detailPaneInert ? "pointer-events-none opacity-50" : "",
         )}
-        {...(!state.enabled ? { inert: true } : {})}
+        {...(detailPaneInert ? { inert: true } : {})}
       >
         {/* Nothing renders between the provider header and the tab rail. The
             API-key card used to sit here, above the bar, so a provider's only
