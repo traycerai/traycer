@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { imageMutationKeys } from "@/lib/query-keys";
@@ -220,7 +221,7 @@ async function performImageAction(
     return;
   }
   const saved = await saveBlobToDisk(blob, suggestedName);
-  if (saved !== null) toast.success(`Saved ${saved}`);
+  if (saved !== null) toastSavedFile(saved);
 }
 
 function imageFileName(

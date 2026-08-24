@@ -6,7 +6,8 @@ import {
   AnalyticsEvent,
   type AnalyticsUsageImageExportSource,
 } from "@/lib/analytics";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { captureUsageExportImageBlob } from "@/lib/usage-analytics/usage-export-image";
 import { appLogger } from "@/lib/logger";
@@ -46,13 +47,13 @@ export type UsageImageExportInput =
   | { readonly action: "download"; readonly node: HTMLElement };
 
 /**
- * The saved file name on a completed download, `null` on a copy (nothing is
- * named) and on a download the user cancelled out of the save picker.
- * Callers discriminate on the VARIABLES, never on this - both no-name cases
+ * The saved file on a completed download, `null` on a copy (nothing is
+ * saved) and on a download the user cancelled out of the save picker.
+ * Callers discriminate on the VARIABLES, never on this - both no-file cases
  * are the same `null`.
  */
 export type UsageImageExportMutation = UseMutationResult<
-  string | null,
+  SavedFile | null,
   Error,
   UsageImageExportInput
 >;
@@ -88,7 +89,7 @@ export function useUsageImageExport(
     analyticsSource,
   } = params;
 
-  const mutation = useMutation<string | null, Error, UsageImageExportInput>({
+  const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
       if (input.action === "copy") {
@@ -119,7 +120,7 @@ export function useUsageImageExport(
           action: "download",
           source: analyticsSource,
         });
-        toast.success(`Saved ${saved}`);
+        toastSavedFile(saved);
       }
     },
     onError: (err, input) => {

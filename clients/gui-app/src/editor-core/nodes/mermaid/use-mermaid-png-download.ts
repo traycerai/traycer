@@ -1,9 +1,9 @@
 import { useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { svgToPngBlob } from "@/editor-core/nodes/mermaid/mermaid-service";
 import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { appLogger } from "@/lib/logger";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -27,7 +27,7 @@ export function useMermaidPngDownload(
 ): UseMermaidPngDownloadResult {
   const { svg, enabled } = params;
   const { mutate, isPending } = useMutation<
-    string | null,
+    SavedFile | null,
     Error,
     MermaidPngDownloadInput
   >({
@@ -42,7 +42,7 @@ export function useMermaidPngDownload(
     },
     onSuccess: (saved) => {
       if (saved !== null) {
-        toast.success(`Saved ${saved}`);
+        toastSavedFile(saved);
       }
     },
     onError: (err) => {
