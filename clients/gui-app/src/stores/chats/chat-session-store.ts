@@ -442,6 +442,37 @@ type MissingWorktreePathsUpdate =
   | ReadonlyArray<string>
   | ((current: ReadonlyArray<string>) => ReadonlyArray<string>);
 
+/**
+ * The chat record MINUS its transcript spine.
+ *
+ * `ChatSessionState` keeps the transcript in its own `messages`/`events`
+ * fields, and the snapshot's `chat` carries the same arrays a second time.
+ * Storing both meant every session retained the whole transcript TWICE - on a
+ * 40 MB chat across the ~30 live subscriptions a multi-pane workspace holds,
+ * that second copy is the larger half of the store's footprint - to serve four
+ * scalar reads (`title`, `isTitleEditedByUser`, `settings`, `parentId`).
+ *
+ * The fields are omitted from the TYPE rather than merely left unassigned, so
+ * the compiler is what proves nothing reads them. Anything that needs the
+ * transcript reads `state.messages` / `state.events`, which is where the
+ * merge, the row projection and (with the windowed transcript) hydration all
+ * already look.
+ */
+export type ChatSessionRecord = Omit<Chat, "messages" | "events">;
+
+/**
+ * Drops the transcript arrays off a snapshot's chat record.
+ *
+ * Written as a destructure so adding a transcript-bearing field to `Chat`
+ * cannot silently start being retained again: the omission is expressed once,
+ * here and in {@link ChatSessionRecord}, and the two are checked against each
+ * other by the return type.
+ */
+function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
+  const { messages: _messages, events: _events, ...record } = chat;
+  return record;
+}
+
 export interface ChatSessionState {
   readonly epicId: string;
   readonly chatId: string;
@@ -471,7 +502,7 @@ export interface ChatSessionState {
    * value, since those carry live news too.
    */
   readonly transcriptBaselineEpoch: number;
-  readonly chat: Chat | null;
+  readonly chat: ChatSessionRecord | null;
   readonly access: ChatAccess | null;
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
@@ -1804,10 +1835,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           restoredWorktreeIntentForSnapshot =
             settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
           return {
-            chat: {
-              ...frame.snapshot.chat,
-              messages: [...messages],
-            },
+            // Destructured rather than spread-and-overwritten: the point is
+            // that neither array is RETAINED, and `{...chat, messages: []}`
+            // would still hold `events` (and any transcript-bearing field a
+            // later minor adds). See `ChatSessionRecord`.
+            chat: chatRecordWithoutTranscript(frame.snapshot.chat),
             currentComposerSettings: nextComposerSettings,
             access: frame.snapshot.access,
             messages,

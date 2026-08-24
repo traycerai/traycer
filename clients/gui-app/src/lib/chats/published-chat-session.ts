@@ -282,11 +282,11 @@ export function publishedChatSessionState(
       lastDeliveredRolesDigest: null,
       activeSessionChain: null,
       claudePendingWakes: [],
-      // Copied into mutable arrays: `Chat` is the persisted record shape and
-      // its arrays are not readonly, while the conversion's are. Nothing
-      // mutates them here - the copy is the type boundary, not a defence.
-      messages: [...input.conversion.messages],
-      events: [...input.conversion.events],
+      // No `messages`/`events` here: the record is a `ChatSessionRecord`, and
+      // the transcript is carried once, on the state's own fields below. A
+      // published copy is the case that made the duplicate most expensive -
+      // the whole transcript arrives materialized, so a second copy doubled
+      // the peak of an already-large read.
       archivedAt: null,
     },
     access: {
