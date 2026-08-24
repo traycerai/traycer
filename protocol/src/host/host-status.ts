@@ -31,7 +31,7 @@ import { z } from "zod";
  * `busy` / `busySessionCount` went with them, for a different reason: they
  * describe a *right now* that a lease refreshed on the order of minutes cannot
  * carry. Both already exist on the live host↔GUI connection
- * (`host.status@1.1`), and the notification room's
+ * (`host.status@1.2`), and the notification room's
  * {@link HOST_RUNTIME_STATUS_AWARENESS_FIELD} carries them for surfaces that
  * hold a room rather than a session. A client with neither has no live source
  * and must render no drain state at all — not a stale one, and not a zero.

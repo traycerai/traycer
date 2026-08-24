@@ -88,6 +88,11 @@ export default defineConfig({
     ],
   },
   test: {
+    // Anchored to the package directory so siblings whose names merely
+    // CONTAIN "zod" (`zod-to-json-schema`, `@hookform/resolvers/zod`) are
+    // not dragged in. Full rationale for the workaround itself lives in
+    // `clients/desktop/vitest.shared.ts`.
+    server: { deps: { inline: [/[\\/]node_modules[\\/]zod[\\/]/] } },
     environment: "jsdom",
     setupFiles: ["./__tests__/test-browser-apis.ts"],
     include: [

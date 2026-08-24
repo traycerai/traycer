@@ -71,8 +71,9 @@ export function useHostIdentityQuery(input: {
  * report a version and a session count for a host far too old to have any of
  * the methods around it.
  *
- * Polled, not merely stale-timed. Its `busySessionCount` is what the drain
- * affordance names in "Apply now — ends N sessions" and then destroys, so the
+ * Polled, not merely stale-timed. Its `busySessionCount` / `busyBreakdown` is
+ * what the drain affordance names in "Apply now — ends 2 agents and 1
+ * terminal" (or "ends N sessions" on a @1.1 host) and then destroys, so the
  * question is not "may we reuse this value" but "is this value still true".
  * Going stale does not refetch on its own, so without an interval a focused
  * Overview could sit for minutes serving the count it read on mount.

@@ -1536,9 +1536,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     default - reverting the SELECTED shell via `config.shell.revertArgs`). **On Windows hosts with WSL
     selected** (classified by binary via `windowsShellCaptionFamily`, shared
     with the host resolver) a single quiet line sits directly under the picker
-    in its column - "Agents won't see tools installed in WSL", amber dot +
-    `Info` glyph - with the explanation and the "run the Traycer host inside
-    WSL" remedy link (docs.traycer.ai/settings/shell#using-wsl) in a
+    in its column - "WSL applies to terminal tabs only", amber dot + `Info`
+    glyph - with the shell/host boundary and an "Install Traycer in WSL" WSLg
+    remedy link (docs.traycer.ai/install#windows-via-wsl) in a
     `HoverCard`; the glyph is itself a focusable anchor to that docs page so
     keyboard users reach the remedy without the pointer-only hover card. Only
     WSL earns a caption: PowerShell / Git Bash profile loading and cmd's plain
@@ -1864,10 +1864,13 @@ aria-live="polite"` carrying the equivalent text for
       half is actionable from Settings - the pid names a process this page can
       only reach through the Restart button beside it, and the relay origin is
       infrastructure the account picked. What it carried that anyone acts on is
-      the session count, which is now a chip on the identity line straight off
-      `host.status.busySessionCount`: emerald and pulsing above zero, muted at
-      zero, and ABSENT while the host has not answered, because "No active
-      sessions" is a claim and silence is not. `host-overview-parity.test.tsx`
+      whether the host is busy, which is now a chip on the identity line from
+      `host.status.busyBreakdown` (via `describeHostBusy`): "2 agents · 1
+      terminal working" / "1 terminal agent working" / "Idle". Emerald and
+      pulsing only when `busy`; muted when idle; ABSENT while the host has not
+      answered, because "Idle" is a claim and silence is not. A @1.1 host
+      (`busyBreakdown: null`) falls back to "N sessions"; a host that is busy
+      with no count at all says "Busy". `host-overview-parity.test.tsx`
       is correspondingly stricter - `endpointText` is no longer a named
       exception, so the two variants now differ on the "This computer" tag and
       the danger zone's removal plane and nothing else.

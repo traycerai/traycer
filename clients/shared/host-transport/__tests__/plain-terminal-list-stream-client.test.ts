@@ -11,6 +11,7 @@ import type {
 import { PlainTerminalListStreamClient } from "../plain-terminal-list-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { WsStreamClient } from "../ws-stream-client";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
@@ -51,6 +52,7 @@ function makeWsStreamClient(
   session: IStreamSession,
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   const client = new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     // Required since this branch made transport evidence a construction
     // input rather than an optional hook: every WsStreamClient reports

@@ -8,6 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -16,6 +18,7 @@ import { formatPlatform } from "@/components/settings/host-scope/host-scope-mode
 import { useHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { useAddHostDialogStore } from "@/stores/settings/add-host-dialog-store";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { toast } from "sonner";
 
 // The commands that actually stand a host up, and nothing else.
@@ -167,9 +170,7 @@ function AddHostDialogBody(): ReactNode {
       <>
         <DialogHeader>
           <DialogTitle>
-            {arrived.connectable
-              ? `${arrived.name} is connected`
-              : `${arrived.name} is registered`}
+            {arrived.connectable ? "Host connected" : "Host registered"}
           </DialogTitle>
           <DialogDescription>
             {arrived.connectable
@@ -185,9 +186,19 @@ function AddHostDialogBody(): ReactNode {
             <HostGlyph host={arrived} className="size-4.5" />
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-ui-sm font-medium">
-              {arrived.name}
-            </span>
+            <TooltipWrapper
+              label={arrived.name}
+              side="top"
+              sideOffset={undefined}
+              align="start"
+            >
+              <span
+                aria-label={arrived.name}
+                className="line-clamp-2 text-ui-sm font-medium [overflow-wrap:anywhere]"
+              >
+                {arrived.name}
+              </span>
+            </TooltipWrapper>
             <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
               <HostPresenceDot
                 tone={arrived.health.tone}
@@ -203,19 +214,26 @@ function AddHostDialogBody(): ReactNode {
           </span>
           <Check className="size-4 shrink-0 text-emerald-500" aria-hidden />
         </div>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" onClick={closeDialog}>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full sm:w-auto"
+            onClick={closeDialog}
+          >
             Close
           </Button>
           <Button
             type="button"
+            className="w-full sm:w-auto"
             onClick={() => {
               scope.setHostId(arrived.hostId);
               closeDialog();
+              navigateToSettingsSection("host");
             }}
             data-testid="add-host-manage-arrived"
           >
-            Set up {arrived.name}
+            Set up host
           </Button>
         </div>
       </>
@@ -226,33 +244,53 @@ function AddHostDialogBody(): ReactNode {
     <>
       <DialogHeader>
         <DialogTitle>Add host</DialogTitle>
-        <DialogDescription>
-          A host is Traycer running on the computer you want to reach. Run these
-          over there — this window notices the moment it joins your account.
+        <DialogDescription className="text-pretty">
+          Run these commands on the computer you want to reach. This window
+          detects it when it connects.
         </DialogDescription>
       </DialogHeader>
 
       <ol className="flex min-w-0 flex-col" data-testid="add-host-steps">
         <Step index={1} title="Install the Traycer CLI">
-          <CommandBlock command={CLI_NPM_COMMAND} label="npm" />
-          <CommandBlock command={CLI_HOMEBREW_COMMAND} label="brew" />
-          <StepNote>
-            Pick one — npm (needs Node 20.18 or newer) or Homebrew (macOS and
-            Linux). Running both installs two competing copies.
-          </StepNote>
+          <Tabs defaultValue="npm" className="gap-1.5">
+            <TabsList
+              variant="line"
+              aria-label="Install method"
+              className="justify-start border-b border-border group-data-[orientation=horizontal]/tabs:h-7"
+            >
+              <TabsTrigger
+                value="npm"
+                className="flex-none px-2.5 py-0 text-ui-xs"
+              >
+                npm
+              </TabsTrigger>
+              <TabsTrigger
+                value="homebrew"
+                className="flex-none px-2.5 py-0 text-ui-xs"
+              >
+                Homebrew
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="npm" className="grid gap-1.5">
+              <CommandBlock command={CLI_NPM_COMMAND} />
+              <StepNote>Requires Node 20.18 or newer.</StepNote>
+            </TabsContent>
+            <TabsContent value="homebrew" className="grid gap-1.5">
+              <CommandBlock command={CLI_HOMEBREW_COMMAND} />
+              <StepNote>Available on macOS and Linux.</StepNote>
+            </TabsContent>
+          </Tabs>
         </Step>
         <Step index={2} title="Sign in">
-          <CommandBlock command={LOGIN_COMMAND} label={null} />
+          <CommandBlock command={LOGIN_COMMAND} />
           <StepNote>
-            Prints a link and a code — open the link on any device, enter the
-            code, approve. This only signs in.
+            Open the link on any device, enter the code, and approve sign-in.
           </StepNote>
         </Step>
         <Step index={3} title="Install and start the host">
-          <CommandBlock command={HOST_ENSURE_COMMAND} label={null} />
+          <CommandBlock command={HOST_ENSURE_COMMAND} />
           <StepNote>
-            Installs the host, registers it as a background service, and starts
-            it. Safe to run again if anything looks wrong.
+            Installs, registers, and starts the host. Safe to run again.
           </StepNote>
         </Step>
       </ol>
@@ -291,14 +329,13 @@ function Step(props: {
 
 function StepNote(props: { readonly children: ReactNode }): ReactNode {
   return (
-    <span className="text-ui-xs text-muted-foreground">{props.children}</span>
+    <span className="text-pretty text-ui-xs text-muted-foreground">
+      {props.children}
+    </span>
   );
 }
 
-function CommandBlock(props: {
-  readonly command: string;
-  readonly label: string | null;
-}): ReactNode {
+function CommandBlock(props: { readonly command: string }): ReactNode {
   // The hook, not a hand-rolled writeText + timeout: it withholds the success
   // check when the write rejects (denied permission, insecure context) and
   // clears its reset timer on unmount, both of which the inline version got
@@ -310,11 +347,6 @@ function CommandBlock(props: {
   });
   return (
     <div className="group flex min-w-0 items-center gap-2 rounded-lg border border-border bg-foreground/5 px-2.5 py-1.5 transition-colors hover:bg-foreground/6">
-      {props.label === null ? null : (
-        <span className="shrink-0 font-mono text-code-xs text-muted-foreground/70 select-none">
-          {props.label}
-        </span>
-      )}
       <code className="min-w-0 flex-1 overflow-x-auto font-mono text-code-xs whitespace-pre text-foreground">
         {props.command}
       </code>

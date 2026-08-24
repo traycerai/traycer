@@ -5,6 +5,7 @@ import type {
   HostUpdateState,
 } from "@traycer/protocol/host/host-status";
 import {
+  busyBreakdownFromAwareness,
   deriveHostPresence,
   deriveUpdateAffordance,
   deriveUpdatePill,
@@ -14,6 +15,7 @@ import {
   type DtoPresenceView,
   type LiveBusySessionCountOptions,
 } from "@/components/settings/panels/my-hosts-model";
+import { HOST_RUNTIME_STATUS_AWARENESS_FIELD } from "@traycer/protocol/host/notifications/index";
 
 function statusDto(overrides: Partial<HostStatusDTO>): HostStatusDTO {
   return {
@@ -281,6 +283,7 @@ describe("deriveUpdateAffordance", () => {
     const view = deriveUpdateAffordance({
       updateState: "current",
       liveBusySessionCount: 3,
+      liveBusyBreakdown: null,
     });
     expect(view.waitingForSessionsLabel).toBeNull();
     expect(view.showApplyNowForce).toBe(false);
@@ -291,6 +294,7 @@ describe("deriveUpdateAffordance", () => {
     const view = deriveUpdateAffordance({
       updateState: "pending",
       liveBusySessionCount: 0,
+      liveBusyBreakdown: null,
     });
     expect(view.waitingForSessionsLabel).toBeNull();
     expect(view.showApplyNowForce).toBe(false);
@@ -301,6 +305,7 @@ describe("deriveUpdateAffordance", () => {
     const view = deriveUpdateAffordance({
       updateState: "pending",
       liveBusySessionCount: 1,
+      liveBusyBreakdown: null,
     });
     expect(view.waitingForSessionsLabel).toBe("Waiting for 1 session");
     expect(view.showApplyNowForce).toBe(true);
@@ -311,10 +316,42 @@ describe("deriveUpdateAffordance", () => {
     const view = deriveUpdateAffordance({
       updateState: "pending",
       liveBusySessionCount: 3,
+      liveBusyBreakdown: null,
     });
     expect(view.waitingForSessionsLabel).toBe("Waiting for 3 sessions");
     expect(view.showApplyNowForce).toBe(true);
     expect(view.applyNowLabel).toBe("Apply now — ends 3 sessions");
+  });
+
+  it("names the breakdown on the force when a typed split is present", () => {
+    const view = deriveUpdateAffordance({
+      updateState: "pending",
+      liveBusySessionCount: 3,
+      liveBusyBreakdown: {
+        workingAgents: 2,
+        activeTerminalAgents: 0,
+        busyTerminals: 1,
+      },
+    });
+    expect(view.waitingForSessionsLabel).toBe(
+      "Waiting for 2 agents and 1 terminal",
+    );
+    expect(view.showApplyNowForce).toBe(true);
+    expect(view.applyNowLabel).toBe("Apply now — ends 2 agents and 1 terminal");
+    expect(view.applyNowLabel).not.toMatch(/session/i);
+  });
+
+  it("keeps the count copy when the breakdown is a zero object (no nameable work)", () => {
+    const view = deriveUpdateAffordance({
+      updateState: "pending",
+      liveBusySessionCount: 2,
+      liveBusyBreakdown: {
+        workingAgents: 0,
+        activeTerminalAgents: 0,
+        busyTerminals: 0,
+      },
+    });
+    expect(view.applyNowLabel).toBe("Apply now — ends 2 sessions");
   });
 
   describe("null vs zero — absence is not zero (safety-critical)", () => {
@@ -326,6 +363,7 @@ describe("deriveUpdateAffordance", () => {
       const view = deriveUpdateAffordance({
         updateState: "pending",
         liveBusySessionCount: null,
+        liveBusyBreakdown: null,
       });
       expect(view.waitingForSessionsLabel).toBeNull();
       expect(view.showApplyNowForce).toBe(false);
@@ -336,10 +374,12 @@ describe("deriveUpdateAffordance", () => {
       const nullView = deriveUpdateAffordance({
         updateState: "pending",
         liveBusySessionCount: null,
+        liveBusyBreakdown: null,
       });
       const zeroView = deriveUpdateAffordance({
         updateState: "pending",
         liveBusySessionCount: 0,
+        liveBusyBreakdown: null,
       });
       // Both currently render identically (neither shows a force) — the
       // distinction that matters is that neither treats `null` as if it were
@@ -503,5 +543,48 @@ describe("settledBusySessionCount", () => {
     ]) {
       expect(settledBusySessionCount(options(overrides))).toBeNull();
     }
+  });
+});
+
+describe("busyBreakdownFromAwareness", () => {
+  it("reads a populated split off the room field", () => {
+    const breakdown = {
+      workingAgents: 2,
+      activeTerminalAgents: 0,
+      busyTerminals: 1,
+    };
+    expect(
+      busyBreakdownFromAwareness({
+        [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+          busy: true,
+          busySessionCount: 3,
+          updateProgress: null,
+          busyBreakdown: breakdown,
+        },
+      }),
+    ).toEqual(breakdown);
+  });
+
+  it("returns null when the host omitted the key or sent null", () => {
+    expect(
+      busyBreakdownFromAwareness({
+        [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+          busy: true,
+          busySessionCount: 2,
+          updateProgress: null,
+        },
+      }),
+    ).toBeNull();
+    expect(
+      busyBreakdownFromAwareness({
+        [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+          busy: true,
+          busySessionCount: 2,
+          updateProgress: null,
+          busyBreakdown: null,
+        },
+      }),
+    ).toBeNull();
+    expect(busyBreakdownFromAwareness({})).toBeNull();
   });
 });

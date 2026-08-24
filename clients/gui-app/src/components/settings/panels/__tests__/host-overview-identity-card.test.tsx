@@ -179,13 +179,43 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
   });
 });
 
-describe("<HostSettingsPanel /> Overview identity card — active-sessions chip", () => {
-  it("reads '1 active session' once host.status answers with busySessionCount: 1", async () => {
+describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
+  it("reads 'Idle' with no live tone when the host reports no work", async () => {
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
       effectiveName: "Studio Mac",
+      busy: false,
+      busySessionCount: 0,
+      busyBreakdown: {
+        workingAgents: 0,
+        activeTerminalAgents: 0,
+        busyTerminals: 0,
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const chip = await screen.findByTestId("host-active-sessions");
+    expect(chip.textContent).toBe("Idle");
+    expect(chip.getAttribute("data-live")).toBe("false");
+    expect(chip.className).not.toMatch(/emerald/);
+  });
+
+  it("reads '1 agent working' for a {1,0,0} breakdown", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+      busy: true,
       busySessionCount: 1,
+      busyBreakdown: {
+        workingAgents: 1,
+        activeTerminalAgents: 0,
+        busyTerminals: 0,
+      },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
@@ -194,7 +224,28 @@ describe("<HostSettingsPanel /> Overview identity card — active-sessions chip"
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
-    expect(chip.textContent).toBe("1 active session");
+    expect(chip.getAttribute("data-live")).toBe("true");
+    expect(chip.textContent).toBe("1 agent working");
+    expect(chip.textContent).not.toMatch(/session/i);
+  });
+
+  it("falls back to '2 sessions' for a @1.1 host with a count and no breakdown", async () => {
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+      busy: true,
+      busySessionCount: 2,
+      busyBreakdown: null,
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    const chip = await screen.findByTestId("host-active-sessions");
+    expect(chip.getAttribute("data-count")).toBe("2");
+    expect(chip.textContent).toBe("2 sessions");
   });
 
   it("is ABSENT entirely while host.status has not resolved — not the same as a known zero", async () => {
@@ -216,6 +267,7 @@ describe("<HostSettingsPanel /> Overview identity card — active-sessions chip"
             busy: true,
             busySessionCount: 1,
             updateProgress: null,
+            busyBreakdown: null,
           };
         },
       },

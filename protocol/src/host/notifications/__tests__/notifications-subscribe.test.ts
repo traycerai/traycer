@@ -292,6 +292,60 @@ describe("readHostRuntimeStatusAwareness", () => {
       updateProgress: null,
     });
   });
+
+  it("still parses an entry that omits busyBreakdown — the key is additive", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: true,
+        busySessionCount: 2,
+        updateProgress: null,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: true,
+      busySessionCount: 2,
+      updateProgress: null,
+    });
+  });
+
+  it("round-trips a populated busyBreakdown", () => {
+    const breakdown = {
+      workingAgents: 2,
+      activeTerminalAgents: 1,
+      busyTerminals: 0,
+    };
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: true,
+        busySessionCount: 3,
+        updateProgress: null,
+        busyBreakdown: breakdown,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: true,
+      busySessionCount: 3,
+      updateProgress: null,
+      busyBreakdown: breakdown,
+    });
+  });
+
+  it("round-trips busyBreakdown: null", () => {
+    const entry = {
+      [HOST_RUNTIME_STATUS_AWARENESS_FIELD]: {
+        busy: true,
+        busySessionCount: 2,
+        updateProgress: null,
+        busyBreakdown: null,
+      },
+    };
+    expect(readHostRuntimeStatusAwareness(entry)).toEqual({
+      busy: true,
+      busySessionCount: 2,
+      updateProgress: null,
+      busyBreakdown: null,
+    });
+  });
 });
 
 describe("notifications.subscribe registry membership", () => {

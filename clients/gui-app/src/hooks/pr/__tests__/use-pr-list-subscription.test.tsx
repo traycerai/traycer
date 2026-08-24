@@ -25,6 +25,7 @@ import {
   __resetPrListSubscriptionsForTesting,
 } from "../use-pr-list-subscription";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
  * Mock stream session for `pr.subscribeListForEpic`. Unlike git's status
@@ -94,6 +95,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

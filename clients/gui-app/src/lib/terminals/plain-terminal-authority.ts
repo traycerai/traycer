@@ -601,7 +601,14 @@ export type PlainTerminalMigrationOutcome =
 export interface PlainTerminalMigrationAuthority {
   readonly hostId: string;
   readonly scope: PlainTerminalScope;
-  readonly capability: PlainTerminalCapability;
+  /**
+   * Only the status gates a migration, so callers may pass the bare status
+   * and key their effects on that primitive: an effect keyed on the
+   * capability OBJECT re-fired on every re-render (the authority hook
+   * rebuilds it each render), and after a failed import each re-fire was
+   * another import, another failure, another toast - a storm at RPC speed.
+   */
+  readonly capability: Pick<PlainTerminalCapability, "status">;
   readonly canMutate: boolean;
   readonly importLegacy: (
     request: ImportLegacyPlainTerminalRequest,

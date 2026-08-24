@@ -138,6 +138,7 @@ function buildManifest(opts: FakeClientOptions): HostVersionsManifest {
       yanked: v.yanked,
       deprecationReason: v.yanked ? "test-yanked" : null,
       requiredCliVersion: null,
+      minimumEpoch: null,
       platforms: { [platformKey]: asset },
     };
   });
