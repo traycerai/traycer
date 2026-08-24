@@ -268,8 +268,12 @@ export function ShellProgramCombobox(props: {
               label="System default"
               labelMono={false}
               detail={`${defaultEntry.name} · ${defaultEntry.path}`}
-              notice={null}
-              selectable
+              // The OS default is `%COMSPEC%` on Windows, which a user can
+              // point at wsl.exe - so this row can be a broken WSL too, and
+              // must refuse exactly like its concrete twin rather than
+              // resetting the config to a shell that cannot start.
+              notice={shellRowNotice(defaultEntry)}
+              selectable={defaultEntry.wslHealth === undefined}
               testId="settings-shell-reset"
               onSelect={() => {
                 onUseSystemDefault();

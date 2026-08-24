@@ -283,6 +283,34 @@ describe("<ShellProgramCombobox />", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("refuses the System default row when the OS default is a broken WSL", async () => {
+    const onUseSystemDefault = vi.fn();
+    // %COMSPEC% can point at wsl.exe, which makes the OS default itself a
+    // shell that cannot start a terminal - resetting to it would reintroduce
+    // exactly the failure the concrete row already refuses.
+    const WSL_DEFAULT: TraycerDetectedShell = {
+      name: "WSL",
+      path: "C:\\Windows\\System32\\wsl.exe",
+      isDefault: true,
+      source: "detected",
+      missing: false,
+      wslHealth: "no-distro",
+    };
+    renderCombobox({
+      value: "C:\\Windows\\System32\\wsl.exe",
+      synthesised: true,
+      shells: [WSL_DEFAULT],
+      onUseSystemDefault,
+    });
+    openPopover();
+
+    const systemDefault = await screen.findByTestId("settings-shell-reset");
+    expect(systemDefault.getAttribute("aria-disabled")).toBe("true");
+    expect(systemDefault.textContent).toContain("no Linux distribution");
+    fireEvent.click(systemDefault);
+    expect(onUseSystemDefault).not.toHaveBeenCalled();
+  });
+
   it("re-detects shells via the explicit refresh control", async () => {
     const onRefresh = vi.fn();
     renderCombobox({

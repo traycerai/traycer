@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import type { WslHealth } from "./schema";
+import nodePath from "node:path";
+import type { DetectedShell, WslHealth } from "./schema";
 
 /**
  * Liveness probe behind `DetectedShell.wslHealth`.
@@ -114,4 +115,50 @@ export function probeWslHealthCached(
 
 export function clearWslHealthMemoForTests(): void {
   memo.clear();
+}
+
+/** How {@link annotateWslHealth} asks about one `wsl.exe` path. */
+export type WslHealthProbe = (
+  wslPath: string,
+) => Promise<WslHealth | undefined>;
+
+/**
+ * Attaches {@link DetectedShell.wslHealth} to every `wsl.exe` row whose WSL
+ * cannot host a terminal, so pickers can warn (and refuse) instead of offering
+ * a shell that prints usage text and exits.
+ *
+ * Probed PER DISTINCT PATH, never once for the basename: an added row may point
+ * at a different `wsl.exe` than System32's (a wrapper, a copy, a Sysnative
+ * view), and answering for one with another's verdict would flag a working
+ * shell or clear a broken one. Distinct paths are rare - normally exactly one -
+ * and the caching prober is keyed by path, so the common case is one spawn.
+ *
+ * Best-effort like the rest of listing: a probe that cannot answer (rejects, or
+ * resolves `undefined`) leaves its rows unannotated rather than failing the
+ * list. Callers own the platform gate; this is pure mapping.
+ */
+export async function annotateWslHealth(
+  rows: readonly DetectedShell[],
+  probe: WslHealthProbe,
+): Promise<readonly DetectedShell[]> {
+  const isWslRow = (row: DetectedShell): boolean =>
+    nodePath.win32.basename(row.path).toLowerCase() === "wsl.exe";
+  // Keyed by the case-insensitive path (win32 filesystem), valued by the
+  // original spelling so the probe spawns the path as the user wrote it.
+  const distinct = new Map<string, string>();
+  for (const row of rows) {
+    if (isWslRow(row)) distinct.set(row.path.toLowerCase(), row.path);
+  }
+  if (distinct.size === 0) return rows;
+  const verdicts = new Map<string, WslHealth | undefined>();
+  await Promise.all(
+    [...distinct].map(async ([key, path]) => {
+      verdicts.set(key, await probe(path).catch(() => undefined));
+    }),
+  );
+  return rows.map((row) => {
+    if (!isWslRow(row)) return row;
+    const verdict = verdicts.get(row.path.toLowerCase());
+    return verdict === undefined ? row : { ...row, wslHealth: verdict };
+  });
 }

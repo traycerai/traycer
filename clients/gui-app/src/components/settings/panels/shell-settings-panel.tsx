@@ -523,10 +523,8 @@ function TerminalShellGroup(props: {
   readonly onRevertFlags: () => void;
 }) {
   const { config } = props;
-  const showWslCaption =
-    config !== undefined &&
-    isWindows() &&
-    windowsShellCaptionFamily(config.path) === "wsl";
+  const wslCaption = resolveWslCaption(config, props.shells);
+  const showWslCaption = wslCaption !== null;
   return (
     <SettingsGroup
       title="Terminal shell · New terminals"
@@ -596,9 +594,7 @@ function TerminalShellGroup(props: {
                     testId="settings-shell-program-saving-spinner"
                   />
                 </div>
-                {showWslCaption ? (
-                  <WslCaptionSlot path={config.path} shells={props.shells} />
-                ) : null}
+                <WslCaptionSlot caption={wslCaption} />
               </div>
             </div>
             <div
@@ -701,21 +697,50 @@ function WslAgentCaption() {
   );
 }
 
+type WslHealthValue = NonNullable<ConfigDetectedShell["wslHealth"]>;
+
+/** Which caption (if any) belongs under the picker; see {@link resolveWslCaption}. */
+type WslCaption =
+  | { readonly kind: "unavailable"; readonly health: WslHealthValue }
+  | { readonly kind: "scoping" }
+  | null;
+
 /**
- * The one caption slot under a WSL shell pick. The configured shell can
- * already BE a broken WSL (picked before it broke, or set via the CLI); the
- * list's health annotation is the only signal, so this escalates from the
- * quiet "applies to terminal tabs only" scoping note to "terminals won't
- * start at all" with the remedy when the list flags the configured path.
+ * The one caption slot under a WSL shell pick, in priority order.
+ *
+ * The configured shell can already BE a broken WSL (picked before it broke, or
+ * set via the CLI), which outranks the quiet scoping note: terminals failing to
+ * start is not a trade-off to mention, it is the thing to fix.
+ *
+ * That arm keys off `wslHealth` and NOTHING else. The annotation is computed on
+ * the machine being configured and only ever set for a Windows `wsl.exe`, so it
+ * stays truthful when a macOS or Linux GUI configures a remote Windows host -
+ * where `isWindows()`, which reads the RENDERER's platform, would wrongly say
+ * "not Windows" and hide the warning. The scoping note has no host-side signal
+ * of its own, so it keeps the renderer-platform gate it shipped with.
  */
-function WslCaptionSlot(props: {
-  readonly path: string;
-  readonly shells: readonly ConfigDetectedShell[];
-}) {
-  const health = props.shells.find(
-    (shell) => shell.path.toLowerCase() === props.path.toLowerCase(),
+function resolveWslCaption(
+  config: ShellConfigSnapshot | undefined,
+  shells: readonly ConfigDetectedShell[],
+): WslCaption {
+  if (config === undefined) return null;
+  const health = shells.find(
+    // win32 paths, so case-insensitive; only such rows carry `wslHealth`.
+    (shell) => shell.path.toLowerCase() === config.path.toLowerCase(),
   )?.wslHealth;
-  if (health !== undefined) return <WslUnavailableCaption health={health} />;
+  if (health !== undefined) return { kind: "unavailable", health };
+  if (isWindows() && windowsShellCaptionFamily(config.path) === "wsl") {
+    return { kind: "scoping" };
+  }
+  return null;
+}
+
+function WslCaptionSlot(props: { readonly caption: WslCaption }) {
+  const { caption } = props;
+  if (caption === null) return null;
+  if (caption.kind === "unavailable") {
+    return <WslUnavailableCaption health={caption.health} />;
+  }
   return <WslAgentCaption />;
 }
 
@@ -727,9 +752,7 @@ function WslCaptionSlot(props: {
  * `WslAgentCaption`, it is "your terminals are broken until you act", and the
  * hover card carries the one command that fixes it.
  */
-function WslUnavailableCaption(props: {
-  readonly health: "not-installed" | "no-distro";
-}) {
+function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
   const notInstalled = props.health === "not-installed";
   return (
     <HoverCard>
