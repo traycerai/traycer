@@ -13,7 +13,10 @@ export {
   type PersistentHistoryController,
 } from "@/lib/persistent-history";
 
-export { useHistoryNavAvailable } from "@/lib/history-navigation/use-history-nav-available";
+export {
+  historyNavChromeAvailable,
+  useHistoryNavAvailable,
+} from "@/lib/history-navigation/use-history-nav-available";
 export {
   useHistoryNavState,
   type HistoryNavState,
