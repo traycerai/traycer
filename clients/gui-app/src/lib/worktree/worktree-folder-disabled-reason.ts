@@ -87,10 +87,7 @@ export function worktreeFolderRowBadge(
               : "This workspace is unavailable.",
         };
   }
-  if (
-    row.setupState === "pending" ||
-    row.disabledReason === "setup_pending"
-  ) {
+  if (row.setupState === "pending" || row.disabledReason === "setup_pending") {
     return {
       label: "setup pending",
       pending: false,
@@ -99,10 +96,7 @@ export function worktreeFolderRowBadge(
       detail: "The worktree is ready to use. Setup is waiting to start.",
     };
   }
-  if (
-    row.setupState === "running" ||
-    row.disabledReason === "setup_running"
-  ) {
+  if (row.setupState === "running" || row.disabledReason === "setup_running") {
     return {
       label: "setting up",
       pending: true,

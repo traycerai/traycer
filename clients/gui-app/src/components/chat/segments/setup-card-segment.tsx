@@ -301,10 +301,7 @@ export function SetupCardSegment(props: {
       ) : (
         <Tooltip>
           <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
-          <TooltipContent
-            side="bottom"
-            className="max-w-80 whitespace-normal"
-          >
+          <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
             {provisionFailureDetail}
           </TooltipContent>
         </Tooltip>
@@ -441,8 +438,7 @@ function WorkspaceSetupDetail(
   const provisionFailed = isProvisionFailure(entry);
   const creationState = creationStepState(entry, provisionFailed);
   const setupState = setupStepState(entry, provisionFailed);
-  const setupActive =
-    !provisionFailed && entry.state !== "creating" && active;
+  const setupActive = !provisionFailed && entry.state !== "creating" && active;
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (

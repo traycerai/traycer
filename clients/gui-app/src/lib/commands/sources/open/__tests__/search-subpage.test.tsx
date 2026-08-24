@@ -95,12 +95,7 @@ describe("useSearchOpenerItems (step 1: target selection)", () => {
     state.rows = [
       row("/ws/alpha", null, "local", false),
       row("/worktrees/setting-up", "setup_pending", "worktree", true),
-      row(
-        "/worktrees/missing",
-        "missing_worktree_path",
-        "worktree",
-        false,
-      ),
+      row("/worktrees/missing", "missing_worktree_path", "worktree", false),
       row("/worktrees/feature", null, "worktree", true),
     ];
     const result = items();

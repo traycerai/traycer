@@ -387,9 +387,7 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
         name: "Worktree creation failed. fatal: could not create work tree dir",
       }),
     ).toBeTruthy();
-    const createStep = screen
-      .getByText("Creating worktree")
-      .closest("li");
+    const createStep = screen.getByText("Creating worktree").closest("li");
     expect(createStep?.querySelector(".text-destructive")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry creation" }));
     expect(createMutate).toHaveBeenCalledTimes(1);
