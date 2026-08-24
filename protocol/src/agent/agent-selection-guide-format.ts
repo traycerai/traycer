@@ -9,7 +9,9 @@ const WORKSPACE_GUIDE_LABEL = ".traycer/agent-selection-guide.md";
 
 const LAYERED_OPENER = `The instructions below are grouped by scope. Apply all of them. Where a workspace's instructions conflict with the global instructions, the workspace instructions take precedence and override global — they are more specific. For anything the workspace instructions do not address, follow the global instructions.`;
 
-const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide their own instructions below, each labeled by its path. Apply the instructions for the workspace that contains the files your task touches. If more than one workspace contains a file, the most specific workspace (the highest-priority workspace shown first) takes precedence and overrides broader workspace instructions.`;
+const WORKSPACE_SCOPE_PARAGRAPH = `Workspace instructions apply only to files under the workspace path shown in their section heading. Files outside that path follow the global instructions unless another workspace guide applies.`;
+
+const MULTI_WORKSPACE_PARAGRAPH = `When more than one workspace contains a file, the most specific workspace (the highest-priority workspace shown first) takes precedence and overrides broader workspace instructions.`;
 
 const WORKSPACES_ONLY_OPENER = `Each workspace's instructions apply to work on files under that workspace; multiple workspaces provide instructions below, labeled by path. Apply the instructions for the workspace that contains the files your task touches. If more than one workspace contains a file, the most specific workspace (the highest-priority workspace shown first) takes precedence and overrides broader workspace instructions.`;
 
@@ -69,8 +71,8 @@ function opener(sources: readonly AgentSelectionGuideResponseSource[]): string {
     (source) => source.kind === "workspace",
   ).length;
   return workspaceCount >= 2
-    ? `${LAYERED_OPENER}\n\n${MULTI_WORKSPACE_PARAGRAPH}`
-    : LAYERED_OPENER;
+    ? `${LAYERED_OPENER}\n\n${WORKSPACE_SCOPE_PARAGRAPH}\n\n${MULTI_WORKSPACE_PARAGRAPH}`
+    : `${LAYERED_OPENER}\n\n${WORKSPACE_SCOPE_PARAGRAPH}`;
 }
 
 function sectionHeader(source: AgentSelectionGuideResponseSource): string {

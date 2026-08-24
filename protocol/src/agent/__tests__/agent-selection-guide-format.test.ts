@@ -40,7 +40,8 @@ describe("formatAgentSelectionGuideResponse", () => {
       ]),
     );
     expect(text).toContain("take precedence and override global");
-    expect(text).not.toContain("Multiple workspaces provide");
+    expect(text).toContain("apply only to files under the workspace path");
+    expect(text).not.toContain("When more than one workspace");
     expect(text.indexOf(`## Workspace instructions — ${APP_DIR}`)).toBeLessThan(
       text.indexOf("## Global instructions"),
     );
@@ -56,9 +57,7 @@ describe("formatAgentSelectionGuideResponse", () => {
         globalSource("global body", 1),
       ]),
     );
-    expect(text).toContain(
-      "Multiple workspaces provide their own instructions",
-    );
+    expect(text).toContain("When more than one workspace contains a file");
     expect(text).toContain(`## Workspace instructions — ${APP_DIR}`);
     expect(text).toContain(`## Workspace instructions — ${LIB_DIR}`);
     expect(text).toContain("## Global instructions");
@@ -76,9 +75,13 @@ describe("formatAgentSelectionGuideResponse", () => {
 
     expect(text).toContain("the most specific workspace");
     expect(text).toContain("highest-priority workspace shown first");
-    expect(
-      text.indexOf(`## Workspace instructions — ${nestedWorkspace} (`),
-    ).toBeLessThan(text.indexOf(`## Workspace instructions — ${APP_DIR} (`));
+    const nestedHeading = `## Workspace instructions — ${nestedWorkspace} (`;
+    const parentHeading = `## Workspace instructions — ${APP_DIR} (`;
+    expect(text).toContain(nestedHeading);
+    expect(text).toContain(parentHeading);
+    expect(text.indexOf(nestedHeading)).toBeLessThan(
+      text.indexOf(parentHeading),
+    );
   });
 
   it("renders workspace-only guides without global precedence framing", () => {
