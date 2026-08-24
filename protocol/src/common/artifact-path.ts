@@ -69,21 +69,29 @@ function normalizeArtifactPathSegments(filePath: string): string[] {
 }
 
 /**
- * ASCII-only lowercase, for the reserved-name comparison below.
+ * Case FOLD, not lowercase, for the reserved-name comparison below.
  *
- * Deliberately NOT `String.prototype.toLowerCase`, which carries Unicode
- * mappings no filesystem applies to a directory name (U+212A KELVIN SIGN to
- * `k`, U+0130 to `i` plus a combining dot). Neither of those happens to collide
- * with `.comments`, so this is not fixing a live false positive - it is
- * refusing to depend on that coincidence. The reservation should widen by
- * exactly the ASCII case variants a case-insensitive volume collapses, and a
- * Unicode fold is a larger, vaguer set that would need re-checking every time
- * the reserved name changed.
+ * The distinction is the whole point and cost a review round to learn. An
+ * earlier revision folded ASCII only, arguing that Unicode mappings never
+ * collide with `.comments` - having checked U+212A KELVIN SIGN (to `k`) and
+ * U+0130 (to `i` plus a combining dot), neither of which appears in the name.
+ * It missed U+017F LATIN SMALL LETTER LONG S, which folds to `s`, and
+ * `.comments` ends in one. Case-insensitive APFS folds it, so `.commentſ`
+ * addresses the projection directory.
+ *
+ * `toLowerCase` does not fix that either: `ſ` is ALREADY lowercase, so it is
+ * left alone. Folding is what collapses it, and JS has no `toCaseFold`, so
+ * upper-then-lower is the standard approximation - `ſ` uppercases to `S`,
+ * which then lowercases to `s`. Both methods are locale-independent (unlike
+ * their `toLocale*` siblings), so there is no Turkish-i hazard here.
+ *
+ * The approximation is imperfect in the safe direction: it can only ever fold
+ * MORE names onto the reserved one, and over-reserving is nearly free because
+ * `slugify` cannot mint a leading dot, so every name reaching this comparison
+ * with one was hand-authored.
  */
-function asciiLowerCase(value: string): string {
-  return value.replace(/[A-Z]/gu, (ch) =>
-    String.fromCharCode(ch.charCodeAt(0) + 32),
-  );
+function caseFold(value: string): string {
+  return value.toUpperCase().toLowerCase();
 }
 
 /**
@@ -105,8 +113,7 @@ function stripWin32TrailingPadding(value: string): string {
 /**
  * Whether a single directory name ADDRESSES the reserved comment-projection
  * directory on any supported platform - not whether it is spelled that way.
- * Folds ASCII case (case-insensitive volumes) and Win32 trailing dot/space
- * padding.
+ * Normalizes Win32 trailing dot/space padding, then case-folds.
  *
  * Exported because "is this our projection directory?" is asked in two places
  * that must never disagree: here, where a matching chain segment is REFUSED as
@@ -120,16 +127,17 @@ function stripWin32TrailingPadding(value: string): string {
  *
  * Every widening here is safe against the strand-a-real-artifact failure that
  * kept the gate one name wide: `slugify` maps every `[^a-z0-9]` run to `-`, so
- * no minted folderName carries a leading dot, any casing, or trailing padding.
- * The only names newly refused are ones that address our directory anyway.
+ * no minted folderName carries a leading dot, any casing, padding, or
+ * non-ASCII letter. Every name that reaches this comparison with a leading dot
+ * was therefore hand-authored, which is what makes erring toward over-reserving
+ * cheap - and erring the other way is what lets two writers share a directory.
  */
 export function isEpicArtifactCommentsDirName(name: string): boolean {
-  // The constant is already ASCII-lowercase and unpadded, so only the input is
-  // normalized. Order does not matter - padding carries no case.
-  return (
-    asciiLowerCase(stripWin32TrailingPadding(name)) ===
-    EPIC_ARTIFACT_COMMENTS_DIRNAME
-  );
+  // Padding first: it is positional, and folding can change length (`ß` to
+  // `ss`), so stripping a tail afterwards would be reasoning about the wrong
+  // string. The constant is already folded and unpadded.
+  return caseFold(stripWin32TrailingPadding(name)) ===
+    EPIC_ARTIFACT_COMMENTS_DIRNAME;
 }
 
 /**

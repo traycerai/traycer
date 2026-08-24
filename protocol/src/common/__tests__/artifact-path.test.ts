@@ -329,6 +329,19 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
     },
   );
 
+  /**
+   * Unicode case FOLDING, which is not lowercasing. U+017F LATIN SMALL LETTER
+   * LONG S folds to `s` and `.comments` ends in one, so a case-insensitive
+   * APFS volume addresses the projection directory through this spelling.
+   * `toLowerCase` would not catch it - `ſ` is already lowercase.
+   */
+  it.each([".commentſ", ".COMMENTſ", ".ComMentſ.", ".commentſ "])(
+    "matches %s, which Unicode case folding collapses onto the reserved name",
+    (name) => {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(true);
+    },
+  );
+
   it.each([
     "comments",
     ".comment",
@@ -338,6 +351,7 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
     "images",
     ".comment.s",
     " .comments",
+    ".commentß",
   ])(
     "does not match the near-miss %s, a distinct directory on every platform",
     (name) => {
