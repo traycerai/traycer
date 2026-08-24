@@ -103,6 +103,14 @@ import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
 import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
+import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
+import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
+import {
+  browserTabOrigin,
+  nextSettledTabIdentity,
+  type SettledTabIdentity,
+} from "@/lib/browser-view/browser-tab-display";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -463,6 +471,65 @@ interface TerminalTabControl {
   readonly rename: (title: string) => void;
 }
 
+type BrowserTabPresentation = SettledTabIdentity & {
+  readonly isolated: boolean;
+};
+
+function settleBrowserTabPresentation(
+  previous: BrowserTabPresentation | null,
+  tab: BrowserTabInfo,
+  isolated: boolean,
+): BrowserTabPresentation {
+  const identity = nextSettledTabIdentity(previous, tab);
+  return {
+    ...identity,
+    faviconUrl:
+      browserTabOrigin(tab.url) === browserTabOrigin(identity.url)
+        ? identity.faviconUrl
+        : null,
+    isolated,
+  };
+}
+
+function useBrowserTabPresentation(
+  tab: EpicCanvasTileRef,
+): BrowserTabPresentation | null {
+  const sessions = useMaybeBrowserSessionsContext();
+  const session =
+    tab.type === "browser-session"
+      ? sessions?.items.find(
+          (candidate) =>
+            candidate.hostId === tab.hostId &&
+            candidate.sessionId === tab.sessionId,
+        )
+      : undefined;
+  const liveTab = session?.tabs.find(
+    (candidate) => candidate.tabId === tab.tabId,
+  );
+  const [state, setState] = useState(() => ({
+    liveTab,
+    presentation:
+      liveTab === undefined || session === undefined
+        ? null
+        : settleBrowserTabPresentation(
+            null,
+            liveTab,
+            session.profile === "isolated",
+          ),
+  }));
+  if (state.liveTab === liveTab) return state.presentation;
+  const presentation =
+    liveTab === undefined || session === undefined
+      ? null
+      : settleBrowserTabPresentation(
+          state.presentation,
+          liveTab,
+          session.profile === "isolated",
+        );
+  setState({ liveTab, presentation });
+  return presentation;
+}
+
 function TabItem(props: TabItemProps) {
   if (props.tab.type !== "terminal") {
     return <TabItemBody {...props} terminalControl={null} />;
@@ -549,10 +616,12 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
+  const browserPresentation = useBrowserTabPresentation(tab);
   const displayTitle =
-    terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
+    browserPresentation?.title ??
+    (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
-      : fallbackDisplayTitle;
+      : fallbackDisplayTitle);
   const canRename =
     canRenameTabs &&
     (isOpenableEpicNodeKind(tab.type) || tab.type === "terminal") &&
@@ -580,7 +649,7 @@ function useTabRenameControl(args: {
     canEdit: canRename,
     onCommit: handleRename,
   });
-  return { displayTitle, canRename, rename };
+  return { displayTitle, browserPresentation, canRename, rename };
 }
 
 function TabItemBody(
@@ -649,14 +718,15 @@ function TabItemBody(
     data: dropData,
   });
   const { onRename } = menuProps;
-  const { displayTitle, canRename, rename } = useTabRenameControl({
-    tab,
-    epicId,
-    groupId,
-    canRenameTabs,
-    terminalControl: props.terminalControl,
-    onRename,
-  });
+  const { displayTitle, browserPresentation, canRename, rename } =
+    useTabRenameControl({
+      tab,
+      epicId,
+      groupId,
+      canRenameTabs,
+      terminalControl: props.terminalControl,
+      onRename,
+    });
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
@@ -721,7 +791,11 @@ function TabItemBody(
           modifier: leaderModifier,
           hint: leaderHint(leaderDigitFor(index), "to switch to", displayTitle),
         };
-  const tooltipContent = tabTooltipContent(tab, displayTitle);
+  const tooltipContent = tabTooltipContent(
+    tab,
+    displayTitle,
+    browserPresentation,
+  );
 
   return (
     <ContextMenu>
@@ -765,6 +839,7 @@ function TabItemBody(
               epicId={epicId}
               tab={tab}
               titleGenerationPending={titleGenerationPending}
+              browserPresentation={browserPresentation}
             />
             <TabItemLabelSlot
               displayTitle={displayTitle}
@@ -929,7 +1004,18 @@ function TabDisplayTitle(props: {
 function tabTooltipContent(
   tab: EpicCanvasTileRef,
   displayTitle: string,
+  browserPresentation: BrowserTabPresentation | null,
 ): ReactNode {
+  if (browserPresentation !== null) {
+    return (
+      <div className="flex min-w-0 flex-col gap-0.5 text-left">
+        <div className="truncate font-medium">{displayTitle}</div>
+        <div className="truncate text-ui-xs text-muted-foreground">
+          {browserPresentation.url}
+        </div>
+      </div>
+    );
+  }
   if (!isGitDiffTileRef(tab)) return displayTitle;
   const context = tab.repositoryContext;
   const repositoryLabel =
@@ -1094,7 +1180,6 @@ function renderFixedTabIcon(
       return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
     case "browser":
     case "browser-peek":
-    case "browser-session":
       return <Globe className="size-3.5 shrink-0 text-muted-foreground" />;
     case "agent-browser":
       return <Bot className="size-3.5 shrink-0 text-muted-foreground" />;
@@ -1119,6 +1204,7 @@ function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
+  readonly browserPresentation: BrowserTabPresentation | null;
 }): ReactNode {
   // Unconditional so hook order holds across tab kinds; the placeholder
   // answers "reachable", which keeps every non-chat tab on its normal glyph.
@@ -1135,6 +1221,15 @@ function TabIcon(props: {
     hostId: isManagedCommandOutputTileRef(props.tab) ? props.tab.hostId : "",
     commandId: isManagedCommandOutputTileRef(props.tab) ? props.tab.id : "",
   });
+  if (props.tab.type === "browser-session") {
+    return (
+      <BrowserFavicon
+        faviconUrl={props.browserPresentation?.faviconUrl ?? null}
+        isolated={props.browserPresentation?.isolated ?? false}
+        className="size-3.5"
+      />
+    );
+  }
   const fixedIcon = renderFixedTabIcon(
     props.tab,
     managedCommand?.monitoring === true,

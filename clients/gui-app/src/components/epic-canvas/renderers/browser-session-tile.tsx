@@ -30,15 +30,15 @@ function resolveSwapState(args: {
   readonly bindingRegistrationId: string | null;
   readonly terminalBindingRegistrationId: string | null;
   readonly castMigrated: boolean;
-}): { readonly renderHeadless: boolean; readonly holdReason: string | null } {
-  const renderHeadless =
+}): { readonly renderPeek: boolean; readonly holdReason: string | null } {
+  const renderPeek =
     args.migrationRuntime === "headless" ||
     args.bindingRegistrationId === null ||
     (args.castMigrated &&
       args.bindingRegistrationId === args.terminalBindingRegistrationId);
-  if (!renderHeadless) return { renderHeadless, holdReason: null };
+  if (!renderPeek) return { renderPeek, holdReason: null };
   return {
-    renderHeadless,
+    renderPeek,
     holdReason:
       args.bindingRegistrationId === null
         ? "binding-missing"
@@ -52,7 +52,7 @@ function useBrowserSessionSwap(input: {
   readonly sessionId: string;
   readonly tabId: string;
 }): {
-  readonly renderHeadless: boolean;
+  readonly renderPeek: boolean;
   readonly castGeneration: number;
   readonly onMigrated: () => void;
 } {
@@ -89,7 +89,7 @@ function useBrowserSessionSwap(input: {
     setCastGeneration((current) => current + 1);
   }, [castMigrated, input.session?.migration]);
 
-  const { renderHeadless, holdReason } = resolveSwapState({
+  const { renderPeek, holdReason } = resolveSwapState({
     migrationRuntime: input.session?.migration?.runtime,
     bindingRegistrationId: input.bindingRegistrationId,
     terminalBindingRegistrationId,
@@ -102,7 +102,7 @@ function useBrowserSessionSwap(input: {
       return;
     }
     const settlementRevision = input.session?.migration?.revision ?? 0;
-    const verdict = renderHeadless ? "hold" : "swap";
+    const verdict = renderPeek ? "hold" : "swap";
     const signature = [
       terminalBindingRegistrationId,
       input.bindingRegistrationId,
@@ -129,12 +129,12 @@ function useBrowserSessionSwap(input: {
     input.session?.migration?.revision,
     input.sessionId,
     input.tabId,
-    renderHeadless,
+    renderPeek,
     terminalBindingRegistrationId,
   ]);
 
   return {
-    renderHeadless,
+    renderPeek,
     castGeneration,
     onMigrated,
   };
@@ -145,7 +145,7 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
   readonly routingChatId: string | null;
-  readonly renderHeadless: boolean;
+  readonly renderPeek: boolean;
   readonly castGeneration: number;
   readonly onMigrated: () => void;
 }
@@ -159,7 +159,7 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  if (props.renderHeadless || props.binding === null) {
+  if (props.renderPeek) {
     const peek: BrowserPeekTileRef = {
       id: props.node.id,
       instanceId: props.node.instanceId,
@@ -232,7 +232,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     sessions.lifecycle,
     tab,
   ]);
-  const { renderHeadless, castGeneration, onMigrated } =
+  const { renderPeek, castGeneration, onMigrated } =
     useBrowserSessionSwap({
       session,
       bindingRegistrationId: binding?.registrationId ?? null,
@@ -247,7 +247,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
       tab={tab}
       binding={binding}
       routingChatId={sessions.routingChatId}
-      renderHeadless={renderHeadless}
+      renderPeek={renderPeek}
       castGeneration={castGeneration}
       onMigrated={onMigrated}
     />

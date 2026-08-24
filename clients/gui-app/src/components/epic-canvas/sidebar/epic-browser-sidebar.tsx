@@ -53,6 +53,7 @@ import {
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import {
   BROWSER_TILE_DND_TYPE,
   getBrowserTileDragId,
@@ -952,6 +953,7 @@ function BrowserTabRow(props: BrowserTabRowProps) {
                   : null
               }
               isolated={session.profile === "isolated"}
+              className="size-4"
             />
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden whitespace-nowrap">
               <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -1178,40 +1180,4 @@ function useCoalescedBrowserTabDrivers(
   );
 
   return visible;
-}
-
-function BrowserFavicon(props: {
-  readonly faviconUrl: string | null;
-  readonly isolated: boolean;
-}) {
-  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const faviconUrl = props.faviconUrl;
-  const showImage = faviconUrl !== null && loadedSrc === faviconUrl;
-
-  return (
-    <span
-      className={cn(
-        "relative size-4 shrink-0",
-        props.isolated && "rounded-sm ring-1 ring-amber-500/80",
-      )}
-    >
-      {showImage ? null : (
-        <Globe2 className="size-4 text-muted-foreground" aria-hidden />
-      )}
-      {faviconUrl === null ? null : (
-        <img
-          src={faviconUrl}
-          alt=""
-          className={cn(
-            "absolute inset-0 size-4 rounded-sm ring-1 ring-black/10 dark:ring-white/10",
-            showImage ? "opacity-100" : "opacity-0",
-          )}
-          onLoad={() => setLoadedSrc(faviconUrl)}
-          onError={() =>
-            setLoadedSrc((current) => (current === faviconUrl ? null : current))
-          }
-        />
-      )}
-    </span>
-  );
 }

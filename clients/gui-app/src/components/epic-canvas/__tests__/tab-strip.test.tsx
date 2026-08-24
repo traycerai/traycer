@@ -32,6 +32,12 @@ import {
   installManagedCommandChatSession,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -176,6 +182,22 @@ function createQueryClient(): QueryClient {
   });
 }
 
+function browserSessionsState(
+  items: readonly BrowserSessionInfo[],
+): BrowserSessionsState {
+  return {
+    lifecycle: "live",
+    items,
+    errorMessage: null,
+    routingChatId: "chat-1",
+    retry: () => undefined,
+    closeSession: () => undefined,
+    closeTab: () => Promise.resolve(),
+    requestPromoteState: () => Promise.reject(new Error("unused")),
+    requestLendStorage: () => Promise.reject(new Error("unused")),
+  };
+}
+
 // TabItem reads its active/preview/globally-active state from the canvas store
 // (via `useTabActivation`), not from props, so seed a tab whose lone group has
 // `TAB` as the active + preview tab.
@@ -227,37 +249,42 @@ function renderTabStripForTab(
     readonly onSplit:
       ((groupId: string, direction: SplitDirection) => void) | undefined;
   },
+  browserSessions: readonly BrowserSessionInfo[] = [],
 ) {
   seedActivePreviewTab(tab);
   const queryClient = createQueryClient();
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider delayDuration={0}>
-        <TabStrip
-          epicId="epic-1"
-          tabId={VIEW_TAB_ID}
-          groupId="group-1"
-          tabs={[tab]}
-          activeTabId={tab.instanceId}
-          onSelectTab={() => undefined}
-          onCloseTab={input.onClose}
-          onPromotePreview={input.onPromotePreview}
-          onSplit={onSplit}
-          onCloseGroup={() => undefined}
-          onOpenBlankTab={input.onOpenBlankTab}
-          canRenameTabs
-          menuHandlers={{
-            onClose: input.onMenuClose ?? (() => undefined),
-            onCloseOthers: () => undefined,
-            onCloseRight: () => undefined,
-            onCloseAll: () => undefined,
-            onSplit: () => undefined,
-            onRevealInSidebar: () => undefined,
-            onRename: () => undefined,
-          }}
-        />
-      </TooltipProvider>
+      <BrowserSessionsContext.Provider
+        value={browserSessionsState(browserSessions)}
+      >
+        <TooltipProvider delayDuration={0}>
+          <TabStrip
+            epicId="epic-1"
+            tabId={VIEW_TAB_ID}
+            groupId="group-1"
+            tabs={[tab]}
+            activeTabId={tab.instanceId}
+            onSelectTab={() => undefined}
+            onCloseTab={input.onClose}
+            onPromotePreview={input.onPromotePreview}
+            onSplit={onSplit}
+            onCloseGroup={() => undefined}
+            onOpenBlankTab={input.onOpenBlankTab}
+            canRenameTabs
+            menuHandlers={{
+              onClose: input.onMenuClose ?? (() => undefined),
+              onCloseOthers: () => undefined,
+              onCloseRight: () => undefined,
+              onCloseAll: () => undefined,
+              onSplit: () => undefined,
+              onRevealInSidebar: () => undefined,
+              onRename: () => undefined,
+            }}
+          />
+        </TooltipProvider>
+      </BrowserSessionsContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -274,6 +301,60 @@ describe("<TabStrip />", () => {
     terminalAuthorityState.rename.mockReset();
     terminalAuthorityState.close.mockReset();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("uses the live browser tab title, URL, and favicon", () => {
+    const browserTab: EpicCanvasTileRef = {
+      id: "browser-session:session-1:browser-tab-1",
+      instanceId: "browser-instance-1",
+      type: "browser-session",
+      name: "www.google.com",
+      hostId: "host-A",
+      sessionId: "session-1",
+      tabId: "browser-tab-1",
+    };
+    renderTabStripForTab(
+      browserTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: () => undefined,
+      },
+      [
+        {
+          sessionId: "session-1",
+          epicId: "epic-1",
+          hostId: "host-A",
+          profile: "primary",
+          name: "Browser",
+          createdBy: { chatId: "chat-1", agentRunId: "run-1" },
+          createdAt: 1,
+          lastActivityAt: 2,
+          tabs: [
+            {
+              tabId: "browser-tab-1",
+              url: "https://thepier5.com/",
+              originTier: "external",
+              status: "ready",
+              title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
+              viewed: true,
+              drivenBy: [],
+            },
+          ],
+        },
+      ],
+    );
+
+    const tab = screen.getByRole("tab", {
+      name: /Waterfront Hotel in Baltimore \| Pier 5 Hotel/,
+    });
+    expect(
+      tooltipTextFor(screen.getByTestId("tab-title-browser-instance-1")),
+    ).toContain("https://thepier5.com/");
+    expect(tab.querySelector("img")?.getAttribute("src")).toBe(
+      "https://thepier5.com/favicon.ico",
+    );
   });
 
   it("renders preview tabs with an overlaid close button that does not reserve flex space", () => {

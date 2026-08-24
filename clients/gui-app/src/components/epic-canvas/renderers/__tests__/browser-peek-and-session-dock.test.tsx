@@ -1351,7 +1351,7 @@ describe("BrowserPeekTile", () => {
     ]);
   });
 
-  it("pauses the stream when the tile is hidden", () => {
+  it("does not keep a screencast subscription while the tile is hidden", () => {
     const { rerender } = render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
@@ -1372,11 +1372,8 @@ describe("BrowserPeekTile", () => {
       />,
     );
 
-    expect(stream.sentFrames).toContainEqual({
-      kind: "setPaused",
-      hasBinaryPayload: false,
-      paused: true,
-    });
+    expect(stream.closed).toBe(true);
+    expect(hookState.streamClient?.subscribes).toHaveLength(1);
   });
 
   it("coalesces tile viewport changes with a trailing 200ms debounce", async () => {

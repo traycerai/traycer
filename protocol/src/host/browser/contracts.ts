@@ -83,10 +83,8 @@ export type BrowserTabDriver = z.infer<typeof browserTabDriverSchema>;
 
 /**
  * Shared-browser-runtime ticket 01. One page within a session, addressed by
- * a durable, host-minted `tabId` - never a Chromium target id (settled
- * decision 5). This ticket's consumers mint exactly one tab per session
- * (multi-tab mechanics are a later ticket), so `tabId` is currently always
- * equal to the owning session's `sessionId`.
+ * a durable, host-minted `tabId` - never a Chromium target id. A session can
+ * own multiple tabs, and each tab keeps its identity across runtime restarts.
  */
 export const browserTabInfoSchema = z.object({
   tabId: z.string(),

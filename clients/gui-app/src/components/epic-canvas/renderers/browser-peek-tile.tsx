@@ -352,7 +352,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   useEffect(() => {
     activeDialogRef.current = null;
     composingRef.current = false;
-    if (client === null) {
+    if (client === null || !visible) {
       sessionRef.current = null;
       clearLocalArmRef.current(false);
       return;
@@ -492,15 +492,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     setFrameSize,
     setImage,
     setLifecycle,
+    visible,
   ]);
-
-  useEffect(() => {
-    sendPeekFrame(sessionRef.current, {
-      kind: "setPaused",
-      hasBinaryPayload: false,
-      paused: !visible,
-    });
-  }, [visible]);
 
   const sendViewport = useCallback(
     (viewport: {
