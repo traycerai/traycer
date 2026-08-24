@@ -536,7 +536,6 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
       RunnerHostEvent.browserViewCdpTargetAttached,
       targetAttached,
     );
-
   });
 
   it("passes the native tab storage seed through the IPC parser", async () => {
@@ -660,8 +659,6 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
     });
 
     it("coerces missing cdpCallFunctionOn.argumentsJson to null rather than dropping the field", () => {
-      // Documented opacity path: argumentsJson is not schema-checked, but a
-      // missing key still becomes null so both tile kinds see the same shape.
       expect(
         parseBrowserViewCdpCommand({
           kind: "cdpCallFunctionOn",
@@ -678,6 +675,19 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
         argumentsJson: null,
         returnByValue: true,
       });
+    });
+
+    it("rejects non-JSON cdpCallFunctionOn arguments at the IPC boundary", () => {
+      expect(() =>
+        parseBrowserViewCdpCommand({
+          kind: "cdpCallFunctionOn",
+          objectId: null,
+          executionContextId: 1,
+          functionDeclaration: "function() {}",
+          argumentsJson: { invalid: undefined },
+          returnByValue: true,
+        }),
+      ).toThrow();
     });
   });
 });

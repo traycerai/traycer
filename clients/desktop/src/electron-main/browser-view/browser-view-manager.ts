@@ -288,9 +288,11 @@ export interface BrowserViewHostWebContents {
   sendInputEvent(event: {
     readonly type: "keyDown";
     readonly keyCode: string;
-    readonly modifiers?: readonly string[];
+    readonly modifiers?: readonly BrowserViewInputModifier[];
   }): void;
 }
+
+export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
 
 export interface BrowserViewWindow {
   readonly contentView: ManagedContentView;
@@ -2449,7 +2451,7 @@ export class BrowserViewManager {
     const hostWebContents =
       window === null || window.isDestroyed() ? null : window.webContents;
     if (hostWebContents === null) return;
-    const modifiers: string[] = [];
+    const modifiers: BrowserViewInputModifier[] = [];
     if (chord.mod)
       modifiers.push(this.hostPlatform === "darwin" ? "meta" : "control");
     if (chord.ctrl) modifiers.push("control");
@@ -4211,9 +4213,9 @@ function browserZoomStepForKey(key: string): 1 | -1 | 0 | null {
 function preventInputDefault(args: readonly unknown[]): void {
   const event = args[0];
   if (!isRecord(event)) return;
-  const preventDefault = Reflect.get(event, "preventDefault");
+  const preventDefault = event.preventDefault;
   if (typeof preventDefault !== "function") return;
-  Reflect.apply(preventDefault, event, []);
+  preventDefault.call(event);
 }
 
 function windowOpenShouldCreateTile(
@@ -4244,11 +4246,11 @@ function readPopupWindow(
 ): BrowserViewPopupWindow | null {
   const value = args[0];
   if (!isRecord(value)) return null;
-  const webContents = toPopupWebContents(Reflect.get(value, "webContents"));
-  const isDestroyed = Reflect.get(value, "isDestroyed");
-  const close = Reflect.get(value, "close");
-  const on = Reflect.get(value, "on");
-  const off = Reflect.get(value, "off");
+  const webContents = toPopupWebContents(value.webContents);
+  const isDestroyed = value.isDestroyed;
+  const close = value.close;
+  const on = value.on;
+  const off = value.off;
   if (
     webContents === null ||
     typeof isDestroyed !== "function" ||
@@ -4260,15 +4262,15 @@ function readPopupWindow(
   }
   return {
     webContents,
-    isDestroyed: () => Boolean(Reflect.apply(isDestroyed, value, [])),
+    isDestroyed: () => Boolean(isDestroyed.call(value)),
     close: () => {
-      Reflect.apply(close, value, []);
+      close.call(value);
     },
     on: (event, listener) => {
-      Reflect.apply(on, value, [event, listener]);
+      on.call(value, event, listener);
     },
     off: (event, listener) => {
-      Reflect.apply(off, value, [event, listener]);
+      off.call(value, event, listener);
     },
   };
 }
@@ -4277,10 +4279,10 @@ function toPopupWebContents(
   value: unknown,
 ): BrowserViewPopupWebContents | null {
   if (!isRecord(value)) return null;
-  const id = Reflect.get(value, "id");
-  const once = Reflect.get(value, "once");
-  const on = Reflect.get(value, "on");
-  const off = Reflect.get(value, "off");
+  const id = value.id;
+  const once = value.once;
+  const on = value.on;
+  const off = value.off;
   if (
     typeof id !== "number" ||
     typeof once !== "function" ||
@@ -4292,13 +4294,13 @@ function toPopupWebContents(
   return {
     id,
     once: (event, listener) => {
-      Reflect.apply(once, value, [event, listener]);
+      once.call(value, event, listener);
     },
     on: (event, listener) => {
-      Reflect.apply(on, value, [event, listener]);
+      on.call(value, event, listener);
     },
     off: (event, listener) => {
-      Reflect.apply(off, value, [event, listener]);
+      off.call(value, event, listener);
     },
   };
 }

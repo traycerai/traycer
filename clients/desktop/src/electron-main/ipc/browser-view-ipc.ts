@@ -47,10 +47,8 @@ import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
   BrowserViewManager,
   scheduleBrowserViewDebugSnapshot,
-  type BrowserViewHostWebContents,
   type BrowserViewWindow,
   type ManagedBrowserView,
-  type ManagedContentView,
 } from "../browser-view/browser-view-manager";
 import { hostPlatformFromProcessPlatform } from "../../ipc-contracts/reserved-chords";
 import { installBrowserViewManagerDebug } from "../browser-view/browser-view-manager-debug";
@@ -253,8 +251,10 @@ export function registerBrowserViewIpc(
     ),
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewAcceptTab, (_event, payload) =>
-    manager.acceptTab(parseBrowserViewNativeTabCapability(payload)),
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewAcceptTab,
+    (_event, payload) =>
+      manager.acceptTab(parseBrowserViewNativeTabCapability(payload)),
   );
 
   bridge.handleInvoke(
@@ -643,6 +643,50 @@ function isElectronBrowserWindow(value: unknown): value is BrowserWindow {
   return value instanceof BrowserWindow;
 }
 
+function toBrowserViewWindow(value: unknown): BrowserViewWindow | null {
+  if (!isElectronBrowserWindow(value)) return null;
+  return {
+    contentView: {
+      addChildView: (view) => {
+        if (!(view instanceof WebContentsView)) {
+          throw new Error("Browser manager produced a non-Electron view");
+        }
+        value.contentView.addChildView(view);
+      },
+      removeChildView: (view) => {
+        if (!(view instanceof WebContentsView)) return;
+        value.contentView.removeChildView(view);
+      },
+    },
+    webContents: {
+      on: (event, listener) => {
+        if (event === "did-start-navigation") {
+          value.webContents.on("did-start-navigation", listener);
+        } else {
+          value.webContents.on("render-process-gone", listener);
+        }
+      },
+      off: (event, listener) => {
+        if (event === "did-start-navigation") {
+          value.webContents.off("did-start-navigation", listener);
+        } else {
+          value.webContents.off("render-process-gone", listener);
+        }
+      },
+      sendInputEvent: (event) => {
+        value.webContents.sendInputEvent({
+          ...event,
+          modifiers:
+            event.modifiers === undefined ? undefined : [...event.modifiers],
+        });
+      },
+    },
+    isDestroyed: () => value.isDestroyed(),
+    isVisible: () => value.isVisible(),
+    isMinimized: () => value.isMinimized(),
+  };
+}
+
 function readSenderWindowId(
   bridge: RunnerIpcBridge,
   event: IpcMainInvokeEvent,
@@ -874,58 +918,6 @@ function parseBounds(value: unknown): BrowserViewBounds {
     y: readFiniteNumber(record.y, "y"),
     width: readFiniteNumber(record.width, "width"),
     height: readFiniteNumber(record.height, "height"),
-  };
-}
-
-function toBrowserViewWindow(value: unknown): BrowserViewWindow | null {
-  if (!isRecord(value)) return null;
-  const contentView = Reflect.get(value, "contentView");
-  if (!isContentView(contentView)) return null;
-  const isDestroyed = Reflect.get(value, "isDestroyed");
-  const isVisible = Reflect.get(value, "isVisible");
-  const isMinimized = Reflect.get(value, "isMinimized");
-  if (typeof isDestroyed !== "function" || typeof isVisible !== "function") {
-    return null;
-  }
-  return {
-    contentView,
-    webContents: toBrowserViewHostWebContents(
-      Reflect.get(value, "webContents"),
-    ),
-    isDestroyed: () => Boolean(isDestroyed.call(value)),
-    isVisible: () => Boolean(isVisible.call(value)),
-    isMinimized: () =>
-      typeof isMinimized === "function" && Boolean(isMinimized.call(value)),
-  };
-}
-
-function isContentView(value: unknown): value is ManagedContentView {
-  if (!isRecord(value)) return false;
-  return (
-    typeof Reflect.get(value, "addChildView") === "function" &&
-    typeof Reflect.get(value, "removeChildView") === "function"
-  );
-}
-
-function toBrowserViewHostWebContents(
-  value: unknown,
-): BrowserViewHostWebContents | null {
-  if (!isRecord(value)) return null;
-  const on = Reflect.get(value, "on");
-  const off = Reflect.get(value, "off");
-  const sendInputEvent = Reflect.get(value, "sendInputEvent");
-  if (typeof on !== "function" || typeof off !== "function") return null;
-  if (typeof sendInputEvent !== "function") return null;
-  return {
-    on: (event, listener) => {
-      on.call(value, event, listener);
-    },
-    off: (event, listener) => {
-      off.call(value, event, listener);
-    },
-    sendInputEvent: (event) => {
-      sendInputEvent.call(value, event);
-    },
   };
 }
 

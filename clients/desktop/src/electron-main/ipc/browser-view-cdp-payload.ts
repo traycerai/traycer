@@ -1,4 +1,5 @@
 import type { BrowserViewCdpCommand } from "../../ipc-contracts/browser-view-types";
+import { browserCdpArgumentsJsonSchema } from "@traycer/protocol/host/browser/contracts";
 
 /**
  * Payload parsing for ticket 03's typed CDP bridge, shared by the two IPC
@@ -78,7 +79,9 @@ export function parseBrowserViewCdpCommand(
           record.functionDeclaration,
           "command.functionDeclaration",
         ),
-        argumentsJson: record.argumentsJson ?? null,
+        argumentsJson: browserCdpArgumentsJsonSchema.parse(
+          record.argumentsJson ?? null,
+        ),
         returnByValue: readBoolean(
           record.returnByValue,
           "command.returnByValue",

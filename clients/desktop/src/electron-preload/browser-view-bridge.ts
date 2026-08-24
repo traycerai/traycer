@@ -4,182 +4,43 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
-  BrowserViewCdpDispatch,
   BrowserViewCdpResult,
+  BrowserViewBridge,
+  BrowserViewElectronTabLifecycleBridge,
   BrowserViewCdpSessionEndedChange,
   BrowserViewCdpTargetAttachedChange,
   BrowserCookieCryptoState,
-  BrowserViewAttachSurface,
-  BrowserLabsStateUpdate,
   BrowserPrimaryProfileCaptureResult,
-  BrowserViewBoundsUpdate,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewCertificateTrust,
-  BrowserViewControlAction,
   BrowserViewControlActionResult,
-  BrowserViewControlGrant,
   BrowserViewControlGrantResult,
   BrowserViewControlRevokedChange,
-  BrowserViewControlRevoke,
   BrowserViewDebugSnapshotChange,
-  BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
-  BrowserViewDetachSurface,
-  BrowserViewElectronTabCdpDispatch,
-  BrowserViewElectronTabControl,
-  BrowserViewEnsureTab,
   BrowserViewFindChange,
-  BrowserViewFindRequest,
-  BrowserViewFindStop,
   BrowserViewOpenTileRequest,
-  BrowserViewOverlayOcclusion,
   BrowserViewOverlayOcclusionResult,
-  BrowserViewOverlayRelease,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewNativeTabCdpSessionEndedChange,
   BrowserViewNativeTabCdpTargetAttachedChange,
   BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabStatusChange,
-  BrowserViewNativeTabCapability,
   BrowserViewProvisionedTab,
-  BrowserViewReleaseTab,
   BrowserViewStatusChange,
-  BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCapture,
   BrowserViewStorageStateCaptureResult,
-  BrowserViewTileKey,
-  BrowserViewTileUpsert,
-  BrowserViewViewportPresetChange,
 } from "../ipc-contracts/browser-view-types";
 import type {
   BrowserAnnotationAttachedIpcEvent,
-  BrowserAnnotationAttachResultInput,
   BrowserAnnotationSessionIpcEvent,
-  BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartResult,
 } from "../ipc-contracts/browser-annotation-types";
-import { subscribe, type Disposable, type Listener } from "./subscribe";
+import { subscribe } from "./subscribe";
 
 export interface BrowserViewBridgeSurface {
-  browserView: {
-    upsertTile(input: BrowserViewTileUpsert): Promise<void>;
-    ensureTab(input: BrowserViewEnsureTab): Promise<BrowserViewProvisionedTab>;
-    acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
-    attachSurface(input: BrowserViewAttachSurface): Promise<void>;
-    detachSurface(input: BrowserViewDetachSurface): Promise<void>;
-    releaseTab(input: BrowserViewReleaseTab): Promise<boolean>;
-    controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
-    updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-    setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
-    releaseTile(input: BrowserViewTileKey): Promise<void>;
-    /** BT-303: register renderer chords that outrank guest keystrokes. */
-    setReservedChords(tokens: readonly string[]): Promise<void>;
-    /**
-     * BT-202 flicker fix: renderer confirms the replacement frame is decoded
-     * and on screen; both managers park their owned tiles on this ack.
-     */
-    overlayPaintAck(overlayId: string): Promise<void>;
-    reloadTile(input: BrowserViewTileKey): Promise<void>;
-    goBack(input: BrowserViewTileKey): Promise<void>;
-    goForward(input: BrowserViewTileKey): Promise<void>;
-    findInPage(input: BrowserViewFindRequest): Promise<void>;
-    stopFindInPage(input: BrowserViewFindStop): Promise<void>;
-    cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
-    trustCertificate(input: BrowserViewCertificateTrust): Promise<void>;
-    zoomIn(input: BrowserViewTileKey): Promise<void>;
-    zoomOut(input: BrowserViewTileKey): Promise<void>;
-    resetZoom(input: BrowserViewTileKey): Promise<void>;
-    capturePage(
-      input: BrowserViewTileKey,
-    ): Promise<BrowserViewCapturePageResult>;
-    getDebugSnapshot(
-      input: BrowserViewTileKey,
-    ): Promise<BrowserViewDebugSnapshotChange>;
-    clearDebugEvents(input: BrowserViewTileKey): Promise<void>;
-    startAnnotation(
-      input: BrowserViewTileKey,
-    ): Promise<BrowserAnnotationStartResult>;
-    cancelAnnotation(input: BrowserViewTileKey): Promise<void>;
-    setAnnotationTargetChatLabel(
-      input: BrowserAnnotationSetTargetChatLabelInput,
-    ): Promise<void>;
-    reportAnnotationAttachResult(
-      input: BrowserAnnotationAttachResultInput,
-    ): Promise<void>;
-    openDevTools(input: BrowserViewTileKey): Promise<void>;
-    occludeForOverlay(
-      input: BrowserViewOverlayOcclusion,
-    ): Promise<BrowserViewOverlayOcclusionResult>;
-    releaseOverlay(
-      input: BrowserViewOverlayRelease,
-    ): Promise<BrowserViewOverlayReleaseResult>;
-    getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
-    setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
-    applyStorageState(
-      input: BrowserViewStorageStateApply,
-    ): Promise<BrowserViewStorageStateApplyResult>;
-    captureStorageState(
-      input: BrowserViewStorageStateCapture,
-    ): Promise<BrowserViewStorageStateCaptureResult>;
-    capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
-    grantControl(
-      input: BrowserViewControlGrant,
-    ): Promise<BrowserViewControlGrantResult>;
-    revokeControl(input: BrowserViewControlRevoke): Promise<void>;
-    executeControlAction(
-      input: BrowserViewControlAction,
-    ): Promise<BrowserViewControlActionResult>;
-    onStatusChange(handler: Listener<BrowserViewStatusChange>): Disposable;
-    onFindChange(handler: Listener<BrowserViewFindChange>): Disposable;
-    onDownloadChange(handler: Listener<BrowserViewDownloadChange>): Disposable;
-    onCertificateError(
-      handler: Listener<BrowserViewCertificateErrorChange>,
-    ): Disposable;
-    onOpenTileRequest(
-      handler: Listener<BrowserViewOpenTileRequest>,
-    ): Disposable;
-    onSnapshotInvalidated(
-      handler: Listener<BrowserViewSnapshotInvalidatedChange>,
-    ): Disposable;
-    onDebugSnapshotChange(
-      handler: Listener<BrowserViewDebugSnapshotChange>,
-    ): Disposable;
-    onControlRevoked(
-      handler: Listener<BrowserViewControlRevokedChange>,
-    ): Disposable;
-    onAnnotationEvent(
-      handler: Listener<BrowserAnnotationSessionIpcEvent>,
-    ): Disposable;
-    onAnnotationAttached(
-      handler: Listener<BrowserAnnotationAttachedIpcEvent>,
-    ): Disposable;
-    // Typed CDP driving for a presented browser tile.
-    dispatchCdp(input: BrowserViewCdpDispatch): Promise<BrowserViewCdpResult>;
-    dispatchElectronTabCdp(
-      input: BrowserViewElectronTabCdpDispatch,
-    ): Promise<BrowserViewCdpResult>;
-    onNativeTabStatusChange(
-      handler: Listener<BrowserViewNativeTabStatusChange>,
-    ): Disposable;
-    onNativeTabCdpSessionEnded(
-      handler: Listener<BrowserViewNativeTabCdpSessionEndedChange>,
-    ): Disposable;
-    onNativeTabCdpTargetAttached(
-      handler: Listener<BrowserViewNativeTabCdpTargetAttachedChange>,
-    ): Disposable;
-    onElectronTabHandoff(
-      handler: Listener<BrowserViewElectronTabHandoffChange>,
-    ): Disposable;
-    onCdpSessionEnded(
-      handler: Listener<BrowserViewCdpSessionEndedChange>,
-    ): Disposable;
-    onCdpTargetAttached(
-      handler: Listener<BrowserViewCdpTargetAttachedChange>,
-    ): Disposable;
-  };
+  browserView: BrowserViewBridge & BrowserViewElectronTabLifecycleBridge;
 }
 
 export function buildBrowserViewBridge(): BrowserViewBridgeSurface {

@@ -7,6 +7,7 @@ import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-h
 
 const LIFECYCLE_METHODS = [
   "ensureTab",
+  "acceptTab",
   "attachSurface",
   "detachSurface",
   "releaseTab",
@@ -52,11 +53,14 @@ describe("resolveDesktopElectronTabLifecycleBridge", () => {
   });
 
   it("keeps lifecycle methods out of the general browser-view capability", () => {
+    const lifecycleMethods = new Set<string>(LIFECYCLE_METHODS);
     const browserView = new Proxy<Record<string, unknown>>(
       {},
       {
         get: (_target, property) =>
-          property === "capturePrimaryProfile" || property === "overlayPaintAck"
+          property === "capturePrimaryProfile" ||
+          property === "overlayPaintAck" ||
+          (typeof property === "string" && lifecycleMethods.has(property))
             ? undefined
             : () => undefined,
       },
@@ -65,11 +69,8 @@ describe("resolveDesktopElectronTabLifecycleBridge", () => {
     const bridge = resolveDesktopBrowserViewBridge(runnerHost(browserView));
 
     expect(bridge).not.toBeNull();
-    if (bridge === null) throw new Error("Expected the general bridge.");
-    for (const method of LIFECYCLE_METHODS) {
-      expect(method in bridge).toBe(false);
-    }
-    expect("capturePrimaryProfile" in bridge).toBe(false);
-    expect("overlayPaintAck" in bridge).toBe(false);
+    expect(
+      resolveDesktopElectronTabLifecycleBridge(runnerHost(browserView)),
+    ).toBeNull();
   });
 });
