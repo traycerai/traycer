@@ -164,9 +164,11 @@ export function isRateLimitProfileFetchEligible(
   profile: ProviderProfile,
 ): boolean {
   return (
+    profile.enabled &&
     (profile.kind === "ambient"
       ? eligibility.ambient
-      : eligibility.managedProfiles) && hasUsableProfileCredential(profile)
+      : eligibility.managedProfiles) &&
+    hasUsableProfileCredential(profile)
   );
 }
 

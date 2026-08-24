@@ -20,6 +20,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV71,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -28,29 +29,9 @@ import {
  * live schemas instead of aliased to them (see the freeze comment on
  * `providerCliStateBaseShapeV70Preimage` in `provider-schemas.ts`).
  *
- * TWO different kinds of shape share this file, and the names now say which is
- * which. The `*V70Preimage` exports BACK NO CONTRACT and never did: they were
- * frozen when the version-manager fields opened a v8.0 above an unreleased
- * v7.0, so that growing the live shape could not reach the v7.0 contract. The
- * release collapsed those two tree-only majors back into one, so v7.0 is the
- * head again and points at the canonical schemas - the shape those exports
- * capture was negotiated by no peer, ever.
- *
- * `providersListRequestSchemaV70` is the other kind. The collapse moved only
- * the response, so the frozen request still equals what v7.0 serializes: a real
- * freeze, which is why it keeps a bare `V70` name. The equality is asserted
- * below rather than assumed, because nothing else enforces it.
- *
- * What makes the pre-image worth pinning is that the v6 -> v7 bridge re-parses
- * every upgraded row through it and the provider compat suites share it, while
- * parts of it (`providerCliStateBaseShapeV70Preimage`) still reference live
- * sub-schemas. A pin is what stops live growth from silently redefining what
- * those callers assert.
- *
- * The PRE-SHIP freeze this file used to provide for v7.0 now lives in
- * `__tests__/__fixtures__/frozen-catalog-lines.ts`, which dumps the live shape
- * deeply under the `providers.list@7.0` key: any growth of the head line goes
- * red there and forces v8.0 to be opened for real.
+ * `*V70Preimage` backs no contract, but remains part of the v6 -> v7 upgrade.
+ * Bare `V70` exports are the released v7 contract; the live exports now back
+ * v8.0 and may grow without widening v7.0.
  */
 
 function providerState(providerId: string) {
@@ -170,35 +151,26 @@ describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
 describe("the v7-era schemas are distinct objects from the canonical live ones", () => {
   it("providersListRequestSchemaV70 / ResponseSchemaV70 are not the canonical exports", () => {
     expect(providersListRequestSchemaV70).not.toBe(providersListRequestSchema);
-    expect(providersListResponseSchemaV70Preimage).not.toBe(
+    expect(providersListResponseSchemaV70).not.toBe(
       providersListResponseSchema,
     );
   });
 
-  it("v7.1 is the head and names the canonical response; v7.0 names its freeze", () => {
-    // This assertion has now flipped twice, and the flips ARE the judgement the
-    // freeze rule exists to force. While an unreleased v8.0 sat above v7.0,
-    // v7.0 was pinned; collapsing that major made v7.0 the head and it tracked
-    // live again; opening v7.1 for the auth-aware enablement fields made it a
-    // non-head line once more, so it is pinned again - this time to the REAL
-    // v7.0 freeze (`providersListResponseSchemaV70`), not to the pre-image,
-    // which still backs no contract and remains the v6 -> v7 bridge's
-    // first-pass target.
-    //
-    // "A line that has STOPPED being the head still points at live" is the
-    // defect being guarded, so both halves are asserted: the head names live,
-    // and the line below it does not.
+  it("v7.0 and v7.1 name their freezes while v8.0 names the live response", () => {
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v71 = hostRpcRegistry["providers.list"][7].versions[1].contract;
-    expect(v71.responseSchema).toBe(providersListResponseSchema);
+    const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
+    expect(v71.responseSchema).toBe(providersListResponseSchemaV71);
+    expect(v80.responseSchema).toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
+    expect(v71.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
-    // The REQUEST side did not move: the freeze covered only the response, so
-    // both minors still bind the live request and `providersListRequestSchemaV70`
-    // remains the hand-copy held equal to it by the pin above.
+    // The request side did not move; all three lines still bind the live
+    // request while the V70 hand-copy below pins its current shape.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
     expect(v71.requestSchema).toBe(providersListRequestSchema);
+    expect(v80.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 
@@ -410,10 +382,16 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     // must round-trip untouched.
     const { modelProviders: _modelProviders, ...liveCapabilities } =
       viaLive.providers[0].nativeCapabilities;
+    const { enabled: _enabled, ...liveProfile } =
+      viaLive.providers[0].profiles[0];
     expect(viaFrozen).toEqual({
       ...viaLive,
       providers: [
-        { ...viaLive.providers[0], nativeCapabilities: liveCapabilities },
+        {
+          ...viaLive.providers[0],
+          profiles: [liveProfile],
+          nativeCapabilities: liveCapabilities,
+        },
       ],
     });
     expect(viaFrozen.providers[0].providerId).toBe("huggingface");

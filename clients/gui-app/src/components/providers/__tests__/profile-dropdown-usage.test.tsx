@@ -99,6 +99,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -228,6 +229,11 @@ function renderDropdown(
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
+      profileEnablementAvailable
+      profileEnablementPending={() => false}
+      profileEnablementDisabledReason={() => null}
+      disabledProfilesSelectable={false}
+      onSetProfileEnabled={vi.fn()}
       admissionByProfileId={null}
     />,
   );

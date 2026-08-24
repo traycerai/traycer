@@ -1079,6 +1079,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1098,6 +1099,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1428,6 +1430,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1447,6 +1450,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2123,6 +2127,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2164,6 +2169,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2183,6 +2189,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2332,6 +2339,7 @@ describe("<HarnessModelPicker />", () => {
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
     const ambientProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient" as const,
       authType: "oauth" as const,
       label: "Terminal account",
@@ -2352,6 +2360,7 @@ describe("<HarnessModelPicker />", () => {
     const workProfile = {
       ...ambientProfile,
       profileId: "work-profile",
+      enabled: true,
       kind: "managed" as const,
       label: "Work",
       accentColor: initialColor,
@@ -2416,6 +2425,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2435,6 +2445,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2545,6 +2556,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2564,6 +2576,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2927,6 +2940,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2946,6 +2960,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2990,6 +3005,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3009,6 +3025,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3052,6 +3069,7 @@ describe("<HarnessModelPicker />", () => {
     return [
       {
         profileId: "ambient",
+        enabled: true,
         kind: "ambient",
         authType: "oauth",
         label: "Terminal account",
@@ -3071,6 +3089,7 @@ describe("<HarnessModelPicker />", () => {
       },
       {
         profileId: "work-profile",
+        enabled: true,
         kind: "managed",
         authType: "oauth",
         label: "Work",
@@ -3179,6 +3198,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3198,6 +3218,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3257,6 +3278,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3276,6 +3298,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3318,6 +3341,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3337,6 +3361,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3386,6 +3411,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3405,6 +3431,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3446,6 +3473,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3465,6 +3493,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",

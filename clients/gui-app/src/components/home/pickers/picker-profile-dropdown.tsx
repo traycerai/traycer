@@ -12,6 +12,10 @@ import type { ProfileDropdownUsagePresentation } from "@/components/providers/pr
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   profileCommitId,
@@ -45,7 +49,16 @@ interface PickerProfileDropdownProps {
 export function PickerProfileDropdown(props: PickerProfileDropdownProps) {
   const providerId = guiHarnessIdToProviderId(props.providerId);
   if (providerId === null) {
-    return <PickerProfileDropdownView props={props} usagePresentation={null} />;
+    return (
+      <PickerProfileDropdownView
+        props={props}
+        usagePresentation={null}
+        profileEnablementAvailable={false}
+        profileEnablementPending={() => false}
+        profileEnablementDisabledReason={() => null}
+        onSetProfileEnabled={null}
+      />
+    );
   }
   return (
     <ProfileUsagePickerProfileDropdown props={props} providerId={providerId} />
@@ -64,32 +77,59 @@ function ProfileUsagePickerProfileDropdown({
     enabled: true,
     subscribed: true,
   });
+  const runTargetProvider = runTargetProvidersQuery.data?.providers.find(
+    (candidate) => candidate.providerId === providerId,
+  );
   const usageProfiles = useMemo(() => {
     if (runTargetClient === null) return EMPTY_PROFILES;
-    const provider = runTargetProvidersQuery.data?.providers.find(
-      (candidate) => candidate.providerId === providerId,
-    );
-    if (provider === undefined) return EMPTY_PROFILES;
+    if (runTargetProvider === undefined) return EMPTY_PROFILES;
     return resolveHostConsistentUsageProfiles(
       props.profiles,
-      provider.profiles,
+      runTargetProvider.profiles,
     );
-  }, [
-    props.profiles,
-    providerId,
-    runTargetClient,
-    runTargetProvidersQuery.data,
-  ]);
+  }, [props.profiles, runTargetClient, runTargetProvider]);
   const usagePresentation = useProfileUsagePresentation({
     runTargetHostId: props.runTargetHostId,
     providerId,
     profiles: usageProfiles,
   });
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    runTargetClient,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    runTargetClient,
+    providerId,
+  );
 
   return (
     <PickerProfileDropdownView
       props={props}
       usagePresentation={usagePresentation}
+      profileEnablementAvailable={props.profiles.some(
+        (profile) => profile.kind === "managed",
+      )}
+      profileEnablementPending={profileEnablementPending}
+      profileEnablementDisabledReason={(profileId) => {
+        if (
+          runTargetProvider?.enabled !== true ||
+          runTargetProvider.profiles.find(
+            (profile) => profileCommitId(profile) === profileId,
+          )?.enabled !== true ||
+          runTargetProvider.profiles.filter((profile) => profile.enabled)
+            .length > 1
+        ) {
+          return null;
+        }
+        return "Enable another profile before disabling this one.";
+      }}
+      onSetProfileEnabled={(profileId, enabled) =>
+        setProfileEnabled.mutate({
+          providerId,
+          profileId: profileId ?? "ambient",
+          enabled,
+        })
+      }
     />
   );
 }
@@ -183,9 +223,20 @@ function hasSameAccountIdentity(
 function PickerProfileDropdownView({
   props,
   usagePresentation,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
 }: {
   readonly props: PickerProfileDropdownProps;
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly profileEnablementDisabledReason: (
+    profileId: string | null,
+  ) => string | null;
+  readonly onSetProfileEnabled:
+    ((profileId: string | null, enabled: boolean) => void) | null;
 }) {
   return (
     <ProfileDropdown
@@ -200,6 +251,13 @@ function PickerProfileDropdownView({
       contentContainer={props.contentContainer}
       onCloseAutoFocus={() => props.inputRef.current?.focus()}
       usagePresentation={usagePresentation}
+      profileEnablementAvailable={profileEnablementAvailable}
+      profileEnablementPending={profileEnablementPending}
+      profileEnablementDisabledReason={profileEnablementDisabledReason}
+      disabledProfilesSelectable={false}
+      onSetProfileEnabled={(profileId, enabled) =>
+        onSetProfileEnabled?.(profileId, enabled)
+      }
       admissionByProfileId={props.admissionByProfileId}
     />
   );

@@ -42,6 +42,7 @@ const mocks = vi.hoisted(
     turnRefreshCalls: TurnRefreshCall[];
     queueScope: { hostId: string };
     refreshProviders: Mock<() => Promise<void>>;
+    refreshProfileStatus: Mock<(...args: unknown[]) => Promise<unknown>>;
     refreshOnMount: Mock<(...args: unknown[]) => void>;
   } => ({
     data: undefined,
@@ -58,6 +59,7 @@ const mocks = vi.hoisted(
     turnRefreshCalls: [],
     queueScope: { hostId: "host-b" },
     refreshProviders: vi.fn(() => Promise.resolve()),
+    refreshProfileStatus: vi.fn((..._args: unknown[]) => Promise.resolve()),
     refreshOnMount: vi.fn(),
   }),
 );
@@ -124,6 +126,19 @@ vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => mocks.refreshProviders,
 }));
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      isPending: false,
+      mutateAsync: (...args: unknown[]) => mocks.refreshProfileStatus(...args),
+    }),
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostClient: () => null };
+});
 
 import {
   EmbeddedProviderRateLimitForProvider,
@@ -209,6 +224,7 @@ describe("ProviderRateLimitForProvider", () => {
     mocks.hostId = "host-1";
     mocks.turnRefreshCalls = [];
     mocks.refreshProviders.mockClear();
+    mocks.refreshProfileStatus.mockClear();
     mocks.refreshOnMount.mockClear();
   });
 
@@ -657,7 +673,7 @@ describe("ProviderRateLimitForProvider", () => {
     expect(mocks.refetch).not.toHaveBeenCalled();
   });
 
-  it("combines the selected host's profile-status and managed-profile usage refresh", () => {
+  it("keeps the Terminal-only profile refresh on the existing bulk path", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     render(
       <ProviderProfilesRefreshButton
@@ -665,6 +681,7 @@ describe("ProviderRateLimitForProvider", () => {
         profileId="work-profile"
         usageUpdatedAt={null}
         fetchEligible
+        maintenanceAvailable={false}
       />,
     );
 
@@ -684,6 +701,32 @@ describe("ProviderRateLimitForProvider", () => {
         profileId: "work-profile",
       },
     );
+    expect(mocks.refreshProfileStatus).not.toHaveBeenCalled();
+  });
+
+  it("routes managed profile maintenance through the dedicated host RPC", () => {
+    render(
+      <ProviderProfilesRefreshButton
+        providerId="codex"
+        profileId="work-profile"
+        usageUpdatedAt={null}
+        fetchEligible={false}
+        maintenanceAvailable
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Refresh profile status and usage limits",
+      }),
+    );
+
+    expect(mocks.refreshProfileStatus).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "work-profile",
+    });
+    expect(mocks.refreshProviders).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("keeps the refresh button disabled while THIS target is fetching, even once its own isFetching has settled", () => {

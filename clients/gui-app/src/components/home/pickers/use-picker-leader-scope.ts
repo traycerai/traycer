@@ -40,6 +40,7 @@ interface PickerLeaderScopeInput {
     string | null,
     ProfileRowAdmission
   > | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   /** Same commit path the dropdown's row clicks use - `handleProfileChange` -
    *  so the lock rule and memory-aware funnel apply identically here. */
   readonly onProfileChange: (
@@ -67,6 +68,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   } = input;
   const stateRef = useRef({
@@ -77,6 +79,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   });
   useEffect(() => {
@@ -88,6 +91,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
       activeProviderId,
       activeProviderProfiles,
       activeProviderProfileAdmission,
+      profileEnablementPending,
       onProfileChange,
     };
   }, [
@@ -98,6 +102,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   ]);
 
@@ -155,9 +160,22 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
           // Progressive disclosure: active only when the dropdown itself is
           // rendered (2+ profiles) - otherwise there is nothing to hint or
           // dispatch to, matching the rail/reasoning gates above.
-          isActive: () => stateRef.current.activeProviderProfiles.length >= 2,
+          isActive: () =>
+            stateRef.current.activeProviderProfiles.filter(
+              (profile) =>
+                profile.enabled &&
+                !stateRef.current.profileEnablementPending(
+                  profileCommitId(profile),
+                ),
+            ).length >= 2,
           dispatch: (digit) => {
-            const profiles = stateRef.current.activeProviderProfiles;
+            const profiles = stateRef.current.activeProviderProfiles.filter(
+              (profile) =>
+                profile.enabled &&
+                !stateRef.current.profileEnablementPending(
+                  profileCommitId(profile),
+                ),
+            );
             // Beyond digit 9, profiles stay click-only - mirrors the provider
             // rail's own overflow behavior above.
             const index = digit === 0 ? 9 : digit - 1;

@@ -30,6 +30,10 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -65,7 +69,10 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
-import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import {
+  defaultSelectedProfileId,
+  profileCommitId,
+} from "@/components/providers/provider-profile-model";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import {
   providerCanStartProfileOauth,
@@ -841,6 +848,9 @@ function ProviderEnableSwitch(props: {
   readonly enabled: boolean;
   readonly isPending: boolean;
   readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+  readonly profileEnablementPending: boolean;
   readonly onSetEnabled: (
     providerId: ProviderCliState["providerId"],
     enabled: boolean,
@@ -848,9 +858,19 @@ function ProviderEnableSwitch(props: {
 }) {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
   const disablingLast = enabled && props.enabledProviderCount <= 1;
+  const enablingWithoutProfile =
+    !enabled &&
+    props.profileEnablementAvailable &&
+    props.enabledProfileCount === 0;
+  let disabledReason: string | null = null;
+  if (disablingLast) {
+    disabledReason = "At least one provider must stay enabled.";
+  } else if (enablingWithoutProfile) {
+    disabledReason = "Enable a profile before enabling this provider.";
+  }
   return (
     <TooltipWrapper
-      label={disablingLast ? ENABLEMENT_FLOOR_HINT : null}
+      label={disabledReason}
       side="top"
       sideOffset={undefined}
       align={undefined}
@@ -861,11 +881,19 @@ function ProviderEnableSwitch(props: {
         <Switch
           id={id}
           checked={enabled}
+          aria-disabled={disabledReason !== null || undefined}
           onCheckedChange={(next) => {
-            if (isPending || (!next && disablingLast)) return;
+            if (
+              isPending ||
+              props.profileEnablementPending ||
+              (!next && disablingLast) ||
+              (next && enablingWithoutProfile)
+            ) {
+              return;
+            }
             onSetEnabled(providerId, next);
           }}
-          disabled={isPending || disablingLast}
+          disabled={isPending || props.profileEnablementPending}
         />
       </span>
     </TooltipWrapper>
@@ -945,6 +973,9 @@ function ProviderEnablementControl(props: {
   readonly source: ProviderEnablementSource | undefined;
   readonly isPending: boolean;
   readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+  readonly profileEnablementPending: boolean;
   readonly onSetEnabled: (
     providerId: ProviderCliState["providerId"],
     enabled: boolean,
@@ -967,13 +998,25 @@ function ProviderEnablementControl(props: {
           enabled={enabled}
           isPending={isPending}
           enabledProviderCount={props.enabledProviderCount}
+          profileEnablementAvailable={props.profileEnablementAvailable}
+          enabledProfileCount={props.enabledProfileCount}
+          profileEnablementPending={props.profileEnablementPending}
           onSetEnabled={props.onSetEnabled}
         />
       </div>
     );
   }
   const blockingDisable = enabled && props.enabledProviderCount <= 1;
+  const blockingEnable =
+    !enabled &&
+    props.profileEnablementAvailable &&
+    props.enabledProfileCount === 0;
   const detail = mode === "auto" ? autoEnablementDetail(props.source) : null;
+  let guardHint: string | null = null;
+  if (blockingDisable) guardHint = ENABLEMENT_FLOOR_HINT;
+  if (blockingEnable) {
+    guardHint = "Enable a profile before enabling this provider.";
+  }
   return (
     <div className="flex shrink-0 flex-col items-end gap-1">
       <div className="flex items-center gap-2 text-ui-sm">
@@ -984,18 +1027,29 @@ function ProviderEnablementControl(props: {
           value={mode}
           onValueChange={(next) => {
             const chosen = parseEnablementMode(next);
-            if (chosen === null || isPending) return;
+            if (
+              chosen === null ||
+              isPending ||
+              props.profileEnablementPending
+            ) {
+              return;
+            }
             if (chosen === "off" && blockingDisable) return;
+            if (chosen !== "off" && blockingEnable) return;
             onSetMode(providerId, chosen);
           }}
-          disabled={isPending}
+          disabled={isPending || props.profileEnablementPending}
         >
           <SelectTrigger id={id} size="sm" className="min-w-0">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="auto">{ENABLEMENT_MODE_LABELS.auto}</SelectItem>
-            <SelectItem value="on">{ENABLEMENT_MODE_LABELS.on}</SelectItem>
+            <SelectItem value="auto" disabled={blockingEnable}>
+              {ENABLEMENT_MODE_LABELS.auto}
+            </SelectItem>
+            <SelectItem value="on" disabled={blockingEnable}>
+              {ENABLEMENT_MODE_LABELS.on}
+            </SelectItem>
             {/* Disabled rather than hidden: the floor is a rule about the
                 whole set, so a vanishing option would read as this provider
                 not supporting Off at all. */}
@@ -1008,11 +1062,9 @@ function ProviderEnablementControl(props: {
       {detail === null ? null : (
         <span className="text-ui-xs text-muted-foreground">{detail}</span>
       )}
-      {blockingDisable ? (
-        <span className="text-ui-xs text-muted-foreground">
-          {ENABLEMENT_FLOOR_HINT}
-        </span>
-      ) : null}
+      {guardHint === null ? null : (
+        <span className="text-ui-xs text-muted-foreground">{guardHint}</span>
+      )}
     </div>
   );
 }
@@ -1081,6 +1133,20 @@ function ProviderDetail({
         : defaultSelectedProfileId(state.profiles),
   );
   const setEnabled = useProvidersSetEnabled();
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    hostClient,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    hostClient,
+    providerId,
+  );
+  const profileEnablementAvailable = state.profiles.some(
+    (profile) => profile.kind === "managed",
+  );
+  const anyProfileEnablementPending = state.profiles.some((profile) =>
+    profileEnablementPending(profileCommitId(profile)),
+  );
   // Whether the detail pane below the header is inert - the Account and
   // Profiles controls included.
   //
@@ -1126,6 +1192,14 @@ function ProviderDetail({
     onDismissFailedAttempt: () => setFailedProfileAttempt(null),
     selectedProfileId,
     onSelectedProfileIdChange: setSelectedProfileId,
+    profileEnablementAvailable,
+    profileEnablementPending,
+    onSetProfileEnabled: (profileId, enabled) =>
+      setProfileEnabled.mutate({
+        providerId,
+        profileId: profileId ?? "ambient",
+        enabled,
+      }),
   };
 
   return (
@@ -1169,6 +1243,11 @@ function ProviderDetail({
           source={state.enablementSource}
           isPending={setEnabled.isPending}
           enabledProviderCount={enabledProviderCount}
+          profileEnablementAvailable={profileEnablementAvailable}
+          enabledProfileCount={
+            state.profiles.filter((profile) => profile.enabled).length
+          }
+          profileEnablementPending={anyProfileEnablementPending}
           onSetEnabled={(id, enabled) =>
             // Plain enable/disable - never a native mutation or profile
             // rename/remove/recolor/drift-ack. No `mode`: this arm only runs
@@ -1192,13 +1271,7 @@ function ProviderDetail({
           }
         />
       </div>
-      <div
-        className={cn(
-          "flex flex-1 flex-col transition-opacity md:min-h-0",
-          detailPaneInert ? "pointer-events-none opacity-50" : "",
-        )}
-        {...(detailPaneInert ? { inert: true } : {})}
-      >
+      <div className="flex flex-1 flex-col md:min-h-0">
         {/* Nothing renders between the provider header and the tab rail. The
             API-key card used to sit here, above the bar, so a provider's only
             real setting appeared outside the tabs that were supposed to hold
@@ -1301,13 +1374,20 @@ function ProviderDetail({
                     ),
                   }
                 : {})}
-              className="-mx-5 mt-0 px-5 pt-4 pb-5 md:min-h-0 md:overflow-y-auto"
+              className={cn(
+                "-mx-5 mt-0 px-5 pt-4 pb-5 transition-opacity duration-150 md:min-h-0 md:overflow-y-auto",
+                detailPaneInert &&
+                  tab !== "usage" &&
+                  "pointer-events-none opacity-50",
+              )}
+              {...(detailPaneInert && tab !== "usage" ? { inert: true } : {})}
             >
               <ProviderTabBody
                 tab={tab}
                 state={state}
                 providers={providers}
                 hostId={hostId}
+                detailPaneInert={detailPaneInert}
                 profileTab={profileTab}
                 apiKeyDraft={apiKeyDraft}
                 onApiKeyDraftChange={setApiKeyDraft}
@@ -1352,6 +1432,12 @@ interface ProviderProfileTabProps {
   readonly onDismissFailedAttempt: () => void;
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
 }
 
 function ProviderTabBody({
@@ -1359,6 +1445,7 @@ function ProviderTabBody({
   state,
   providers,
   hostId,
+  detailPaneInert,
   profileTab,
   apiKeyDraft,
   onApiKeyDraftChange,
@@ -1368,6 +1455,7 @@ function ProviderTabBody({
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
+  readonly detailPaneInert: boolean;
   readonly profileTab: ProviderProfileTabProps;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
@@ -1424,22 +1512,30 @@ function ProviderTabBody({
               profileTab.isSelectedHostLocal,
             )}
           />
-          <TraycerSubscriptionForProvider providerId={state.providerId} />
-          {/* The unscoped card is the ZERO-profile shape, which is what
-              `ProviderProfileScopedSection` documents it as. With profiles on
-              this same tab its per-profile limits are already rendered above,
-              scoped to the selected profile - mounting this too would show two
-              near-identical limits blocks and leave the ambient one looking
-              authoritative when the selected profile is what actually runs. */}
-          {state.profiles.length === 0 ? (
-            <ProviderRateLimitForProvider
-              providerId={state.providerId}
-              profileId={null}
-              usageUpdatedAt={null}
-              fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
-              onOpenModelProviders={() => onActiveTabChange("modelProviders")}
-            />
-          ) : null}
+          <div
+            className={cn(
+              "flex flex-col gap-3 transition-opacity duration-150",
+              detailPaneInert && "pointer-events-none opacity-50",
+            )}
+            {...(detailPaneInert ? { inert: true } : {})}
+          >
+            <TraycerSubscriptionForProvider providerId={state.providerId} />
+            {/* The unscoped card is the ZERO-profile shape, which is what
+                `ProviderProfileScopedSection` documents it as. With profiles on
+                this same tab its per-profile limits are already rendered above,
+                scoped to the selected profile - mounting this too would show two
+                near-identical limits blocks and leave the ambient one looking
+                authoritative when the selected profile is what actually runs. */}
+            {state.profiles.length === 0 ? (
+              <ProviderRateLimitForProvider
+                providerId={state.providerId}
+                profileId={null}
+                usageUpdatedAt={null}
+                fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+                onOpenModelProviders={() => onActiveTabChange("modelProviders")}
+              />
+            ) : null}
+          </div>
         </div>
       );
     case "mcp": {

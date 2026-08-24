@@ -63,6 +63,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -150,7 +151,7 @@ function buildClient(
 }
 
 describe("resolveClonedChatSettings: additional adversarial edges", () => {
-  it("falls back to ambient when the TARGET host has genuinely empty profiles[] (flag-off host), never throws", async () => {
+  it("requires profile selection when the TARGET host has genuinely empty profiles[] (flag-off host), never throws", async () => {
     const sourceClient = buildClient("source-host", () => ({
       providers: [
         claudeState([profile("source-work-uuid", "managed", "Work", "acct-1")]),
@@ -166,15 +167,19 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
       sourceSettings: BASE_SETTINGS,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
 
     expect(result).toEqual({
-      settings: { ...BASE_SETTINGS, profileId: null },
-      fallenBackToAmbient: true,
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "no-enabled-terminal-fallback",
+      matchedProfileId: null,
+      targetProfiles: [],
     });
   });
 
-  it("falls back to ambient when the TARGET (not source) RPC call fails mid-mapping, never throws unhandled", async () => {
+  it("reports target catalog transport failure separately from an empty catalog", async () => {
     const sourceClient = buildClient("source-host", () => ({
       providers: [
         claudeState([profile("source-work-uuid", "managed", "Work", "acct-1")]),
@@ -189,11 +194,12 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
       sourceSettings: BASE_SETTINGS,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
 
     expect(result).toEqual({
-      settings: { ...BASE_SETTINGS, profileId: null },
-      fallenBackToAmbient: true,
+      status: "catalog-unavailable",
+      providerId: "claude-code",
     });
   });
 
@@ -235,7 +241,9 @@ function baseCloneArgs(
       providers: [],
       native: null,
     })),
+    explicitTargetProfileId: null,
     onProfileFallbackToAmbient: vi.fn(),
+    onProfileSelectionRequired: vi.fn(),
     onHistoryUnavailable: vi.fn(),
     onCloneFailed: vi.fn(),
     navigateNestedFocus: null,
@@ -244,9 +252,10 @@ function baseCloneArgs(
 }
 
 describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () => {
-  it("target host missing from the directory entirely: falls back to ambient, notifies the caller, never throws", async () => {
+  it("target host missing from the directory entirely: stops for catalog recovery, never creates ambient", async () => {
     const createChat = vi.fn<CreateChatCommand>();
     const onProfileFallbackToAmbient = vi.fn();
+    const onProfileSelectionRequired = vi.fn();
     const directory = fakeDirectory([
       {
         hostId: "source-host",
@@ -266,6 +275,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         directory,
         createChat,
         onProfileFallbackToAmbient,
+        onProfileSelectionRequired,
       }),
     );
 
@@ -273,15 +283,19 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(onProfileFallbackToAmbient).toHaveBeenCalledTimes(1);
-    expect(createChat).toHaveBeenCalledTimes(1);
-    const [request] = createChat.mock.calls[0];
-    expect(request.settings).toEqual({ ...BASE_SETTINGS, profileId: null });
+    expect(onProfileFallbackToAmbient).not.toHaveBeenCalled();
+    expect(createChat).not.toHaveBeenCalled();
+    expect(onProfileSelectionRequired).toHaveBeenCalledWith({
+      status: "catalog-unavailable",
+      providerId: "claude-code",
+    });
   });
 
-  it("ambient source settings (profileId already null): no RPC calls at all, no fallback notice, settings pass through untouched", async () => {
+  it("ambient source settings pass through when Terminal is enabled", async () => {
     const createChat = vi.fn<CreateChatCommand>();
     const onProfileFallbackToAmbient = vi.fn();
+    const onProfileSelectionRequired = vi.fn();
+    const onCloneFailed = vi.fn();
     const ambientSettings: ChatRunSettings = {
       ...BASE_SETTINGS,
       profileId: null,
@@ -302,14 +316,25 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
         directory,
         createChat,
         onProfileFallbackToAmbient,
+        onProfileSelectionRequired,
+        onCloneFailed,
         sourceSettings: ambientSettings,
+        globalClient: buildClient("target-host", () => ({
+          providers: [
+            claudeState([
+              profile("ambient", "ambient", "Terminal account", "acct-9"),
+            ]),
+          ],
+          native: null,
+        })),
       }),
     );
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(onProfileFallbackToAmbient).not.toHaveBeenCalled();
+    expect(onProfileSelectionRequired).not.toHaveBeenCalled();
+    expect(onCloneFailed).not.toHaveBeenCalled();
     expect(createChat).toHaveBeenCalledTimes(1);
     const [request] = createChat.mock.calls[0];
     expect(request.settings).toEqual(ambientSettings);

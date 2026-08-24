@@ -31,10 +31,20 @@ function profile(
   profileId: string,
   kind: "ambient" | "managed",
   label: string,
-  accountUuid: string | null,
+  account:
+    | string
+    | null
+    | { readonly accountUuid: string | null; readonly enabled: boolean },
 ): ProviderProfile {
+  const accountUuid =
+    typeof account === "object" && account !== null
+      ? account.accountUuid
+      : account;
+  const enabled =
+    typeof account === "object" && account !== null ? account.enabled : true;
   return {
     profileId,
+    enabled,
     kind,
     authType: "oauth",
     label,
@@ -154,15 +164,19 @@ describe("mapProfileIdAcrossHosts", () => {
 });
 
 describe("resolveClonedChatSettings", () => {
-  it("passes ambient settings through untouched with no RPC calls", async () => {
+  it("passes ambient settings through untouched when Terminal is enabled", async () => {
     const sourceClient = buildClient([]);
-    const targetClient = buildClient([]);
+    const targetClient = buildClient([
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
+    ]);
     const result = await resolveClonedChatSettings({
       sourceSettings: BASE_SETTINGS,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
+      status: "ready",
       settings: BASE_SETTINGS,
       fallenBackToAmbient: false,
     });
@@ -181,8 +195,59 @@ describe("resolveClonedChatSettings", () => {
       sourceSettings,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
+      status: "ready",
+      settings: { ...sourceSettings, profileId: "target-work-uuid" },
+      fallenBackToAmbient: false,
+    });
+  });
+
+  it("requires profile selection when the identity match on the target is disabled", async () => {
+    const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
+    const sourceClient = buildClient([
+      profile("source-work-uuid", "managed", "Work", "acct-1"),
+    ]);
+    const targetProfiles = [
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
+      profile("target-work-uuid", "managed", "Work", {
+        accountUuid: "acct-1",
+        enabled: false,
+      }),
+    ];
+    const targetClient = buildClient(targetProfiles);
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient,
+      targetClient,
+      explicitTargetProfileId: null,
+    });
+
+    expect(result).toEqual({
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "matching-profile-disabled",
+      matchedProfileId: "target-work-uuid",
+      targetProfiles,
+    });
+  });
+
+  it("returns ready for an explicitly selected enabled target profile", async () => {
+    const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
+    const targetProfiles = [
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
+      profile("target-work-uuid", "managed", "Work", "acct-1"),
+    ];
+    const result = await resolveClonedChatSettings({
+      sourceSettings,
+      sourceClient: null,
+      targetClient: buildClient(targetProfiles),
+      explicitTargetProfileId: { profileId: "target-work-uuid" },
+    });
+
+    expect(result).toEqual({
+      status: "ready",
       settings: { ...sourceSettings, profileId: "target-work-uuid" },
       fallenBackToAmbient: false,
     });
@@ -191,20 +256,23 @@ describe("resolveClonedChatSettings", () => {
   it("falls back to ambient when the source host is unreachable (null client)", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const targetClient = buildClient([
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
       profile("target-work-uuid", "managed", "Work", "acct-1"),
     ]);
     const result = await resolveClonedChatSettings({
       sourceSettings,
       sourceClient: null,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
+      status: "ready",
       settings: { ...sourceSettings, profileId: null },
       fallenBackToAmbient: true,
     });
   });
 
-  it("falls back to ambient when the target has no profile with a matching accountUuid", async () => {
+  it("falls back to Terminal when no identity matches and Terminal is enabled", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const sourceClient = buildClient([
       profile("source-work-uuid", "managed", "Work", "acct-1"),
@@ -216,14 +284,16 @@ describe("resolveClonedChatSettings", () => {
       sourceSettings,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
+      status: "ready",
       settings: { ...sourceSettings, profileId: null },
       fallenBackToAmbient: true,
     });
   });
 
-  it("falls back to ambient when the source profile itself carries no accountUuid", async () => {
+  it("requires profile selection when no eligible Terminal fallback exists", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const sourceClient = buildClient([
       profile("source-work-uuid", "managed", "Work", null),
@@ -235,28 +305,34 @@ describe("resolveClonedChatSettings", () => {
       sourceSettings,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
-      settings: { ...sourceSettings, profileId: null },
-      fallenBackToAmbient: true,
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "no-enabled-terminal-fallback",
+      matchedProfileId: null,
+      targetProfiles: [
+        profile("target-work-uuid", "managed", "Work", "acct-1"),
+      ],
     });
   });
 
-  it("treats an RPC failure on either host the same as no match found", async () => {
+  it("distinguishes target catalog transport failure from an empty catalog", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
-    // No handlers registered -> every request rejects.
+    // The source may be unavailable; the target catalog failure is the
+    // recovery state this regression distinguishes from an honest empty list.
     const sourceClient = buildClient(null);
-    const targetClient = buildClient([
-      profile("target-work-uuid", "managed", "Work", "acct-1"),
-    ]);
+    const targetClient = buildClient(null);
     const result = await resolveClonedChatSettings({
       sourceSettings,
       sourceClient,
       targetClient,
+      explicitTargetProfileId: null,
     });
     expect(result).toEqual({
-      settings: { ...sourceSettings, profileId: null },
-      fallenBackToAmbient: true,
+      status: "catalog-unavailable",
+      providerId: "claude-code",
     });
   });
 });

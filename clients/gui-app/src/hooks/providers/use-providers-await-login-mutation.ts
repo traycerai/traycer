@@ -6,7 +6,10 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
-import { PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerProfileSchema,
+  PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+} from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
@@ -35,11 +38,14 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  * narrow the cached capability. See the call site for why this one field is
  * different from every other field on the echo.
  */
-function withoutLoginCapability(
-  state: AwaitLoginProviderState,
-): Omit<AwaitLoginProviderState, "loginCapability"> {
+function withoutLoginCapability(state: AwaitLoginProviderState) {
   const { loginCapability: _dropped, ...rest } = state;
-  return rest;
+  return {
+    ...rest,
+    profiles: rest.profiles.map((profile) =>
+      providerProfileSchema.parse(profile),
+    ),
+  };
 }
 
 /**

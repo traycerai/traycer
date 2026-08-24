@@ -62,6 +62,7 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
+  orderProfiles,
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
@@ -77,6 +78,7 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -619,6 +621,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  const activeProviderProfileEnablementPending =
+    useProviderProfileEnablementPending(
+      runTargetClient,
+      guiHarnessIdToProviderId(resolvedActiveProviderId),
+    );
   // The browsed provider's full CLI state, for the panel's ambient-auth line
   // (which credential a single-profile provider is actually running on - e.g.
   // Copilot riding the GitHub CLI's login). Same `providers.list` response the
@@ -848,6 +855,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission: profileAdmission,
+    profileEnablementPending: activeProviderProfileEnablementPending,
     onProfileChange: handleProfileChange,
   });
 
@@ -1181,7 +1189,7 @@ function profilesByHarnessIdFromProviderStates(
   return new Map(
     providers.map((provider) => [
       providerIdToGuiHarnessId(provider.providerId),
-      provider.profiles,
+      orderProfiles(provider.profiles),
     ]),
   );
 }

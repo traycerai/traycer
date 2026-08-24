@@ -54,13 +54,14 @@ export function profileRowStatusSuffix(
   return null;
 }
 
-// Ambient always sorts first, matching the rail dot / picker dropdown / old
-// row-list convention, so "default to ambient/first" resolves to the same
-// profile everywhere.
+// Enabled profiles stay selectable and shortcut-addressable as one contiguous
+// group. Disabled profiles remain visible after them for human recovery. The
+// Terminal account keeps its long-standing first position within either group.
 export function orderProfiles(
   profiles: readonly ProviderProfile[],
 ): ReadonlyArray<ProviderProfile> {
   return [...profiles].sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
     if (a.kind === b.kind) return 0;
     return a.kind === "ambient" ? -1 : 1;
   });

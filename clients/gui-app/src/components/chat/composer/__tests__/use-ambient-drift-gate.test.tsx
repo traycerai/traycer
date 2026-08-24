@@ -33,6 +33,7 @@ function ambientProfile(
 ): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",

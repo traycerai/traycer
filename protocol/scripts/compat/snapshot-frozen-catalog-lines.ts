@@ -30,7 +30,7 @@ import {
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
-  providersListRequestSchema,
+  providersListRequestSchemaV70,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
@@ -40,6 +40,7 @@ import {
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV71,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
@@ -111,18 +112,17 @@ const FIXTURES = {
   // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
   // `*V70Preimage` shapes are the precedent); do not regenerate to green.
   "providers.list@7.0": dump(providersListResponseSchemaV70),
-  // The head line. It inherits v7.0's old job here: it dumps the LIVE schema,
-  // so the FIRST attempt to grow the live shape goes red on this row rather
-  // than on the release that ships the growth. Same response then applies -
-  // freeze the line that stopped being head, open the next one.
-  "providers.list@7.1": dump(providersListResponseSchema),
+  // v7.1 froze when v8.0 opened for per-profile eligibility.
+  "providers.list@7.1": dump(providersListResponseSchemaV71),
+  // The live head; its snapshot catches the next attempted growth.
+  "providers.list@8.0": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was
   // the only thing that could see it. Two rows cover every line: v1.0..v6.0 all
   // share `providersListRequestSchemaBeforeV70`, and v7.0 has its own.
   "providers.list@1.0..6.0 request": dump(providersListRequestSchemaBeforeV70),
-  "providers.list@7.0 request": dump(providersListRequestSchema),
+  "providers.list@7.0 request": dump(providersListRequestSchemaV70),
 };
 
 const HEADER =

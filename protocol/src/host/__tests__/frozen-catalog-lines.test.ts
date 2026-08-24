@@ -20,16 +20,17 @@ import {
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
-  providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
-  providersListResponseSchemaV70,
+  providersListRequestSchemaV70,
+  providersListResponseSchema,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
-  providersListResponseSchema,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
+  providersListResponseSchemaV71,
 } from "@traycer/protocol/host/provider-schemas";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -88,12 +89,12 @@ const LIVE_FROZEN_EXPORTS = {
   // breaking change and two optional fields are not one. v8.0 stays right for
   // id/enum growth on a host->client catalog payload.
   "providers.list@7.0": providersListResponseSchemaV70,
-  // The head line now, holding v7.0's old job: it names the LIVE schema, so
-  // the next attempt to grow it fails here first. Same response - freeze the
-  // line that stopped being head, open the next one, do not regenerate.
-  "providers.list@7.1": providersListResponseSchema,
+  // v7.1 froze when v8.0 opened for per-profile eligibility.
+  "providers.list@7.1": providersListResponseSchemaV71,
+  // The live head; its snapshot catches the next attempted growth.
+  "providers.list@8.0": providersListResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
-  "providers.list@7.0 request": providersListRequestSchema,
+  "providers.list@7.0 request": providersListRequestSchemaV70,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

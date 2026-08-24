@@ -42,21 +42,29 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
       readonly onSelect: (() => void) | undefined;
+      readonly onClick: (() => void) | undefined;
+      readonly onKeyDown:
+        ((event: KeyboardEvent<HTMLButtonElement>) => void) | undefined;
       readonly "aria-label": string | undefined;
+      readonly "aria-disabled": boolean | undefined;
       readonly "aria-current": "true" | undefined;
       readonly className: string | undefined;
       readonly disabled: boolean | undefined;
+      readonly tabIndex: number | undefined;
       readonly title: string | undefined;
     }): ReactNode => (
       <button
         type="button"
         role="menuitem"
         aria-label={props["aria-label"]}
+        aria-disabled={props["aria-disabled"]}
         aria-current={props["aria-current"]}
         className={props.className}
         disabled={props.disabled}
+        tabIndex={props.tabIndex}
         title={props.title}
-        onClick={props.onSelect}
+        onClick={props.onClick ?? props.onSelect}
+        onKeyDown={props.onKeyDown}
       >
         {props.children}
       </button>
@@ -76,13 +84,14 @@ import { ProfileDropdown } from "../profile-dropdown";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 function profile(
   profileId: string,
-  kind: ProviderProfile["kind"],
   label: string,
   authStatus: ProviderProfile["auth"]["status"],
+  enabled: boolean,
 ): ProviderProfile {
   return {
     profileId,
-    kind,
+    enabled,
+    kind: profileId === "ambient" ? "ambient" : "managed",
     authType: "oauth",
     label,
     auth: {
@@ -101,18 +110,19 @@ function profile(
   };
 }
 
-const AMBIENT = profile(
-  "ambient",
-  "ambient",
-  "Terminal account",
-  "authenticated",
-);
-const WORK = profile("work-profile", "managed", "Work", "authenticated");
+const AMBIENT = profile("ambient", "Terminal account", "authenticated", true);
+const WORK = profile("work-profile", "Work", "authenticated", true);
 const PERSONAL_SIGNED_OUT = profile(
   "personal-profile",
-  "managed",
   "Personal",
   "unauthenticated",
+  true,
+);
+const PERSONAL_DISABLED = profile(
+  "personal-profile",
+  "Personal",
+  "authenticated",
+  false,
 );
 
 // A caller-injected hint stub, decoupled from the picker's real digit-mapping
@@ -142,6 +152,16 @@ interface RenderDropdownInput {
     index: number,
   ) => ProfileDropdownShortcutHint | null;
   readonly onCloseAutoFocus: (() => void) | null;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly profileEnablementDisabledReason: (
+    profileId: string | null,
+  ) => string | null;
+  readonly disabledProfilesSelectable: boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
   readonly admissionByProfileId: ReadonlyMap<
     string | null,
     { readonly disabled: boolean; readonly reason: string | null }
@@ -162,6 +182,11 @@ function renderDropdown(input: RenderDropdownInput) {
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
       usagePresentation={null}
+      profileEnablementAvailable={input.profileEnablementAvailable}
+      profileEnablementPending={input.profileEnablementPending}
+      profileEnablementDisabledReason={input.profileEnablementDisabledReason}
+      disabledProfilesSelectable={input.disabledProfilesSelectable}
+      onSetProfileEnabled={input.onSetProfileEnabled}
       admissionByProfileId={input.admissionByProfileId}
     />,
   );
@@ -186,6 +211,13 @@ function baseDropdownInput(
     shortcutHintForIndex:
       overrides.shortcutHintForIndex ?? stubShortcutHintForIndex,
     onCloseAutoFocus: overrides.onCloseAutoFocus ?? null,
+    profileEnablementAvailable: overrides.profileEnablementAvailable ?? true,
+    profileEnablementPending:
+      overrides.profileEnablementPending ?? (() => false),
+    profileEnablementDisabledReason:
+      overrides.profileEnablementDisabledReason ?? (() => null),
+    disabledProfilesSelectable: overrides.disabledProfilesSelectable ?? false,
+    onSetProfileEnabled: overrides.onSetProfileEnabled ?? vi.fn(),
     admissionByProfileId:
       overrides.admissionByProfileId === undefined
         ? null
@@ -258,10 +290,237 @@ describe("<ProfileDropdown />", () => {
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     ).toBeDefined();
     expect(screen.getByRole("menuitem", { name: "Work" })).toBeDefined();
-    const signedOutRow = screen.getByRole("menuitem", {
+    screen.getByRole("menuitem", {
       name: "Personal, Signed out",
     });
-    expect(signedOutRow.className).toContain("opacity-60");
+    expect(
+      screen.getByRole("group", { name: "Personal profile controls" })
+        .className,
+    ).toContain("opacity-60");
+  });
+
+  it("does not render profile switches for a Terminal-only provider", () => {
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT],
+        activeProfileId: null,
+        profileEnablementAvailable: false,
+      }),
+    );
+
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+  });
+
+  it("groups disabled profiles after enabled rows and visibly labels them Disabled", () => {
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [PERSONAL_DISABLED, WORK, AMBIENT],
+        activeProfileId: "work-profile",
+      }),
+    );
+
+    const profileRows = screen.getAllByRole("menuitem").slice(0, 3);
+    expect(profileRows[0]?.textContent).toContain("Terminal account");
+    expect(profileRows[1]?.textContent).toContain("Work");
+    expect(profileRows[2]?.textContent).toContain("Personal");
+    expect(within(profileRows[2]).getByText("Disabled")).toBeDefined();
+  });
+
+  it("keeps selection and enablement as sibling actions", () => {
+    const onSelectProfile = vi.fn();
+    const onSetProfileEnabled = vi.fn();
+    renderDropdown(
+      baseDropdownInput({
+        onSelectProfile,
+        onSetProfileEnabled,
+        activeProfileId: null,
+      }),
+    );
+
+    const workGroup = screen.getByRole("group", {
+      name: "Work profile controls",
+    });
+    const workRow = within(workGroup).getByRole("menuitem", {
+      name: "Work",
+    });
+    const workSwitch = within(workGroup).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(workRow.parentElement).toBe(workGroup);
+    expect(workSwitch.parentElement).toBe(workGroup);
+    fireEvent.click(workSwitch);
+
+    expect(onSetProfileEnabled).toHaveBeenCalledWith("work-profile", false);
+    expect(onSelectProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(workRow);
+    expect(onSelectProfile).toHaveBeenLastCalledWith("work-profile");
+  });
+
+  it("keeps a disabled selection focusable but prevents activation and keeps its switch operable", () => {
+    const onSelectProfile = vi.fn();
+    const onSetProfileEnabled = vi.fn();
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT, WORK, PERSONAL_DISABLED],
+        activeProfileId: "personal-profile",
+        onSelectProfile,
+        onSetProfileEnabled,
+      }),
+    );
+
+    const disabledGroup = screen.getByRole("group", {
+      name: "Personal profile controls",
+    });
+    const disabledRow = within(disabledGroup).getByRole("menuitem", {
+      name: /Personal.*Disabled/,
+    });
+    const disabledSwitch = within(disabledGroup).getByRole("switch", {
+      name: "Allow agents to use Personal",
+    });
+    expect(disabledRow.parentElement).toBe(disabledGroup);
+    expect(disabledSwitch.parentElement).toBe(disabledGroup);
+    expect(disabledRow.getAttribute("aria-disabled")).toBe("true");
+    expect(disabledRow.hasAttribute("disabled")).toBe(false);
+    disabledRow.focus();
+    expect(document.activeElement).toBe(disabledRow);
+
+    fireEvent.click(disabledRow);
+    expect(onSelectProfile).not.toHaveBeenCalled();
+
+    fireEvent.click(disabledSwitch);
+    expect(onSetProfileEnabled).toHaveBeenCalledWith("personal-profile", true);
+  });
+
+  it("assigns contiguous shortcuts only to enabled profiles", () => {
+    const onSelectProfile = vi.fn();
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT, PERSONAL_DISABLED, WORK],
+        activeProfileId: null,
+        onSelectProfile,
+      }),
+    );
+
+    expect(screen.getByTestId("model-profile-digit-1")).toBeDefined();
+    expect(screen.getByTestId("model-profile-digit-2")).toBeDefined();
+    expect(screen.queryByTestId("model-profile-digit-3")).toBeNull();
+    expect(
+      within(
+        screen.getByRole("menuitem", { name: /Personal.*Disabled/ }),
+      ).queryByTestId("model-profile-digit-2"),
+    ).toBeNull();
+  });
+
+  it("keeps only the pending profile guarded until its host mutation settles", () => {
+    const onSetProfileEnabled = vi.fn();
+    const onSelectProfile = vi.fn();
+    renderDropdown(
+      baseDropdownInput({
+        profileEnablementPending: (profileId) => profileId === "work-profile",
+        onSetProfileEnabled,
+        onSelectProfile,
+      }),
+    );
+
+    const workGroup = screen.getByRole("group", {
+      name: "Work profile controls",
+    });
+    const workRow = within(workGroup).getByRole("menuitem", {
+      name: /Work.*Updating/,
+    });
+    const workSwitch = within(workGroup).getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(workRow.getAttribute("aria-disabled")).toBe("true");
+    expect(workRow.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(workRow);
+    expect(onSelectProfile).not.toHaveBeenCalled();
+
+    const terminalRow = within(
+      screen.getByRole("group", { name: "Terminal account profile controls" }),
+    ).getByRole("menuitem", {
+      name: "Terminal account, Terminal",
+    });
+    fireEvent.click(terminalRow);
+    expect(onSelectProfile).toHaveBeenCalledWith(null);
+
+    expect(workSwitch.getAttribute("aria-disabled")).toBeNull();
+    if (!(workSwitch instanceof HTMLButtonElement)) {
+      throw new Error("Expected the profile switch to render as a button.");
+    }
+    expect(workSwitch.disabled).toBe(true);
+    fireEvent.click(workSwitch);
+    expect(onSetProfileEnabled).not.toHaveBeenCalled();
+  });
+
+  it("does not let a pending profile claim an enabled shortcut", () => {
+    renderDropdown(
+      baseDropdownInput({
+        profileEnablementPending: (profileId) => profileId === "work-profile",
+      }),
+    );
+
+    expect(
+      within(
+        screen.getByRole("group", { name: "Work profile controls" }),
+      ).queryByTestId("model-profile-digit-2"),
+    ).toBeNull();
+    expect(
+      within(
+        screen.getByRole("group", {
+          name: "Terminal account profile controls",
+        }),
+      ).getByTestId("model-profile-digit-1"),
+    ).toBeDefined();
+  });
+
+  it("blocks a pending profile switch until its host mutation settles", () => {
+    const onSetProfileEnabled = vi.fn();
+    renderDropdown(
+      baseDropdownInput({
+        profileEnablementPending: (profileId) => profileId === "work-profile",
+        onSetProfileEnabled,
+      }),
+    );
+
+    const workSwitch = within(
+      screen.getByRole("group", { name: "Work profile controls" }),
+    ).getByRole("switch", { name: "Allow agents to use Work" });
+    expect(workSwitch.getAttribute("aria-disabled")).toBeNull();
+    if (!(workSwitch instanceof HTMLButtonElement)) {
+      throw new Error("Expected the profile switch to render as a button.");
+    }
+    expect(workSwitch.disabled).toBe(true);
+    fireEvent.click(workSwitch);
+    expect(onSetProfileEnabled).not.toHaveBeenCalled();
+  });
+
+  it("keeps the final-enabled switch focusable but manually guarded", () => {
+    const onSetProfileEnabled = vi.fn();
+    const disabledReason = "Enable another profile before disabling this one.";
+    renderDropdown(
+      baseDropdownInput({
+        profileEnablementDisabledReason: (profileId) =>
+          profileId === "work-profile" ? disabledReason : null,
+        onSetProfileEnabled,
+      }),
+    );
+
+    const workSwitch = within(
+      screen.getByRole("group", { name: "Work profile controls" }),
+    ).getByRole("switch", { name: "Allow agents to use Work" });
+    expect(workSwitch.getAttribute("aria-disabled")).toBe("true");
+    if (!(workSwitch instanceof HTMLButtonElement)) {
+      throw new Error("Expected the profile switch to render as a button.");
+    }
+    expect(workSwitch.disabled).toBe(false);
+    expect(tooltipTextNear(workSwitch)).toBe(disabledReason);
+    workSwitch.focus();
+    expect(document.activeElement).toBe(workSwitch);
+
+    fireEvent.click(workSwitch);
+    expect(onSetProfileEnabled).not.toHaveBeenCalled();
   });
 
   it("commits the clicked row's commit id, using null for the ambient row", () => {
@@ -399,7 +658,9 @@ describe("<ProfileDropdown />", () => {
       throw new Error("Expected Work row mock to render as a button.");
     }
     expect(blocked.disabled).toBe(true);
-    expect(blocked.className).toContain("opacity-60");
+    expect(
+      screen.getByRole("group", { name: "Work profile controls" }).className,
+    ).toContain("opacity-60");
     expect(tooltipTextNear(blocked)).toBe(
       "This profile can't continue this session.",
     );
@@ -470,7 +731,9 @@ describe("<ProfileDropdown />", () => {
       throw new Error("Expected Work row mock to render as a button.");
     }
     expect(blocked.disabled).toBe(true);
-    expect(blocked.className).toContain("opacity-60");
+    expect(
+      screen.getByRole("group", { name: "Work profile controls" }).className,
+    ).toContain("opacity-60");
     // No reason means no TooltipWrapper - native title also absent.
     expect(tooltipTextNear(blocked)).toBeNull();
   });

@@ -10,6 +10,8 @@ import { useRefreshProviderRateLimitsOnMount } from "@/hooks/host/use-refresh-pr
 import { useRefreshProviderRateLimitsOnTurn } from "@/hooks/host/use-refresh-provider-rate-limits-on-turn";
 import { useProviderRateLimitRefresh } from "@/hooks/rate-limits/use-provider-rate-limit-refresh";
 import { useIsRateLimitReadFollowUpExhausted } from "@/hooks/rate-limits/use-rate-limit-queue-target-phase";
+import { useHostClient } from "@/lib/host";
+import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import {
   isRateLimitCapableProvider,
@@ -71,21 +73,58 @@ export function ProviderProfilesRefreshButton({
   profileId,
   usageUpdatedAt,
   fetchEligible,
+  maintenanceAvailable,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
   readonly fetchEligible: boolean;
+  readonly maintenanceAvailable: boolean;
 }): ReactNode {
-  if (!isRateLimitCapableProvider(providerId) || !fetchEligible) {
-    return <ProfilesOnlyRefreshButton />;
+  if (!maintenanceAvailable) {
+    return isRateLimitCapableProvider(providerId) && fetchEligible ? (
+      <ProfilesAndUsageRefreshButton
+        providerId={providerId}
+        profileId={profileId}
+        usageUpdatedAt={usageUpdatedAt}
+        fetchEligible={fetchEligible}
+      />
+    ) : (
+      <ProfilesOnlyRefreshButton />
+    );
   }
   return (
-    <ProfilesAndUsageRefreshButton
+    <ProfileMaintenanceRefreshButton
       providerId={providerId}
       profileId={profileId}
-      usageUpdatedAt={usageUpdatedAt}
-      fetchEligible={fetchEligible}
+    />
+  );
+}
+
+function ProfileMaintenanceRefreshButton({
+  providerId,
+  profileId,
+}: {
+  readonly providerId: ProviderId;
+  readonly profileId: string | null;
+}): ReactNode {
+  const client = useHostClient();
+  const refresh = useProvidersRefreshProfileStatusForClient(client);
+
+  return (
+    <RefreshIconButton
+      onRefresh={async () => {
+        await refresh.mutateAsync({
+          providerId,
+          profileId: profileId ?? "ambient",
+        });
+      }}
+      label={
+        isRateLimitCapableProvider(providerId)
+          ? "Refresh profile status and usage limits"
+          : "Refresh profile status"
+      }
+      refreshing={refresh.isPending}
     />
   );
 }

@@ -118,6 +118,7 @@ function selectableDestination(
 ): boolean {
   const assessment = assessProfileRateLimit(profile, selectedModel);
   return (
+    profile.enabled &&
     profile.auth.status === "authenticated" &&
     (!assessment.known ||
       rateLimitSeverityTier(assessment.severity) <
@@ -156,6 +157,7 @@ function findProbeTarget(
   return (
     destinations.find(
       (destination) =>
+        destination.selectable &&
         destination.profile.auth.status === "authenticated" &&
         !assessProfileRateLimit(destination.profile, selectedModel).known,
     ) ?? null

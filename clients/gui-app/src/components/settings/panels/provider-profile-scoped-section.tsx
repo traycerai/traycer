@@ -20,6 +20,7 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -123,6 +124,12 @@ interface ProviderProfileScopedSectionProps {
    *  profile via `AddProviderProfileDialog`'s `onProfileCreated`. */
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
 }
 
 /**
@@ -153,6 +160,9 @@ export function ProviderProfileScopedSection(
     onDismissFailedAttempt,
     selectedProfileId,
     onSelectedProfileIdChange,
+    profileEnablementAvailable,
+    profileEnablementPending,
+    onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
   const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
@@ -236,6 +246,7 @@ export function ProviderProfileScopedSection(
                 state,
                 selectedProfile,
               )}
+              maintenanceAvailable={profileEnablementAvailable}
             />
           </div>
         </div>
@@ -252,6 +263,23 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          profileEnablementAvailable={profileEnablementAvailable}
+          profileEnablementPending={profileEnablementPending}
+          profileEnablementDisabledReason={(profileId) => {
+            const profile = profiles.find(
+              (candidate) => profileCommitId(candidate) === profileId,
+            );
+            if (
+              !state.enabled ||
+              profile?.enabled !== true ||
+              profiles.filter((candidate) => candidate.enabled).length > 1
+            ) {
+              return null;
+            }
+            return "Enable another profile before disabling this one.";
+          }}
+          disabledProfilesSelectable
+          onSetProfileEnabled={onSetProfileEnabled}
           admissionByProfileId={null}
         />
         <div
@@ -384,6 +412,9 @@ export function ProviderProfileScopedSection(
           (candidate) => candidate.profileId !== selectedProfile.profileId,
         )}
         onSelectedProfileIdChange={onSelectedProfileIdChange}
+        profileEnablementAvailable={profileEnablementAvailable}
+        profileEnablementPending={profileEnablementPending}
+        onSetProfileEnabled={onSetProfileEnabled}
       />
     </section>
   );
@@ -559,6 +590,60 @@ function signedInMessage(profile: ProviderProfile): string {
   return `Signed in to ${profileDisplayLabel(profile)}`;
 }
 
+function profileEligibilityDisabledReason(
+  providerEnabled: boolean,
+  profile: ProviderProfile,
+  profiles: readonly ProviderProfile[],
+): string | null {
+  if (!providerEnabled || !profile.enabled) return null;
+  const anotherProfileEnabled = profiles.some(
+    (candidate) =>
+      candidate.profileId !== profile.profileId && candidate.enabled,
+  );
+  if (anotherProfileEnabled) return null;
+  return "Enable another profile before disabling this one.";
+}
+
+function ProfileEligibilityEditor(props: {
+  readonly profile: ProviderProfile;
+  readonly available: boolean;
+  readonly pending: boolean;
+  readonly disabledReason: string | null;
+  readonly onSetEnabled: (enabled: boolean) => void;
+}): ReactNode {
+  if (!props.available) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-foreground/3 p-3">
+      <div className="min-w-0">
+        <div className="text-ui-sm font-medium text-foreground">
+          Allow agents to use this profile
+        </div>
+        <div className="text-ui-xs text-muted-foreground">
+          {props.profile.enabled ? "Enabled" : "Disabled"}. Disabled profiles
+          stay visible but cannot start new work.
+        </div>
+      </div>
+      <TooltipWrapper
+        label={props.disabledReason}
+        side="left"
+        sideOffset={6}
+        align={undefined}
+      >
+        <Switch
+          aria-label={`Allow agents to use ${profileDisplayLabel(props.profile)}`}
+          checked={props.profile.enabled}
+          disabled={props.pending}
+          aria-disabled={props.disabledReason !== null || undefined}
+          onCheckedChange={(enabled) => {
+            if (props.disabledReason !== null) return;
+            props.onSetEnabled(enabled);
+          }}
+        />
+      </TooltipWrapper>
+    </div>
+  );
+}
+
 function ProfileEditDialog({
   state,
   profile,
@@ -569,6 +654,9 @@ function ProfileEditDialog({
   onOpenChange,
   remainingProfilesAfterRemoval,
   onSelectedProfileIdChange,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  onSetProfileEnabled,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
@@ -583,6 +671,12 @@ function ProfileEditDialog({
    *  just deleted. */
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
 }): ReactNode {
   const providerId = state.providerId;
   const removeProfile = useRemoveProviderProfile();
@@ -605,6 +699,12 @@ function ProfileEditDialog({
   const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
   const isTerminalProfile = removeProfileDisabledReason !== null;
   const dialogCopy = profileEditDialogCopy(profile, startInReauth);
+  const eligibilityDisabledReason = profileEligibilityDisabledReason(
+    state.enabled,
+    profile,
+    profiles,
+  );
+  const enablementPending = profileEnablementPending(profileCommitId(profile));
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
@@ -712,6 +812,16 @@ function ProfileEditDialog({
               selectedColor={accentColor}
               onSelectColor={setAccentColor}
               disabled={savePending || switchingAccount}
+            />
+
+            <ProfileEligibilityEditor
+              profile={profile}
+              available={profileEnablementAvailable}
+              pending={enablementPending}
+              disabledReason={eligibilityDisabledReason}
+              onSetEnabled={(enabled) =>
+                onSetProfileEnabled(profileCommitId(profile), enabled)
+              }
             />
 
             {switchingAccount ? (

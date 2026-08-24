@@ -14,6 +14,7 @@ import {
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,7 +27,10 @@ import {
 } from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
-import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
+import {
+  orderProfiles,
+  profileDisplayLabel,
+} from "@/components/providers/provider-profile-model";
 import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
@@ -79,6 +83,11 @@ import {
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -1692,12 +1701,23 @@ function ProfileRateLimitProviderBlock({
   const queueScope = useRateLimitQueueScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    client,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    client,
+    providerId,
+  );
+  const profileEnablementAvailable = profiles.some(
+    (profile) => profile.kind === "managed",
+  );
   const activeProfileId = resolveRateLimitProfileId(
     profileSelection,
     providerId,
     profiles,
   );
-  const targets = profiles.map((profile) => ({
+  const targets = orderProfiles(profiles).map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
     fetchEligible: isRateLimitProfileFetchEligible(fetchEligibility, profile),
@@ -1821,6 +1841,23 @@ function ProfileRateLimitProviderBlock({
               variant={variant}
               query={queries[index]}
               openOpenCodeModelProviders={openOpenCodeModelProviders}
+              profileEnablementAvailable={profileEnablementAvailable}
+              profileEnablementPending={profileEnablementPending(
+                target.profileId,
+              )}
+              profileEnablementDisabledReason={
+                target.profile.enabled &&
+                profiles.filter((profile) => profile.enabled).length <= 1
+                  ? "Enable another profile before disabling this one."
+                  : null
+              }
+              onSetProfileEnabled={(enabled) =>
+                setProfileEnabled.mutate({
+                  providerId,
+                  profileId: target.profile.profileId,
+                  enabled,
+                })
+              }
             />
           );
         })}
@@ -1872,6 +1909,10 @@ function RateLimitProviderProfileRow({
   variant,
   query,
   openOpenCodeModelProviders,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
@@ -1880,6 +1921,10 @@ function RateLimitProviderProfileRow({
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
   readonly openOpenCodeModelProviders: () => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: boolean;
+  readonly profileEnablementDisabledReason: string | null;
+  readonly onSetProfileEnabled: (enabled: boolean) => void;
   readonly query: {
     readonly isPending: boolean;
     readonly isFetching: boolean;
@@ -1890,6 +1935,9 @@ function RateLimitProviderProfileRow({
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
+  const client = useHostClient();
+  const refreshProfileStatus =
+    useProvidersRefreshProfileStatusForClient(client);
   const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
   const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
     providerId,
@@ -1924,8 +1972,9 @@ function RateLimitProviderProfileRow({
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2",
+        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 transition-opacity duration-150",
         active && "border-primary/60 bg-primary/5",
+        !profile.enabled && "opacity-60",
       )}
       aria-current={active ? "true" : undefined}
     >
@@ -1953,13 +2002,59 @@ function RateLimitProviderProfileRow({
                 Active
               </Badge>
             ) : null}
+            {!profile.enabled ? (
+              <Badge variant="outline" className="font-normal">
+                Disabled
+              </Badge>
+            ) : null}
           </div>
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={query.isFetching || targetPhase === "fetching"}
+            refreshing={
+              query.isFetching ||
+              targetPhase === "fetching" ||
+              refreshProfileStatus.isPending
+            }
             queued={targetPhase === "queued"}
             signedOut={signedOutWithoutUsage}
           />
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {!profile.enabled ? (
+            <RefreshIconButton
+              onRefresh={async () => {
+                await refreshProfileStatus.mutateAsync({
+                  providerId,
+                  profileId: profile.profileId,
+                });
+              }}
+              label={`Refresh ${profileDisplayLabel(profile)} status and usage limits`}
+              refreshing={refreshProfileStatus.isPending}
+              className="size-7"
+            />
+          ) : null}
+          {profileEnablementAvailable ? (
+            <TooltipWrapper
+              label={profileEnablementDisabledReason}
+              side="left"
+              sideOffset={6}
+              align={undefined}
+            >
+              <Switch
+                aria-label={`Allow agents to use ${profileDisplayLabel(profile)}`}
+                checked={profile.enabled}
+                disabled={profileEnablementPending}
+                aria-disabled={
+                  profileEnablementDisabledReason !== null || undefined
+                }
+                className="mt-0.5 h-4 w-7 transition-colors duration-150"
+                onCheckedChange={(enabled) => {
+                  if (profileEnablementDisabledReason !== null) return;
+                  onSetProfileEnabled(enabled);
+                }}
+              />
+            </TooltipWrapper>
+          ) : null}
         </div>
       </div>
       {signedOutWithoutUsage ? (
