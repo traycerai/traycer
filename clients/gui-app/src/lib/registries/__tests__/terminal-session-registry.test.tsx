@@ -366,9 +366,7 @@ describe("useTerminalSessionHandle acquire-time defunct guard", () => {
     });
 
     expect(second.result.current).not.toBe(firstHandle);
-    expect(second.result.current?.store.getState().status).not.toBe(
-      "reaped",
-    );
+    expect(second.result.current?.store.getState().status).not.toBe("reaped");
   });
 
   it("reuses a healthy warm terminal-agent handle across a disable/re-enable cycle", async () => {
