@@ -52,6 +52,7 @@ import {
 } from "@/lib/tab-navigation";
 import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
 
@@ -147,6 +148,7 @@ const activeUnmounts: Array<() => void> = [];
 
 beforeEach(() => {
   navigateProbe.current = null;
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({
     version: 2,
     items: [],
@@ -187,6 +189,96 @@ describe("mobile back navigation over a plain history", () => {
     await waitFor(() => {
       expect(focusedKind()).toBe("settings");
     });
+  });
+
+  // The step every phone journey ends with and no case above takes: back to
+  // HOME. The suites here hop between two tabs, so they never land on the
+  // landing path - which is resolved by a different branch entirely, and is the
+  // one a user reaches by opening one thing from Home and swiping back.
+  it("returns to the landing surface on a back step out of the first tab", async () => {
+    const { history, router } = buildRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => {
+      expect(navigateProbe.current).not.toBeNull();
+    });
+    const navigate = navigateProbe.current;
+    if (navigate === null) throw new Error("router never published navigate");
+
+    expect(router.state.location.pathname).toBe("/");
+    await act(async () => {
+      activateTabIntent(navigate, settingsTabIntent("general"), undefined);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("settings");
+    });
+
+    await act(async () => {
+      goBack({ history });
+      await Promise.resolve();
+    });
+
+    // The route is back at the landing; the SURFACE has to follow it. A
+    // resolver that moves the location and leaves Settings active is the frozen
+    // screen the device reports.
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/");
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("draft");
+    });
+    // Home is not the absence of a tab: a populated strip always has exactly
+    // one active item, and on this shell Home IS the landing draft surface.
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+  });
+
+  // The hazard of activating on every step: each press could stack another
+  // Home. The landing draft is named rather than minted, so the second press
+  // re-activates the one that exists.
+  it("re-activates the one Home rather than stacking a draft per step", async () => {
+    const { history, router } = buildRouter();
+    render(<RouterProvider router={router} />);
+    await waitFor(() => {
+      expect(navigateProbe.current).not.toBeNull();
+    });
+    const navigate = navigateProbe.current;
+    if (navigate === null) throw new Error("router never published navigate");
+
+    await act(async () => {
+      activateTabIntent(navigate, settingsTabIntent("general"), undefined);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("settings");
+    });
+    await act(async () => {
+      goBack({ history });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("draft");
+    });
+    const firstHome = selectHostFocusedRef(useTabsStore.getState())?.id ?? null;
+    expect(firstHome).not.toBeNull();
+
+    // Forward into Settings, then back to Home a second time.
+    await act(async () => {
+      goForward({ history });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("settings");
+    });
+    await act(async () => {
+      goBack({ history });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("draft");
+    });
+
+    expect(selectHostFocusedRef(useTabsStore.getState())?.id).toBe(firstHome);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
   });
 
   it("returns to the later surface on a forward step", async () => {
