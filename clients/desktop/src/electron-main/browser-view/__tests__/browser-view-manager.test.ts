@@ -507,20 +507,6 @@ class FakeHostWebContents extends EventEmitter {
     readonly modifiers: readonly string[];
   }> = [];
 
-  on(
-    event: "did-start-navigation" | "render-process-gone",
-    listener: (...args: unknown[]) => void,
-  ): this {
-    return super.on(event, listener);
-  }
-
-  off(
-    event: "did-start-navigation" | "render-process-gone",
-    listener: (...args: unknown[]) => void,
-  ): this {
-    return super.off(event, listener);
-  }
-
   sendInputEvent(event: {
     readonly type: "keyDown";
     readonly keyCode: string;
@@ -2919,6 +2905,42 @@ describe("BrowserViewManager", () => {
         reason: "user took over",
       }),
     );
+  });
+
+  it("does not adopt an in-flight action when the same control id is re-granted", async () => {
+    const harness = createHarness();
+    harness.manager.upsertTile(
+      "window-1",
+      upsert(BASE_KEY, "http://localhost:3000", true),
+    );
+    const view = harness.views[0];
+    view.webContents.debugger.deferCommands = true;
+    const grant = {
+      ...BASE_KEY,
+      controlId: "control-1",
+      chatId: "chat-1",
+      agentRunId: "agent-1",
+      agentLabel: "Agent One",
+      origin: "http://localhost:3000",
+      expiresAt: Date.now() + 60_000,
+    };
+    harness.manager.grantControl("window-1", grant);
+    const action = harness.manager.executeControlAction("window-1", {
+      ...BASE_KEY,
+      controlId: "control-1",
+      actionId: "old-action",
+      sensitiveApprovalId: null,
+      action: { kind: "scroll", deltaX: 0, deltaY: 120 },
+    });
+
+    await Promise.resolve();
+    harness.manager.grantControl("window-1", grant);
+    view.webContents.debugger.commandResolvers[0]?.(null);
+
+    await expect(action).resolves.toEqual({
+      status: "cancelled",
+      reason: "user took over",
+    });
   });
 
   it("requires approval before typing into password fields", async () => {

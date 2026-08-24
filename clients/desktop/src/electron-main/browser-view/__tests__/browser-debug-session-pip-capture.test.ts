@@ -81,7 +81,12 @@ class FakeCapturedImage implements BrowserViewCapturedImage {
     return this.bytes.byteLength === 0;
   }
 
-  crop(_rect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }): BrowserViewCapturedImage {
+  crop(_rect: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  }): BrowserViewCapturedImage {
     return this;
   }
 
@@ -90,7 +95,7 @@ class FakeCapturedImage implements BrowserViewCapturedImage {
   }
 }
 
-class FakeWebContents implements BrowserViewWebContents {
+class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly id = 1;
   readonly debugger = new FakeDebugger();
   readonly navigationHistory = undefined;
@@ -122,10 +127,7 @@ class FakeWebContents implements BrowserViewWebContents {
     return Promise.resolve();
   }
 
-  executeJavaScript(
-    _script: string,
-    _userGesture: boolean,
-  ): Promise<unknown> {
+  executeJavaScript(_script: string, _userGesture: boolean): Promise<unknown> {
     return Promise.resolve();
   }
 
@@ -155,10 +157,7 @@ class FakeWebContents implements BrowserViewWebContents {
 
   reload(): void {}
 
-  findInPage(
-    _text: string,
-    _options: BrowserViewFindInPageOptions,
-  ): number {
+  findInPage(_text: string, _options: BrowserViewFindInPageOptions): number {
     return 0;
   }
 
@@ -172,9 +171,7 @@ class FakeWebContents implements BrowserViewWebContents {
 
   setBackgroundThrottling(_allowed: boolean): void {}
 
-  setDevToolsWebContents(
-    _webContents: BrowserViewDevToolsWebContents,
-  ): void {}
+  setDevToolsWebContents(_webContents: BrowserViewDevToolsWebContents): void {}
 
   openDevTools(_options: BrowserViewOpenDevToolsOptions): void {}
 
@@ -183,10 +180,6 @@ class FakeWebContents implements BrowserViewWebContents {
       details: BrowserViewWindowOpenDetails,
     ) => BrowserViewWindowOpenResult,
   ): void {}
-
-  on(_event: string, _listener: (...args: unknown[]) => void): void {}
-
-  off(_event: string, _listener: (...args: unknown[]) => void): void {}
 }
 
 interface CaptureHarness {

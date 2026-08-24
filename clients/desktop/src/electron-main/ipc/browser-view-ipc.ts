@@ -658,29 +658,7 @@ function toBrowserViewWindow(value: unknown): BrowserViewWindow | null {
         value.contentView.removeChildView(view);
       },
     },
-    webContents: {
-      on: (event, listener) => {
-        if (event === "did-start-navigation") {
-          value.webContents.on("did-start-navigation", listener);
-        } else {
-          value.webContents.on("render-process-gone", listener);
-        }
-      },
-      off: (event, listener) => {
-        if (event === "did-start-navigation") {
-          value.webContents.off("did-start-navigation", listener);
-        } else {
-          value.webContents.off("render-process-gone", listener);
-        }
-      },
-      sendInputEvent: (event) => {
-        value.webContents.sendInputEvent({
-          ...event,
-          modifiers:
-            event.modifiers === undefined ? undefined : [...event.modifiers],
-        });
-      },
-    },
+    webContents: value.webContents,
     isDestroyed: () => value.isDestroyed(),
     isVisible: () => value.isVisible(),
     isMinimized: () => value.isMinimized(),

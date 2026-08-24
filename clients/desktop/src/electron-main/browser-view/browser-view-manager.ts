@@ -101,6 +101,54 @@ import type {
   BrowserViewCertificateErrorChange as BrowserSessionCertificateErrorChange,
   BrowserViewDownloadChange as BrowserSessionDownloadChange,
 } from "./browser-session";
+import type {
+  BrowserViewCapturedImage,
+  BrowserViewDebugger,
+  BrowserViewDevToolsWindow,
+  BrowserViewEvent,
+  BrowserViewFoundInPageResult,
+  BrowserViewHostWebContents,
+  BrowserViewInput,
+  BrowserViewInputModifier,
+  BrowserViewNavigationHistory,
+  BrowserViewPopupWebContents,
+  BrowserViewPopupWindow,
+  BrowserViewRenderProcessGoneDetails,
+  BrowserViewWebContents,
+  BrowserViewWindow,
+  BrowserViewWindowOpenDetails,
+  BrowserViewWindowOpenResult,
+  ManagedBrowserView,
+} from "./browser-view-port";
+import {
+  BrowserViewEntryRegistry,
+  browserViewSurfaceKey as entryKeyId,
+  nativeBrowserViewGuestKey as nativeGuestKey,
+  unmanagedBrowserViewGuestKey as unmanagedGuestKey,
+  type BrowserViewEntryKey,
+} from "./browser-view-entry-registry";
+import { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
+import { BrowserViewControlSession } from "./browser-view-control-session";
+
+export type {
+  BrowserViewCapturedImage,
+  BrowserViewCropRect,
+  BrowserViewDebugger,
+  BrowserViewDevToolsWebContents,
+  BrowserViewDevToolsWindow,
+  BrowserViewFindInPageOptions,
+  BrowserViewHostWebContents,
+  BrowserViewNavigationHistory,
+  BrowserViewOpenDevToolsOptions,
+  BrowserViewPopupWebContents,
+  BrowserViewPopupWindow,
+  BrowserViewWebContents,
+  BrowserViewWindow,
+  BrowserViewWindowOpenDetails,
+  BrowserViewWindowOpenResult,
+  ManagedBrowserView,
+  ManagedContentView,
+} from "./browser-view-port";
 
 const DEBUG_SNAPSHOT_COALESCE_MS = 16;
 export const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
@@ -146,176 +194,6 @@ const VIEWPORT_PRESETS: Readonly<
   tablet: { width: 820, height: 1180 },
   desktop: { width: 1440, height: 900 },
 };
-
-export interface BrowserViewDebugger {
-  isAttached(): boolean;
-  attach(protocolVersion: string): void;
-  detach(): void;
-  sendCommand(
-    method: string,
-    commandParams: Record<string, unknown>,
-    sessionId: string | undefined,
-  ): Promise<unknown>;
-  on(event: string, listener: (...args: unknown[]) => void): void;
-  off(event: string, listener: (...args: unknown[]) => void): void;
-}
-
-export interface BrowserViewNavigationHistory {
-  canGoBack(): boolean;
-  canGoForward(): boolean;
-  clear(): void;
-  goBack(): void;
-  goForward(): void;
-}
-
-export interface BrowserViewOpenDevToolsOptions {
-  readonly mode: "detach";
-  readonly activate: boolean;
-  readonly title: string;
-}
-
-export interface BrowserViewWebContents {
-  readonly id: number;
-  readonly debugger: BrowserViewDebugger;
-  readonly navigationHistory: BrowserViewNavigationHistory | undefined;
-  loadURL(url: string): Promise<unknown>;
-  executeJavaScript(script: string, userGesture: boolean): Promise<unknown>;
-  capturePage(): Promise<BrowserViewCapturedImage>;
-  getURL(): string;
-  getTitle(): string;
-  isDestroyed(): boolean;
-  close(): void;
-  reload(): void;
-  findInPage(text: string, options: BrowserViewFindInPageOptions): number;
-  stopFindInPage(action: "clearSelection"): void;
-  getZoomFactor(): number;
-  setZoomFactor(factor: number): void;
-  setBackgroundThrottling(allowed: boolean): void;
-  setDevToolsWebContents(webContents: BrowserViewDevToolsWebContents): void;
-  openDevTools(options: BrowserViewOpenDevToolsOptions): void;
-  setWindowOpenHandler(
-    handler: (
-      details: BrowserViewWindowOpenDetails,
-    ) => BrowserViewWindowOpenResult,
-  ): void;
-  /**
-   * Compositor frame feed for the tile-frame cache (BT-201/BT-202). The real
-   * Electron signature also accepts an `onlyDirty` first argument; the
-   * structural single-callback form is what the manager uses.
-   */
-  beginFrameSubscription(
-    callback: (image: BrowserViewCapturedImage) => void,
-  ): void;
-  endFrameSubscription(): void;
-  on(event: string, listener: (...args: unknown[]) => void): void;
-  off(event: string, listener: (...args: unknown[]) => void): void;
-}
-
-export interface BrowserViewFindInPageOptions {
-  readonly forward: boolean;
-  readonly findNext: boolean;
-  readonly matchCase: boolean;
-}
-
-export interface BrowserViewWindowOpenDetails {
-  readonly url: string;
-  readonly frameName: string;
-  readonly features: string;
-  readonly disposition: string;
-}
-
-export type BrowserViewWindowOpenResult =
-  | { readonly action: "deny" }
-  | {
-      readonly action: "allow";
-      readonly overrideBrowserWindowOptions: BrowserWindowConstructorOptions;
-      readonly outlivesOpener: boolean;
-    };
-
-export interface BrowserViewCropRect {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-export interface BrowserViewCapturedImage {
-  getSize(): { readonly width: number; readonly height: number };
-  toJPEG(quality: number): Uint8Array;
-  toDataURL(): string;
-  isEmpty(): boolean;
-  crop(rect: BrowserViewCropRect): BrowserViewCapturedImage;
-  toPNG(): Uint8Array;
-}
-
-export interface BrowserViewDevToolsWebContents {
-  readonly id: number;
-}
-
-export interface BrowserViewDevToolsWindow {
-  readonly webContents: BrowserViewDevToolsWebContents;
-  isDestroyed(): boolean;
-  destroy(): void;
-}
-
-export interface ManagedBrowserView {
-  readonly webContents: BrowserViewWebContents;
-  setBounds(bounds: BrowserViewBounds): void;
-  setVisible(visible: boolean): void;
-}
-
-export interface ManagedContentView {
-  addChildView(view: ManagedBrowserView): void;
-  removeChildView(view: ManagedBrowserView): void;
-}
-
-/**
- * The host window's own renderer lifecycle events - distinct from a browser
- * tile's `webContents`, which is a separate `WebContentsView`. Used to hide
- * every entry attached to this window while its renderer is reloading or
- * has crashed, so the native views do not composite over a blank window.
- */
-export interface BrowserViewHostWebContents {
-  on(
-    event: "did-start-navigation" | "render-process-gone",
-    listener: (...args: unknown[]) => void,
-  ): void;
-  off(
-    event: "did-start-navigation" | "render-process-gone",
-    listener: (...args: unknown[]) => void,
-  ): void;
-  /** BT-302: replay reserved app chords into the host renderer. */
-  sendInputEvent(event: {
-    readonly type: "keyDown";
-    readonly keyCode: string;
-    readonly modifiers?: readonly BrowserViewInputModifier[];
-  }): void;
-}
-
-export type BrowserViewInputModifier = "meta" | "control" | "shift" | "alt";
-
-export interface BrowserViewWindow {
-  readonly contentView: ManagedContentView;
-  readonly webContents: BrowserViewHostWebContents | null;
-  isDestroyed(): boolean;
-  isVisible(): boolean;
-  isMinimized(): boolean;
-}
-
-export interface BrowserViewPopupWebContents {
-  readonly id: number;
-  once(event: "destroyed", listener: () => void): void;
-  on(event: string, listener: (...args: unknown[]) => void): void;
-  off(event: string, listener: (...args: unknown[]) => void): void;
-}
-
-export interface BrowserViewPopupWindow {
-  readonly webContents: BrowserViewPopupWebContents;
-  isDestroyed(): boolean;
-  close(): void;
-  on(event: string, listener: () => void): void;
-  off(event: string, listener: () => void): void;
-}
 
 export interface BrowserViewManagerOptions {
   readonly createView: () => ManagedBrowserView;
@@ -455,6 +333,7 @@ export function scheduleBrowserViewDebugSnapshot(
 interface BrowserViewEntry {
   surface: BrowserViewEntryKey | null;
   surfaceBindingId: string | null;
+  readonly guestKey: string;
   readonly identity: BrowserViewGuestIdentity;
   readonly view: ManagedBrowserView;
   readonly listeners: BrowserViewListeners;
@@ -501,28 +380,10 @@ interface BrowserViewEntry {
    * `upsertTile` call for this exact key.
    */
   rendererResetPending: boolean;
-  control: BrowserViewControlState | null;
+  control: BrowserViewControlSession | null;
   internalNavigation: boolean;
-  /** Initial navigation retained behind the host's ownership acceptance. */
-  nativeActivation: BrowserViewNativeActivation | null;
-  /**
-   * Set once this entry has been claimed by a handoff, either as the primary
-   * frame or a sibling, so quit-time drain and later teardown cannot push it
-   * twice.
-   */
-  handedOff: boolean;
-  /**
-   * Shared by sibling tabs captured in one handoff. Their independent close
-   * paths wait on it so they cannot destroy a guest while it is being read.
-   */
-  pendingHandoffCapture: Promise<void> | null;
   /** One teardown shared by every close trigger for this guest. */
   closePromise: Promise<void> | null;
-}
-
-interface BrowserViewNativeActivation {
-  seedScriptId: string | null;
-  promise: Promise<void> | null;
 }
 
 type BrowserViewGuestIdentity =
@@ -536,27 +397,8 @@ type BrowserViewGuestIdentity =
       readonly registrationId: string;
       /** Renderer that established this guest and owns its lifecycle stream. */
       readonly lifecycleOwnerWindowId: string;
-      /** One settlement shared by every idempotent ensure for this guest. */
-      readonly provisioned: Promise<BrowserViewProvisionedTab>;
+      readonly lifecycle: NativeBrowserViewLifecycle;
     };
-
-interface BrowserViewControlState {
-  readonly controlId: string;
-  readonly chatId: string;
-  readonly agentRunId: string | null;
-  readonly agentLabel: string;
-  readonly origin: string;
-  readonly expiresAt: number;
-  generation: number;
-  queue: Promise<unknown>;
-  readonly pendingSensitiveApprovals: Map<
-    string,
-    {
-      readonly actionId: string;
-      readonly action: BrowserViewControlAction["action"];
-    }
-  >;
-}
 
 interface BrowserViewEntryFindState {
   readonly appRequestId: number;
@@ -575,25 +417,50 @@ interface BrowserViewEntryFindSession {
 }
 
 interface BrowserViewListeners {
-  readonly beforeInputEvent: (...args: unknown[]) => void;
-  readonly inputEvent: (...args: unknown[]) => void;
-  readonly contextMenu: (...args: unknown[]) => void;
-  readonly blur: (...args: unknown[]) => void;
-  readonly didCreateWindow: (...args: unknown[]) => void;
-  readonly didFrameNavigate: (...args: unknown[]) => void;
-  readonly didFrameFinishLoad: (...args: unknown[]) => void;
-  readonly didFinishLoad: (...args: unknown[]) => void;
-  readonly didNavigate: (...args: unknown[]) => void;
-  readonly didStartNavigation: (...args: unknown[]) => void;
-  readonly didNavigateInPage: (...args: unknown[]) => void;
-  readonly foundInPage: (...args: unknown[]) => void;
-  readonly pageTitleUpdated: (...args: unknown[]) => void;
-  readonly paint: (...args: unknown[]) => void;
-  readonly renderProcessGone: (...args: unknown[]) => void;
-}
-
-interface BrowserViewEntryKey extends BrowserViewTileKey {
-  readonly windowId: string;
+  readonly beforeInputEvent: (
+    event: BrowserViewEvent,
+    input: BrowserViewInput,
+  ) => void;
+  readonly inputEvent: () => void;
+  readonly contextMenu: () => void;
+  readonly blur: () => void;
+  readonly didCreateWindow: (window: BrowserViewPopupWindow) => void;
+  readonly didFrameNavigate: (
+    event: BrowserViewEvent,
+    url: string,
+    httpResponseCode: number,
+    httpStatusText: string,
+    isMainFrame: boolean,
+  ) => void;
+  readonly didFrameFinishLoad: () => void;
+  readonly didFinishLoad: () => void;
+  readonly didNavigate: (
+    event: BrowserViewEvent,
+    url: string,
+    httpResponseCode: number,
+    httpStatusText: string,
+  ) => void;
+  readonly didStartNavigation: (
+    event: BrowserViewEvent,
+    url: string,
+    isInPlace: boolean,
+    isMainFrame: boolean,
+  ) => void;
+  readonly didNavigateInPage: (
+    event: BrowserViewEvent,
+    url: string,
+    isMainFrame: boolean,
+  ) => void;
+  readonly foundInPage: (
+    event: BrowserViewEvent,
+    result: BrowserViewFoundInPageResult,
+  ) => void;
+  readonly pageTitleUpdated: () => void;
+  readonly paint: () => void;
+  readonly renderProcessGone: (
+    event: BrowserViewEvent,
+    details: BrowserViewRenderProcessGoneDetails,
+  ) => void;
 }
 
 interface BrowserViewPopupEntry {
@@ -605,7 +472,10 @@ interface BrowserViewPopupEntry {
 
 interface BrowserViewPopupListeners {
   readonly closed: () => void;
-  readonly renderProcessGone: (...args: unknown[]) => void;
+  readonly renderProcessGone: (
+    event: BrowserViewEvent,
+    details: BrowserViewRenderProcessGoneDetails,
+  ) => void;
 }
 
 export class BrowserViewManager {
@@ -704,10 +574,7 @@ export class BrowserViewManager {
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
-  /** Presentation-only index. Native lifecycle operations never route here. */
-  private readonly entriesByKey = new Map<string, BrowserViewEntry>();
-  /** Authoritative guest registry; native keys are hostId/sessionId/tabId. */
-  private readonly entriesByGuestKey = new Map<string, BrowserViewEntry>();
+  private readonly entries = new BrowserViewEntryRegistry<BrowserViewEntry>();
   private readonly popupEntriesByWebContentsId = new Map<
     number,
     BrowserViewPopupEntry
@@ -728,8 +595,16 @@ export class BrowserViewManager {
     string,
     {
       readonly webContents: BrowserViewHostWebContents;
-      readonly onNavigate: (...args: unknown[]) => void;
-      readonly onGone: (...args: unknown[]) => void;
+      readonly onNavigate: (
+        event: BrowserViewEvent,
+        url: string,
+        isInPlace: boolean,
+        isMainFrame: boolean,
+      ) => void;
+      readonly onGone: (
+        event: BrowserViewEvent,
+        details: BrowserViewRenderProcessGoneDetails,
+      ) => void;
     }
   >();
   private readonly recentPrimaryProfileOrigins: BrowserPrimaryProfileRecentOrigin[] =
@@ -807,7 +682,7 @@ export class BrowserViewManager {
   upsertTile(windowId: string, input: BrowserViewTileUpsert): void {
     const key = { ...input, windowId };
     const keyId = entryKeyId(key);
-    const presentedEntry = this.entriesByKey.get(keyId);
+    const presentedEntry = this.entries.getSurfaceByKey(keyId);
     if (presentedEntry?.identity.kind === "native") {
       log.warn("[browser-view] unmanaged upsert rejected for native surface", {
         keyId,
@@ -833,7 +708,7 @@ export class BrowserViewManager {
     if (entry.surface === null || entryKeyId(entry.surface) !== keyId) {
       this.rekeyEntry(entry, key);
     } else {
-      this.entriesByKey.set(keyId, entry);
+      this.entries.bindSurface(entry, key);
     }
 
     entry.desiredVisible = input.visible;
@@ -867,7 +742,7 @@ export class BrowserViewManager {
   ): Promise<BrowserViewProvisionedTab> {
     const startedAt = Date.now();
     const guestKey = nativeGuestKey(input);
-    const existing = this.entriesByGuestKey.get(guestKey);
+    const existing = this.entries.getGuest(guestKey);
     if (existing !== undefined) {
       if (existing.identity.kind !== "native") {
         throw new Error(`Native browser tab key collided with ${guestKey}.`);
@@ -877,7 +752,7 @@ export class BrowserViewManager {
           this.ensureTab(windowId, input),
         );
       }
-      return existing.identity.provisioned.then(() =>
+      return existing.identity.lifecycle.provisioned.then(() =>
         this.resolveNativeTabProvisioned(existing),
       );
     }
@@ -891,13 +766,13 @@ export class BrowserViewManager {
       tabId: input.tabId,
       durationMs: 0,
     });
-    const provisioning = Promise.withResolvers<BrowserViewProvisionedTab>();
+    const lifecycle = new NativeBrowserViewLifecycle();
     const identity: BrowserViewGuestIdentity = {
       kind: "native",
       key: toNativeTabKey(input),
       registrationId: randomUUID(),
       lifecycleOwnerWindowId: windowId,
-      provisioned: provisioning.promise,
+      lifecycle,
     };
     const ownerWindow = this.getWindow(windowId);
     if (ownerWindow !== null) {
@@ -919,25 +794,17 @@ export class BrowserViewManager {
       tabId: input.tabId,
       durationMs: Date.now() - startedAt,
     });
-    void this.settleNativeTabInitialization(
-      entry,
-      input,
-      startedAt,
-      provisioning.resolve,
-      provisioning.reject,
-    );
-    return provisioning.promise;
+    void this.settleNativeTabInitialization(entry, input, startedAt);
+    return lifecycle.provisioned;
   }
 
   private async settleNativeTabInitialization(
     entry: BrowserViewEntry,
     input: BrowserViewEnsureTab,
     startedAt: number,
-    resolve: (provisioned: BrowserViewProvisionedTab) => void,
-    reject: (error: unknown) => void,
   ): Promise<void> {
     try {
-      resolve(await this.initializeNativeTab(entry, input, startedAt));
+      await this.initializeNativeTab(entry, input, startedAt);
     } catch (error) {
       log.info("[browser-view] native tab ensure stage", {
         kind: "electron_tab_create",
@@ -959,29 +826,27 @@ export class BrowserViewManager {
           tabId: input.tabId,
         });
       }
-      reject(error);
+      if (entry.identity.kind === "native") {
+        entry.identity.lifecycle.failProvisioning(error);
+      }
     }
   }
 
   acceptTab(input: BrowserViewNativeTabCapability): Promise<void> {
     const entry = this.findExactNativeEntry(input);
-    if (entry === null || entry.nativeActivation === null) {
+    if (entry === null || entry.identity.kind !== "native") {
       return Promise.reject(
         new Error("Electron browser tab is not provisioned."),
       );
     }
-    const existing = entry.nativeActivation.promise;
-    if (existing !== null) return existing;
-    const activation = this.activateNativeTab(entry);
-    entry.nativeActivation.promise = activation;
-    return activation;
+    return entry.identity.lifecycle.accept(() => this.activateNativeTab(entry));
   }
 
   attachSurface(windowId: string, input: BrowserViewAttachSurface): boolean {
     const entry = this.findExactNativeEntry(input);
     if (entry === null) return false;
     const surface = { ...input.surface, windowId };
-    const occupant = this.entriesByKey.get(entryKeyId(surface));
+    const occupant = this.entries.getSurfaceByKey(entryKeyId(surface));
     if (occupant !== undefined && occupant !== entry) {
       log.warn("[browser-view] native surface attachment rejected: occupied", {
         guestKey: guestEntryKey(entry),
@@ -1021,7 +886,7 @@ export class BrowserViewManager {
   }
 
   async releaseTab(input: BrowserViewReleaseTab): Promise<boolean> {
-    const entry = this.entriesByGuestKey.get(nativeGuestKey(input));
+    const entry = this.entries.getGuest(nativeGuestKey(input));
     if (
       entry?.identity.kind !== "native" ||
       entry.identity.registrationId !== input.registrationId
@@ -1086,7 +951,7 @@ export class BrowserViewManager {
         ? null
         : await debugSession.installScriptBeforeNavigation(seedScript);
     await debugSession.enableAfterCommit();
-    entry.nativeActivation = { seedScriptId, promise: null };
+    const provisioned = this.resolveNativeTabProvisioned(entry);
     log.info("[browser-view] native tab ensure stage", {
       kind: "electron_tab_create",
       stage: "manager_settled",
@@ -1096,21 +961,22 @@ export class BrowserViewManager {
       tabId: input.tabId,
       durationMs: Date.now() - startedAt,
     });
-    return this.resolveNativeTabProvisioned(entry);
+    entry.identity.lifecycle.completeProvisioning(provisioned, seedScriptId);
+    return provisioned;
   }
 
   private async activateNativeTab(entry: BrowserViewEntry): Promise<void> {
-    const activation = entry.nativeActivation;
-    if (entry.identity.kind !== "native" || activation === null) {
+    if (entry.identity.kind !== "native") {
       throw new Error("Cannot activate an unprovisioned browser guest.");
     }
     try {
       await this.navigate(entry, entry.requestedUrl, true);
     } finally {
-      if (activation.seedScriptId !== null) {
+      const seedScriptId = entry.identity.lifecycle.takeSeedScriptId();
+      if (seedScriptId !== null) {
         try {
           await this.ensureDebugSession(entry).removeScriptBeforeNavigation(
-            activation.seedScriptId,
+            seedScriptId,
           );
         } catch (error) {
           log.warn("[browser-view] failed to remove native tab seed script", {
@@ -1119,7 +985,6 @@ export class BrowserViewManager {
             tabId: entry.identity.key.tabId,
           });
         }
-        activation.seedScriptId = null;
       }
     }
   }
@@ -1187,7 +1052,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewStorageStateCapture,
   ): Promise<BrowserViewStorageStateCaptureResult> {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       throw new Error("Browser view tile is not available for storage capture");
     }
@@ -1204,7 +1071,9 @@ export class BrowserViewManager {
   }
 
   updateBounds(windowId: string, input: BrowserViewBoundsUpdate): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     const bounds = normalizeBounds(input.bounds);
     entry.bounds = bounds;
@@ -1223,7 +1092,7 @@ export class BrowserViewManager {
 
   releaseTile(windowId: string, input: BrowserViewTileKey): void {
     const keyId = entryKeyId({ ...input, windowId });
-    const entry = this.entriesByKey.get(keyId);
+    const entry = this.entries.getSurfaceByKey(keyId);
     if (entry === undefined || entry.identity.kind !== "unmanaged") return;
     this.detachEntrySurface(entry, "preserve-geometry");
   }
@@ -1237,7 +1106,6 @@ export class BrowserViewManager {
     const keyId = entryKeyId(surface);
     this.cancelDebugSnapshot(entry);
     this.tileFrames.detach(keyId);
-    this.entriesByKey.delete(keyId);
     this.endAnnotationSession(entry, "tile-close");
     for (const overlayId of entry.overlayOwnerIds) {
       const keys = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
@@ -1259,7 +1127,7 @@ export class BrowserViewManager {
       window.contentView.removeChildView(entry.view);
     }
     entry.parentWindowId = null;
-    entry.surface = null;
+    this.entries.detachSurface(entry);
     entry.surfaceBindingId = null;
     if (geometry === "clear-geometry") {
       entry.bounds = null;
@@ -1333,7 +1201,9 @@ export class BrowserViewManager {
   }
 
   findInPage(windowId: string, input: BrowserViewFindRequest): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     if (input.query.length === 0) {
       this.stopFindInPage(windowId, input);
@@ -1392,7 +1262,9 @@ export class BrowserViewManager {
   }
 
   stopFindInPage(windowId: string, input: BrowserViewFindStop): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     entry.findState = {
       appRequestId: input.requestId,
@@ -1435,7 +1307,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewTileKey & { readonly certificateErrorId: string },
   ): boolean {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined || entry.certificateError === null) return false;
     return (
       entry.certificateError.certificateErrorId === input.certificateErrorId
@@ -1446,7 +1320,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewTileKey & { readonly certificateErrorId: string },
   ): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     if (
       entry.certificateError?.certificateErrorId !== input.certificateErrorId
@@ -1480,7 +1356,7 @@ export class BrowserViewManager {
     // An overlay scan can race tile teardown. Log the all-missing case once
     // per scan rather than once per tile.
     const matchedCount = nextKeyIds.filter((keyId) =>
-      this.entriesByKey.has(keyId),
+      this.entries.hasSurfaceKey(keyId),
     ).length;
     if (nextKeyIds.length > 0 && matchedCount === 0) {
       log.info("[browser-view] occlude for overlay: no matching entries", {
@@ -1577,7 +1453,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewTileKey,
   ): Promise<BrowserViewCapturePageResult> {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       throw new Error("Browser view tile is not available for capture");
     }
@@ -1596,7 +1474,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewTileKey,
   ): BrowserViewDebugSnapshotChange {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       return {
         ...input,
@@ -1611,7 +1491,9 @@ export class BrowserViewManager {
   }
 
   clearDebugEvents(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     if (entry.debugSession === null) {
       this.queueDebugSnapshot(entry);
@@ -1624,7 +1506,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserAnnotationSetTargetChatLabelInput,
   ): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     const session = entry.annotationSession;
     if (session === null || !session.isActive()) return;
@@ -1635,7 +1519,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewTileKey,
   ): Promise<BrowserAnnotationStartResult> {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       return Promise.resolve({ ok: false, reason: "tile-not-found" });
     }
@@ -1751,7 +1637,9 @@ export class BrowserViewManager {
   }
 
   cancelAnnotation(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     this.endAnnotationSession(entry, "cancelled");
   }
@@ -1778,29 +1666,28 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewControlGrant,
   ): BrowserViewControlGrantResult {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       return { status: "denied", reason: "Browser tile is not available." };
     }
-    if (entry.control !== null && entry.control.controlId !== input.controlId) {
+    if (entry.control !== null && !entry.control.matches(input.controlId)) {
       return { status: "queued", controlId: input.controlId };
     }
-    entry.control = {
-      controlId: input.controlId,
-      chatId: input.chatId,
-      agentRunId: input.agentRunId,
-      agentLabel: input.agentLabel,
-      origin: input.origin,
-      expiresAt: input.expiresAt,
-      generation: 0,
-      queue: Promise.resolve(null),
-      pendingSensitiveApprovals: new Map(),
-    };
+    entry.control?.cancel();
+    entry.control = new BrowserViewControlSession(
+      input.controlId,
+      input.expiresAt,
+      entry.view.webContents.debugger,
+    );
     return { status: "granted", controlId: input.controlId };
   }
 
   revokeControl(windowId: string, input: BrowserViewControlRevoke): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) return;
     this.cancelControl(entry, input.reason, input.controlId);
   }
@@ -1809,7 +1696,9 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewControlAction,
   ): Promise<BrowserViewControlActionResult> {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...input, windowId }),
+    );
     if (entry === undefined) {
       return Promise.resolve({
         status: "denied",
@@ -1817,51 +1706,20 @@ export class BrowserViewManager {
       });
     }
     const control = entry.control;
-    if (control === null || control.controlId !== input.controlId) {
+    if (control === null || !control.matches(input.controlId)) {
       return Promise.resolve({
         status: "denied",
         reason: "Browser control lock is not active.",
       });
     }
-    if (control.expiresAt <= Date.now()) {
+    if (control.isExpired(Date.now())) {
       this.cancelControl(entry, "control grant expired", input.controlId);
       return Promise.resolve({
         status: "cancelled",
         reason: "control grant expired",
       });
     }
-    const generation = control.generation;
-    const run = control.queue.then(async () => {
-      const latest = entry.control;
-      if (
-        latest === null ||
-        latest.controlId !== input.controlId ||
-        latest.generation !== generation
-      ) {
-        return {
-          status: "cancelled" as const,
-          reason: "user took over",
-        };
-      }
-      const result = await this.sendControlCommand(entry, input);
-      const after = entry.control;
-      if (
-        after === null ||
-        after.controlId !== input.controlId ||
-        after.generation !== generation
-      ) {
-        return {
-          status: "cancelled" as const,
-          reason: "user took over",
-        };
-      }
-      return result;
-    });
-    control.queue = run.catch(() => null);
-    return run.catch((error: unknown) => ({
-      status: "denied",
-      reason: error instanceof Error ? error.message : String(error),
-    }));
+    return control.execute(input);
   }
 
   /**
@@ -1984,7 +1842,7 @@ export class BrowserViewManager {
       this.evictionSweepTimer = null;
     }
     this.tileFrames.detachAll();
-    for (const entry of Array.from(this.entriesByGuestKey.values())) {
+    for (const entry of Array.from(this.entries.guestValues())) {
       void this.closeEntry(entry, "gui-quit");
     }
     for (const popup of Array.from(this.popupEntriesByWebContentsId.values())) {
@@ -2004,14 +1862,12 @@ export class BrowserViewManager {
 
   async drainBrowserHandoffs(): Promise<void> {
     await Promise.all(
-      Array.from(this.entriesByGuestKey.values())
+      Array.from(this.entries.guestValues())
         .filter(
           (entry) =>
             entry.status !== "dead" &&
             entry.identity.kind === "native" &&
-            entry.nativeActivation !== null &&
-            entry.nativeActivation.promise !== null &&
-            !entry.handedOff,
+            entry.identity.lifecycle.canHandoff,
         )
         .map((entry) => this.pushElectronTabHandoff(entry, "gui-quit")),
     );
@@ -2028,7 +1884,7 @@ export class BrowserViewManager {
     readonly overlayOwnerIds: readonly string[];
     readonly overlaySnapshotStale: boolean;
   }> {
-    return Array.from(this.entriesByKey.values()).map((entry) => ({
+    return Array.from(this.entries.surfaceValues()).map((entry) => ({
       key: requireSurface(entry),
       webContentsId: entry.view.webContents.id,
       parentWindowId: entry.parentWindowId,
@@ -2052,11 +1908,15 @@ export class BrowserViewManager {
     const entry: BrowserViewEntry = {
       surface,
       surfaceBindingId: null,
+      guestKey:
+        identity.kind === "native"
+          ? nativeGuestKey(identity.key)
+          : unmanagedGuestKey(identity.pageSessionId),
       identity,
       view,
       listeners: {
-        beforeInputEvent: (...args) => {
-          this.handleBeforeInputEvent(entry, args);
+        beforeInputEvent: (event, input) => {
+          this.handleBeforeInputEvent(entry, event, input);
         },
         inputEvent: () => {
           this.handleNativeUserInput(entry, "user took over");
@@ -2072,11 +1932,11 @@ export class BrowserViewManager {
             "user took over via native dialog or focus change",
           );
         },
-        didCreateWindow: (...args) => {
-          this.handleDidCreateWindow(entry, args);
+        didCreateWindow: (window) => {
+          this.handleDidCreateWindow(entry, window);
         },
-        didFrameNavigate: (...args) => {
-          this.handleCommittedNavigation(entry, args);
+        didFrameNavigate: (_event, url, _code, _text, isMainFrame) => {
+          this.handleCommittedNavigation(entry, url, isMainFrame);
         },
         didFrameFinishLoad: () => {
           if (entry.internalNavigation) return;
@@ -2087,17 +1947,17 @@ export class BrowserViewManager {
           this.invalidateOverlaySnapshot(entry, "finish-load");
           this.rememberPrimaryProfileOrigin(entry);
         },
-        didNavigate: (...args) => {
-          this.handleCommittedNavigation(entry, args);
+        didNavigate: (_event, url) => {
+          this.handleCommittedNavigation(entry, url, true);
         },
-        didStartNavigation: (...args) => {
-          this.handleViewStartNavigation(entry, args);
+        didStartNavigation: (_event, _url, isInPlace, isMainFrame) => {
+          this.handleViewStartNavigation(entry, isInPlace, isMainFrame);
         },
-        didNavigateInPage: (...args) => {
-          this.handleInPageNavigation(entry, args);
+        didNavigateInPage: (_event, url, isMainFrame) => {
+          this.handleInPageNavigation(entry, url, isMainFrame);
         },
-        foundInPage: (...args) => {
-          this.handleFoundInPage(entry, args);
+        foundInPage: (_event, result) => {
+          this.handleFoundInPage(entry, result);
         },
         pageTitleUpdated: () => {
           if (entry.internalNavigation) return;
@@ -2108,8 +1968,8 @@ export class BrowserViewManager {
         paint: () => {
           this.invalidateOverlaySnapshot(entry, "paint");
         },
-        renderProcessGone: (...args) => {
-          this.handleRenderProcessGone(entry, args);
+        renderProcessGone: (_event, details) => {
+          this.handleRenderProcessGone(entry, details.reason);
         },
       },
       parentWindowId: null,
@@ -2140,11 +2000,8 @@ export class BrowserViewManager {
       lastLoggedVisible: null,
       rendererResetPending: false,
       control: null,
-      handedOff: false,
-      pendingHandoffCapture: null,
       closePromise: null,
       internalNavigation: false,
-      nativeActivation: null,
     };
     const webContents = view.webContents;
     webContents.setWindowOpenHandler((details) =>
@@ -2165,10 +2022,7 @@ export class BrowserViewManager {
     webContents.on("page-title-updated", entry.listeners.pageTitleUpdated);
     webContents.on("paint", entry.listeners.paint);
     webContents.on("render-process-gone", entry.listeners.renderProcessGone);
-    if (surface !== null) {
-      this.entriesByKey.set(entryKeyId(surface), entry);
-    }
-    this.entriesByGuestKey.set(guestEntryKey(entry), entry);
+    this.entries.register(entry);
     if (navigateNow) void this.navigate(entry, requestedUrl, false);
     log.info("[browser-view] view created", {
       guestKey: guestEntryKey(entry),
@@ -2182,15 +2036,13 @@ export class BrowserViewManager {
   private findTransferableEntry(
     key: BrowserViewEntryKey,
   ): BrowserViewEntry | null {
-    return (
-      this.entriesByGuestKey.get(unmanagedGuestKey(key.pageSessionId)) ?? null
-    );
+    return this.entries.getGuest(unmanagedGuestKey(key.pageSessionId)) ?? null;
   }
 
   private findExactNativeEntry(
     capability: BrowserViewNativeTabCapability,
   ): BrowserViewEntry | null {
-    const entry = this.entriesByGuestKey.get(nativeGuestKey(capability));
+    const entry = this.entries.getGuest(nativeGuestKey(capability));
     if (entry?.identity.kind !== "native") return null;
     if (entry.identity.registrationId !== capability.registrationId)
       return null;
@@ -2202,7 +2054,9 @@ export class BrowserViewManager {
     windowId: string,
     key: BrowserViewTileKey,
   ): BrowserViewEntry | null {
-    const entry = this.entriesByKey.get(entryKeyId({ ...key, windowId }));
+    const entry = this.entries.getSurfaceByKey(
+      entryKeyId({ ...key, windowId }),
+    );
     return entry?.identity.kind === "unmanaged" ? entry : null;
   }
 
@@ -2216,10 +2070,8 @@ export class BrowserViewManager {
     // next visibility pass re-attaches under the new key (BT-202).
     if (previousKeyId !== null) {
       this.tileFrames.detach(previousKeyId);
-      this.entriesByKey.delete(previousKeyId);
     }
-    entry.surface = key;
-    this.entriesByKey.set(nextKeyId, entry);
+    this.entries.bindSurface(entry, key);
     for (const overlayId of entry.overlayOwnerIds) {
       const overlayKeyIds = this.overlayEntryKeysByOwnerId.get(overlayId);
       if (overlayKeyIds === undefined) continue;
@@ -2264,22 +2116,21 @@ export class BrowserViewManager {
 
   private handleViewStartNavigation(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    isInPlace: boolean,
+    isMainFrame: boolean,
   ): void {
     if (entry.internalNavigation) return;
-    const flags = readHostNavigationFlags(args);
-    if (!flags.isMainFrame || flags.isInPlace) return;
+    if (!isMainFrame || isInPlace) return;
     this.endAnnotationSession(entry, "navigation");
   }
 
   private handleCommittedNavigation(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    url: string,
+    isMainFrame: boolean,
   ): void {
     if (entry.internalNavigation) return;
-    const isMainFrame = readMainFrameFlag(args);
     if (!isMainFrame) return;
-    const url = readNavigationUrl(args) ?? entry.view.webContents.getURL();
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
@@ -2294,11 +2145,11 @@ export class BrowserViewManager {
 
   private handleInPageNavigation(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    url: string,
+    isMainFrame: boolean,
   ): void {
     if (entry.internalNavigation) return;
-    if (!readInPageMainFrameFlag(args)) return;
-    const url = readNavigationUrl(args) ?? entry.view.webContents.getURL();
+    if (!isMainFrame) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
     entry.currentTitle = entry.view.webContents.getTitle();
@@ -2311,9 +2162,8 @@ export class BrowserViewManager {
 
   private handleRenderProcessGone(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    detail: string,
   ): void {
-    const detail = readRenderGoneReason(args);
     this.endAnnotationSession(entry, "crash");
     this.cancelControl(entry, "renderer process gone", null);
     this.invalidateOverlaySnapshot(entry, "render-process-gone");
@@ -2359,10 +2209,8 @@ export class BrowserViewManager {
 
   private handleFoundInPage(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    result: BrowserViewFoundInPageResult,
   ): void {
-    const result = readFoundInPageResult(args);
-    if (result === null) return;
     const session = entry.findState.sessionsByElectronRequestId.get(
       result.requestId,
     );
@@ -2372,8 +2220,8 @@ export class BrowserViewManager {
       query: session.query,
       matchCase: session.matchCase,
       status: "ready",
-      current: result.current,
-      total: result.total,
+      current: result.matches > 0 ? result.activeMatchOrdinal : 0,
+      total: result.matches,
       finalUpdate: result.finalUpdate,
       errorMessage: null,
     });
@@ -2381,25 +2229,25 @@ export class BrowserViewManager {
 
   private handleBeforeInputEvent(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    event: BrowserViewEvent,
+    input: BrowserViewInput,
   ): void {
-    const input = readBeforeInput(args);
-    if (input === null) return;
+    if (input.type !== "keyDown") return;
     // BT-302: reserved app chords win before the guest sees them. The chord
     // set is registered by the renderer; only interceptable+forwardable
     // chords are claimed, so pages keep everything the app cannot replay.
     const reserved = this.matchReservedChord(input);
     if (reserved !== null) {
-      preventInputDefault(args);
+      event.preventDefault();
       this.handleNativeUserInput(entry, "reserved app chord");
       this.forwardReservedChordToHostWindow(entry, reserved);
       return;
     }
     this.handleNativeUserInput(entry, "user took over");
-    if (!input.modifier) return;
+    if (!(input.control || input.meta || input.shift || input.alt)) return;
     const step = browserZoomStepForKey(input.key);
     if (step === null) return;
-    preventInputDefault(args);
+    event.preventDefault();
     if (step === 0) {
       this.trySetEntryZoom(entry, 1);
       return;
@@ -2407,21 +2255,15 @@ export class BrowserViewManager {
     this.applyZoomStep(entry, step);
   }
 
-  private matchReservedChord(input: {
-    readonly key: string;
-    readonly control: boolean;
-    readonly meta: boolean;
-    readonly shift: boolean;
-    readonly alt: boolean;
-  }): ReservedChord | null {
+  private matchReservedChord(input: BrowserViewInput): ReservedChord | null {
     if (this.reservedChords.length === 0) return null;
     const event = reservedChordFromKeyEvent(
       {
         key: input.key,
-        control: input.control,
-        meta: input.meta,
-        shift: input.shift,
-        alt: input.alt,
+        control: input.control === true,
+        meta: input.meta === true,
+        shift: input.shift === true,
+        alt: input.alt === true,
       },
       this.hostPlatform,
     );
@@ -2510,18 +2352,11 @@ export class BrowserViewManager {
 
   private handleDidCreateWindow(
     entry: BrowserViewEntry,
-    args: readonly unknown[],
+    window: BrowserViewPopupWindow,
   ): void {
-    const window = readPopupWindow(args);
     const surface = entry.surface;
     if (surface === null) {
-      window?.close();
-      return;
-    }
-    if (window === null) {
-      log.warn("[browser-view] popup created without trackable window", {
-        webContentsId: entry.view.webContents.id,
-      });
+      window.close();
       return;
     }
     this.registerPopupWebContents(window.webContents);
@@ -2534,10 +2369,10 @@ export class BrowserViewManager {
         closed: () => {
           this.closePopupEntry(popupEntry, false);
         },
-        renderProcessGone: (...renderArgs) => {
+        renderProcessGone: (_event, details) => {
           log.warn("[browser-view] popup renderer gone", {
             popupId,
-            reason: readRenderGoneReason(renderArgs),
+            reason: details.reason,
           });
         },
       },
@@ -2632,7 +2467,7 @@ export class BrowserViewManager {
   private findEntryByWebContentsId(
     webContentsId: number,
   ): BrowserViewEntry | null {
-    for (const entry of this.entriesByGuestKey.values()) {
+    for (const entry of this.entries.guestValues()) {
       if (entry.view.webContents.id === webContentsId) return entry;
     }
     return null;
@@ -2642,7 +2477,7 @@ export class BrowserViewManager {
     overlayId: string,
     keyId: string,
   ): Promise<BrowserViewOverlaySnapshot | null> {
-    const entry = this.entriesByKey.get(keyId);
+    const entry = this.entries.getSurfaceByKey(keyId);
     if (entry === undefined) return null;
     if (entry.overlayOwnerIds.includes(overlayId)) return null;
 
@@ -2676,7 +2511,7 @@ export class BrowserViewManager {
 
     const activeKeyIds = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
     if (!activeKeyIds.includes(keyId)) return null;
-    const currentEntry = this.entriesByKey.get(keyId);
+    const currentEntry = this.entries.getSurfaceByKey(keyId);
     if (currentEntry === undefined) return null;
 
     currentEntry.overlayOwnerIds.push(overlayId);
@@ -2712,7 +2547,7 @@ export class BrowserViewManager {
   paintAckOverlay(overlayId: string): void {
     const keyIds = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
     for (const keyId of keyIds) {
-      const entry = this.entriesByKey.get(keyId);
+      const entry = this.entries.getSurfaceByKey(keyId);
       if (entry === undefined) continue;
       if (!entry.overlayOwnerIds.includes(overlayId)) continue;
       if (!entry.overlayAwaitingPaintAck) continue;
@@ -2760,7 +2595,7 @@ export class BrowserViewManager {
       .slice()
       .reverse()
       .flatMap((keyId): BrowserViewTileKey[] => {
-        const entry = this.entriesByKey.get(keyId);
+        const entry = this.entries.getSurfaceByKey(keyId);
         if (entry === undefined) return [];
         entry.overlayOwnerIds = entry.overlayOwnerIds.filter(
           (ownerId) => ownerId !== overlayId,
@@ -2893,7 +2728,7 @@ export class BrowserViewManager {
     if (this.pendingDebugSnapshotsByKey.has(keyId)) return;
     const task = this.scheduleDebugSnapshot(() => {
       this.pendingDebugSnapshotsByKey.delete(keyId);
-      if (this.entriesByKey.get(keyId) !== entry) return;
+      if (this.entries.getSurfaceByKey(keyId) !== entry) return;
       this.emitDebugSnapshotNow(entry);
     });
     this.pendingDebugSnapshotsByKey.set(keyId, task);
@@ -2968,7 +2803,7 @@ export class BrowserViewManager {
   }
 
   private isEntryCurrent(entry: BrowserViewEntry): boolean {
-    return this.entriesByGuestKey.get(guestEntryKey(entry)) === entry;
+    return this.entries.getGuest(guestEntryKey(entry)) === entry;
   }
 
   private readLiveWebContents(
@@ -3175,17 +3010,20 @@ export class BrowserViewManager {
     if (this.hostWindowResetListenersByWindowId.has(windowId)) return;
     const webContents = window.webContents;
     if (webContents === null) return;
-    const onNavigate = (...args: unknown[]): void => {
-      const { isMainFrame, isInPlace } = readHostNavigationFlags(args);
+    const onNavigate = (
+      _event: BrowserViewEvent,
+      _url: string,
+      isInPlace: boolean,
+      isMainFrame: boolean,
+    ): void => {
       if (!isMainFrame || isInPlace) return;
       this.handleHostWindowRendererReset(windowId, "navigation", null);
     };
-    const onGone = (...args: unknown[]): void => {
-      this.handleHostWindowRendererReset(
-        windowId,
-        "crash",
-        readRenderGoneReason(args),
-      );
+    const onGone = (
+      _event: BrowserViewEvent,
+      details: BrowserViewRenderProcessGoneDetails,
+    ): void => {
+      this.handleHostWindowRendererReset(windowId, "crash", details.reason);
     };
     webContents.on("did-start-navigation", onNavigate);
     webContents.on("render-process-gone", onGone);
@@ -3197,7 +3035,7 @@ export class BrowserViewManager {
   }
 
   private detachHostWindowResetListenerIfUnused(windowId: string): void {
-    const stillUsed = Array.from(this.entriesByGuestKey.values()).some(
+    const stillUsed = Array.from(this.entries.guestValues()).some(
       (entry) =>
         entry.surface?.windowId === windowId ||
         (entry.identity.kind === "native" &&
@@ -3217,19 +3055,18 @@ export class BrowserViewManager {
     detail: string | null,
   ): void {
     let affectedCount = 0;
-    for (const entry of this.entriesByGuestKey.values()) {
+    for (const entry of this.entries.guestValues()) {
       if (
         entry.identity.kind !== "native" ||
         entry.identity.lifecycleOwnerWindowId !== windowId ||
-        (entry.nativeActivation !== null &&
-          entry.nativeActivation.promise !== null)
+        entry.identity.lifecycle.accepted
       ) {
         continue;
       }
       affectedCount += 1;
       void this.closeEntry(entry, null);
     }
-    for (const entry of this.entriesByKey.values()) {
+    for (const entry of this.entries.surfaceValues()) {
       if (entry.surface?.windowId !== windowId) continue;
       if (entry.rendererResetPending) continue;
       entry.rendererResetPending = true;
@@ -3338,7 +3175,7 @@ export class BrowserViewManager {
 
   private runEvictionSweep(): void {
     const hidden: BrowserViewEntry[] = [];
-    for (const entry of this.entriesByGuestKey.values()) {
+    for (const entry of this.entries.guestValues()) {
       if (entry.lastLoggedVisible === true) continue;
       if (entry.status === "dead") continue;
       if (this.isEntryEvictionExempt(entry)) continue;
@@ -3374,7 +3211,7 @@ export class BrowserViewManager {
       string,
       { x: number; y: number; width: number; height: number }
     > = {};
-    for (const [keyId, entry] of this.entriesByKey) {
+    for (const [keyId, entry] of this.entries.surfaceEntries()) {
       if (entry.lastAppliedBounds === null) continue;
       out[keyId] = { ...entry.lastAppliedBounds };
     }
@@ -3384,7 +3221,7 @@ export class BrowserViewManager {
   /** BT-501: entries currently parked under an overlay owner. */
   debugOccludedKeyIds(): readonly string[] {
     const out: string[] = [];
-    for (const [keyId, entry] of this.entriesByKey) {
+    for (const [keyId, entry] of this.entries.surfaceEntries()) {
       if (entry.overlayOwnerIds.length > 0) out.push(keyId);
     }
     return out;
@@ -3502,7 +3339,7 @@ export class BrowserViewManager {
   }
 
   private reconcileWindowVisibility(): void {
-    for (const entry of Array.from(this.entriesByGuestKey.values())) {
+    for (const entry of Array.from(this.entries.guestValues())) {
       const surface = entry.surface;
       if (surface === null && this.pipCaptureEntry === entry) {
         const captureWindow =
@@ -3514,7 +3351,7 @@ export class BrowserViewManager {
       }
       if (
         surface === null ||
-        this.entriesByKey.get(entryKeyId(surface)) !== entry
+        this.entries.getSurfaceByKey(entryKeyId(surface)) !== entry
       ) {
         entry.desiredVisible = false;
         entry.parentWindowId = null;
@@ -3555,12 +3392,13 @@ export class BrowserViewManager {
       handoffReason,
       status: entry.status,
     });
-    if (keyId !== null) this.entriesByKey.delete(keyId);
+    this.destroyDevToolsWindow(entry);
+    this.cancelControl(entry, "browser tile closed", null);
+    this.failPendingAnnotationAttachResultsForEntry(entry);
+    this.entries.detachSurface(entry);
     if (surface !== null) {
       this.detachHostWindowResetListenerIfUnused(surface.windowId);
     }
-    this.destroyDevToolsWindow(entry);
-    this.cancelControl(entry, "browser tile closed", null);
     // Ticket 12 item 2: capture and push before anything below tears the
     // tile down - `webContents` must still be alive for the capture.
     // `entry.status === "dead"` means `handleRenderProcessGone` already
@@ -3571,8 +3409,7 @@ export class BrowserViewManager {
     if (
       handoffReason !== null &&
       entry.identity.kind === "native" &&
-      entry.nativeActivation !== null &&
-      entry.nativeActivation.promise !== null
+      entry.identity.lifecycle.accepted
     ) {
       try {
         await this.pushElectronTabHandoff(
@@ -3589,9 +3426,13 @@ export class BrowserViewManager {
     }
     // A quit drain or a sibling's aggregate handoff can already be reading
     // this guest. Keep the identity reserved until that capture settles.
-    if (entry.pendingHandoffCapture !== null) {
+    const pendingHandoffCapture =
+      entry.identity.kind === "native"
+        ? entry.identity.lifecycle.pendingHandoffCapture
+        : null;
+    if (pendingHandoffCapture !== null) {
       await Promise.race([
-        entry.pendingHandoffCapture,
+        pendingHandoffCapture,
         delay(HANDOFF_CAPTURE_TIMEOUT_MS),
       ]);
     }
@@ -3622,7 +3463,6 @@ export class BrowserViewManager {
     webContents.off("page-title-updated", entry.listeners.pageTitleUpdated);
     webContents.off("paint", entry.listeners.paint);
     webContents.off("render-process-gone", entry.listeners.renderProcessGone);
-    this.failPendingAnnotationAttachResultsForEntry(entry);
     entry.annotationSession?.dispose("tile-close");
     entry.annotationSession = null;
     if (this.pipCaptureEntry === entry) this.pipCaptureEntry = null;
@@ -3630,9 +3470,7 @@ export class BrowserViewManager {
     entry.debugSession = null;
     entry.view.setVisible(false);
     webContents.close();
-    if (this.entriesByGuestKey.get(guestEntryKey(entry)) === entry) {
-      this.entriesByGuestKey.delete(guestEntryKey(entry));
-    }
+    this.entries.remove(entry);
     if (entry.identity.kind === "native") {
       this.detachHostWindowResetListenerIfUnused(
         entry.identity.lifecycleOwnerWindowId,
@@ -3684,26 +3522,24 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
     reason: BrowserViewElectronTabHandoffChange["reason"],
   ): Promise<void> {
-    if (entry.handedOff) return;
     if (entry.identity.kind !== "native") return;
     const identity = entry.identity;
-    entry.handedOff = true;
-    const siblings = Array.from(this.entriesByGuestKey.values()).filter(
+    if (!identity.lifecycle.canHandoff) return;
+    const siblings = Array.from(this.entries.guestValues()).filter(
       (candidate) =>
         candidate !== entry &&
         candidate.identity.kind === "native" &&
         candidate.identity.key.hostId === identity.key.hostId &&
         candidate.identity.key.sessionId === identity.key.sessionId &&
-        candidate.nativeActivation !== null &&
-        candidate.nativeActivation.promise !== null &&
-        !candidate.handedOff,
+        candidate.identity.lifecycle.canHandoff,
     );
     const { promise: aggregationPromise, resolve: resolveAggregation } =
       Promise.withResolvers<void>();
-    entry.pendingHandoffCapture = aggregationPromise;
+    if (!identity.lifecycle.beginHandoffCapture(aggregationPromise)) return;
     for (const sibling of siblings) {
-      sibling.handedOff = true;
-      sibling.pendingHandoffCapture = aggregationPromise;
+      if (sibling.identity.kind === "native") {
+        sibling.identity.lifecycle.beginHandoffCapture(aggregationPromise);
+      }
     }
     const capturedUrl = this.readHandoffUrl(entry);
     const capturedSiblings = siblings.map((sibling) => ({
@@ -3742,12 +3578,10 @@ export class BrowserViewManager {
         reason,
       });
     } finally {
-      if (entry.pendingHandoffCapture === aggregationPromise) {
-        entry.pendingHandoffCapture = null;
-      }
+      identity.lifecycle.finishHandoffCapture(aggregationPromise);
       for (const sibling of siblings) {
-        if (sibling.pendingHandoffCapture === aggregationPromise) {
-          sibling.pendingHandoffCapture = null;
+        if (sibling.identity.kind === "native") {
+          sibling.identity.lifecycle.finishHandoffCapture(aggregationPromise);
         }
       }
       resolveAggregation();
@@ -3796,8 +3630,8 @@ export class BrowserViewManager {
   ): void {
     const control = entry.control;
     if (control === null) return;
-    if (controlId !== null && control.controlId !== controlId) return;
-    control.generation += 1;
+    if (controlId !== null && !control.matches(controlId)) return;
+    control.cancel();
     entry.control = null;
     if (entry.surface === null) return;
     this.notifyControlRevoked(entry.surface.windowId, {
@@ -3811,189 +3645,6 @@ export class BrowserViewManager {
       reason,
     });
   }
-
-  private sendControlCommand(
-    entry: BrowserViewEntry,
-    input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult> {
-    const browserDebugger = entry.view.webContents.debugger;
-    if (!browserDebugger.isAttached()) {
-      browserDebugger.attach("1.3");
-    }
-    if (input.action.kind === "navigate") {
-      return browserDebugger
-        .sendCommand("Page.navigate", { url: input.action.url }, undefined)
-        .then((value) => ({ status: "completed" as const, value }));
-    }
-    if (input.action.kind === "scroll") {
-      return browserDebugger
-        .sendCommand(
-          "Input.dispatchMouseEvent",
-          {
-            type: "mouseWheel",
-            x: 1,
-            y: 1,
-            deltaX: input.action.deltaX,
-            deltaY: input.action.deltaY,
-          },
-          undefined,
-        )
-        .then((value) => ({ status: "completed" as const, value }));
-    }
-    if (input.action.kind === "click") {
-      return this.clickSelector(browserDebugger, input.action.selector).then(
-        (value) => ({ status: "completed" as const, value }),
-      );
-    }
-    return this.typeIntoSelector(entry.control, browserDebugger, input);
-  }
-
-  private async clickSelector(
-    browserDebugger: BrowserViewDebugger,
-    selector: string,
-  ): Promise<unknown> {
-    const point = await this.resolveSelectorCenter(browserDebugger, selector);
-    await browserDebugger.sendCommand(
-      "Input.dispatchMouseEvent",
-      { type: "mouseMoved", x: point.x, y: point.y },
-      undefined,
-    );
-    await browserDebugger.sendCommand(
-      "Input.dispatchMouseEvent",
-      {
-        type: "mousePressed",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        clickCount: 1,
-      },
-      undefined,
-    );
-    return await browserDebugger.sendCommand(
-      "Input.dispatchMouseEvent",
-      {
-        type: "mouseReleased",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        clickCount: 1,
-      },
-      undefined,
-    );
-  }
-
-  private async typeIntoSelector(
-    control: BrowserViewControlState | null,
-    browserDebugger: BrowserViewDebugger,
-    input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult> {
-    if (control === null || input.action.kind !== "type") {
-      return {
-        status: "cancelled",
-        reason: "Browser control lock is not active.",
-      };
-    }
-    const target = await this.focusSelectorForTyping(
-      browserDebugger,
-      input.action.selector,
-    );
-    if (target.sensitive) {
-      const approval = this.consumeSensitiveApproval(control, input);
-      if (!approval) {
-        const approvalId = randomUUID();
-        control.pendingSensitiveApprovals.set(approvalId, {
-          actionId: input.actionId,
-          action: input.action,
-        });
-        return {
-          status: "needs-approval",
-          approvalId,
-          reason: "Typing into a password field requires explicit approval.",
-        };
-      }
-    }
-    const value = await browserDebugger.sendCommand(
-      "Input.insertText",
-      { text: input.action.text },
-      undefined,
-    );
-    return { status: "completed", value };
-  }
-
-  private consumeSensitiveApproval(
-    control: BrowserViewControlState,
-    input: BrowserViewControlAction,
-  ): boolean {
-    if (input.sensitiveApprovalId === null || input.action.kind !== "type") {
-      return false;
-    }
-    const approval = control.pendingSensitiveApprovals.get(
-      input.sensitiveApprovalId,
-    );
-    if (approval === undefined) return false;
-    if (
-      approval.actionId !== input.actionId ||
-      !browserViewControlActionsEqual(approval.action, input.action)
-    ) {
-      return false;
-    }
-    control.pendingSensitiveApprovals.delete(input.sensitiveApprovalId);
-    return true;
-  }
-
-  private async resolveSelectorCenter(
-    browserDebugger: BrowserViewDebugger,
-    selector: string,
-  ): Promise<{ readonly x: number; readonly y: number }> {
-    const result = await browserDebugger.sendCommand(
-      "Runtime.evaluate",
-      {
-        expression: selectorCenterExpression(selector),
-        returnByValue: true,
-      },
-      undefined,
-    );
-    if (!isRecord(result)) {
-      throw new Error("Could not resolve selector center.");
-    }
-    const payload = result.result;
-    if (!isRecord(payload) || !isRecord(payload.value)) {
-      throw new Error("Could not resolve selector center.");
-    }
-    const x = payload.value.x;
-    const y = payload.value.y;
-    if (typeof x !== "number" || typeof y !== "number") {
-      throw new Error("Could not resolve selector center.");
-    }
-    return { x, y };
-  }
-
-  private async focusSelectorForTyping(
-    browserDebugger: BrowserViewDebugger,
-    selector: string,
-  ): Promise<{ readonly sensitive: boolean }> {
-    const result = await browserDebugger.sendCommand(
-      "Runtime.evaluate",
-      {
-        expression: focusSelectorForTypingExpression(selector),
-        returnByValue: true,
-      },
-      undefined,
-    );
-    if (!isRecord(result)) {
-      throw new Error("Could not focus selector.");
-    }
-    const payload = result.result;
-    if (!isRecord(payload) || !isRecord(payload.value)) {
-      throw new Error("Could not focus selector.");
-    }
-    const focused = payload.value.focused;
-    const sensitive = payload.value.sensitive;
-    if (focused !== true || typeof sensitive !== "boolean") {
-      throw new Error("Could not focus selector.");
-    }
-    return { sensitive };
-  }
 }
 
 function delay(ms: number): Promise<void> {
@@ -4002,24 +3653,8 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function entryKeyId(key: BrowserViewEntryKey): string {
-  return [key.windowId, key.viewTabId, key.paneId, key.tileInstanceId].join(
-    "\u001f",
-  );
-}
-
-function nativeGuestKey(key: BrowserViewNativeTabKey): string {
-  return ["native", key.hostId, key.sessionId, key.tabId].join("\u001f");
-}
-
-function unmanagedGuestKey(pageSessionId: string): string {
-  return ["unmanaged", pageSessionId].join("\u001f");
-}
-
 function guestEntryKey(entry: BrowserViewEntry): string {
-  return entry.identity.kind === "native"
-    ? nativeGuestKey(entry.identity.key)
-    : unmanagedGuestKey(entry.identity.pageSessionId);
+  return entry.guestKey;
 }
 
 function toNativeTabKey(key: BrowserViewNativeTabKey): BrowserViewNativeTabKey {
@@ -4095,11 +3730,6 @@ function toTileKey(key: BrowserViewEntryKey): BrowserViewTileKey {
   };
 }
 
-function readNavigationUrl(args: readonly unknown[]): string | null {
-  const value = args[1];
-  return typeof value === "string" ? value : null;
-}
-
 function httpOrigin(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -4111,111 +3741,11 @@ function httpOrigin(url: string): string | null {
   }
 }
 
-function readMainFrameFlag(args: readonly unknown[]): boolean {
-  const value = args[4];
-  return typeof value === "boolean" ? value : true;
-}
-
-/**
- * `did-start-navigation` on the host window's own `webContents`:
- * `(event, url, isInPlace, isMainFrame, frameProcessId, frameRoutingId)`.
- * `isInPlace` is Electron's same-document flag (hash change, pushState).
- */
-function readHostNavigationFlags(args: readonly unknown[]): {
-  readonly isMainFrame: boolean;
-  readonly isInPlace: boolean;
-} {
-  const isInPlace = args[2];
-  const isMainFrame = args[3];
-  return {
-    isMainFrame: typeof isMainFrame === "boolean" ? isMainFrame : true,
-    isInPlace: typeof isInPlace === "boolean" ? isInPlace : false,
-  };
-}
-
-function readInPageMainFrameFlag(args: readonly unknown[]): boolean {
-  const value = args[2];
-  return typeof value === "boolean" ? value : true;
-}
-
-function readRenderGoneReason(args: readonly unknown[]): string {
-  const detail = args.find(
-    (value): value is { readonly reason: string } =>
-      isRecord(value) && typeof value.reason === "string",
-  );
-  return detail?.reason ?? "Renderer process gone";
-}
-
-function readFoundInPageResult(args: readonly unknown[]): {
-  readonly requestId: number;
-  readonly current: number;
-  readonly total: number;
-  readonly finalUpdate: boolean;
-} | null {
-  const value = args.find(
-    (candidate): candidate is Record<string, unknown> =>
-      isRecord(candidate) && typeof candidate.requestId === "number",
-  );
-  if (value === undefined) return null;
-  const requestId = value.requestId;
-  const matches = value.matches;
-  const activeMatchOrdinal = value.activeMatchOrdinal;
-  if (
-    typeof requestId !== "number" ||
-    typeof matches !== "number" ||
-    typeof activeMatchOrdinal !== "number"
-  ) {
-    return null;
-  }
-  return {
-    requestId,
-    current: matches > 0 ? activeMatchOrdinal : 0,
-    total: matches,
-    finalUpdate: value.finalUpdate === true,
-  };
-}
-
-function readBeforeInput(args: readonly unknown[]): {
-  readonly key: string;
-  readonly control: boolean;
-  readonly meta: boolean;
-  readonly shift: boolean;
-  readonly alt: boolean;
-  readonly modifier: boolean;
-} | null {
-  const value = args.find(
-    (candidate): candidate is Record<string, unknown> =>
-      isRecord(candidate) && typeof candidate.key === "string",
-  );
-  if (value === undefined) return null;
-  const key = value.key;
-  if (typeof key !== "string") return null;
-  if (typeof value.type === "string" && value.type !== "keyDown") return null;
-  const control = value.control === true;
-  const meta = value.meta === true;
-  return {
-    key,
-    control,
-    meta,
-    shift: value.shift === true,
-    alt: value.alt === true,
-    modifier: control || meta || value.shift === true || value.alt === true,
-  };
-}
-
 function browserZoomStepForKey(key: string): 1 | -1 | 0 | null {
   if (key === "+" || key === "=") return 1;
   if (key === "-" || key === "_") return -1;
   if (key === "0" || key === ")") return 0;
   return null;
-}
-
-function preventInputDefault(args: readonly unknown[]): void {
-  const event = args[0];
-  if (!isRecord(event)) return;
-  const preventDefault = event.preventDefault;
-  if (typeof preventDefault !== "function") return;
-  preventDefault.call(event);
 }
 
 function windowOpenShouldCreateTile(
@@ -4239,70 +3769,6 @@ function normalizeOpenedUrl(url: string, baseUrl: string): string {
   } catch {
     return url;
   }
-}
-
-function readPopupWindow(
-  args: readonly unknown[],
-): BrowserViewPopupWindow | null {
-  const value = args[0];
-  if (!isRecord(value)) return null;
-  const webContents = toPopupWebContents(value.webContents);
-  const isDestroyed = value.isDestroyed;
-  const close = value.close;
-  const on = value.on;
-  const off = value.off;
-  if (
-    webContents === null ||
-    typeof isDestroyed !== "function" ||
-    typeof close !== "function" ||
-    typeof on !== "function" ||
-    typeof off !== "function"
-  ) {
-    return null;
-  }
-  return {
-    webContents,
-    isDestroyed: () => Boolean(isDestroyed.call(value)),
-    close: () => {
-      close.call(value);
-    },
-    on: (event, listener) => {
-      on.call(value, event, listener);
-    },
-    off: (event, listener) => {
-      off.call(value, event, listener);
-    },
-  };
-}
-
-function toPopupWebContents(
-  value: unknown,
-): BrowserViewPopupWebContents | null {
-  if (!isRecord(value)) return null;
-  const id = value.id;
-  const once = value.once;
-  const on = value.on;
-  const off = value.off;
-  if (
-    typeof id !== "number" ||
-    typeof once !== "function" ||
-    typeof on !== "function" ||
-    typeof off !== "function"
-  ) {
-    return null;
-  }
-  return {
-    id,
-    once: (event, listener) => {
-      once.call(value, event, listener);
-    },
-    on: (event, listener) => {
-      on.call(value, event, listener);
-    },
-    off: (event, listener) => {
-      off.call(value, event, listener);
-    },
-  };
 }
 
 function zoomPercentFromFactor(factor: number): number {
@@ -4381,70 +3847,6 @@ function parseCapturedDataUrl(dataUrl: string): {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function selectorCenterExpression(selector: string): string {
-  return `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof Element)) return null;
-    const rect = element.getBoundingClientRect();
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-  })()`;
-}
-
-function focusSelectorForTypingExpression(selector: string): string {
-  return `(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    if (!(element instanceof HTMLElement)) return { focused: false, sensitive: false };
-    element.focus();
-    const sensitiveAutocomplete = new Set([
-      "current-password",
-      "new-password",
-      "one-time-code",
-    ]);
-    const autocompleteTokens = element
-      .autocomplete
-      .toLowerCase()
-      .split(/\\s+/u)
-      .filter((token) => token.length > 0);
-    const isInput = element instanceof HTMLInputElement;
-    const sensitive =
-      isInput &&
-      (element.type.toLowerCase() === "password" ||
-        autocompleteTokens.some(
-          (token) =>
-            sensitiveAutocomplete.has(token) || token.startsWith("cc-"),
-        ));
-    return { focused: document.activeElement === element, sensitive };
-  })()`;
-}
-
-function browserViewControlActionsEqual(
-  left: BrowserViewControlAction["action"],
-  right: BrowserViewControlAction["action"],
-): boolean {
-  if (left.kind !== right.kind) return false;
-  if (left.kind === "click") {
-    return right.kind === "click" && left.selector === right.selector;
-  }
-  if (left.kind === "type") {
-    return (
-      right.kind === "type" &&
-      left.selector === right.selector &&
-      left.text === right.text
-    );
-  }
-  if (left.kind === "scroll") {
-    return (
-      right.kind === "scroll" &&
-      left.deltaX === right.deltaX &&
-      left.deltaY === right.deltaY
-    );
-  }
-  return right.kind === "navigate" && left.url === right.url;
 }
 
 /**
