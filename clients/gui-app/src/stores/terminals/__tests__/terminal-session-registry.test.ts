@@ -411,6 +411,67 @@ describe("TerminalSessionRegistry", () => {
     expect(registry.get("inst-a")).toBe(owned.handle);
   });
 
+  it("evicts a lease-free plain terminal that the host confirms is reaped (TERMINAL_NOT_FOUND)", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal");
+
+    registry.acquire("terminal-1", () => owned.handle, HOST_ID);
+    registry.release("terminal-1");
+    expect(registry.get("terminal-1")).toBe(owned.handle);
+
+    owned.callbacks().onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "TERMINAL_NOT_FOUND",
+        reason: "TERMINAL_NOT_FOUND: gone",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(owned.handle.store.getState().status).toBe("reaped");
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.get("terminal-1")).toBeNull();
+
+    // Confirmed dead must not resurrect on the linger timer either.
+    vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
+    expect(owned.closeCount()).toBe(1);
+  });
+
+  it("evicts a lease-free terminal-agent the moment it is confirmed reaped, unlike a merely lost one", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("terminal-1", () => owned.handle, HOST_ID);
+    registry.release("terminal-1");
+    expect(registry.get("terminal-1")).toBe(owned.handle);
+
+    owned.callbacks().onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "TERMINAL_NOT_FOUND",
+        reason: "TERMINAL_NOT_FOUND: gone",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(owned.handle.store.getState().status).toBe("reaped");
+    // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test
+    // above), a confirmed-reaped one is a dead end: keeping it warm would
+    // shadow the fresh create-then-acquire bootstrap once the tile revives.
+    expect(owned.closeCount()).toBe(1);
+    expect(registry.get("terminal-1")).toBeNull();
+    // A reopened tab must never adopt the dead entry - there is nothing left
+    // to adopt once the confirmed-reaped eviction above has run.
+    expect(
+      registry.findAdoptableInstanceId(
+        { hostId: HOST_ID, sessionId: "terminal-1" },
+        "tab-2",
+      ),
+    ).toBeNull();
+  });
+
   it("keeps the explicit hostless path from matching a host-owned same-id entry", () => {
     const registry = new TerminalSessionRegistry();
     const hostOwned = createHandle("terminal");

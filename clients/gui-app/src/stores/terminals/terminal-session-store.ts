@@ -38,10 +38,10 @@ export type TerminalReattachMode = "fresh" | "live";
  * (within its detach-linger window, T13); auto-recovery
  * (`useTerminalSessionRecovery`) is worth attempting.
  * `"reaped"` - the host explicitly confirmed via `TERMINAL_NOT_FOUND` that
- * this session no longer exists (linger expired + reaped, or the host
- * restarted and lost it) - a DEFINITIVE dead end. Retrying is guaranteed to
- * fail identically every time, so this bypasses auto-recovery entirely and
- * maps to the terminal "Session lost" tile state (Journey 4).
+ * the PTY addressed by this handle no longer exists (linger expired + reaped,
+ * or the host restarted and lost it). This handle is definitively dead, but a
+ * durable terminal with the same logical id may already have been restored;
+ * bounded recovery must replace the handle and consult current host authority.
  */
 export type TerminalLifecycleStatus =
   "creating" | "running" | "exited" | "lost" | "reaped";

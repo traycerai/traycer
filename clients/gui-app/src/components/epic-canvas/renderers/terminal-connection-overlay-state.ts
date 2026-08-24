@@ -9,23 +9,19 @@ export type TerminalConnectionOverlayState =
  * its session status. `null` means connected/healthy - no overlay. A "lost"
  * session (recoverable - see `TerminalLifecycleStatus`) shows the
  * automatic-recovery spinner until recovery is exhausted, then the manual
- * Reconnect prompt ("reattachable", Architecture §8); a "reaped" session (the
- * host confirmed via `TERMINAL_NOT_FOUND` that it's definitively gone) always
- * shows the terminal "sessionLost" state - never a retry loop, since retrying
- * a confirmed-gone session is guaranteed to fail identically every time. A
- * running session whose transport is mid-reconnect shows the transient
- * spinner. The initial "creating" window shows nothing (the tile's own
- * loading skeleton covers it).
+ * Reconnect prompt ("reattachable", Architecture §8). "Reaped" is equally
+ * terminal for the current handle, but not for the durable terminal identity:
+ * the host may already have restored it, so it follows the same bounded
+ * recovery path. A running session whose transport is mid-reconnect shows the
+ * transient spinner. The initial "creating" window shows nothing (the tile's
+ * own loading skeleton covers it).
  */
 export function resolveTerminalOverlayState(input: {
   readonly status: TerminalLifecycleStatus;
   readonly connectionStatus: StreamConnectionStatus;
   readonly recoveryExhausted: boolean;
 }): TerminalConnectionOverlayState | null {
-  if (input.status === "reaped") {
-    return "sessionLost";
-  }
-  if (input.status === "lost") {
+  if (input.status === "lost" || input.status === "reaped") {
     return input.recoveryExhausted ? "lost" : "recovering";
   }
   if (input.status === "running" && input.connectionStatus !== "open") {

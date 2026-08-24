@@ -18,10 +18,9 @@ import type { TerminalConnectionOverlayState } from "./terminal-connection-overl
  *   automatically (see `useTerminalSessionRecovery`).
  * - `lost` - automatic recovery gave up (the respawn kept failing); offer a
  *   manual retry ("reattachable" - the session may still exist, Architecture §8).
- * - `sessionLost` - the host confirmed (`TERMINAL_NOT_FOUND`) this session is
- *   definitively gone (linger expired + reaped, or lost across a host
- *   restart) - a final state (Journey 4: "Scroll back to see how it
- *   finished"); no retry affordance, only Close.
+ * - `sessionLost` - the owning surface has definitive durable-authority
+ *   evidence that no recovery should be attempted - a final state (Journey 4:
+ *   "Scroll back to see how it finished"); no retry affordance, only Close.
  *
  * Keystrokes are already blocked from the dead PTY at the store
  * (`writeInput` returns null while `status` is `"lost"`/`"reaped"` or the

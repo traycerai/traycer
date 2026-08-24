@@ -2,16 +2,17 @@
  * Automatic recovery for a terminal/TUI tile whose live session dies while the
  * app is disconnected (e.g. the Traycer Host reaps an idle TUI agent after the
  * overnight WS heartbeat times out). The renderer's transport auto-reconnects,
- * but re-subscribing to the reaped session id dead-ends at `status: "lost"` with
- * no path back - the only recovery used to be a full app refresh.
+ * but re-subscribing to the missing session id dead-ends at `status: "lost"`
+ * or `"reaped"` with no path back - the only recovery used to be a full app
+ * refresh.
  *
- * This hook drives a SCOPED refresh instead: on `"lost"` it force-releases the
- * dead (warm-kept) session store and bumps `recoverNonce`. The owning tile keys
- * its bootstrap subtree on that nonce, so the whole `terminal.list -> create ->
- * resume` bootstrap re-runs - for a TUI agent that re-issues `prepareLaunch`,
- * which resumes the conversation from disk. Re-running the real bootstrap reuses
- * its create-then-acquire ordering, so the fresh store never subscribes to the
- * dead id.
+ * This hook drives a SCOPED refresh instead: on a `"lost"` or `"reaped"`
+ * handle it force-releases the dead session store and bumps `recoverNonce`.
+ * The owning tile keys its bootstrap subtree on that nonce, so the whole
+ * `terminal.list -> create -> resume` bootstrap re-runs - for a TUI agent that
+ * re-issues `prepareLaunch`, which resumes the conversation from disk.
+ * Re-running the real bootstrap reuses its create-then-acquire ordering, so the
+ * fresh store never subscribes to the dead handle.
  *
  * Auto-recovery is capped at {@link MAX_AUTO_RECOVERIES} consecutive attempts so
  * a session that keeps dying can't loop forever; past the cap the tile shows a
@@ -30,7 +31,7 @@ export interface TerminalSessionRecovery {
   readonly recoverNonce: number;
   /** True once auto-recovery has exhausted its budget - the tile then offers a manual retry. */
   readonly recoveryExhausted: boolean;
-  /** The live tile reports the stream dead-ended (`status: "lost"`). */
+  /** The live tile reports a stream handle dead-ended (`"lost"`/`"reaped"`). */
   readonly onSessionLost: () => void;
   /** The live tile reports the session is healthy again, resetting the auto budget. */
   readonly onSessionHealthy: () => void;
