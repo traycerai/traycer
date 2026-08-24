@@ -350,10 +350,7 @@ function dedupeNextStepOptions(
 ): ReadonlyArray<TraycerNextStepOption> {
   const seen = new Set<string>();
   return options.filter((option) => {
-    const normalized = option.prompt
-      .trim()
-      .replace(/\s+/gu, " ")
-      .toLocaleLowerCase();
+    const normalized = option.prompt.trim().replace(/\s+/gu, " ").toLowerCase();
     if (seen.has(normalized)) return false;
     seen.add(normalized);
     return true;

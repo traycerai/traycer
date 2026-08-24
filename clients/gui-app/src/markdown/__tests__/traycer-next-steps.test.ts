@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   parseTraycerNextStepsMarkdown,
   repairTraycerNextStepsMarkdown,
@@ -445,6 +445,45 @@ describe("parseTraycerNextStepsMarkdown", () => {
         { prompt: "Publish the feature to customers" },
       ],
     });
+  });
+
+  it("deduplicates case variants independently of the runtime locale", () => {
+    const localeLowerCase = vi
+      .spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return String(this).replaceAll("I", "ı").toLowerCase();
+      });
+
+    try {
+      const duplicateParts = parseTraycerNextStepsMarkdown(
+        [
+          "<TRAYCER_NEXT_STEPS>",
+          "- [] I",
+          "- [] i",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n"),
+        false,
+      );
+      const distinctParts = parseTraycerNextStepsMarkdown(
+        [
+          "<TRAYCER_NEXT_STEPS>",
+          "- [] I",
+          "- [] Publish the feature",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n"),
+        false,
+      );
+
+      expect(duplicateParts).toEqual([
+        { kind: "markdown", id: "markdown:0", markdown: "- I" },
+      ]);
+      expect(distinctParts[0]).toMatchObject({
+        kind: "next_steps",
+        options: [{ prompt: "I" }, { prompt: "Publish the feature" }],
+      });
+    } finally {
+      localeLowerCase.mockRestore();
+    }
   });
 
   it("keeps two materially different owner decisions actionable", () => {
