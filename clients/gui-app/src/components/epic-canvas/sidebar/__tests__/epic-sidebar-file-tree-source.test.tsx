@@ -205,6 +205,10 @@ const modelListeners = new Set<() => void>();
 // invoke it directly, the same way Pierre invokes it on a real row click.
 let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
   null;
+// Row geometry the panel asked Pierre for. Only observable here: `useFileTree`
+// reads its options once, at construction, and the model exposes no getter the
+// panel could be asked afterwards.
+let capturedItemHeight: number | undefined = undefined;
 
 function notifyModel(): void {
   for (const listener of modelListeners) listener();
@@ -350,8 +354,10 @@ vi.mock("@pierre/trees/react", () => ({
     useSyncExternalStore(subscribeToSearchSnapshot, getSearchSnapshot),
   useFileTree: (options: {
     readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
+    readonly itemHeight: number | undefined;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
+    capturedItemHeight = options.itemHeight;
     return { model: mockModel };
   },
 }));
@@ -1351,5 +1357,109 @@ describe("reveal in sidebar", () => {
         { path: "a.ts", options: { offset: "nearest" } },
       ]);
     });
+  });
+});
+
+/**
+ * The same panel body under the phone tab switcher, where it is the File tree
+ * category rather than a sidebar column. `useIsMobileViewport` reads
+ * `window.innerWidth` directly, so overriding it before render is what forces
+ * the touch presentation - same pattern as the composer-menu and providers
+ * panel mobile suites.
+ */
+describe("file tree on a touch viewport", () => {
+  const TAB_ID = "tab-1";
+  let openPermanentSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+  let openPreviewSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
+    listFileTreeCalls.length = 0;
+    resetPathsCalls.length = 0;
+    setSearchCalls.length = 0;
+    searchCalls.length = 0;
+    expandedInModel.clear();
+    expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
+    capturedItemHeight = undefined;
+    installSearchHost({});
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    openPermanentSpy = vi.fn(() => null);
+    openPreviewSpy = vi.fn(() => null);
+    useEpicCanvasStore.setState({
+      prepareOpenTileInTabFocusTarget: openPermanentSpy,
+      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+    });
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    pinnedStreamBindingRef.value = null;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+  });
+
+  it("asks for touch-sized rows instead of the sidebar's compact ones", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    expect(capturedItemHeight).toBe(44);
+  });
+
+  it("opens a tapped row permanently, because there is no tab strip to promote it from", () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    act(() => {
+      capturedOnSelectionChange?.(["readme.md"]);
+    });
+
+    expect(openPreviewSpy).not.toHaveBeenCalled();
+    expect(openPermanentSpy).toHaveBeenCalledTimes(1);
+    expect(openPermanentSpy).toHaveBeenCalledWith(
+      TAB_ID,
+      expect.objectContaining({ filePath: "readme.md" }),
+    );
   });
 });
