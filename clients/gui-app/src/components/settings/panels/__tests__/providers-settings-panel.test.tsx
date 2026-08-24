@@ -26,10 +26,12 @@ import {
   act,
   cleanup,
   fireEvent,
+  queries,
   render,
   screen,
   waitFor,
   within,
+  type BoundFunctions,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -733,6 +735,8 @@ vi.mock("@/components/ui/select", async () => {
         role="combobox"
         id={props.id}
         aria-label={props["aria-label"]}
+        aria-expanded={false}
+        aria-controls="select-mock-content"
       >
         {props.children}
       </button>
@@ -7478,7 +7482,7 @@ function openSectionPicker(): void {
  * and querying `role="button"` reaches exactly the section rows and nothing
  * else on the page.
  */
-function sectionPicker(): ReturnType<typeof within> {
+function sectionPicker(): BoundFunctions<typeof queries> {
   const trigger = screen.getByRole("combobox", { name: "Section" });
   const root = trigger.parentElement;
   if (root === null) {
