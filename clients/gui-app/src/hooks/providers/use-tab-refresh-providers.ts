@@ -12,7 +12,6 @@ import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
-import { invalidateHarnessCatalogsForHost } from "@/hooks/providers/invalidations";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -38,19 +37,19 @@ export function useTabRefreshProviders(): () => Promise<void> {
     options: {
       mutationKey: providersMutationKeys.refresh(),
       onSuccess: async (data: ProvidersListResponse) => {
-        await commitAuthoritativeProvidersList({
-          queryClient,
-          hostId: tabHostId,
-          update: () => data,
-        });
         // This is the TERMINAL-login completion edge in practice: a terminal
         // sign-in has no client-observable completion event, so the user's
         // "Check sign-in status" press (and the token-paste form's refresh) is
         // what tells the client the account exists now. Under auto-enablement
         // that can flip `available`, so the catalogs have to move with the
         // list or the picker keeps serving its cached "No account detected"
-        // row.
-        invalidateHarnessCatalogsForHost(queryClient, tabHostId);
+        // row - which the commit helper does, by invalidating every
+        // `PROVIDER_INVALIDATIONS` entry except the list it just wrote.
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: tabHostId,
+          update: () => data,
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),

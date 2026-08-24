@@ -3,7 +3,6 @@ import {
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
 import type { ReactNode } from "react";
-import { toast } from "sonner";
 import { ProviderList } from "@/components/providers/provider-list";
 import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
@@ -198,10 +197,23 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
   const isLocalHost =
     hosts.find((host) => host.isActive)?.isLocalMachine ?? false;
   const isPending = startLogin.isPending || awaitLogin.isPending;
+  // The RPC succeeded but the host declined to start the login, so the
+  // provider tooling is the limiting factor, not auth - the same outcome
+  // Settings names `failureMessages.notStarted`, and the one edge that could
+  // otherwise dead-end silently (the mutation's own failures already toast
+  // through `toastFromHostError`).
+  //
+  // Surfaced as an INLINE row error rather than a component-level
+  // `toast.error`, which the GUI rules forbid and which would have been the
+  // only ad-hoc one in this act. DERIVED from the mutation result rather than
+  // held in `useState`: the result already is this state, and `mutate` resets
+  // it at the next attempt, so the message clears itself on retry instead of
+  // needing an effect to.
+  const declined = startLogin.isSuccess && !startLogin.data.started;
   const onSignIn = (providerId: ProviderId): void => {
     // Start, then await the honest completion edge. The await is what makes
     // this worth wiring at all: its `onSuccess` overlays the fresh state onto
-    // `providers.list` AND drops the harness catalogs, so a provider that was
+    // `providers.list` and re-reads the row, so a provider that was
     // auto-disabled for want of an account becomes usable without a restart.
     startLogin.mutate(
       // Ambient login, not a managed profile: onboarding has no profile
@@ -210,18 +222,7 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
       { providerId, profileId: null, createProfile: null },
       {
         onSuccess: (result) => {
-          if (!result.started) {
-            // The RPC succeeded but the host declined to start the login, so
-            // the provider tooling is the limiting factor, not auth (Settings
-            // reports the same outcome as `failureMessages.notStarted`).
-            // Returning silently here left the click with NO feedback at all:
-            // the mutation's own failures already toast through
-            // `toastFromHostError`, so this is the one outcome that could dead
-            // end. Onboarding has no per-row error slot, so it borrows the
-            // channel the errors beside it already use.
-            toast.error("Couldn't start sign-in for this provider");
-            return;
-          }
+          if (!result.started) return;
           awaitLogin.mutate({ providerId, profileId: null });
         },
       },
@@ -243,19 +244,26 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
     );
   }
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={isPending}
-      onClick={() => onSignIn(state.providerId)}
-    >
-      Sign in to enable
-      {/* Unchanged label + inline spinner: starting a login spawns the
-          provider CLI host-side, so a press with no feedback invites a
-          second one. */}
-      {isPending ? <MutedAgentSpinner /> : null}
-    </Button>
+    <span className="flex min-w-0 items-center gap-2">
+      {declined ? (
+        <span className="text-ui-xs text-destructive" role="alert">
+          Sign-in did not start. Try again when ready.
+        </span>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={isPending}
+        onClick={() => onSignIn(state.providerId)}
+      >
+        Sign in to enable
+        {/* Unchanged label + inline spinner: starting a login spawns the
+            provider CLI host-side, so a press with no feedback invites a
+            second one. */}
+        {isPending ? <MutedAgentSpinner /> : null}
+      </Button>
+    </span>
   );
 }
 

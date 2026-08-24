@@ -12,10 +12,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { providersMutationKeys } from "@/lib/query-keys";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
-import { invalidateHarnessCatalogsForHost } from "@/hooks/providers/invalidations";
 
 type AwaitLoginRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -156,12 +155,27 @@ export function useProvidersAwaitLoginForClient(args: {
             };
           },
         });
-        // A login can now flip `available`: an undetected provider is
-        // effectively disabled and reported unavailable, so signing in is
-        // exactly the edge that brings it back. The overlay above only
-        // reaches `providers.list`, which is why this is a separate call
-        // rather than something the echo could carry.
-        invalidateHarnessCatalogsForHost(queryClient, context.hostId);
+        // The overlay above is optimistic-only, and deliberately cannot be
+        // the last word. The echo is pinned to
+        // `providerMutationCliStateSchemaV21`, whose field set is the
+        // hand-frozen `providerCliStateBaseShapeV40` - so it carries the new
+        // `enabled` but NOT `enablementMode` / `enablementSource`, which exist
+        // only on the live `providers.list@7.1` shape. Spreading it therefore
+        // flips `enabled` to true while leaving `enablementSource` reading
+        // `"auto-undetected"`, and those two fields are exactly what the
+        // screens the user is looking at render: onboarding keeps offering
+        // "Sign in to enable" and Settings keeps saying "Auto · disabled - no
+        // account detected" beside a provider that just signed in.
+        //
+        // `commitAuthoritativeProvidersList` invalidates every
+        // `PROVIDER_INVALIDATIONS` entry EXCEPT `providers.list` (the one it
+        // just wrote), which is right for the force-refresh callers - their
+        // payload IS a full v7.1 list response. It is wrong here, so this path
+        // adds the one invalidation the helper withholds: without it the
+        // contradiction stands for a full `staleTime` (15 minutes).
+        await queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't confirm sign-in."),

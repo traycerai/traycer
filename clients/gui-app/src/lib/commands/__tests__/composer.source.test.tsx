@@ -622,7 +622,7 @@ describe("composerSource", () => {
     expect(focusedComposerCatalogMock.clientCalls.at(-1)).toBe(hostClientB);
   });
 
-  it("excludes a signed-out provider from both the provider and model subpages - definitive authStatus, no providers.list join available here", () => {
+  it("demotes a signed-out provider to the end of both subpages and badges it, but never removes it - the ambient verdict is not the send gate's verdict", () => {
     const original = catalogMock.harnesses;
     catalogMock.harnesses = [
       ...original,
@@ -675,18 +675,51 @@ describe("composerSource", () => {
       }
 
       const providerItems = collectSubpageItems(providerSubpage, "landing");
-      expect(providerItems.map((item) => item.id)).not.toContain(
-        "composer:provider:claude",
+      const providerIds = providerItems.map((item) => item.id);
+      // Still listed. The row's `authStatus` is the provider's AMBIENT
+      // verdict; a composer pinned to a signed-in managed profile runs turns
+      // on this provider perfectly well, and the send gate - which has the
+      // profile in hand and this palette does not - is what decides.
+      expect(providerIds).toContain("composer:provider:claude");
+      // codex (from the base fixture, no authStatus) still lists, and sorts
+      // ahead of the signed-out row.
+      expect(providerIds).toContain("composer:provider:codex");
+      expect(providerIds.indexOf("composer:provider:codex")).toBeLessThan(
+        providerIds.indexOf("composer:provider:claude"),
       );
-      // codex (from the base fixture, no authStatus) still lists.
-      expect(providerItems.map((item) => item.id)).toContain(
-        "composer:provider:codex",
-      );
+      // ...and it says WHY it is demoted, which is the whole point of reading
+      // `authStatus` here: the subpage is no longer auth-blind.
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:claude")
+          ?.statusBadge,
+      ).toBe("Signed out");
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:codex")
+          ?.statusBadge,
+      ).toBeUndefined();
+      // Demoted, never inert: a disabled row would re-create the same false
+      // negative one layer down.
+      expect(
+        providerItems.find((item) => item.id === "composer:provider:claude")
+          ?.disabled ?? false,
+      ).toBe(false);
 
       const modelItems = collectSubpageItems(modelSubpage, "landing");
+      const claudeModels = modelItems.filter((item) =>
+        item.id.startsWith("composer:model:claude"),
+      );
+      expect(claudeModels.length).toBeGreaterThan(0);
       expect(
-        modelItems.some((item) => item.id.startsWith("composer:model:claude")),
-      ).toBe(false);
+        claudeModels.every((item) => item.statusBadge === "Signed out"),
+      ).toBe(true);
+      // The signed-out provider's models trail every live provider's.
+      const firstClaudeModel = modelItems.findIndex((item) =>
+        item.id.startsWith("composer:model:claude"),
+      );
+      const lastCodexModel = modelItems.findLastIndex((item) =>
+        item.id.startsWith("composer:model:codex"),
+      );
+      expect(lastCodexModel).toBeLessThan(firstClaudeModel);
     } finally {
       catalogMock.harnesses = original;
     }
