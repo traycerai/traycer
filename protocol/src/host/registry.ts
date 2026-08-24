@@ -188,6 +188,8 @@ import {
   agentTuiPrepareLaunchV11,
   agentTuiPrepareLaunchUpgradeV10ToV11,
   agentTuiPromptSubmittedV10,
+  agentTuiPromptSubmittedV11,
+  agentTuiPromptSubmittedUpgradeV10ToV11,
   agentTuiRecordActivityV10,
   agentTuiRecordActivityV11,
   agentTuiRecordActivityUpgradeV10ToV11,
@@ -407,6 +409,7 @@ import {
   terminalSubscribeV13,
   terminalSubscribeV14,
   terminalSubscribeV15,
+  terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
   terminalPlainCloseDowngradeV21ToV10,
@@ -488,7 +491,10 @@ import {
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
 import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
-import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
+import {
+  worktreeDeleteByPathStreamV10,
+  worktreeDeleteByPathStreamV11,
+} from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import {
   epicCommunicationGraphSubscribeV10,
@@ -532,6 +538,7 @@ import {
   worktreeCreatePathsRequestSchemaV10,
   worktreeCreatePathsResponseSchema,
   worktreeDeleteRequestSchema,
+  worktreeDeleteRequestSchemaV11,
   worktreeDeleteResponseSchema,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
@@ -1026,6 +1033,33 @@ export const worktreeDeleteV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: worktreeDeleteRequestSchema,
   responseSchema: worktreeDeleteResponseSchema,
+});
+
+/**
+ * `worktree.delete@1.1` - optional `stopOwners`. Absent/false reproduces
+ * today's refuse-on-busy. True asks the host to stop enumerated holders,
+ * then delete. Response is unchanged. The typed holder list on a busy
+ * refusal rides the `WORKTREE_BUSY` error envelope (`holders`), not this
+ * response — old clients keep the prose `message`.
+ */
+export const worktreeDeleteV11 = defineRpcContract({
+  method: "worktree.delete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: worktreeDeleteRequestSchemaV11,
+  responseSchema: worktreeDeleteResponseSchema,
+});
+
+export const worktreeDeleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof worktreeDeleteV10,
+  typeof worktreeDeleteV11
+>({
+  from: worktreeDeleteV10.schemaVersion,
+  to: worktreeDeleteV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    stopOwners: false,
+  }),
+  upgradeResponse: (response) => response,
 });
 
 // Host-wide worktree surface for Settings ▸ Worktrees. `listAllForHost`
@@ -4627,11 +4661,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // Mirrors `agent.tui.validateForkProfile`'s degrade strategy above.
   "agent.tui.promptSubmitted": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentTuiPromptSubmittedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentTuiPromptSubmittedV11,
+          upgradeFromPreviousVersion: agentTuiPromptSubmittedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6589,11 +6627,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   },
   "worktree.delete": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: worktreeDeleteV11,
+          upgradeFromPreviousVersion: worktreeDeleteUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7855,7 +7897,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: terminalSubscribeV10,
@@ -7874,6 +7916,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         5: {
           contract: terminalSubscribeV15,
+        },
+        6: {
+          contract: terminalSubscribeV16,
         },
       },
     },
@@ -8125,10 +8170,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "worktree.deleteByPath": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
+        },
+        1: {
+          contract: worktreeDeleteByPathStreamV11,
         },
       },
     },

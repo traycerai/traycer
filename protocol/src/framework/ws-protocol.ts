@@ -6,6 +6,7 @@ import {
   type ClientCompatibilityRequirement,
   type ClientHandshakeIdentity,
 } from "@traycer/protocol/framework/client-identity";
+import { worktreeBusyHoldersSchema } from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -390,6 +391,9 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
+  // Typed `WORKTREE_BUSY` inventory. Optional on every error; older hosts
+  // omit it and older clients that still parse `{ code, message }` strip it.
+  holders: worktreeBusyHoldersSchema.optional(),
 });
 
 /** Canonical schema for the host `response` frame. */

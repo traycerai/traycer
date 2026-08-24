@@ -54,6 +54,25 @@ export type {
 export { RPC_ERROR_CODES, isRpcErrorCode } from "./versioned-rpc-types";
 
 export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "./worktree-busy-holders";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "./worktree-busy-holders";
+
+export type {
   AnyOfJsonSchema,
   ArrayJsonSchema,
   ContractJsonSchemas,

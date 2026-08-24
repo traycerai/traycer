@@ -306,6 +306,36 @@ describe("ws-protocol canonical Zod schemas", () => {
       expect(hostFrameSchema.safeParse(frame).success).toBe(true);
     });
 
+    it("keeps WORKTREE_BUSY holders on a `response` error envelope", () => {
+      const frame = {
+        kind: "response" as const,
+        requestId: "req-1",
+        method: "worktree.delete",
+        schemaVersion: { major: 1, minor: 1 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [
+            {
+              ownerRef: {
+                epicId: "e1",
+                ownerKind: "terminal-agent",
+                ownerId: "a1",
+              },
+              holdKind: "terminal-agent-pty",
+              activity: "idle",
+              label: "Claude Code",
+            },
+          ],
+        },
+      };
+
+      const parsed = hostResponseFrameSchema.parse(frame);
+      expect(parsed.error?.holders).toHaveLength(1);
+      expect(parsed.error?.holders?.[0]?.holdKind).toBe("terminal-agent-pty");
+    });
+
     it("accepts a host `fatalError` frame with UNAUTHORIZED code", () => {
       const frame = {
         kind: "fatalError" as const,
