@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
 import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
@@ -92,6 +98,9 @@ function roots(): ReadonlyArray<GitDiffRepoSwitcherRootInput> {
         workspacePath: "/setup-failed",
         repoIdentifier: { owner: "acme", repo: "setup-failed" },
         branch: "feature/setup",
+        setupState: "failed",
+        // Legacy hosts also sent this as a blocking reason. The client keeps
+        // it compatible as a visible, non-blocking warning.
         disabledReason: "setup_failed",
       }),
       fileChangeCount: null,
@@ -351,7 +360,7 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     ).toBeNull();
   });
 
-  it("renders disabled non-Git roots and blocks selection", () => {
+  it("keeps setup failure visible and selectable while blocking non-Git roots", () => {
     const onSelectRoot = vi.fn();
     render(
       <DropdownHarness
@@ -367,12 +376,19 @@ describe("<GitDiffRepoSwitcherDropdown />", () => {
     );
     expect(disabled.getAttribute("aria-disabled")).toBe("true");
     expect(disabled.textContent).toContain("not git");
-    expect(setupFailed.getAttribute("aria-disabled")).toBe("true");
-    expect(setupFailed.textContent).toContain("failed");
+    expect(setupFailed.getAttribute("aria-disabled")).toBeNull();
+    const setupWarning = within(setupFailed).getByText("setup failed");
+    expect(setupWarning.getAttribute("data-status-tone")).toBe("warning");
+    expect(setupWarning.getAttribute("aria-label")).toContain(
+      "worktree is still usable",
+    );
 
     fireEvent.click(disabled);
-    fireEvent.click(setupFailed);
     expect(onSelectRoot).not.toHaveBeenCalled();
+    fireEvent.click(setupFailed);
+    expect(onSelectRoot).toHaveBeenCalledWith(
+      expect.objectContaining({ runningDir: "/setup-failed" }),
+    );
   });
 
   it("moves keyboard focus through workspace rows only", () => {

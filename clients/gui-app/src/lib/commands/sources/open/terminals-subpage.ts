@@ -39,7 +39,12 @@ import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-
 import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
-import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import {
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
+import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import {
   openerActionLeaf,
@@ -57,11 +62,12 @@ function terminalWorkspaceLeaf(
   target: { readonly hostId: string; readonly cwd: string },
   label: string,
   hostClient: HostClient<HostRpcRegistry>,
+  status: WorktreeFolderRowBadge | null,
 ): CommandItem {
   // Cmdk can invoke a selected row twice before its view rerenders. Keep this
   // synchronous per-leaf latch so one workspace selection creates one terminal.
   let hasLaunched = false;
-  return openerActionLeaf({
+  const leaf = openerActionLeaf({
     id: `open:terminals:new:${target.hostId}:${encodeURIComponent(target.cwd)}`,
     label,
     keywords: [target.cwd, "new", "terminal", "workspace"],
@@ -92,6 +98,9 @@ function terminalWorkspaceLeaf(
       });
     },
   });
+  if (status === null) return leaf;
+  const statusBadge = `${status.label.charAt(0).toUpperCase()}${status.label.slice(1)}`;
+  return { ...leaf, statusBadge, description: status.detail };
 }
 
 function terminalWorkspaceCheckingHint(
@@ -166,14 +175,12 @@ function terminalWorkspaceLeaves(
   const visibleRows = rowsWithoutResolvedMissing.filter(
     (row) => row.hostId === hostId,
   );
-  const selectableRows = visibleRows.filter(
-    (row) => row.disabledReason === null,
-  );
+  const selectableRows = visibleRows.filter(isBrowsable);
   const checkingRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && isWorkspaceResolvePending(row),
   );
   const disabledRows = visibleRows.filter(
-    (row) => row.disabledReason !== null && !isWorkspaceResolvePending(row),
+    (row) => !isBrowsable(row) && !isWorkspaceResolvePending(row),
   );
   const leaves = selectableRows.map((row) =>
     terminalWorkspaceLeaf(
@@ -181,6 +188,7 @@ function terminalWorkspaceLeaves(
       { hostId: row.hostId, cwd: row.runningDir },
       row.runningDir,
       hostClient,
+      worktreeFolderRowBadge(row),
     ),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
@@ -205,6 +213,7 @@ function terminalWorkspaceLeaves(
         { hostId, cwd: workspace.folderlessCwd },
         workspace.folderlessCwd,
         hostClient,
+        null,
       ),
     ];
   }

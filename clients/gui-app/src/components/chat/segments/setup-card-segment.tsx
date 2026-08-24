@@ -263,6 +263,7 @@ export function SetupCardSegment(props: {
 
   const total = workspaces.length;
   const readyCount = workspaces.filter((w) => w.state === "ready").length;
+  const hasProvisionFailure = workspaces.some(isProvisionFailure);
 
   const shared: SharedHandlers = {
     focusTerminal,
@@ -273,16 +274,48 @@ export function SetupCardSegment(props: {
     active: isActive,
   };
 
-  const title = headerTitle(aggregate.state, multi, total, isActive);
+  const title = headerTitle(
+    aggregate.state,
+    multi,
+    total,
+    isActive,
+    hasProvisionFailure,
+  );
+  const provisionFailureDetail =
+    workspaces.find(isProvisionFailure)?.errorMessage ?? null;
   const secondary = multi
     ? `${readyCount} of ${total} done`
     : workspaceSecondary(workspaces[0]);
   const ChevronIcon = expanded ? ChevronDown : ChevronRight;
+  const titleLabel = (
+    <span
+      className="text-foreground/85"
+      aria-label={
+        provisionFailureDetail === null
+          ? undefined
+          : `${title}. ${provisionFailureDetail}`
+      }
+    >
+      {title}
+    </span>
+  );
 
   const labelInner = (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
       <StatusIcon state={aggregate.state} active={isActive} />
-      <span className="text-foreground/85">{title}</span>
+      {provisionFailureDetail === null ? (
+        titleLabel
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            className="max-w-80 whitespace-normal"
+          >
+            {provisionFailureDetail}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {secondary.length > 0 ? (
         <>
           {/* Separate centered flex item so the dot aligns with the row's
@@ -410,16 +443,23 @@ function WorkspaceSetupDetail(
     tabReady,
     active,
   } = props;
+  const provisionFailed = isProvisionFailure(entry);
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
-      <RetryButton pending={retryPending} onRetry={() => onRetry(entry)} />
+      <RetryButton
+        pending={retryPending}
+        onRetry={() => onRetry(entry)}
+        label={provisionFailed ? "Retry creation" : "Retry setup"}
+      />
     ) : null;
   const reportIssue =
     entry.state === "failed" ? (
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Worktree setup failed",
+          title: provisionFailed
+            ? "Worktree creation failed"
+            : "Worktree setup failed",
           message: entry.errorMessage,
           code: null,
           source: "Setup",
@@ -446,7 +486,13 @@ function WorkspaceSetupDetail(
           {/* Spins while `git worktree add` runs (state "creating"); flips to a
               done check once the add finishes and the rest proceeds. */}
           <StatusIcon
-            state={entry.state === "creating" ? "creating" : "ready"}
+            state={
+              provisionFailed
+                ? "failed"
+                : entry.state === "creating"
+                  ? "creating"
+                  : "ready"
+            }
             active={active}
           />
           <span className="text-foreground/85">Creating worktree</span>
@@ -455,10 +501,25 @@ function WorkspaceSetupDetail(
           {/* Pending (static dot) until the worktree exists and the setup
               script starts; then reflects the live setup state. */}
           <StatusIcon
-            state={entry.state === "creating" ? "setting-up" : entry.state}
-            active={entry.state === "creating" ? false : active}
+            state={
+              provisionFailed
+                ? "setting-up"
+                : entry.state === "creating"
+                  ? "setting-up"
+                  : entry.state
+            }
+            active={
+              provisionFailed || entry.state === "creating" ? false : active
+            }
           />
-          <span className="text-foreground/85">Setting up worktree</span>
+          <span
+            className={cn(
+              "text-foreground/85",
+              provisionFailed && "text-muted-foreground",
+            )}
+          >
+            Setting up worktree
+          </span>
           {entry.state === "failed" && entry.setupExitCode !== null ? (
             <span className="text-muted-foreground">
               (exit {entry.setupExitCode})
@@ -502,7 +563,11 @@ function headerTitle(
   multi: boolean,
   total: number,
   active: boolean,
+  hasProvisionFailure: boolean,
 ): string {
+  if (state === "failed" && hasProvisionFailure) {
+    return "Worktree creation failed";
+  }
   if (multi) {
     if (state === "ready") return `${total} worktrees ready`;
     if (state === "failed") return "Worktree setup failed";
@@ -576,6 +641,7 @@ function OpenTerminalButton(props: {
 function RetryButton(props: {
   readonly pending: boolean;
   readonly onRetry: () => void;
+  readonly label: "Retry creation" | "Retry setup";
 }) {
   return (
     <Button
@@ -587,7 +653,7 @@ function RetryButton(props: {
       data-testid="setup-card-retry"
       className="text-destructive hover:text-destructive"
     >
-      Retry setup
+      {props.label}
       {props.pending ? (
         <AgentSpinningDots
           className="text-current"
@@ -597,6 +663,10 @@ function RetryButton(props: {
       ) : null}
     </Button>
   );
+}
+
+function isProvisionFailure(entry: SetupCardWorkspace): boolean {
+  return entry.state === "failed" && entry.retryFolderIntent !== null;
 }
 
 /**
