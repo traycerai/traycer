@@ -210,6 +210,18 @@ export function publishTileSurfaceEnvironment(
  * publish. Once a destination slot has published for the same instance, the
  * source slot's later teardown is a no-op rather than a concealment of the
  * live record.
+ *
+ * The opposite order is the accepted gap. A source slot that tears down
+ * BEFORE any destination has published leaves the record retained but
+ * unpresented, and it stays unpresented until that destination's own publish
+ * restores the claim. Nothing here schedules or bounds that interval: the
+ * bound is the destination publish, NOT a frame. It is short today only
+ * because the transfers that produce it are choreographed synchronously - a
+ * same-commit structural move republishes during the same layout phase, so
+ * the gap never reaches paint - and it would widen if that choreography ever
+ * became asynchronous. A record briefly unpainted while genuinely between
+ * owners is the deliberate trade for never painting two owners at once, which
+ * is the unrecoverable failure.
  */
 export function retractTileSurfacePresentation(
   instanceId: string,

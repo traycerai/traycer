@@ -299,6 +299,38 @@ describe("tile surface environment registry", () => {
     unsubscribe();
   });
 
+  it("the source-first transfer gap is bounded by the destination publish, not by a frame", async () => {
+    seedMember("chat-1", "tab-1");
+    const source = environment({});
+    publishTileSurfaceEnvironment(source);
+
+    // Source tears down before any destination has published - the accepted
+    // gap. The record is RETAINED (still non-null, still a member) but stops
+    // claiming the rect.
+    retractTileSurfacePresentation(
+      "chat-1",
+      source.services.geometryAnchorElement,
+    );
+    expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      false,
+    );
+
+    // Elapsed time does not end the gap: nothing in the registry schedules or
+    // bounds the recovery. Only the destination's own publish does - which is
+    // why the bound is "until the destination publishes", not "one frame".
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      false,
+    );
+
+    publishTileSurfaceEnvironment(environment({}));
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      true,
+    );
+  });
+
   it("retracting an already-unpresented or unknown record notifies nobody", () => {
     seedMember("chat-1", "tab-1");
     const published = environment({});
