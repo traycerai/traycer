@@ -205,7 +205,7 @@ const COMPATIBILITY_REASSURANCE =
 export async function clientCompatibilityRecoveryHintForVector(input: {
   readonly requirement: ClientCompatibilityRequirement | null;
   readonly source: CliInstallSource;
-  readonly readFeedEpoch: () => Promise<number | null>;
+  readonly readFeedEpoch: (signal: AbortSignal) => Promise<number | null>;
 }): Promise<string | null> {
   const { requirement } = input;
   if (requirement === null) return null;
@@ -220,15 +220,22 @@ export async function clientCompatibilityRecoveryHintForVector(input: {
 }
 
 async function readRecoveryFeedEpoch(
-  readFeedEpoch: () => Promise<number | null>,
+  readFeedEpoch: (signal: AbortSignal) => Promise<number | null>,
 ): Promise<number | null> {
+  const controller = new AbortController();
   let timer: NodeJS.Timeout | null = null;
   const deadline = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), RECOVERY_FEED_LOOKUP_DEADLINE_MS);
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(null);
+    }, RECOVERY_FEED_LOOKUP_DEADLINE_MS);
     timer.unref?.();
   });
   try {
-    return await Promise.race([readFeedEpoch().catch(() => null), deadline]);
+    return await Promise.race([
+      readFeedEpoch(controller.signal).catch(() => null),
+      deadline,
+    ]);
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
@@ -254,7 +261,7 @@ function manualVectorRemedy(
   // upgrade. Unstamped, insufficient, and unreachable are one answer here -
   // the action is identical for all three, and naming the internals of a
   // release feed to a blocked user is noise.
-  return "Download the latest Traycer CLI from https://github.com/traycerai/traycer/releases - the published CLI feed does not offer a build new enough for this host, so 'traycer cli upgrade' will not resolve it.";
+  return "Download the latest Traycer CLI from https://github.com/traycerai/traycer/releases - the CLI feed could not verify a build new enough for this host, so it could not verify that 'traycer cli upgrade' will resolve it.";
 }
 
 // Source-agnostic one-liner for callers that surface the verdict without an

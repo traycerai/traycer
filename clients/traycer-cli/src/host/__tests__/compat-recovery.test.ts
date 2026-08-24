@@ -194,7 +194,9 @@ describe("clientCompatibilityRecoveryHintForVector", () => {
       // a wasted upgrade cycle. What must never appear is the IMPERATIVE form
       // the sufficient branch uses, which is the actual instruction.
       expect(hint).not.toMatch(/Run 'traycer cli upgrade'/u);
-      expect(hint).toMatch(/'traycer cli upgrade' will not resolve it/u);
+      expect(hint).toMatch(
+        /could not verify that 'traycer cli upgrade' will resolve it/u,
+      );
     },
   );
 
@@ -206,20 +208,27 @@ describe("clientCompatibilityRecoveryHintForVector", () => {
     });
     expect(hint).toContain("https://github.com/traycerai/traycer/releases");
     expect(hint).not.toMatch(/Run 'traycer cli upgrade'/u);
-    expect(hint).toMatch(/'traycer cli upgrade' will not resolve it/u);
+    expect(hint).toMatch(
+      /could not verify that 'traycer cli upgrade' will resolve it/u,
+    );
   });
 
   it("bounds a stalled recovery-only feed lookup", async () => {
     vi.useFakeTimers();
     try {
+      let recoverySignal: AbortSignal | undefined;
       const hintPromise = clientCompatibilityRecoveryHintForVector({
         requirement: requirement(),
         source: "manual",
-        readFeedEpoch: () => new Promise(() => undefined),
+        readFeedEpoch: (signal) => {
+          recoverySignal = signal;
+          return new Promise(() => undefined);
+        },
       });
       await vi.advanceTimersByTimeAsync(3_000);
       const hint = await hintPromise;
       expect(hint).toContain("https://github.com/traycerai/traycer/releases");
+      expect(recoverySignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }

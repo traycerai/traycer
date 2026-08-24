@@ -62,8 +62,14 @@ export interface CliVersionsManifest {
 const CLI_VERSIONS_URL = releaseManifestUrl("cli-manifest");
 
 export async function fetchCliVersions(): Promise<CliVersionsManifest> {
+  return fetchCliVersionsWithSignal(null);
+}
+
+async function fetchCliVersionsWithSignal(
+  signal: AbortSignal | null,
+): Promise<CliVersionsManifest> {
   const url = CLI_VERSIONS_URL;
-  const body = await fetchText(url, { signal: null, onHeartbeat: null });
+  const body = await fetchText(url, { signal, onHeartbeat: null });
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -139,9 +145,11 @@ function readCompatibilityEpoch(value: unknown): number | null {
  * cannot establish that `cli upgrade` would deliver a build that clears the
  * floor.
  */
-export async function readCliFeedCompatibilityEpoch(): Promise<number | null> {
+export async function readCliFeedCompatibilityEpoch(
+  signal: AbortSignal,
+): Promise<number | null> {
   try {
-    return (await fetchCliVersions()).compatibilityEpoch;
+    return (await fetchCliVersionsWithSignal(signal)).compatibilityEpoch;
   } catch {
     return null;
   }

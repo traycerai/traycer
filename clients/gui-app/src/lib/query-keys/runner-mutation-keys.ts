@@ -1,4 +1,5 @@
 import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
 
 const supportBridgeQueryScopeIds = new WeakMap<object, number>();
 let nextSupportBridgeQueryScopeId = 1;
@@ -155,7 +156,7 @@ export const runnerQueryKeys = {
     readonly candidateSufficient: boolean;
     readonly allowPrerelease: boolean;
     /**
-     * The held candidate's status, or `"none"` when the updater holds nothing.
+     * The updater status; `"idle"` means it currently holds no candidate.
      *
      * ⚠ THIS SEGMENT IS NOT A CACHE-EFFICIENCY DETAIL - it is what makes
      * `resolveCompatRecovery`'s SIDE EFFECTS run when they are needed. Resolving
@@ -172,7 +173,7 @@ export const runnerQueryKeys = {
      * asked again - leaving a Windows user with a staged build still armed to
      * install on quit, and a macOS user with no warning that one will.
      */
-    readonly candidateStatus: string;
+    readonly candidateStatus: DesktopAppUpdateSnapshot["status"];
   }) =>
     [
       ...runnerQueryKeys.appUpdateCompatRecoveryScope(input.runnerHostScopeId),

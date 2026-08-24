@@ -1947,10 +1947,20 @@ describe("compat recovery: RC probe", () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     await updater.installAutoUpdater(true, makeDeps(true));
     autoUpdater.setFeedURL.mockClear();
-    // Never settles, and never rejects. That is the shape a hung socket has.
+    let recoverySignal: AbortSignal | undefined;
+    // Never settles on its own. It rejects only when the recovery deadline
+    // aborts it, proving the fallback does not leave a live request behind.
     vi.stubGlobal(
       "fetch",
-      vi.fn(() => new Promise(() => undefined)),
+      vi.fn(
+        (_input: string | URL | Request, init: RequestInit | undefined) =>
+          new Promise((_resolve, reject) => {
+            recoverySignal = init?.signal ?? undefined;
+            recoverySignal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      ),
     );
 
     vi.useFakeTimers();
@@ -1963,6 +1973,7 @@ describe("compat recovery: RC probe", () => {
       const plan = await pending;
       expect(plan.route).toBe("manual");
       expect(plan.rcCandidateVersion).toBeNull();
+      expect(recoverySignal?.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -2030,7 +2041,13 @@ describe("compat recovery: RC probe", () => {
     // Reading the unreconciled field would let the probe run against the feed
     // the user is ALREADY on and offer an opt-in they already have, whose
     // `setAllowPrereleaseUpdates(true)` then answers `unchanged`.
-    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const persistControl: PersistPrereleaseControl = { calls: [], gate: null };
+    const gateControl: { release: (() => void) | null } = { release: null };
+    persistControl.gate = new Promise<void>((resolve) => {
+      gateControl.release = resolve;
+    });
+    const { autoUpdater, preferences, updater } =
+      await loadUpdaterWithPersistControl(NOT_LINUX_GUIDANCE, persistControl);
     vi.stubGlobal(
       "fetch",
       fetchRouter([macReleaseFixture("desktop-v2.0.0-rc.1", true)], {
@@ -2038,7 +2055,12 @@ describe("compat recovery: RC probe", () => {
       }),
     );
     await updater.installAutoUpdater(true, makeDeps(true));
-    await updater.setAllowPrereleaseUpdates(true);
+    const pendingChannelChange = updater.setAllowPrereleaseUpdates(true);
+    await vi.waitFor(() => expect(persistControl.calls).toEqual([true]));
+    // Persistence is already externally observable while performChannelChange
+    // is still gated before its snapshot update: the exact split state this
+    // test exists to exercise.
+    preferences.allowPrerelease = true;
 
     const plan = await updater.resolveCompatRecovery({
       minimumEpoch: 2,
@@ -2046,6 +2068,11 @@ describe("compat recovery: RC probe", () => {
     });
 
     expect(plan.route).toBe("manual");
+    const release = gateControl.release;
+    if (release === null)
+      throw new Error("Expected the persist gate to be pending");
+    release();
+    await pendingChannelChange;
   });
 
   it("a held sufficient candidate is update-available, even when the host is on RC", async () => {

@@ -1,3 +1,4 @@
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   HostPlatformAsset,
@@ -257,7 +258,7 @@ function parseVersionEntry(
  */
 function parseNullableEpoch(raw: unknown, sourceLabel: string): number | null {
   if (raw === undefined || raw === null) return null;
-  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) {
+  if (typeof raw !== "number" || !isValidCompatibilityEpoch(raw)) {
     throw manifestInvalid(
       sourceLabel,
       "'minimumEpoch' must be a positive integer, null, or absent",

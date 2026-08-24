@@ -65,11 +65,15 @@ describe("readCliFeedCompatibilityEpoch", () => {
 
   it("returns the stamp when the feed is readable", async () => {
     fetchTextMock.mockResolvedValue(body({ compatibilityEpoch: 2 }));
-    expect(await readCliFeedCompatibilityEpoch()).toBe(2);
+    expect(
+      await readCliFeedCompatibilityEpoch(new AbortController().signal),
+    ).toBe(2);
   });
 
   it("returns null when the feed is unreachable, never throwing", async () => {
     fetchTextMock.mockRejectedValue(new Error("offline"));
-    expect(await readCliFeedCompatibilityEpoch()).toBeNull();
+    expect(
+      await readCliFeedCompatibilityEpoch(new AbortController().signal),
+    ).toBeNull();
   });
 });

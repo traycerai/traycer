@@ -1,3 +1,4 @@
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { isDevBuild } from "../../config";
 import type { DesktopAppUpdateCheckIntent } from "../../ipc-contracts/app-update-types";
 import {
@@ -104,8 +105,7 @@ function parseCompatRecoveryRequest(value: unknown): {
   return {
     minimumEpoch:
       typeof minimumEpoch === "number" &&
-      Number.isSafeInteger(minimumEpoch) &&
-      minimumEpoch > 0
+      isValidCompatibilityEpoch(minimumEpoch)
         ? minimumEpoch
         : Number.MAX_SAFE_INTEGER,
     hostAllowsRcRecovery: record.hostAllowsRcRecovery === true,

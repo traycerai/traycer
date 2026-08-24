@@ -1050,8 +1050,10 @@ async function probeRcRecoveryCandidate(
   if (existing !== undefined) {
     return existing;
   }
+  const controller = new AbortController();
   const probe = withRcRecoveryProbeDeadline(
-    runRcRecoveryProbe(minimumEpoch),
+    runRcRecoveryProbe(minimumEpoch, controller.signal),
+    controller,
   ).catch((error: unknown) => {
     // A probe failure is not a verdict about RC - it is "we could not find
     // out". Route it exactly like "nothing found": the manual link. Surfacing
@@ -1084,6 +1086,7 @@ async function probeRcRecoveryCandidate(
  */
 function withRcRecoveryProbeDeadline(
   probe: Promise<DesktopReleaseCandidate | null>,
+  controller: AbortController,
 ): Promise<DesktopReleaseCandidate | null> {
   let timer: NodeJS.Timeout | null = null;
   const deadline = new Promise<DesktopReleaseCandidate | null>((resolve) => {
@@ -1091,6 +1094,7 @@ function withRcRecoveryProbeDeadline(
       log.warn("[updater] RC recovery probe timed out", {
         deadlineMs: RC_RECOVERY_PROBE_DEADLINE_MS,
       });
+      controller.abort();
       resolve(null);
     }, RC_RECOVERY_PROBE_DEADLINE_MS);
     timer.unref?.();
@@ -1102,12 +1106,13 @@ function withRcRecoveryProbeDeadline(
 
 async function runRcRecoveryProbe(
   minimumEpoch: number,
+  signal: AbortSignal,
 ): Promise<DesktopReleaseCandidate | null> {
   const coordinate = resolveUpdateRepo();
   if (coordinate === null) {
     return null;
   }
-  const all = await collectDesktopReleaseCandidates(coordinate);
+  const all = await collectDesktopReleaseCandidates(coordinate, signal);
   const releaseCandidates = all
     .filter((candidate) => candidate.version.includes("-rc."))
     // NEWER THAN THE RUNNING BUILD, or the offer cannot be honoured. This
@@ -1153,7 +1158,7 @@ async function runRcRecoveryProbe(
       continue;
     }
     fetched += 1;
-    const rawManifest = await fetchDesktopReleaseManifest(request);
+    const rawManifest = await fetchDesktopReleaseManifest(request, signal);
     if (rawManifest === null) {
       continue;
     }
@@ -1471,7 +1476,10 @@ function applyDesktopReleaseFeed(feed: DesktopUpdateFeed): void {
 async function findNewestDesktopRelease(
   coordinate: GitHubRepoCoordinate,
 ): Promise<DesktopReleaseCandidate | null> {
-  const candidates = await collectDesktopReleaseCandidates(coordinate);
+  const candidates = await collectDesktopReleaseCandidates(
+    coordinate,
+    undefined,
+  );
   // Evaluate candidates newest-first, actually fetching + parsing each channel
   // manifest and fully validating it (tag/version agreement, checksums,
   // referenced installer assets, applicable installer, OS compatibility). The
@@ -1504,7 +1512,7 @@ async function findNewestDesktopRelease(
     if (request === null) {
       continue;
     }
-    const rawManifest = await fetchDesktopReleaseManifest(request);
+    const rawManifest = await fetchDesktopReleaseManifest(request, undefined);
     if (rawManifest === null) {
       // A missing/errored manifest (HTTP failure) makes this release unusable;
       // fall back to the next. A transport-level failure propagates as a
@@ -1544,6 +1552,7 @@ async function findNewestDesktopRelease(
 // beyond the cap is never mistaken for "up to date".
 async function collectDesktopReleaseCandidates(
   coordinate: GitHubRepoCoordinate,
+  signal: AbortSignal | undefined,
 ): Promise<DesktopReleaseCandidate[]> {
   const token = PRIVATE_UPDATE_TOKEN.trim();
   const headers: Record<string, string> = {
@@ -1554,7 +1563,7 @@ async function collectDesktopReleaseCandidates(
   const candidates: DesktopReleaseCandidate[] = [];
   for (let page = 1; page <= MAX_DISCOVERY_PAGES; page += 1) {
     const url = `https://api.github.com/repos/${coordinate.owner}/${coordinate.repo}/releases?per_page=100&page=${page}`;
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { headers, signal });
     if (!response.ok) {
       throw new Error(
         `GitHub release discovery failed with HTTP ${response.status}`,
@@ -1578,11 +1587,17 @@ async function collectDesktopReleaseCandidates(
 // the release as unusable and falls back to the next; a transport-level failure
 // rejects so a genuine connectivity problem surfaces as a discovery error rather
 // than a false "up to date".
-async function fetchDesktopReleaseManifest(request: {
-  readonly url: string;
-  readonly headers: Record<string, string>;
-}): Promise<string | null> {
-  const response = await fetch(request.url, { headers: request.headers });
+async function fetchDesktopReleaseManifest(
+  request: {
+    readonly url: string;
+    readonly headers: Record<string, string>;
+  },
+  signal: AbortSignal | undefined,
+): Promise<string | null> {
+  const response = await fetch(request.url, {
+    headers: request.headers,
+    signal,
+  });
   if (!response.ok) {
     return null;
   }
