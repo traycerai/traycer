@@ -6,7 +6,10 @@ import {
   type ClientCompatibilityRequirement,
   type ClientHandshakeIdentity,
 } from "@traycer/protocol/framework/client-identity";
-import { worktreeBusyHoldersSchema } from "./worktree-busy-holders";
+import {
+  worktreeBusyHoldersSchema,
+  type WorktreeBusyHolder,
+} from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -238,7 +241,11 @@ export type HostResponseFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly result: unknown | null;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: readonly WorktreeBusyHolder[];
+  } | null;
 };
 
 /**

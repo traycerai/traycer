@@ -307,6 +307,15 @@ class FakeRelayHost {
   /** Answers the next REQUEST with this result payload. */
   unaryResult: unknown = { ready: true };
   /**
+   * When set, auto-RESPONSE carries this error envelope (and a null result)
+   * instead of `unaryResult`. Used to pin `WORKTREE_BUSY` holder preservation.
+   */
+  unaryError: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: unknown;
+  } | null = null;
+  /**
    * When true, a REQUEST is recorded in `unaryRequests` but NOT auto-answered
    * with a RESPONSE - lets a test inject its own terminal frame (e.g. a
    * stream-scoped FATAL) for that request's streamId instead of racing the
@@ -619,8 +628,8 @@ class FakeRelayHost {
         json: {
           requestId: typeof json.requestId === "string" ? json.requestId : "",
           method: typeof json.method === "string" ? json.method : "",
-          result: this.unaryResult,
-          error: null,
+          result: this.unaryError === null ? this.unaryResult : null,
+          error: this.unaryError,
         },
         binary: null,
       });
@@ -3144,6 +3153,109 @@ describe("RemoteSession per-stream inbound error routing", () => {
   // viable in a unit test) or adding an injection seam to `RemoteSession`,
   // which this task's brief forbids touching. Skipped; flagged for whoever
   // owns that seam decision.
+});
+
+describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
+  const statusContract = defineRpcContract({
+    method: "host.status",
+    schemaVersion: { major: 1, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ready: z.boolean() }),
+  });
+  const statusRegistry: VersionedRpcRegistry =
+    defineFloorAwareVersionedRpcRegistry(["host.status"] as const, {
+      "host.status": {
+        1: {
+          latestMinor: 0,
+          versions: {
+            0: {
+              contract: statusContract,
+              upgradeFromPreviousVersion: null,
+            },
+          },
+          downgradePathsFromLatest: {},
+        },
+      },
+    });
+
+  const holders = [
+    {
+      ownerRef: {
+        epicId: "epic-1",
+        ownerKind: "chat" as const,
+        ownerId: "chat-1",
+      },
+      holdKind: "chat-turn" as const,
+      activity: "working" as const,
+      label: "Chat is mid-turn",
+    },
+  ];
+
+  it(
+    "keeps holders on a WORKTREE_BUSY unary error",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders,
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, undefined)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({
+          code: "WORKTREE_BUSY",
+          message: "in use",
+        });
+        expect((error as HostRpcError).holders).toEqual(holders);
+      } finally {
+        session.close();
+      }
+    },
+    WAIT.timeout,
+  );
+
+  it(
+    "leaves holders null when a WORKTREE_BUSY envelope omits them",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryError = { code: "WORKTREE_BUSY", message: "in use" };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, undefined)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect((error as HostRpcError).holders).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    WAIT.timeout,
+  );
 });
 
 describe("RemoteSession pending-unary FATAL rejection (S3)", () => {

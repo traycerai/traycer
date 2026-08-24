@@ -2701,7 +2701,64 @@ describe("WsRpcClient", () => {
       return (
         error instanceof HostRpcError &&
         error.code === "DOWNGRADE_UNSUPPORTED" &&
-        error.message === "no bridge"
+        error.message === "no bridge" &&
+        error.holders === null
+      );
+    });
+  });
+
+  it("preserves WORKTREE_BUSY holders from a response error envelope", async () => {
+    const holders = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "chat" as const,
+          ownerId: "chat-1",
+        },
+        holdKind: "chat-turn" as const,
+        activity: "working" as const,
+        label: "Chat is mid-turn",
+      },
+    ];
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-busy-holders",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-busy-holders",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 0 },
+      result: null,
+      error: {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders,
+      },
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "WORKTREE_BUSY" &&
+        error.message === "in use" &&
+        error.holders !== null &&
+        JSON.stringify(error.holders) === JSON.stringify(holders)
       );
     });
   });
