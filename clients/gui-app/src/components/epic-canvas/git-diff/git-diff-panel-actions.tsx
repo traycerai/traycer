@@ -177,7 +177,10 @@ export function GitDiffPanelInlineActions(props: {
         side="bottom"
         align="end"
         sideOffset={4}
-        className="min-w-0 max-w-[min(16rem,calc(100vw-2rem))]"
+        // No `max-w-*` here: the primitive owns `max-w-safe-dvw`, and CSS
+        // allows one width clamp per element, so a cap named by the caller
+        // DISPLACES the safe-area one instead of tightening it.
+        className="min-w-0"
       >
         <GitDiffPanelMenuItems epicId={props.epicId} />
       </DropdownMenuContent>
