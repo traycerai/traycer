@@ -25,7 +25,7 @@
     "test:watch": "vitest --config vitest.config.ts"
   },
   "dependencies": {
-    "@capacitor/android": "8.4.2",
+    "@capacitor/android": "8.5.0",
     "@capacitor/app": "8.1.1",
     "@capacitor/app-launcher": "8.0.1",
     "@capacitor/barcode-scanner": "3.1.0",
