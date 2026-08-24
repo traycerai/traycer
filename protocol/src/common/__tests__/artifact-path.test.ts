@@ -315,7 +315,30 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
     },
   );
 
-  it.each(["comments", ".comment", ".comments2", ".comments-old", "", "images"])(
+  /**
+   * Win32 drops trailing dots and spaces from a path component, so
+   * `CreateFile(".comments.")` opens `.comments`. Such a name is hard to create
+   * ON Windows for that same reason, but it travels: authored on a
+   * dot-sensitive host, synced, and then resolved on Windows onto the
+   * projection directory.
+   */
+  it.each([".comments.", ".comments ", ".comments...", ".COMMENTS. .", ".comments  "])(
+    "matches %s, which Win32 canonicalizes onto the projection directory",
+    (name) => {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(true);
+    },
+  );
+
+  it.each([
+    "comments",
+    ".comment",
+    ".comments2",
+    ".comments-old",
+    "",
+    "images",
+    ".comment.s",
+    " .comments",
+  ])(
     "does not match the near-miss %s, a distinct directory on every platform",
     (name) => {
       expect(isEpicArtifactCommentsDirName(name)).toBe(false);

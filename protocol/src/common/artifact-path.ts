@@ -87,22 +87,49 @@ function asciiLowerCase(value: string): string {
 }
 
 /**
- * Whether a single directory name IS the reserved comment-projection dirname,
- * folding ASCII case.
+ * Strip the trailing dots and spaces Win32 drops from a path component.
+ *
+ * `CreateFile(".comments.")` and `CreateFile(".comments ")` both open
+ * `.comments` - the trailing padding never reaches the filesystem. Such a name
+ * cannot easily be CREATED on Windows for the same reason, but it can be
+ * created on a case- and dot-sensitive host and then travel: the epic tree is
+ * synced, and on Windows that folder resolves onto the projection directory.
+ *
+ * Only trailing padding is stripped, never interior or leading, so `.comments`
+ * itself is untouched and `.comment.s` stays a distinct name.
+ */
+function stripWin32TrailingPadding(value: string): string {
+  return value.replace(/[. ]+$/u, "");
+}
+
+/**
+ * Whether a single directory name ADDRESSES the reserved comment-projection
+ * directory on any supported platform - not whether it is spelled that way.
+ * Folds ASCII case (case-insensitive volumes) and Win32 trailing dot/space
+ * padding.
  *
  * Exported because "is this our projection directory?" is asked in two places
  * that must never disagree: here, where a matching chain segment is REFUSED as
  * an artifact, and in the host's file-sync, where a matching directory is
- * EXEMPTED from the unmanaged-folder sweep. If the ingest side folds case and
+ * EXEMPTED from the unmanaged-folder sweep. If the ingest side normalizes and
  * the sweep side does not, a `.COMMENTS/` on a case-insensitive volume becomes
  * a directory that can be neither ingested nor recognized as ours - so the
  * sweep deletes the live projection, which has no local authority to
  * regenerate from. Sharing the predicate is what makes that divergence
  * unrepresentable, in the same spirit as sharing the dirname constants.
+ *
+ * Every widening here is safe against the strand-a-real-artifact failure that
+ * kept the gate one name wide: `slugify` maps every `[^a-z0-9]` run to `-`, so
+ * no minted folderName carries a leading dot, any casing, or trailing padding.
+ * The only names newly refused are ones that address our directory anyway.
  */
 export function isEpicArtifactCommentsDirName(name: string): boolean {
-  // The constant is already ASCII-lowercase, so only the input is folded.
-  return asciiLowerCase(name) === EPIC_ARTIFACT_COMMENTS_DIRNAME;
+  // The constant is already ASCII-lowercase and unpadded, so only the input is
+  // normalized. Order does not matter - padding carries no case.
+  return (
+    asciiLowerCase(stripWin32TrailingPadding(name)) ===
+    EPIC_ARTIFACT_COMMENTS_DIRNAME
+  );
 }
 
 /**
