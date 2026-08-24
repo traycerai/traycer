@@ -168,35 +168,48 @@ export type ClientCompatibilityFailure =
   | "below-minimum";
 
 /**
- * Which release line the remedy lives on.
+ * The release lines a host build can report as its own, for the client's
+ * RECOVERY ROUTING - never for admission.
  *
- * Exported as VALUES, not only as a type, because the channel has runtime
- * readers outside this package: a host validates the channel baked into its own
- * config at startup, and the release tooling validates the one it is about to
- * stamp. A type-only export leaves each of those hand-writing `"stable"` and
- * `"rc"`, which is how a third channel gets added here and silently rejected
- * there.
+ * Deliberately NOT a closed union on the wire (see
+ * {@link ClientCompatibilityRequirement.hostReleaseChannel}): a host bakes this
+ * string from its own build config, which already carries `dev` for a source
+ * build, and a future line must not make a shipped client fail to parse a
+ * fatal. These are the values a client is expected to RECOGNIZE; everything
+ * else is legal and simply routes conservatively.
  */
-export const CLIENT_UPGRADE_CHANNELS = ["stable", "rc"] as const;
-export type ClientUpgradeChannel = (typeof CLIENT_UPGRADE_CHANNELS)[number];
+export const KNOWN_HOST_RELEASE_CHANNELS = ["stable", "rc", "dev"] as const;
+export type KnownHostReleaseChannel =
+  (typeof KNOWN_HOST_RELEASE_CHANNELS)[number];
 
-export function isClientUpgradeChannel(
-  value: unknown,
-): value is ClientUpgradeChannel {
-  return (
-    typeof value === "string" &&
-    (CLIENT_UPGRADE_CHANNELS as readonly string[]).includes(value)
-  );
+/**
+ * Whether a rejecting host's release channel authorizes a client to look for
+ * its remedy on the RC line.
+ *
+ * The one question this answers, and it is deliberately narrow: only the exact
+ * string `rc` does. An absent channel (a host that predates the field), `dev`,
+ * `stable`, and any value this build has never heard of all return `false`, so
+ * a client never offers an RC opt-in on the strength of a channel it could not
+ * interpret. Written as a positive match rather than "not stable" for exactly
+ * that reason - the negative form turns every future channel into an RC route.
+ */
+export function hostReleaseChannelAllowsRcRecovery(
+  hostReleaseChannel: string | null | undefined,
+): boolean {
+  return hostReleaseChannel === "rc";
 }
 
 /**
  * The structured half of an epoch rejection, carried additively on
  * {@link FatalErrorDetails}.
  *
- * `minimumKnownClientAppVersion` is the earliest official build known to carry
- * the required epoch on the relevant channel. It EXPLAINS the remedy; it is
- * never compared for admission, so a backport that declares epoch 2 is
- * accepted even when its SemVer sorts below this string.
+ * WHAT IS AND IS NOT HERE. Admission is epoch-only, and so is the remedy: the
+ * host states the generation it requires and which release line IT is on, and
+ * the client resolves an obtainable build through the update mechanism it
+ * already owns. A product version, a per-family catalog, or a download URL
+ * never appears on this wire - the host cannot know which build of which client
+ * family a given peer can actually install, and a host that guesses names a
+ * remedy some rejected population cannot follow.
  */
 export type ClientCompatibilityRequirement = {
   readonly minimumCompatibilityEpoch: number;
@@ -205,8 +218,49 @@ export type ClientCompatibilityRequirement = {
   readonly observedClientKind: string | null;
   readonly observedClientAppVersion: string | null;
   readonly observedClientAppVersionStatus: "valid" | "missing" | "invalid";
+  /**
+   * @deprecated Never populated. Hosts stopped naming a remedy build when
+   * admission became epoch-only: the host has no way to know which build of
+   * desktop, CLI, or a future client family a given peer can obtain, and one
+   * string cannot be the answer for all of them.
+   *
+   * KEPT ON THE WIRE, nullable, because shipped clients parse this object with
+   * their own copy of the schema and a REMOVED member is a parse failure for
+   * them - which would turn an actionable "update your app" into an
+   * unactionable malformed fatal for precisely the population this mechanism
+   * exists to reach. They already handle `null`.
+   */
   readonly minimumKnownClientAppVersion: string | null;
-  readonly upgradeChannel: ClientUpgradeChannel | null;
+  /**
+   * @deprecated Never populated, kept nullable for the same wire-compatibility
+   * reason as {@link minimumKnownClientAppVersion}. A client that wants to know
+   * which line the HOST is on reads {@link hostReleaseChannel} instead - which
+   * is a fact about the host, not a claim about where some other component's
+   * remedy was published.
+   */
+  readonly upgradeChannel: "stable" | "rc" | null;
+  /**
+   * The release line of the host that produced this rejection - `stable`, `rc`,
+   * or `dev` today (see {@link KNOWN_HOST_RELEASE_CHANNELS}).
+   *
+   * OPTIONAL, not nullable, and the two are different guarantees here. A host
+   * that predates this field omits the key entirely, so a newer client parsing
+   * an older host's fatal must not require it; making it required would break
+   * exactly the direction wire compatibility is supposed to protect.
+   *
+   * AN OPEN STRING, not an enum, for the mirror-image reason: a host bakes this
+   * from its own build config, and a future line must not make a shipped
+   * client's schema reject the whole requirement over a value it has never
+   * heard of. Consumers route through
+   * {@link hostReleaseChannelAllowsRcRecovery}, which recognizes `rc` and
+   * treats everything else - including `dev` and anything unknown - as no RC
+   * routing.
+   *
+   * IT NEVER PARTICIPATES IN ADMISSION. The host already decided that from the
+   * epoch alone; this exists so a client can tell whether looking on the RC
+   * line could possibly find a build that clears the floor.
+   */
+  readonly hostReleaseChannel?: string;
 };
 
 export const clientCompatibilityRequirementSchema = z.object({
@@ -217,7 +271,16 @@ export const clientCompatibilityRequirementSchema = z.object({
   observedClientAppVersion: z.string().nullable(),
   observedClientAppVersionStatus: z.enum(["valid", "missing", "invalid"]),
   minimumKnownClientAppVersion: z.string().nullable(),
-  upgradeChannel: z.enum(CLIENT_UPGRADE_CHANNELS).nullable(),
+  // Inline literals, deliberately not a shared exported constant: the member
+  // is deprecated and never populated, so these values exist only to keep the
+  // parse shape of an already-shipped wire member. Nothing else may grow a
+  // dependency on them.
+  upgradeChannel: z.enum(["stable", "rc"]).nullable(),
+  // `.optional()` and a bare `z.string()`, both load-bearing - see the type's
+  // member doc. Absent-tolerant so an older host's fatal still parses here, and
+  // unconstrained so a newer host's channel does not fail the whole object in a
+  // client that has already shipped.
+  hostReleaseChannel: z.string().optional(),
 });
 
 /**

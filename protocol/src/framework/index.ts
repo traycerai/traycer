@@ -179,20 +179,20 @@ export type {
   ClientCompatibilityFailure,
   ClientCompatibilityRequirement,
   ClientHandshakeIdentity,
-  ClientUpgradeChannel,
   FirstPartyClientIdentity,
   FirstPartyClientKind,
+  KnownHostReleaseChannel,
 } from "./client-identity";
 
 export {
-  CLIENT_UPGRADE_CHANNELS,
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+  KNOWN_HOST_RELEASE_CHANNELS,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
   MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
   STRICT_SEMVER_PATTERN,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
-  isClientUpgradeChannel,
+  hostReleaseChannelAllowsRcRecovery,
   isStrictSemVer,
   isValidCompatibilityEpoch,
   toClientHandshakeIdentity,

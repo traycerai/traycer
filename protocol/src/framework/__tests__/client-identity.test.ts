@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  CLIENT_UPGRADE_CHANNELS,
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+  KNOWN_HOST_RELEASE_CHANNELS,
   LEGACY_CLIENT_COMPATIBILITY_EPOCH,
   MAX_DIAGNOSTIC_APP_VERSION_LENGTH,
   STRICT_SEMVER_PATTERN,
   isStrictSemVer,
   clientCompatibilityRequirementSchema,
   clientHandshakeIdentitySchema,
-  isClientUpgradeChannel,
+  hostReleaseChannelAllowsRcRecovery,
   isValidCompatibilityEpoch,
   toClientHandshakeIdentity,
   type ClientCompatibilityRequirement,
@@ -331,7 +331,7 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
   const fatal = {
     code: "INCOMPATIBLE",
     reason:
-      "This Traycer client is too old for this host. Update the Traycer app or CLI to 1.2.0-rc.2 or newer. Updating the host again will not help. Do not reset Traycer; your agents and history remain stored.",
+      "This Traycer client is too old for this host. Update the Traycer app or CLI to the latest version. Updating the host again will not help. Do not reset Traycer; your agents and history remain stored.",
     incompatibleMethods: null,
     upgradeGuidance: { clientShouldUpgrade: true, hostShouldUpgrade: false },
     retryable: false,
@@ -356,7 +356,11 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
     });
     // The reason has to carry the remedy on its own, contradict the old UI's
     // hard-coded host-update action, and rule out the destructive recovery.
+    // Generic on purpose: a versioned "install 1.2.0" was only ever true for
+    // one client family, and this sentence reaches desktop, CLI, and anything
+    // later whose version chains have nothing to do with each other.
     expect(parsed.reason).toContain("Update the Traycer app or CLI");
+    expect(parsed.reason).toContain("the latest version");
     expect(parsed.reason).toContain("Updating the host again will not help");
     expect(parsed.reason).toContain("Do not reset Traycer");
   });
@@ -377,33 +381,62 @@ describe("clientCompatibilityRequirement on the fatal envelope", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("still parses the deprecated remedy members when they are null", () => {
+    // Current hosts never populate these. They stay on the wire as REQUIRED
+    // nullable members because a REMOVED key is a parse failure for every
+    // client that already shipped a schema requiring them.
+    expect(
+      clientCompatibilityRequirementSchema.safeParse({
+        ...REQUIREMENT,
+        minimumKnownClientAppVersion: null,
+        upgradeChannel: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("FAILS to parse a requirement that omits a deprecated member entirely", () => {
+    // Required-nullable, not optional. That is the wire-compat guarantee for
+    // shipped clients: they already handle `null`, they do not handle a
+    // missing key. Dropping either member here would turn an actionable
+    // "update your app" into an unactionable malformed fatal for precisely
+    // the population this mechanism exists to reach.
+    const withoutVersion: Record<string, unknown> = { ...REQUIREMENT };
+    delete withoutVersion["minimumKnownClientAppVersion"];
+    expect(
+      clientCompatibilityRequirementSchema.safeParse(withoutVersion).success,
+    ).toBe(false);
+
+    const withoutChannel: Record<string, unknown> = { ...REQUIREMENT };
+    delete withoutChannel["upgradeChannel"];
+    expect(
+      clientCompatibilityRequirementSchema.safeParse(withoutChannel).success,
+    ).toBe(false);
+  });
 });
 
-describe("the upgrade-channel contract as runtime values", () => {
+describe("upgradeChannel on the requirement", () => {
   /**
-   * The channel had a type-only export, so every RUNTIME reader outside this
-   * package - a host validating its own baked config at startup, the release
-   * tooling validating what it is about to stamp - had to hand-write the pair
-   * of literals. These assertions are what make the exported values the single
-   * definition rather than a second one that happens to agree today.
+   * `upgradeChannel` is a deprecated, never-populated wire member kept only
+   * for parse compatibility with already-shipped clients (see the schema's
+   * doc comment). The values are inline literals now, deliberately not a
+   * shared exported constant, so this coverage is expressed directly against
+   * the schema rather than iterated over a removed helper.
    */
 
-  it("is the same set the wire schema accepts", () => {
-    for (const channel of CLIENT_UPGRADE_CHANNELS) {
+  it.each(["stable", "rc", null] as const)(
+    "parses %j",
+    (upgradeChannel) => {
       expect(
         clientCompatibilityRequirementSchema.safeParse({
           ...REQUIREMENT,
-          upgradeChannel: channel,
+          upgradeChannel,
         }).success,
       ).toBe(true);
-    }
-  });
+    },
+  );
 
-  it("rejects a channel the wire schema also rejects", () => {
-    // Both directions on one value: a spelling no channel carries must fail the
-    // guard AND the schema, or a host would admit a config the wire cannot
-    // describe.
-    expect(isClientUpgradeChannel("beta")).toBe(false);
+  it("rejects a channel the wire schema does not carry", () => {
     expect(
       clientCompatibilityRequirementSchema.safeParse({
         ...REQUIREMENT,
@@ -411,13 +444,88 @@ describe("the upgrade-channel contract as runtime values", () => {
       }).success,
     ).toBe(false);
   });
+});
 
-  it("guards every declared channel and nothing else", () => {
-    for (const channel of CLIENT_UPGRADE_CHANNELS) {
-      expect(isClientUpgradeChannel(channel)).toBe(true);
-    }
-    for (const notAChannel of [null, undefined, 2, "", "STABLE", ["rc"]]) {
-      expect(isClientUpgradeChannel(notAChannel)).toBe(false);
-    }
+describe("hostReleaseChannel on the requirement", () => {
+  /**
+   * OPTIONAL, OPEN STRING. Both halves of that are load-bearing, and they
+   * protect opposite directions:
+   *
+   *  - Optional/absent-tolerant so a NEW client parsing an OLD host's fatal
+   *    does not reject the whole object over a key that host never sent.
+   *  - Open (not an enum) so a NEW host's future line does not fail the
+   *    whole object in a client that has already shipped. Consumers route
+   *    through `hostReleaseChannelAllowsRcRecovery`, which recognizes `rc`
+   *    and treats everything else as no RC routing.
+   *
+   * Making this a closed union would invert that: every future channel
+   * would become a parse failure for the exact clients that need to recover.
+   */
+
+  it("parses when the key is ABSENT (old host → new client)", () => {
+    // REQUIREMENT has never carried this member; that is the old-host shape.
+    expect(REQUIREMENT).not.toHaveProperty("hostReleaseChannel");
+    const parsed = clientCompatibilityRequirementSchema.safeParse(REQUIREMENT);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.hostReleaseChannel).toBeUndefined();
+  });
+
+  it.each([...KNOWN_HOST_RELEASE_CHANNELS])(
+    "parses the known host line %j",
+    (hostReleaseChannel) => {
+      expect(
+        clientCompatibilityRequirementSchema.safeParse({
+          ...REQUIREMENT,
+          hostReleaseChannel,
+        }).success,
+      ).toBe(true);
+    },
+  );
+
+  it("parses an UNKNOWN string rather than failing the whole object", () => {
+    // THE REASON IT IS NOT AN ENUM. A host bakes this from its own build
+    // config; a future line (`canary`, whatever ships next) must still
+    // reach a shipped client as a well-formed requirement, so that client
+    // can route conservatively instead of treating the fatal as malformed.
+    const parsed = clientCompatibilityRequirementSchema.safeParse({
+      ...REQUIREMENT,
+      hostReleaseChannel: "canary",
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.hostReleaseChannel).toBe("canary");
+  });
+});
+
+describe("hostReleaseChannelAllowsRcRecovery", () => {
+  /**
+   * The one question this answers, and it is deliberately narrow: only the
+   * exact string `rc` authorizes looking for a remedy on the RC line. Written
+   * as a positive match rather than "not stable" so a future channel, a
+   * source build (`dev`), an absent field, and a typo all refuse RC opt-in
+   * instead of accidentally offering it.
+   */
+
+  it("is true ONLY for the exact string rc", () => {
+    expect(hostReleaseChannelAllowsRcRecovery("rc")).toBe(true);
+  });
+
+  it.each([
+    ["stable", "stable"],
+    ["dev", "dev"],
+    ["an unknown line", "canary"],
+    ["a case variant", "RC"],
+    ["empty string", ""],
+    ["undefined", undefined],
+    ["null", null],
+  ] as const)("is false for %s", (_label, value) => {
+    expect(hostReleaseChannelAllowsRcRecovery(value)).toBe(false);
+  });
+
+  it("is the same set of known values the type advertises", () => {
+    // Exported as VALUES, not only as a type, so a runtime reader does not
+    // hand-write `stable`/`rc`/`dev` next to a type-only export.
+    expect(KNOWN_HOST_RELEASE_CHANNELS).toEqual(["stable", "rc", "dev"]);
   });
 });

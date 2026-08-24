@@ -111,7 +111,9 @@ import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-cli
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
+  DesktopCompatRecoveryPlan,
 } from "../ipc-contracts/app-update-types";
 import type {
   GlobalShortcutId,
@@ -526,9 +528,13 @@ export interface DesktopAppUpdatesBridge {
   ): Promise<DesktopAppUpdateSnapshot>;
   setAllowPrerelease(
     allowPrerelease: boolean,
-  ): Promise<DesktopAppUpdateSnapshot>;
+  ): Promise<DesktopAppUpdateChannelChange>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
+  resolveCompatRecovery(request: {
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+  }): Promise<DesktopCompatRecoveryPlan>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose: () => void;
   };

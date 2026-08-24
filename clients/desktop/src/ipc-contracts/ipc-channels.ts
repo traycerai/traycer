@@ -187,6 +187,7 @@ export const RunnerHostInvoke = {
   appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
   appUpdateDownload: "runnerHost:appUpdate:download",
   appUpdateInstall: "runnerHost:appUpdate:install",
+  appUpdateResolveCompatRecovery: "runnerHost:appUpdate:resolveCompatRecovery",
   globalShortcutsGetSnapshot: "runnerHost:globalShortcuts:getSnapshot",
   globalShortcutsSet: "runnerHost:globalShortcuts:set",
   systemPreferencesAccentColor: "runnerHost:systemPreferences:accentColor",

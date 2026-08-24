@@ -25,6 +25,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateGuidance,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
@@ -77,6 +78,7 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "1.0.0",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -101,7 +103,21 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  readonly setAllowPrerelease = vi.fn(() => Promise.resolve(this.snapshot));
+  // Annotated with the full change type. Inference from this default narrows
+  // `outcome` to the literal `"changed"`, which then rejects a
+  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
+  // refusal, which is exactly the case worth testing.
+  readonly setAllowPrerelease = vi.fn(
+    (): Promise<DesktopAppUpdateChannelChange> =>
+      Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
+  );
+  readonly resolveCompatRecovery = vi.fn(() =>
+    Promise.resolve({
+      route: "manual" as const,
+      rcCandidateVersion: null,
+      stagedVersion: null,
+    }),
+  );
   private readonly handlers = new Set<
     (snapshot: DesktopAppUpdateSnapshot) => void
   >();
@@ -170,6 +186,7 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     currentVersion: "1.0.0",
     allowPrerelease: false,
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     downloadProgress: null,
     installBlockedReason: null,
     installGuidance: null,
@@ -234,6 +251,7 @@ function availableSnapshot(sequence: number): DesktopAppUpdateSnapshot {
     sequence,
     status: "available",
     latestVersion: "1.2.3",
+    latestCompatibilityEpoch: null,
     lastCheckedAt: "2026-06-15T00:00:00.000Z",
     lastCheckIntent: "automatic",
   };

@@ -1,4 +1,5 @@
 import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { DesktopAppUpdateSnapshot } from "@/lib/windows/types";
 
 const supportBridgeQueryScopeIds = new WeakMap<object, number>();
 let nextSupportBridgeQueryScopeId = 1;
@@ -133,6 +134,67 @@ export function runnerHostQueryScopeId(runnerHost: object): number {
 export const runnerQueryKeys = {
   serviceLogTail: (service: object, maxLines: number) =>
     ["runner.serviceLogTail", service, maxLines] as const,
+  /**
+   * Where recovery from a host's client-compatibility rejection should send
+   * this user, as decided by the desktop main process.
+   *
+   * KEYED ON THE INPUTS THAT CHANGE THE ANSWER, and deliberately not on the
+   * whole snapshot. The floor and the RC authorization are the question;
+   * `candidateSufficient` and `allowPrerelease` are the two facts about the
+   * held candidate that flip the route. Keying on `status` / `latestVersion`
+   * as well would mint a fresh key - and so a fresh paginated RC probe - every
+   * time the updater merely re-narrated the same candidate.
+   *
+   * Scoped to the bridge instance the plan was resolved through
+   * (`runnerHostQueryScopeId`), for the same structural-hashing reason every
+   * other runner query is.
+   */
+  appUpdateCompatRecovery: (input: {
+    readonly runnerHostScopeId: number;
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+    readonly candidateSufficient: boolean;
+    readonly allowPrerelease: boolean;
+    /**
+     * The updater status; `"idle"` means it currently holds no candidate.
+     *
+     * ⚠ THIS SEGMENT IS NOT A CACHE-EFFICIENCY DETAIL - it is what makes
+     * `resolveCompatRecovery`'s SIDE EFFECTS run when they are needed. Resolving
+     * a plan discards an insufficient staged artifact and disarms quit-time
+     * install, and on macOS it is what produces the `restart-to-clear-staged`
+     * warning.
+     *
+     * Without it, the very common opening sequence silently skips all of that:
+     * the dialog mounts, the plan resolves while the mount-triggered update
+     * check is still in flight (nothing held, so `candidateSufficient: false`),
+     * and the check then lands an INSUFFICIENT candidate. `candidateSufficient`
+     * is still `false` and `allowPrerelease` has not moved, so the key is
+     * unchanged, the `staleTime: Infinity` entry is reused, and main is never
+     * asked again - leaving a Windows user with a staged build still armed to
+     * install on quit, and a macOS user with no warning that one will.
+     */
+    readonly candidateStatus: DesktopAppUpdateSnapshot["status"];
+  }) =>
+    [
+      ...runnerQueryKeys.appUpdateCompatRecoveryScope(input.runnerHostScopeId),
+      input.minimumEpoch,
+      input.hostAllowsRcRecovery,
+      input.candidateSufficient,
+      input.allowPrerelease,
+      input.candidateStatus,
+    ] as const,
+  /**
+   * Every recovery plan resolved through one bridge, as a partial-match prefix.
+   *
+   * The RC opt-in invalidates through THIS rather than through a reconstructed
+   * full key: after a channel change the inputs that identified the entry have
+   * themselves moved, so naming the old key exactly means naming an entry
+   * nobody will read again while leaving the one they will read stale. It is a
+   * prefix EXTENSION above, not a sibling, which is what keeps the partial
+   * match reaching it.
+   */
+  appUpdateCompatRecoveryScope: (runnerHostScopeId: number) =>
+    ["runner.appUpdates.compatRecovery", runnerHostScopeId] as const,
   // The shell's durable answer to "which host id belongs to THIS machine",
   // read once while the host directory bootstraps. Takes the SCOPE ID, not
   // the runner object - see `runnerHostQueryScopeId`.
