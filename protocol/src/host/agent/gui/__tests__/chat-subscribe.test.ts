@@ -1297,6 +1297,175 @@ describe("chat.subscribe@1.3 server frames", () => {
   });
 });
 
+describe("chat.subscribe background items (subagent rows)", () => {
+  // `turnStateChanged` is the cheapest frame carrying `backgroundItems`.
+  function turnStateFrame(items: ReadonlyArray<Record<string, unknown>>) {
+    return {
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: null,
+      backgroundItems: items,
+    };
+  }
+
+  function backgroundItemsOf(
+    frame: unknown,
+  ): ReadonlyArray<Record<string, unknown>> {
+    const parsed = chatSubscribeServerFrameSchema.parse(frame);
+    if (
+      parsed.kind !== "turnStateChanged" ||
+      parsed.backgroundItems === undefined
+    ) {
+      throw new Error(
+        "expected a turnStateChanged frame with background items",
+      );
+    }
+    return parsed.backgroundItems;
+  }
+
+  // A provider-native child execution: the run id is the stop handle AND the
+  // rendered card's block id (one execution = one runId = one blockId).
+  const topLevelSubagent = {
+    taskId: "codex-subagent-v2:turn-1:item-7",
+    kind: "subagent",
+    title: "Explore the auth flow",
+    blockId: "codex-subagent-v2:turn-1:item-7",
+    parentTaskId: null,
+    scheduledFor: null,
+  };
+
+  it("parses a top-level kind: subagent row whose blockId equals its taskId", () => {
+    expect(backgroundItemsOf(turnStateFrame([topLevelSubagent]))).toEqual([
+      topLevelSubagent,
+    ]);
+
+    const snapshot = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+        backgroundItems: [topLevelSubagent],
+      },
+    });
+    expect(snapshot).toMatchObject({
+      kind: "snapshot",
+      snapshot: { backgroundItems: [topLevelSubagent] },
+    });
+
+    // The subagent branch defaults its nesting metadata (the command-branch
+    // defaults are covered separately).
+    expect(
+      backgroundItemsOf(
+        turnStateFrame([
+          {
+            taskId: "run-1",
+            kind: "subagent",
+            title: "Explore",
+            blockId: "run-1",
+          },
+        ]),
+      ),
+    ).toEqual([
+      {
+        taskId: "run-1",
+        kind: "subagent",
+        title: "Explore",
+        blockId: "run-1",
+        parentTaskId: null,
+        scheduledFor: null,
+      },
+    ]);
+
+    // A subagent row is not a command row: the command-only stop capability
+    // never rides on it.
+    const [stripped] = backgroundItemsOf(
+      turnStateFrame([
+        {
+          ...topLevelSubagent,
+          individualStopUnavailable: {
+            providerLabel: "Codex",
+            minVersion: null,
+          },
+        },
+      ]),
+    );
+    expect(stripped).toBeDefined();
+    expect(stripped).not.toHaveProperty("individualStopUnavailable");
+  });
+
+  it("parses a nested subagent row whose parentTaskId names its owning subagent, and a command nested under that child", () => {
+    const nestedSubagent = {
+      taskId: "codex-subagent-v2:turn-1:item-9",
+      kind: "subagent",
+      title: "Review the change",
+      blockId: "codex-subagent-v2:turn-1:item-9",
+      parentTaskId: "codex-subagent-v2:turn-1:item-7",
+      scheduledFor: null,
+    };
+    const nestedCommand = {
+      taskId: "cmd-1",
+      kind: "command",
+      title: "bun test",
+      blockId: "cmd-1",
+      parentTaskId: "codex-subagent-v2:turn-1:item-9",
+      scheduledFor: null,
+      individualStopUnavailable: null,
+    };
+    const items = [topLevelSubagent, nestedSubagent, nestedCommand];
+
+    // Exact round-trip so a default can never mask a dropped parentTaskId.
+    expect(backgroundItemsOf(turnStateFrame(items))).toEqual(items);
+
+    // The nesting chain survives on every released line that carries it
+    // (1.2 introduced `parentTaskId`); 1.1 strips it, by design.
+    expect(
+      chatSubscribeV12.serverFrameSchema.parse(turnStateFrame(items)),
+    ).toMatchObject({
+      backgroundItems: [
+        { parentTaskId: null },
+        { parentTaskId: "codex-subagent-v2:turn-1:item-7" },
+        { parentTaskId: "codex-subagent-v2:turn-1:item-9" },
+      ],
+    });
+    const onV11 = chatSubscribeV11.serverFrameSchema.parse(
+      turnStateFrame([topLevelSubagent, nestedSubagent]),
+    );
+    if (
+      onV11.kind !== "turnStateChanged" ||
+      onV11.backgroundItems === undefined
+    ) {
+      throw new Error("expected a 1.1 turnStateChanged frame with items");
+    }
+    expect(onV11.backgroundItems).toHaveLength(2);
+    for (const row of onV11.backgroundItems) {
+      expect(row).not.toHaveProperty("parentTaskId");
+      expect(row).not.toHaveProperty("scheduledFor");
+    }
+
+    // `parentTaskId` is string-or-null, not an open field.
+    expect(
+      chatSubscribeServerFrameSchema.safeParse(
+        turnStateFrame([{ ...nestedSubagent, parentTaskId: 42 }]),
+      ).success,
+    ).toBe(false);
+  });
+});
+
 describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
   // An agent-authored user message whose sender carries `inReplyTo` (it
   // resumed an A2A thread the receiving chat opened).
@@ -1951,9 +2120,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     messages: [userMessage, assistantWithImages],
   };
 
-  function snapshotFrameWithChat(
-    chatPayload: Chat,
-  ): Record<string, unknown> {
+  function snapshotFrameWithChat(chatPayload: Chat): Record<string, unknown> {
     return {
       kind: "snapshot",
       hasBinaryPayload: false,
@@ -1975,7 +2142,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     };
   }
 
-  function blockDeltaFrame(event: Record<string, unknown>): Record<string, unknown> {
+  function blockDeltaFrame(
+    event: Record<string, unknown>,
+  ): Record<string, unknown> {
     return {
       kind: "blockDelta",
       hasBinaryPayload: false,
@@ -2170,7 +2339,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }
@@ -2250,7 +2421,9 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       throw new Error("expected assistant message");
     }
     expect(assistant.imageResolutions).toHaveLength(resolutionStates.length);
-    const toolCall = assistant.blocks.find((block) => block.type === "tool_call");
+    const toolCall = assistant.blocks.find(
+      (block) => block.type === "tool_call",
+    );
     if (!toolCall || toolCall.type !== "tool_call") {
       throw new Error("expected tool_call block");
     }

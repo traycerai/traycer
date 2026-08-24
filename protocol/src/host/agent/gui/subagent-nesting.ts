@@ -11,12 +11,25 @@
 import type { RuntimeEvent } from "./agent-runtime";
 import { deriveToolInputSummary, toSummaryLine } from "./tool-input-summary";
 
-// A sub-agent's own narration, turn lifecycle, usage, compaction, and errors
-// must not surface in the parent timeline (parity with the Claude harness, which
-// shows only a sub-agent's tool/file activity, not its narration). `error` is
-// suppressed because the adapters treat a top-level `error` as terminal for the
-// chat turn - a sub-agent's own failure must close only that sub-agent, never
-// the parent turn. The set is the UNION across harnesses (e.g. Codex emits
+// A sub-agent's own narration, turn lifecycle (its start AND every terminal:
+// completed / stopped / interrupted), steer boundaries, usage, compaction, and
+// errors must not surface in the parent timeline (parity with the Claude
+// harness, which shows only a sub-agent's tool/file activity, not its
+// narration). The accumulator applies `turn.stopped` / `turn.interrupted` to the
+// WHOLE owning row (`finalizeStreamingActionBlocks` ignores `parentBlockId`),
+// and leaves `parentBlockId` unset on the `steer` / `compaction` blocks it mints
+// for `steer.submitted` / `compaction.errored` - so a leaked child lifecycle
+// event would interrupt the root's own in-flight work or inject a root-level
+// steer / compaction card. The only public child terminal is
+// `subagent.completed`, which the converter emits itself; the accumulator
+// finalizes that child's still-streaming nested tool/command/file descendants
+// when it settles the card (`finalizeStreamingDescendants`), so suppressing the
+// child `turn.*` here does not strand them spinning. `error` is suppressed
+// because the adapters treat a top-level `error` as terminal for the chat turn -
+// a sub-agent's own failure must close only that sub-agent, never the parent
+// turn. `approval.*` is deliberately NOT here: child approvals are routed
+// through the global pending-approval state by the host and never emitted as
+// child runtime blocks. The set is the UNION across harnesses (e.g. Codex emits
 // `turn.started`, OpenCode emits `compaction.started`); listing an event a given
 // harness never emits is harmless.
 const SUBAGENT_SUPPRESSED_EVENTS: ReadonlySet<RuntimeEvent["type"]> = new Set([
@@ -26,11 +39,15 @@ const SUBAGENT_SUPPRESSED_EVENTS: ReadonlySet<RuntimeEvent["type"]> = new Set([
   "reasoning.completed",
   "turn.started",
   "turn.completed",
+  "turn.stopped",
+  "turn.interrupted",
+  "steer.submitted",
   "usage.updated",
   "error",
   "todo.updated",
   "compaction.started",
   "compaction.completed",
+  "compaction.errored",
 ]);
 
 // A concise progress line for a child's tool/command activity so the card's

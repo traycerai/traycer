@@ -4508,23 +4508,44 @@ function applyContentDelta(
   return applyContentBlockDelta(state, event);
 }
 
-// The block id whose OWNING message a detached backgrounded-subagent event
-// targets, plus whether routing to that owner is MANDATORY:
-//   - `subagent.*`             → the subagent block (`event.blockId`).
+// The block ids whose OWNING message a detached backgrounded-subagent event
+// targets - ordered candidates, first owned wins - plus whether routing to
+// that owner is MANDATORY:
+//   - `subagent.*` / `workflow.*` → the card (`event.blockId`) first; then,
+//     for a NESTED card (non-empty string `parentBlockId`), the parent card.
+//     The first start of a nested child is unknown to every row, so only its
+//     parent can say which settled message owns it. `workflow.*` dual-writes
+//     onto the same subagent-typed card and outlives its turn the same way.
 //   - a terminal `tool_call.*` / `command.completed` → its non-empty
 //     `parentBlockId` when it is a subagent CHILD; otherwise its own `blockId`
 //     (a genuinely top-level background terminal - Claude backgrounds through a
 //     `tool_call`, Codex through a plain `command`).
 //   - any other nested event  → its `parentBlockId`.
 // `mandatory` is set whenever the owner comes from `parentBlockId` or from a
-// parentless background tool terminal: such an event belongs to an older row
-// and must NEVER fall through to the active turn, where the accumulator would
-// mint a duplicate top-level card for it.
+// parentless background tool terminal: such an event belongs to the row that
+// owns its parent (or to an older background row) and must never be minted
+// into a NEWER unrelated turn by the active-row fallback. A top-level
+// `subagent.*` with no parent stays non-mandatory so a legitimate first start
+// still falls through to the active assistant row.
 // Null for everything else (text/reasoning/top-level tool deltas), so the
 // common high-frequency path skips the owner lookup.
+interface DetachedOwnerTarget {
+  readonly candidates: ReadonlyArray<string>;
+  readonly mandatory: boolean;
+}
+
+function subagentOwnerCandidates(
+  blockId: string,
+  parentBlockId: string | null,
+): DetachedOwnerTarget {
+  return parentBlockId === null
+    ? { candidates: [blockId], mandatory: false }
+    : { candidates: [blockId, parentBlockId], mandatory: true };
+}
+
 function detachedSubagentOwnerTarget(
   event: RuntimeEvent,
-): { readonly ownerBlockId: string; readonly mandatory: boolean } | null {
+): DetachedOwnerTarget | null {
   const parentBlockId =
     "parentBlockId" in event &&
     typeof event.parentBlockId === "string" &&
@@ -4534,9 +4555,12 @@ function detachedSubagentOwnerTarget(
   if (
     event.type === "subagent.started" ||
     event.type === "subagent.progress" ||
-    event.type === "subagent.completed"
+    event.type === "subagent.completed" ||
+    event.type === "workflow.started" ||
+    event.type === "workflow.progress" ||
+    event.type === "workflow.completed"
   ) {
-    return { ownerBlockId: event.blockId, mandatory: false };
+    return subagentOwnerCandidates(event.blockId, parentBlockId);
   }
   if (
     event.type === "tool_call.completed" ||
@@ -4544,15 +4568,15 @@ function detachedSubagentOwnerTarget(
     event.type === "command.completed"
   ) {
     if (parentBlockId !== null) {
-      return { ownerBlockId: parentBlockId, mandatory: true };
+      return { candidates: [parentBlockId], mandatory: true };
     }
     return {
-      ownerBlockId: event.blockId,
+      candidates: [event.blockId],
       mandatory: "backgroundTask" in event && event.backgroundTask === true,
     };
   }
   if (parentBlockId !== null) {
-    return { ownerBlockId: parentBlockId, mandatory: true };
+    return { candidates: [parentBlockId], mandatory: true };
   }
   return null;
 }
@@ -4562,6 +4586,53 @@ function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
     message.role === "assistant" &&
     message.blocks.some((block) => block.blockId === blockId)
   );
+}
+
+// Does the ACTIVE turn's row own `blockId`? That row is either the
+// materialized assistant message for the active turn (a steer-split
+// continuation, a reconnect) or the not-yet-materialized live row. Both count:
+// a nested event whose parent lives in the live row is the live turn's own
+// activity, not a detached write to an older message.
+function activeTurnRowOwnsBlock(
+  state: ChatSessionState,
+  assistantIndex: number,
+  blockId: string,
+): boolean {
+  if (
+    assistantIndex >= 0 &&
+    assistantMessageOwnsBlock(state.messages[assistantIndex], blockId)
+  ) {
+    return true;
+  }
+  const live = state.liveAssistantMessage;
+  return (
+    live !== null &&
+    state.activeTurn !== null &&
+    live.turnId === state.activeTurn.turnId &&
+    live.blocks.some((block) => block.blockId === blockId)
+  );
+}
+
+// Resolves a detached event against its ordered owner candidates, strictly
+// child-first: the child's own card (wherever it lives) wins over its parent's,
+// so a re-emitted start or later progress keeps updating the existing card
+// instead of minting a sibling beside the parent.
+//   - "active"  → the active turn's row owns this candidate; take the normal
+//                 active-row path.
+//   - a state   → the event was applied to the settled row owning the candidate.
+//   - "none"    → no row owns any candidate.
+function routeDetachedEvent(
+  state: ChatSessionState,
+  assistantIndex: number,
+  event: RuntimeEvent,
+  target: DetachedOwnerTarget,
+): Partial<ChatSessionState> | "active" | "none" {
+  for (const blockId of target.candidates) {
+    if (activeTurnRowOwnsBlock(state, assistantIndex, blockId)) return "active";
+    const routed = applyEventToOwningMessage(state, event, blockId);
+    if (routed !== null) return routed;
+  }
+  return "none";
 }
 
 // Applies a block event to the frozen pre-split row of the active turn that
@@ -4685,33 +4756,26 @@ function applyContentBlockDelta(
     state.messages,
     state.activeTurn?.turnId ?? state.liveAssistantMessage?.turnId ?? null,
   );
-  // Detached backgrounded-subagent activity: its card lives in an earlier,
-  // already-settled message. Route the event to that message when the active
-  // turn's row does not own the block, so the card keeps updating live. Gated to
-  // subagent-context events; the active turn's own subagent skips this.
+  // Detached backgrounded-subagent activity: its card (or, for the first start
+  // of a nested child, its parent's card) lives in an earlier, already-settled
+  // message. Route the event to that message when the active turn's row -
+  // materialized or live - does not own it, so the card keeps updating live.
+  // Gated to subagent-context events; the active turn's own subagent activity
+  // takes the normal path below.
   const detachedTarget = detachedSubagentOwnerTarget(event);
-  if (
-    detachedTarget !== null &&
-    !(
-      assistantIndex >= 0 &&
-      assistantMessageOwnsBlock(
-        state.messages[assistantIndex],
-        detachedTarget.ownerBlockId,
-      )
-    )
-  ) {
-    const routed = applyEventToOwningMessage(
+  if (detachedTarget !== null) {
+    const routed = routeDetachedEvent(
       state,
+      assistantIndex,
       event,
-      detachedTarget.ownerBlockId,
+      detachedTarget,
     );
-    if (routed !== null) return routed;
+    if (routed !== "active" && routed !== "none") return routed;
     // A parented (subagent-child) event whose owning message is gone must NOT
-    // fall through to the active turn: the accumulator would append its
-    // terminal as a duplicate top-level card on an unrelated turn. The settled
-    // subagent owner is its only legitimate target, so drop it (identity =
-    // no-op) instead.
-    if (detachedTarget.mandatory) return state;
+    // fall through to the active turn: the accumulator would append it as a
+    // duplicate top-level card on an unrelated turn. The settled owner is its
+    // only legitimate target, so drop it (identity = no-op) instead.
+    if (routed === "none" && detachedTarget.mandatory) return state;
   }
   // Steer-split carryover: a block that was still STREAMING when a steered
   // user message split the turn lives in an EARLIER assistant row of the SAME

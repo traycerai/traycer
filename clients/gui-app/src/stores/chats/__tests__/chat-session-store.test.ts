@@ -5,6 +5,7 @@ import type {
   ClaudePendingWake,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { RuntimeEvent } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -8763,6 +8764,560 @@ describe("createChatSessionStore", () => {
     expect(blocks).toEqual([
       expect.objectContaining({ type: "text", blockId: "active-text" }),
     ]);
+  });
+
+  // ── detached subagent routing (nested starts through the settled parent) ──
+
+  // A settled codex row whose backgrounded subagent card is still running. The
+  // card's later activity - and the first start of any child it spawns - must
+  // land on this row, not on whatever turn is live by then.
+  function emitSettledSubagentRow(
+    callbacks: ChatStreamCallbacks,
+    blocksVersion: number | null,
+  ): void {
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-settled",
+          sender: {
+            type: "agent",
+            harnessId: "codex",
+            agentId: "codex",
+            displayName: "Codex",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "subagent",
+              blockId: "bg-subagent",
+              status: "streaming",
+              timestamp: 2,
+              startedAt: 2,
+              name: "Explorer",
+              agentType: "explorer",
+              task: "Survey the repo",
+              progressUpdates: [],
+              result: null,
+              spawnToolCallId: null,
+              stopped: false,
+              workflowMeta: null,
+            },
+          ],
+          startedAt: 2,
+          timestamp: 2,
+          turnId: "turn-settled",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+          imageResolutions: [],
+          ...(blocksVersion === null ? {} : { blocksVersion }),
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+  }
+
+  function raiseNextLiveTurn(callbacks: ChatStreamCallbacks): void {
+    // Raised directly - `startRunningTurn` would emit its own snapshot and
+    // wipe the settled row.
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+    });
+    emitBlockDelta(callbacks, {
+      type: "text.delta",
+      blockId: "active-text",
+      timestamp: 4,
+      delta: "Active turn",
+    });
+  }
+
+  function emitBlockDelta(
+    callbacks: ChatStreamCallbacks,
+    event: RuntimeEvent,
+  ): void {
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event,
+    });
+  }
+
+  function settledRow(
+    harness: Harness,
+  ): Extract<Message, { role: "assistant" }> {
+    const settled = harness.handle.store
+      .getState()
+      .messages.find((message) => message.messageId === "assistant-settled");
+    if (settled?.role !== "assistant") {
+      throw new Error("Expected the settled assistant row");
+    }
+    return settled;
+  }
+
+  it("routes a detached subagent's started/progress/completed sequence to the settled row that owns its card", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSettledSubagentRow(callbacks, 3);
+    raiseNextLiveTurn(callbacks);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "bg-subagent",
+      timestamp: 10,
+      name: "Explorer (resolved)",
+      agentType: "explorer",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.progress",
+      blockId: "bg-subagent",
+      timestamp: 11,
+      update: "Reading src/",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.completed",
+      blockId: "bg-subagent",
+      timestamp: 12,
+      outcome: "completed",
+      result: "Survey done",
+    });
+
+    const settled = settledRow(harness);
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "bg-subagent",
+        status: "completed",
+        progressUpdates: ["Reading src/"],
+        result: "Survey done",
+      }),
+    ]);
+    // One bump per real mutation; the row's own completed-at is untouched.
+    expect(settled.blocksVersion).toBe(6);
+    expect(settled.timestamp).toBe(2);
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("routes the first nested subagent.started through the settled parent card instead of the live turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSettledSubagentRow(callbacks, 3);
+    raiseNextLiveTurn(callbacks);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "nested-sub",
+      parentBlockId: "bg-subagent",
+      timestamp: 10,
+      name: "Worker",
+      task: "Write tests",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.progress",
+      blockId: "nested-sub",
+      parentBlockId: "bg-subagent",
+      timestamp: 11,
+      update: "Editing",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.completed",
+      blockId: "nested-sub",
+      parentBlockId: "bg-subagent",
+      timestamp: 12,
+      outcome: "completed",
+      result: "Tests written",
+    });
+
+    const settled = settledRow(harness);
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "bg-subagent" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "nested-sub",
+        parentBlockId: "bg-subagent",
+        status: "completed",
+        progressUpdates: ["Editing"],
+        result: "Tests written",
+      }),
+    ]);
+    expect(settled.blocksVersion).toBe(6);
+    expect(settled.timestamp).toBe(2);
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("routes a nested subagent.started through the settled parent when no turn is active (not dropped)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSettledSubagentRow(callbacks, 3);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "nested-sub",
+      parentBlockId: "bg-subagent",
+      timestamp: 10,
+      name: "Worker",
+    });
+
+    const settled = settledRow(harness);
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({ blockId: "bg-subagent" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "nested-sub",
+        parentBlockId: "bg-subagent",
+        status: "streaming",
+        startedAt: 10,
+      }),
+    ]);
+    expect(settled.blocksVersion).toBe(4);
+    expect(settled.timestamp).toBe(2);
+  });
+
+  it("drops a nested subagent.started whose parent card no row owns instead of minting it into the active turn", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitBlockDelta(callbacks, {
+      type: "text.delta",
+      blockId: "active-text",
+      timestamp: 4,
+      delta: "Active turn",
+    });
+    const before = harness.handle.store.getState().liveAssistantMessage;
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "orphan-nested",
+      parentBlockId: "missing-parent",
+      timestamp: 5,
+      name: "Worker",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.progress",
+      blockId: "orphan-nested",
+      parentBlockId: "missing-parent",
+      timestamp: 6,
+      update: "x",
+    });
+
+    const live = harness.handle.store.getState().liveAssistantMessage;
+    expect(live?.blocks).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+    expect(live?.blocksVersion).toBe(before?.blocksVersion);
+  });
+
+  it("still opens a new top-level subagent card in the live turn when it carries no string parentBlockId", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+    emitBlockDelta(callbacks, {
+      type: "text.delta",
+      blockId: "active-text",
+      timestamp: 4,
+      delta: "Active turn",
+    });
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "fresh-top",
+      timestamp: 5,
+      name: "Explorer",
+    });
+    // An explicit null is "confirmed top-level", not a parent route.
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "fresh-top-null",
+      parentBlockId: null,
+      timestamp: 6,
+      name: "Explorer 2",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+      expect.objectContaining({ type: "subagent", blockId: "fresh-top" }),
+      expect.objectContaining({ type: "subagent", blockId: "fresh-top-null" }),
+    ]);
+  });
+
+  it("keeps a nested subagent.started whose parent card lives in the live row on the live row", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "live-sub",
+      timestamp: 4,
+      name: "Explorer",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "live-nested",
+      parentBlockId: "live-sub",
+      timestamp: 5,
+      name: "Worker",
+    });
+    emitBlockDelta(callbacks, {
+      type: "subagent.progress",
+      blockId: "live-nested",
+      parentBlockId: "live-sub",
+      timestamp: 6,
+      update: "working",
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "live-sub" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "live-nested",
+        parentBlockId: "live-sub",
+        progressUpdates: ["working"],
+      }),
+    ]);
+    expect(harness.handle.store.getState().messages).toEqual([]);
+  });
+
+  it("nests a child tool_call.started under a live-row subagent instead of dropping it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "live-sub",
+      timestamp: 4,
+      name: "Explorer",
+    });
+    emitBlockDelta(callbacks, {
+      type: "tool_call.started",
+      blockId: "live-child-tool",
+      parentBlockId: "live-sub",
+      timestamp: 5,
+      toolName: "read_file",
+      agentMessageSend: null,
+    });
+
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "subagent", blockId: "live-sub" }),
+      expect.objectContaining({
+        type: "tool_call",
+        blockId: "live-child-tool",
+        parentBlockId: "live-sub",
+      }),
+    ]);
+  });
+
+  it("appends a nested subagent.started beside its parent in the active turn's materialized row", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-live-row",
+          sender: {
+            type: "agent",
+            harnessId: "codex",
+            agentId: "codex",
+            displayName: "Codex",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "subagent",
+              blockId: "row-sub",
+              status: "streaming",
+              timestamp: 4,
+              startedAt: 4,
+              name: "Explorer",
+              agentType: null,
+              task: null,
+              progressUpdates: [],
+              result: null,
+              spawnToolCallId: null,
+              stopped: false,
+              workflowMeta: null,
+            },
+          ],
+          startedAt: 4,
+          timestamp: 4,
+          turnId: "turn-1",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+          imageResolutions: [],
+          blocksVersion: 1,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      runStatus: "running",
+      activeTurn: runningActiveTurn(),
+      turnInProgress: true,
+    });
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "row-nested",
+      parentBlockId: "row-sub",
+      timestamp: 5,
+      name: "Worker",
+    });
+
+    const row = harness.handle.store
+      .getState()
+      .messages.find((message) => message.messageId === "assistant-live-row");
+    if (row?.role !== "assistant") {
+      throw new Error("Expected the active turn's assistant row");
+    }
+    expect(row.blocks).toEqual([
+      expect.objectContaining({ blockId: "row-sub" }),
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "row-nested",
+        parentBlockId: "row-sub",
+      }),
+    ]);
+  });
+
+  it("routes a detached workflow card's progress and completion to the settled row that owns it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          role: "assistant",
+          messageId: "assistant-settled",
+          sender: {
+            type: "agent",
+            harnessId: "claude",
+            agentId: "claude",
+            displayName: "Claude",
+            reply: { expectsReply: false },
+            inReplyTo: null,
+          },
+          blocks: [
+            {
+              type: "subagent",
+              blockId: "wf-1",
+              status: "streaming",
+              timestamp: 2,
+              startedAt: 2,
+              name: "review",
+              agentType: null,
+              task: "Review the diff",
+              progressUpdates: [],
+              result: null,
+              spawnToolCallId: null,
+              stopped: false,
+              workflowMeta: {
+                name: "review",
+                intent: "Review the diff",
+                activity: [],
+                agentsStarted: null,
+                agentsFinished: null,
+                totalTokens: null,
+              },
+            },
+          ],
+          startedAt: 2,
+          timestamp: 2,
+          turnId: "turn-settled",
+          usage: null,
+          reasoningEffort: null,
+          serviceTier: null,
+          imageResolutions: [],
+          blocksVersion: 3,
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    raiseNextLiveTurn(callbacks);
+
+    emitBlockDelta(callbacks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 10,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 4,
+    });
+    emitBlockDelta(callbacks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 11,
+      outcome: "completed",
+      result: "2 findings",
+    });
+
+    const settled = settledRow(harness);
+    expect(settled.blocks).toEqual([
+      expect.objectContaining({
+        type: "subagent",
+        blockId: "wf-1",
+        status: "completed",
+        result: "2 findings",
+        progressUpdates: ["Find"],
+      }),
+    ]);
+    expect(settled.blocksVersion).toBe(5);
+    expect(
+      harness.handle.store.getState().liveAssistantMessage?.blocks,
+    ).toEqual([
+      expect.objectContaining({ type: "text", blockId: "active-text" }),
+    ]);
+  });
+
+  it("leaves blocksVersion absent on a settled row that had none while still replacing its blocks", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSettledSubagentRow(callbacks, null);
+    const before = settledRow(harness);
+
+    emitBlockDelta(callbacks, {
+      type: "subagent.started",
+      blockId: "nested-sub",
+      parentBlockId: "bg-subagent",
+      timestamp: 10,
+      name: "Worker",
+    });
+
+    const after = settledRow(harness);
+    expect(after).not.toBe(before);
+    expect(after.blocks).toHaveLength(2);
+    expect("blocksVersion" in after).toBe(false);
+    expect(after.timestamp).toBe(2);
   });
 
   it("keeps a completed live assistant visible when the next turn starts", () => {
