@@ -294,8 +294,23 @@ export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
  * superseded index instead of serving the wrong span - the client may not have
  * processed the `indexChanged` that raced its request.
  *
- * `maxBytes` is the client's budget for the response and must be at or under
- * the 1 MiB frame invariant.
+ * `fromOrdinal` and `toOrdinal` are INCLUSIVE at both ends. The response's
+ * `truncatedAtOrdinal` is the other convention on purpose - it names the first
+ * ordinal that did NOT fit, so a client resumes at exactly that number without
+ * an off-by-one at the seam.
+ *
+ * `maxBytes` is the client's budget for the response. It is a ceiling that
+ * yields to progress: a single record larger than the whole budget is served
+ * alone and over it, because a row that cannot be fetched at any budget is a
+ * permanent hole in the transcript, and single records do reach ~1.27 MB.
+ *
+ * That is also the one sanctioned exception to the 1 MiB frame invariant, and
+ * it is safe for a reason that does not generalize: the invariant exists
+ * because the relay reclassifies an oversized body to the BULK lane, where it
+ * can be reordered against INTERACTIVE deltas. A `range` response is ordered
+ * against nothing - it is matched by `requestId`, validated by `epoch`, and
+ * applied by row identity - so arriving late costs it nothing. A `snapshot` or
+ * an `indexChanged` has no such protection and must stay under the ceiling.
  */
 export const chatLoadRangeRequestSchema = z.object({
   requestId: z.string(),

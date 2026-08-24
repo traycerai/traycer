@@ -53,6 +53,95 @@ describe("rowSkeletonEntrySchema", () => {
   });
 });
 
+describe("message row role", () => {
+  it("accepts role: user and role: assistant", () => {
+    const userInput = {
+      kind: "message" as const,
+      id: "m-1",
+      createdAt: 1,
+      role: "user",
+      byteLength: 1,
+    };
+    const assistantInput = {
+      kind: "message" as const,
+      id: "m-2",
+      createdAt: 2,
+      role: "assistant",
+      byteLength: 1,
+    };
+
+    expect(messageRowSkeletonEntrySchema.parse(userInput).role).toBe("user");
+    expect(messageRowSkeletonEntrySchema.parse(assistantInput).role).toBe(
+      "assistant",
+    );
+  });
+
+  it("rejects role: system - the skeleton has no persisted counterpart for worktree setup cards", () => {
+    const input = {
+      kind: "message" as const,
+      id: "m-1",
+      createdAt: 1,
+      role: "system",
+      byteLength: 1,
+    };
+
+    const result = messageRowSkeletonEntrySchema.safeParse(input);
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("message row sentByAgent", () => {
+  it("accepts an omitted sentByAgent", () => {
+    const input = {
+      kind: "message" as const,
+      id: "m-1",
+      createdAt: 1,
+      role: "user",
+      byteLength: 1,
+    };
+
+    const parsed = messageRowSkeletonEntrySchema.parse(input);
+
+    expect("sentByAgent" in parsed).toBe(false);
+  });
+
+  it("accepts sentByAgent: true as a boolean flag", () => {
+    const input = {
+      kind: "message" as const,
+      id: "m-1",
+      createdAt: 1,
+      role: "user",
+      byteLength: 1,
+      sentByAgent: true,
+    };
+
+    const parsed = messageRowSkeletonEntrySchema.parse(input);
+
+    expect(parsed.sentByAgent).toBe(true);
+  });
+
+  it("rejects a sentByAgent that is an agent-sender object rather than a boolean", () => {
+    const input = {
+      kind: "message" as const,
+      id: "m-1",
+      createdAt: 1,
+      role: "user",
+      byteLength: 1,
+      sentByAgent: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "agent-1",
+        displayName: "Claude",
+      },
+    };
+
+    const result = messageRowSkeletonEntrySchema.safeParse(input);
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("message row preview cap", () => {
   it("accepts a preview at the ROW_SKELETON_PREVIEW_MAX_CHARS boundary", () => {
     const input = {
@@ -86,7 +175,7 @@ describe("message row preview cap", () => {
 });
 
 describe("optional fields are genuinely omitted, not materialized as undefined", () => {
-  it("omits preview, agentSenderInfo, completedAt, runState, persistentMessageId, and usage from a parsed minimal message entry", () => {
+  it("omits preview, sentByAgent, and usage from a parsed minimal message entry", () => {
     const input = {
       kind: "message" as const,
       id: "m-1",
@@ -101,11 +190,13 @@ describe("optional fields are genuinely omitted, not materialized as undefined",
     expect(keys.sort()).toEqual(
       ["kind", "id", "createdAt", "role", "byteLength"].sort(),
     );
+    // The `keys.sort()` assertion above is the real guard - it is exhaustive,
+    // so it catches a NEW optional field materializing as `undefined` too.
+    // These name the current optional fields for the reader's benefit; naming
+    // fields the schema no longer has (as this test did for the three
+    // fork-eligibility fields) makes an assertion that can never fail.
     expect("preview" in parsed).toBe(false);
-    expect("agentSenderInfo" in parsed).toBe(false);
-    expect("completedAt" in parsed).toBe(false);
-    expect("runState" in parsed).toBe(false);
-    expect("persistentMessageId" in parsed).toBe(false);
+    expect("sentByAgent" in parsed).toBe(false);
     expect("usage" in parsed).toBe(false);
   });
 });

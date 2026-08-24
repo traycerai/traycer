@@ -96,16 +96,14 @@ export function sortIntoCanonicalRowOrder<T>(
  * shifts every ordinal after the first mistake, so it is enumerated rather
  * than inferred.
  *
- * Kept in sync with `rendered-messages.ts`, which is the only place these rows
- * are built:
+ * The two sources, both of which `rendered-messages.ts` now builds THROUGH the
+ * functions below rather than beside them:
  *
- * - `chat.forked` -> the forked-chat link row (`buildForkedChatLinkMessages`),
- *   and ONLY when its metadata carries both `sourceChatId` and `sourceHostId`;
- *   an event missing either renders nothing.
- * - `send.failed` -> the notification-anchor error row
- *   (`buildNotificationAnchorMessages`), and ONLY when it carries a message and
- *   `metadata.notificationAnchor === true`. A plain `send.failed` is history
- *   with no row.
+ * - `chat.forked` -> the forked-chat link row, when its metadata carries both
+ *   `sourceChatId` and `sourceHostId` ({@link forkedChatLinkRowSource}).
+ * - `send.failed` -> the notification-anchor error row, when it carries a
+ *   message and `metadata.notificationAnchor === true`
+ *   ({@link eventDrawsNotificationAnchorRow}).
  *
  * Both predicates are content-dependent, which is why this is a function and
  * not a `Set` of type strings. Worktree setup cards are the third row-bearing
@@ -113,19 +111,104 @@ export function sortIntoCanonicalRowOrder<T>(
  * rather than from a chat event, and they are woven by anchor rather than
  * ordered by timestamp.
  */
+/**
+ * A metadata value the renderer would accept as present.
+ *
+ * Mirrors `metadataString` in `rendered-messages.ts`, and the EMPTY-STRING case
+ * is the whole reason this is a named function rather than a `typeof` check
+ * inline: the renderer treats `""` as absent. A predicate that accepted it
+ * would materialize a row the renderer does not draw, and every ordinal after
+ * that event would be off by one - bodies under the wrong rows, silently, for
+ * the rest of the transcript.
+ */
+function renderableMetadataString(
+  metadata: Readonly<Record<string, unknown>>,
+  key: string,
+): string | null {
+  const value = metadata[key];
+  if (typeof value !== "string") return null;
+  return value.length > 0 ? value : null;
+}
+
+/** The origin a forked-chat link row points at. */
+export interface ForkedChatLinkRowSource {
+  readonly sourceChatId: string;
+  readonly sourceHostId: string;
+  /**
+   * The source chat's title as captured at fork time, or `null` when the event
+   * carried none. Rides along because it comes out of the same metadata bag -
+   * extracting it separately would put a second reader of these keys beside the
+   * one that decides whether the row exists. The placeholder for `null` is the
+   * renderer's to choose.
+   */
+  readonly sourceChatTitle: string | null;
+}
+
+/**
+ * The forked-chat link row's source, or `null` when this event draws no row.
+ *
+ * Returns the extracted fields rather than a boolean so the renderer can use
+ * THIS as its filter instead of writing an equivalent one beside it. That is
+ * not a stylistic preference: the first version of this module tested
+ * `typeof value === "string"` while the renderer's `metadataString` also
+ * rejects the EMPTY string, so an event carrying `sourceChatId: ""` would have
+ * occupied an ordinal here and drawn nothing there - putting every later row's
+ * body under the wrong row, silently, for the rest of the transcript.
+ *
+ * A predicate that can disagree with its consumer is the failure this module
+ * exists to prevent, so it does not get to have one.
+ */
+export function forkedChatLinkRowSource(
+  event: ChatEvent,
+): ForkedChatLinkRowSource | null {
+  if (event.type !== "chat.forked") return null;
+  const metadata = event.metadata;
+  if (metadata === null) return null;
+  const sourceChatId = renderableMetadataString(metadata, "sourceChatId");
+  const sourceHostId = renderableMetadataString(metadata, "sourceHostId");
+  if (sourceChatId === null || sourceHostId === null) return null;
+  return {
+    sourceChatId,
+    sourceHostId,
+    sourceChatTitle: renderableMetadataString(metadata, "sourceChatTitle"),
+  };
+}
+
+/** What a notification-anchor error row renders. */
+export interface NotificationAnchorRowSource {
+  readonly message: string;
+  /** Provider error code, when the event carried one. */
+  readonly code: string | null;
+}
+
+/**
+ * The notification-anchor error row's content, or `null` when this event draws
+ * no row.
+ *
+ * A plain `send.failed` is history with no row; only one carrying a message and
+ * an explicit `notificationAnchor` marker occupies an ordinal. Shaped like
+ * {@link forkedChatLinkRowSource} and for the same reason - the renderer filters
+ * on this rather than on a copy of it.
+ */
+export function notificationAnchorRowSource(
+  event: ChatEvent,
+): NotificationAnchorRowSource | null {
+  if (event.type !== "send.failed") return null;
+  const metadata = event.metadata;
+  if (metadata === null) return null;
+  if (metadata.notificationAnchor !== true) return null;
+  if (event.message === null) return null;
+  return {
+    message: event.message,
+    code: renderableMetadataString(metadata, "code"),
+  };
+}
+
 export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
-  if (event.type === "chat.forked") {
-    const metadata = event.metadata;
-    if (metadata === null) return false;
-    return (
-      typeof metadata.sourceChatId === "string" &&
-      typeof metadata.sourceHostId === "string"
-    );
-  }
-  if (event.type === "send.failed") {
-    return event.message !== null && event.metadata?.notificationAnchor === true;
-  }
-  return false;
+  return (
+    forkedChatLinkRowSource(event) !== null ||
+    notificationAnchorRowSource(event) !== null
+  );
 }
 
 /**

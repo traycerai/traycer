@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
+  CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS,
   compactChatTurnMinimapPreview,
   resolveChatTurnMinimapCurrentIndex,
   resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapTopStyle,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { MINIMAP_TRACK_END_HIT_PADDING } from "@/components/minimap/minimap-track-geometry";
+import { ROW_SKELETON_PREVIEW_MAX_CHARS } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 
 const TURNS = [
   { rowIndex: 0, endRowIndex: 1 },
@@ -72,6 +74,17 @@ describe("chat turn minimap logic", () => {
   it("uses a short, whitespace-collapsed query label", () => {
     expect(compactChatTurnMinimapPreview("  A\n\n useful   query ")).toBe(
       "A useful query",
+    );
+  });
+
+  // The skeleton ships one char past the minimap's budget so the compactor
+  // can see a 201st character and know to append "…" (row-skeleton.ts's
+  // ROW_SKELETON_PREVIEW_MAX_CHARS doc). If the minimap cap ever rises to
+  // meet or pass the protocol cap, every long user turn silently loses its
+  // truncation ellipsis.
+  it("stays strictly below the protocol row-skeleton preview cap", () => {
+    expect(CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS).toBeLessThan(
+      ROW_SKELETON_PREVIEW_MAX_CHARS,
     );
   });
 });

@@ -22,7 +22,11 @@ import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe
 // transcript's skeleton, and this is where those ordinals get drawn - so a
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
-import { compareCanonicalRowOrder } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import {
+  compareCanonicalRowOrder,
+  forkedChatLinkRowSource,
+  notificationAnchorRowSource,
+} from "@traycer/protocol/persistence/chat-transcript/row-order";
 // Identity of the assistant turn a record contributes to (records sharing a key
 // accumulate into ONE rendered turn). Shared rather than local because the
 // host's fork-boundary derivation groups by the same key, and a chat must not
@@ -1460,16 +1464,14 @@ function buildForkedChatLinkMessages(
   viewTabId: string,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    if (event.type !== "chat.forked") return [];
-    const metadata = event.metadata;
-    if (metadata === null) return [];
-    const sourceChatId = metadataString(metadata, "sourceChatId");
-    const sourceHostId = metadataString(metadata, "sourceHostId");
-    if (sourceChatId === null || sourceHostId === null) {
-      return [];
-    }
-    const sourceChatTitle =
-      metadataString(metadata, "sourceChatTitle") ?? "Untitled agent";
+    // Through the shared predicate, not beside it: this decides whether the
+    // event OCCUPIES AN ORDINAL, and the host numbers rows from the same
+    // function. A second copy that agreed by inspection is what put an
+    // empty-string guard on one side only.
+    const source = forkedChatLinkRowSource(event);
+    if (source === null) return [];
+    const { sourceChatId, sourceHostId } = source;
+    const sourceChatTitle = source.sourceChatTitle ?? "Untitled agent";
     const id = `forked-chat-link:${event.eventId}`;
     return [
       {
@@ -1516,26 +1518,22 @@ function buildNotificationAnchorMessages(
   events: ReadonlyArray<ChatEvent>,
 ): ReadonlyArray<ChatMessageModel> {
   return events.flatMap((event) => {
-    if (
-      event.type !== "send.failed" ||
-      event.message === null ||
-      event.metadata?.notificationAnchor !== true
-    ) {
-      return [];
-    }
+    // Shared with the host's ordinal numbering - see the forked-link builder.
+    const anchor = notificationAnchorRowSource(event);
+    if (anchor === null) return [];
     const id = chatTranscriptEventRowId(event.eventId);
     return [
       {
         id,
         role: "assistant",
-        content: event.message,
+        content: anchor.message,
         segments: [
           {
             id: `${id}:error`,
             kind: "error",
-            message: event.message,
+            message: anchor.message,
             recoverable: false,
-            code: metadataString(event.metadata, "code"),
+            code: anchor.code,
           },
         ],
         structuredContent: null,
@@ -1556,15 +1554,6 @@ function buildNotificationAnchorMessages(
       },
     ];
   });
-}
-
-function metadataString(
-  metadata: NonNullable<ChatEvent["metadata"]>,
-  key: string,
-): string | null {
-  const value = metadata[key];
-  if (typeof value !== "string") return null;
-  return value.length > 0 ? value : null;
 }
 
 /**
