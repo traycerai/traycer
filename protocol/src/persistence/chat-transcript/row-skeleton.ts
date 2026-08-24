@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { agentSenderSchema } from "@traycer/protocol/persistence/epic/senders";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-events";
 
@@ -34,6 +33,14 @@ import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-eve
  * fixed at write time or bounded by construction, which is what keeps a
  * 20k-row skeleton to ~1-2 MB.
  *
+ * **No fork-eligibility fields.** An earlier draft put
+ * `completedAt`/`runState`/`persistentMessageId` on every message entry so the
+ * renderer's "latest forkable row" scan could run over the skeleton. Two of the
+ * three are RENDERED fields with no persisted counterpart, and the answer is a
+ * single scalar for the whole chat - so it travels as one, on
+ * `chatTranscriptDerived`. See `fork-boundary.ts` for the derivation and why
+ * the host can compute it without the renderer's turn-lifecycle fold.
+ *
  * ## Absent vs null
  *
  * Fields that most rows do not carry are `.optional()` rather than nullable,
@@ -53,8 +60,25 @@ import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-eve
  */
 const byteLengthSchema = z.number().int().nonnegative();
 
-/** ≤200 chars. Enforced here so a host bug cannot inflate every skeleton row. */
-export const ROW_SKELETON_PREVIEW_MAX_CHARS = 200;
+/**
+ * Preview length cap. Enforced here so a host bug cannot inflate every row.
+ *
+ * ## Why 201 and not 200
+ *
+ * The minimap's own budget is 200 (`CHAT_TURN_MINIMAP_PREVIEW_MAX_CHARS`), and
+ * its compactor appends an ellipsis only when it can SEE a 201st character -
+ * `compact.length > MAX` is how it distinguishes "this is the whole message"
+ * from "this is the start of one". Handing it exactly 200 would make every long
+ * user turn lose its "…", because a truncated preview and a message that
+ * happens to be 200 characters long are then indistinguishable.
+ *
+ * So the producer ships one character past the consumer's budget and the
+ * consumer truncates as it always has. The alternatives were a `truncated`
+ * flag (a second field carrying one bit that the string itself already
+ * implies) or moving the compactor into shared code (the right end state, and
+ * part of the shared-derivation extraction - not something to half-do here).
+ */
+export const ROW_SKELETON_PREVIEW_MAX_CHARS = 201;
 
 export const messageRowSkeletonEntrySchema = z.object({
   kind: z.literal("message"),
@@ -67,31 +91,36 @@ export const messageRowSkeletonEntrySchema = z.object({
    * field that makes that detectable rather than silent.
    */
   createdAt: z.number(),
-  role: z.enum(["user", "assistant", "system"]),
+  /**
+   * The persisted roles, and only those. `messageSchema` is a two-arm union of
+   * user and assistant; the renderer's third role, `system`, belongs to WORKTREE
+   * SETUP CARDS, which are derived from workspace state rather than from a chat
+   * record and are woven by anchor rather than ordered by timestamp (see
+   * `row-order.ts`). Admitting `system` here would advertise a row this side can
+   * never produce.
+   */
+  role: z.enum(["user", "assistant"]),
   byteLength: byteLengthSchema,
   /**
    * Minimap text for HUMAN user turns only. Assistant rows get their minimap
    * label from role and status, and an A2A row from its sender - so previewing
    * them would be bytes nothing reads.
+   *
+   * Whitespace-collapsed by the producer, because that is the form the consumer
+   * measures its budget in - see `ROW_SKELETON_PREVIEW_MAX_CHARS`.
    */
   preview: z.string().max(ROW_SKELETON_PREVIEW_MAX_CHARS).optional(),
   /**
-   * Present when the row was sent by an agent rather than a person. The
-   * minimap renders human and A2A user turns differently, so it cannot infer
-   * this from `role` alone.
+   * Present (and always `true`) when the row was sent by another AGENT rather
+   * than a person - `sender.type === "agent"`, an `agent.sendMessage` delivery.
+   *
+   * A flag rather than the sender record, because the only consumer that reads
+   * an UNHYDRATED row is the minimap, and what it asks is a yes/no: it lists
+   * human turns and skips A2A ones (`isHumanUserMessage`). Everything that
+   * renders the agent's identity - the id, title, and reply affordance - runs
+   * against a hydrated row, which carries the whole sender.
    */
-  agentSenderInfo: agentSenderSchema.optional(),
-  /**
-   * The three fields fork eligibility is decided from, together with `role`.
-   * `forkableAssistantMessageId` requires an assistant row that has completed
-   * (`completedAt` present), is not still running (`runState` absent), and
-   * carries a non-transient `persistentMessageId`. Role alone is not enough,
-   * which is why all three ride the skeleton: the "latest forkable" scan walks
-   * the whole transcript and must answer without hydrating it.
-   */
-  completedAt: z.number().optional(),
-  runState: z.string().optional(),
-  persistentMessageId: z.string().optional(),
+  sentByAgent: z.boolean().optional(),
   /**
    * Present on assistant rows that reported usage. The context chip scans
    * backwards for the most recent one, so it must be answerable from the

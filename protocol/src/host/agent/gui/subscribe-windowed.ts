@@ -158,6 +158,19 @@ export const chatTranscriptDerivedSchema = z.object({
    * is the ordinary state for most chats.
    */
   pinnedTodo: pinnedTodoSnapshotSchema.nullable(),
+  /**
+   * The message id a fork of this chat would cut at - what the composer's
+   * switch-host gesture means by "fork the chat as it stands". `null` when the
+   * chat has no boundary yet (the agent has never replied, or its only
+   * assistant turn is the one running right now), which the gesture reports
+   * rather than opening a dialog pointed at nothing.
+   *
+   * A scalar rather than per-row skeleton fields: see `fork-boundary.ts`, which
+   * holds the derivation and the reasoning. Note this is only the CHAT-level
+   * boundary - the per-message fork buttons read the row the user pointed at,
+   * which is hydrated by construction.
+   */
+  latestForkableAssistantMessageId: z.string().nullable(),
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 

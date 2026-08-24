@@ -23,6 +23,11 @@ import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import { compareCanonicalRowOrder } from "@traycer/protocol/persistence/chat-transcript/row-order";
+// Identity of the assistant turn a record contributes to (records sharing a key
+// accumulate into ONE rendered turn). Shared rather than local because the
+// host's fork-boundary derivation groups by the same key, and a chat must not
+// change where it forks depending on which side computed it.
+import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
   isNoOpCheckpointEntry,
   turnCheckpointManifestSchema,
@@ -1865,16 +1870,6 @@ interface PersistedAssistantTurnRenderInput {
   readonly turnCache: Map<string, AssistantTurnCacheEntry>;
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   readonly lastUserTimestamp: number | null;
-}
-
-/**
- * Identity of the assistant turn a record contributes to. Records sharing a
- * key accumulate into ONE rendered turn (multi-record turns: subagent flows,
- * legacy/migrated snapshots); legacy records without a `turnId` fall back to
- * their timestamp.
- */
-function assistantTurnKey(message: AssistantMessage): string {
-  return message.turnId ?? `ts:${message.timestamp}`;
 }
 
 function hasOnlyAutonomousResumeAssistantBlocks(
