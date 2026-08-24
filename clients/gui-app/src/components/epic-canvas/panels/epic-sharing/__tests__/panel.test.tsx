@@ -511,7 +511,7 @@ describe("<SharingPanel />", () => {
     expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("spins the refresh icon while collaborators are refreshing", () => {
+  it("shows the standard agent spinner while collaborators are refreshing", () => {
     testState.collaboratorsQuery = {
       isFetching: true,
       dataUpdatedAt: Date.now(),
@@ -526,8 +526,8 @@ describe("<SharingPanel />", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      screen.getByTestId("epic-sharing-refresh-spinner").getAttribute("class"),
-    ).toContain("animate-spin");
+      screen.getByTestId("epic-sharing-refresh-spinner").className,
+    ).toContain("font-mono");
   });
 
   it("keeps role triggers visible for teams and direct collaborators", () => {
