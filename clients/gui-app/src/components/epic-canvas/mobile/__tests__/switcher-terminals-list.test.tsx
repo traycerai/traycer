@@ -278,7 +278,9 @@ describe("<SwitcherTerminalsList /> rows", () => {
       }),
     ]);
     renderList(openEpicTab());
-    const row = screen.getByTestId("switcher-terminal-row-durable-term");
+    // Anchored: the row and its "…" trigger are both buttons, and the trigger
+    // is named "Actions for Durable shell".
+    const row = screen.getByRole("button", { name: /^Durable shell/ });
     expect(row.textContent).toContain("Durable shell");
     // Desktop's per-row status line, which the phone used to drop.
     expect(row.textContent).toContain("Runtime status unavailable");
@@ -317,10 +319,10 @@ describe("<SwitcherTerminalsList /> rows", () => {
 
     // Two rows share a terminalId across hosts: matching on the id alone lights
     // both up, which is exactly what the id-only mobile selector did.
-    const hostA = screen.getByText("Host A shell").closest("button");
-    const hostB = screen.getByText("Host B shell").closest("button");
-    expect(hostA?.getAttribute("aria-current")).toBe("true");
-    expect(hostB?.getAttribute("aria-current")).toBeNull();
+    const hostA = screen.getByRole("button", { name: /^Host A shell/ });
+    const hostB = screen.getByRole("button", { name: /^Host B shell/ });
+    expect(hostA.getAttribute("aria-current")).toBe("true");
+    expect(hostB.getAttribute("aria-current")).toBeNull();
   });
 
   it("opens a durable row as a host-authority tile and closes the sheet", () => {
@@ -334,7 +336,7 @@ describe("<SwitcherTerminalsList /> rows", () => {
     ]);
     const tabId = openEpicTab();
     renderList(tabId);
-    fireEvent.click(screen.getByTestId("switcher-terminal-row-durable-term"));
+    fireEvent.click(screen.getByRole("button", { name: /^Durable shell/ }));
 
     const tiles = Object.values(
       useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
@@ -378,17 +380,15 @@ describe("<SwitcherTerminalsList /> rows", () => {
       }),
     ]);
     const editor = renderList(openEpicTab());
-    expect(
-      screen.getByTestId("switcher-terminal-rename-durable-term").textContent,
-    ).toContain("Rename");
-    expect(
-      screen.getByTestId("switcher-terminal-close-durable-term").textContent,
-    ).toContain("Close");
+    expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     editor.unmount();
 
     role.value = "viewer";
     renderList(openEpicTab());
-    expect(screen.queryByTestId("switcher-more-durable-term")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Actions for Durable shell" }),
+    ).toBeNull();
   });
 
   it("disables close for a durable row the client may not mutate", () => {
@@ -402,11 +402,10 @@ describe("<SwitcherTerminalsList /> rows", () => {
       }),
     ]);
     renderList(openEpicTab());
-    expect(
-      screen
-        .getByTestId("switcher-terminal-close-durable-term")
-        .hasAttribute("disabled"),
-    ).toBe(true);
+    const close = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Close",
+    });
+    expect(close.disabled).toBe(true);
   });
 });
 
@@ -425,7 +424,7 @@ describe("<SwitcherTerminalsList /> states", () => {
     expect(screen.getByTestId("switcher-terminal-error").textContent).toContain(
       "host unreachable",
     );
-    fireEvent.click(screen.getByTestId("switcher-terminal-retry"));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(listQuery.refetchCalls).toBe(1);
   });
 
@@ -466,12 +465,8 @@ describe("<SwitcherTerminalsList /> states", () => {
     expect(
       screen.getByTestId(`switcher-terminal-failed-create-${key}`).textContent,
     ).toContain("host offline");
-    expect(
-      screen.getByTestId(`switcher-terminal-failed-retry-${key}`),
-    ).toBeTruthy();
-    expect(
-      screen.getByTestId(`switcher-terminal-failed-discard-${key}`),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
     // A failed create is not an empty list.
     expect(screen.queryByTestId("switcher-terminal-empty")).toBeNull();
   });
