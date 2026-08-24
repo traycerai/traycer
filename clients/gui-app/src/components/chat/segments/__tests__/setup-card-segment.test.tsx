@@ -382,10 +382,11 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       ]),
     );
 
-    const failureTitle = screen.getByText("Worktree creation failed");
-    expect(failureTitle.getAttribute("aria-label")).toContain(
-      "fatal: could not create work tree dir",
-    );
+    expect(
+      screen.getByRole("button", {
+        name: "Worktree creation failed. fatal: could not create work tree dir",
+      }),
+    ).toBeTruthy();
     const createStep = screen
       .getByText("Creating worktree")
       .closest("li");

@@ -438,7 +438,9 @@ describe("<NewTerminalPicker />", () => {
               // progress as a disabled reason.
               "setup_running",
             ),
-            setupState: "running",
+            // The legacy disabled reason remains authoritative when a mixed
+            // host/client deployment has not converged on setupState yet.
+            setupState: "not_required",
           },
         ],
         folderlessCwd: "/Users/tgill",
@@ -468,6 +470,37 @@ describe("<NewTerminalPicker />", () => {
           launchedTerminalCwd(tile) === "/work/traycer-wt/feature-x",
       ),
     ).toBe(true);
+  });
+
+  it("shows legacy setup-pending status while keeping the row selectable", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          {
+            ...makeRow(
+              "host-1",
+              "/work/traycer-wt/feature-x",
+              "feature-x",
+              "setup_pending",
+            ),
+            setupState: "not_required",
+          },
+        ],
+        folderlessCwd: "/Users/tgill",
+      },
+      isPending: false,
+      isError: false,
+    };
+    openPicker();
+
+    const option = screen.getByRole("option", { name: /feature-x/i });
+    const pending = within(option).getByText("setup pending");
+    expect(pending.getAttribute("data-status-tone")).toBe("neutral");
+    expect(option.className).toContain("cursor-pointer");
+    expect(option.dataset.checked).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("selects nothing and keeps Launch disabled when every row is disabled", () => {

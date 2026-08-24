@@ -161,10 +161,10 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
 
 /**
  * Default row for the terminal picker, mirroring the git diff panel's
- * `pickDefaultRow`: skip rows with blocking selector reasons (setup pending,
- * missing worktree, ...), prefer the primary directory the agent runs in, and
- * otherwise take the first selectable row. A failed best-effort setup remains
- * browsable with a warning. Terminals don't require a git repo.
+ * `pickDefaultRow`: skip only genuinely unavailable rows. A verified worktree
+ * stays browsable while setup is pending, running, failed, or cancelled.
+ * Prefer the primary directory the agent runs in, then the first browsable
+ * row. Terminals don't require a git repo.
  */
 function pickDefaultTerminalRow(
   rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,

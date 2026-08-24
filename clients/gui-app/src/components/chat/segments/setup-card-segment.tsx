@@ -283,22 +283,15 @@ export function SetupCardSegment(props: {
   });
   const provisionFailureDetail =
     workspaces.find(isProvisionFailure)?.errorMessage ?? null;
+  const toggleAccessibleLabel =
+    provisionFailureDetail === null
+      ? title
+      : `${title}. ${provisionFailureDetail}`;
   const secondary = multi
     ? `${readyCount} of ${total} done`
     : workspaceSecondary(workspaces[0]);
   const ChevronIcon = expanded ? ChevronDown : ChevronRight;
-  const titleLabel = (
-    <span
-      className="text-foreground/85"
-      aria-label={
-        provisionFailureDetail === null
-          ? undefined
-          : `${title}. ${provisionFailureDetail}`
-      }
-    >
-      {title}
-    </span>
-  );
+  const titleLabel = <span className="text-foreground/85">{title}</span>;
 
   const labelInner = (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
@@ -360,6 +353,7 @@ export function SetupCardSegment(props: {
           <button
             type="button"
             aria-expanded={expanded}
+            aria-label={toggleAccessibleLabel}
             data-testid="setup-card-toggle"
             className={cn(
               "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
@@ -390,6 +384,7 @@ export function SetupCardSegment(props: {
           data-find-include="true"
           onClick={() => setManualExpanded(!expanded)}
           aria-expanded={expanded}
+          aria-label={toggleAccessibleLabel}
           data-testid="setup-card-toggle"
           className={cn(
             "rounded-sm outline-none transition-colors",
