@@ -40,6 +40,7 @@ import type {
 } from "@/stores/terminals/terminal-session-store";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import type { TerminalScope } from "@traycer/protocol/host/terminal/unary-schemas";
+import { useTerminalThemeHint } from "@/lib/terminal-theme-hint";
 // Last-resort opening grid when the measurement probe never reported (its
 // chunk failed to load within the timeout, or the tile never mounted one) and
 // no kept-alive engine exists to peek. Everything downstream can still heal
@@ -276,6 +277,16 @@ export function useTerminalTileBootstrap(
     markTerminalLoad(sessionId, "create-done");
   }, [createIsSuccess, sessionId]);
 
+  // Spawner-theme hint for the host's OSC 10/11 replies (TUI light/dark
+  // detection). Read through a ref: the create effect wants the CURRENT
+  // theme at dispatch time, but a theme toggle must not re-fire a one-shot
+  // create effect (the hint is spawn-time-only anyway - a TUI probes once).
+  const themeHint = useTerminalThemeHint();
+  const themeHintRef = useRef(themeHint);
+  useEffect(() => {
+    themeHintRef.current = themeHint;
+  }, [themeHint]);
+
   // The mutate ref lets the create-effect dispatch through the latest
   // mutation without re-firing on every tanstack render.
   const createMutateRef = useRef(create.mutate);
@@ -345,6 +356,7 @@ export function useTerminalTileBootstrap(
             shellArgs:
               payload.shellArgs === null ? null : [...payload.shellArgs],
             worktreeBusyPaths: [...payload.worktreeBusyPaths],
+            themeHint: themeHintRef.current,
           },
           { onSettled: () => setCreateRetryError(null) },
         );

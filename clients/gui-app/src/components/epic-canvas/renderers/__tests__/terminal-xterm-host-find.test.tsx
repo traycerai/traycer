@@ -160,6 +160,12 @@ vi.mock("@xterm/xterm", () => ({
           listener("\x1b[16;39R");
         });
       }
+      // Real xterm answers OSC 11 colour queries with its themed background.
+      if (chunk.includes("\x1b]11;?")) {
+        this.dataListeners.forEach((listener) => {
+          listener("\x1b]11;rgb:ffff/ffff/ffff\x07");
+        });
+      }
       if (callback !== undefined) {
         callback();
       }
@@ -1127,6 +1133,55 @@ describe("<TerminalXtermHost /> terminal find", () => {
     });
     expect(onUserInput).not.toHaveBeenCalled();
 
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
+    expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
+  });
+
+  it("never forwards xterm's OSC 10/11 colour reports as user input", async () => {
+    // The HOST is the single authority for colour queries (it answers with
+    // the session's spawn-time themeHint). A live query still reaches this
+    // client's xterm through the output stream and xterm generates a reply;
+    // forwarding it would race the host's answer with one reply per attached
+    // viewer, each reporting its own theme.
+    const onUserInput = vi.fn();
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    getWriter()({ kind: "live", chunk: "\x1b]11;?\x07", onAckable: () => {} });
+    expect(onUserInput).not.toHaveBeenCalled();
+
+    // Genuine input keeps flowing untouched.
     getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
   });

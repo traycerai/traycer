@@ -391,10 +391,12 @@ import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/
 import { workspaceStreamAssetV10 } from "@traycer/protocol/host/workspace/asset-stream";
 import { gitStreamFileAssetV10 } from "@traycer/protocol/host/git-asset-stream";
 import {
-  terminalCreateDowngradeV20ToV10,
+  terminalCreateDowngradeV21ToV10,
   terminalCreateV10,
   terminalCreateV20,
+  terminalCreateV21,
   terminalCreateUpgradeV10ToV20,
+  terminalCreateUpgradeV20ToV21,
   terminalKillV10,
   terminalListDowngradeV23ToV10,
   terminalListV10,
@@ -6304,14 +6306,18 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: terminalCreateV20,
           upgradeFromPreviousVersion: terminalCreateUpgradeV10ToV20,
         },
+        1: {
+          contract: terminalCreateV21,
+          upgradeFromPreviousVersion: terminalCreateUpgradeV20ToV21,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalCreateDowngradeV20ToV10 },
+      downgradePathsFromLatest: { 1: terminalCreateDowngradeV21ToV10 },
     },
   },
   "terminal.kill": {

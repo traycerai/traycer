@@ -209,6 +209,11 @@ function EpicPlainTerminalCreateHostOwner(props: {
                 rows: job.rows,
                 desiredSessionId: job.terminalId,
                 worktreeBusyPaths: [],
+                // Plain terminals take the host's dark OSC-reply fallback;
+                // the capable `terminal.plain.create` path carries no hint
+                // either, and the two must not drift (see the terminal
+                // light-mode plan's scope decision).
+                themeHint: null,
               },
             });
             return;

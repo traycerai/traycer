@@ -106,6 +106,14 @@ interface XtermInitialOptions extends ITerminalOptions {
 }
 
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+
+// xterm's replies to OSC 10/11 default-colour queries (`ESC ] 10|11 ; <spec>
+// BEL|ST`), which surface on `onData` like keystrokes do. Filtered out of the
+// user-input forwarding path: the HOST is the single authority for colour
+// queries (it answers with the session's spawn-time `themeHint`), and a
+// per-viewer reply would race it with a different answer per attached client.
+// eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
+const OSC_COLOR_REPORT_PATTERN = /\x1b\](?:10|11);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
@@ -760,10 +768,19 @@ function createXtermEntry(
   let hasReceivedContent = false;
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
+    // The HOST answers OSC 10/11 default-colour queries (with the theme the
+    // session was spawned under - see `themeHint` on `terminal.create`), so
+    // xterm's own replies to queries it sees in the live stream must not be
+    // forwarded: with N attached viewers the TUI would otherwise hear N+1
+    // answers in unpredictable order, each viewer reporting its own theme.
+    // Replies are emitted as standalone onData payloads, never mixed with
+    // keystrokes; the remainder check keeps any interleaved real input.
+    const filtered = d.replace(OSC_COLOR_REPORT_PATTERN, "");
+    if (filtered.length === 0 && d.length > 0) return;
     // A sticky modifier latched on the mobile key bar combines with the next
     // typed character here. Desktop input takes the empty-latch fast path
     // (only the bar ever sets a latch).
-    live.onUserInput(applyTerminalKeyBarLatchToTypedInput(d));
+    live.onUserInput(applyTerminalKeyBarLatchToTypedInput(filtered));
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
     live.onSearchResults(result);
