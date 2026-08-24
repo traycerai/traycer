@@ -136,6 +136,16 @@ describe("parseTraycerNextStepsMarkdown", () => {
     const [settled, growing, completed] = nextStepsParts;
     expect(growing.id).toBe(settled.id);
     expect(completed.id).toBe(settled.id);
+    expect(growing.prose).toBe("Pick one.\n\n- Export the cha");
+    expect(growing.options).toEqual(settled.options);
+    expect(growing.options.map((option) => option.prompt)).not.toContain(
+      "Export the cha",
+    );
+    expect(completed.options.map((option) => option.prompt)).toEqual([
+      "Use /implementation-validation to validate the work",
+      "Review the changed files with /review-files",
+      "Export the changelog",
+    ]);
     expect(growing.options[0]?.id).toBe(settled.options[0]?.id);
     expect(completed.options[0]?.id).toBe(settled.options[0]?.id);
   });

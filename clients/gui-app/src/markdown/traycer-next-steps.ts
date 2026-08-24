@@ -111,6 +111,9 @@ function parseTraycerNextStepsMarkdownWithTags(
           ? parsed.options.slice(0, -1)
           : parsed.options,
       );
+      const streamingOptions = parsed.trailingOptionIsStreaming
+        ? parsed.options.slice(-1)
+        : [];
       if (settledOptions.length < MIN_NEXT_STEP_OPTIONS) {
         // A single distinct continuation is not a choice. Fail closed at the
         // shared parser boundary so every consumer drops the action instead
@@ -129,8 +132,10 @@ function parseTraycerNextStepsMarkdownWithTags(
           // which grows every frame and would remount the part (prose markdown
           // + action buttons) on every streamed token.
           id: `next:${block.start}`,
-          prose: parsed.prose,
-          options: distinctOptions,
+          // Keep the active trailing prompt visible, but inert, until its line
+          // settles. It must not become a clickable partial action.
+          prose: inertNextStepsMarkdown(parsed.prose, streamingOptions),
+          options: settledOptions,
           complete: block.complete,
         });
       }
