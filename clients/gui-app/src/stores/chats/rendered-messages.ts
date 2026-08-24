@@ -18,6 +18,11 @@ import type {
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
+// The ONE comparator. The host numbers rows with it to build the windowed
+// transcript's skeleton, and this is where those ordinals get drawn - so a
+// second, locally-written `a.createdAt - b.createdAt` here would be a silent
+// way for the two sides to disagree about which row an ordinal names.
+import { compareCanonicalRowOrder } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import {
   isNoOpCheckpointEntry,
   turnCheckpointManifestSchema,
@@ -1295,7 +1300,7 @@ export function useRenderedMessages(
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
     // memo re-runs on every streamed delta, so the no-card path must stay cheap.
     if (setupCardEntries.length === 0) {
-      return baseRows.sort((a, b) => a.createdAt - b.createdAt);
+      return baseRows.sort(compareCanonicalRowOrder);
     }
 
     // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
@@ -1339,7 +1344,7 @@ export function useRenderedMessages(
     });
 
     const sorted = [...baseRows, ...floatingCards].sort(
-      (a, b) => a.createdAt - b.createdAt,
+      compareCanonicalRowOrder,
     );
 
     // Weave each anchored card in immediately above its message. A push loop
