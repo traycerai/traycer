@@ -185,9 +185,10 @@ export function splitDoctorIssuesByVantage(
 // difference that stopped earning its place. Neither half is actionable from
 // Settings: the pid belongs to a process this page cannot signal except through
 // the Restart button already beside it, and the relay origin is infrastructure
-// the account picked. What the row carried that anyone acts on is the session
-// count, which now renders as a chip on the identity line and comes straight
-// off `host.status.busySessionCount` — no per-kind derivation left to do.
+// the account picked. What the row carried that anyone acts on is whether the
+// host is busy, which now renders as a chip on the identity line from
+// `host.status.busyBreakdown` (falling back to `busySessionCount` on a @1.1
+// host) via `describeHostBusy` — no viewer/tile count, ever.
 //
 // The local snapshot (`LocalHostSnapshot`) was this module's only reason to
 // know about a host's locality at all, so the Overview no longer takes it.

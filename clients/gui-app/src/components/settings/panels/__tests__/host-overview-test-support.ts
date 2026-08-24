@@ -26,6 +26,7 @@ import type {
   HostAvailableManifest,
   HostGetInstallationInfoResponse,
 } from "@traycer/protocol/host/maintenance/index";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -137,7 +138,9 @@ export function buildOverviewHostFixture(options: {
   readonly customName?: string | null;
   readonly systemName?: string;
   readonly hostVersion?: string;
+  readonly busy?: boolean;
   readonly busySessionCount?: number;
+  readonly busyBreakdown?: HostBusyBreakdown | null;
   readonly installation?: HostGetInstallationInfoResponse;
   /**
    * Replaces (rather than merges into) individual method handlers after the
@@ -169,10 +172,14 @@ export function buildOverviewHostFixture(options: {
       return {
         ready: true,
         hostVersion: options.hostVersion ?? "1.5.0",
-        protocolVersion: { major: 1, minor: 1 },
-        busy: false,
+        protocolVersion: {
+          major: 1,
+          minor: options.busyBreakdown === undefined ? 1 : 2,
+        },
+        busy: options.busy ?? false,
         busySessionCount: options.busySessionCount ?? 0,
         updateProgress: null,
+        busyBreakdown: options.busyBreakdown ?? null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

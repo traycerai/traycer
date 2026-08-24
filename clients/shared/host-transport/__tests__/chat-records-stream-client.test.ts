@@ -28,6 +28,7 @@ import {
 } from "../chat-records-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class StubSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler = () => undefined;
@@ -68,6 +69,7 @@ function makeWsStreamClient(
   session: IStreamSession,
 ): WsStreamClient<typeof hostStreamRpcRegistry> {
   const client = new WsStreamClient({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
     bearer: () => null,

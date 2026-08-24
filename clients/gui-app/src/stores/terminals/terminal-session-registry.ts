@@ -169,6 +169,10 @@ export class TerminalSessionRegistry {
     return handle.store.subscribe((state) => {
       const defunct =
         state.status === "exited" ||
+        // `TERMINAL_NOT_FOUND` only proves this handle's PTY is gone. A
+        // durable terminal may already have been recreated under the same
+        // logical id, so a reaped handle must never shadow a fresh bootstrap.
+        state.status === "reaped" ||
         // "Lost" (the store's mapping of a `closed` stream) is a dead end
         // for a plain terminal: the stream client never redials after
         // `closed` (transient drops surface as "reconnecting", not
@@ -203,6 +207,7 @@ export class TerminalSessionRegistry {
       if (entry.handle.sessionId !== identity.sessionId) continue;
       if (entry.hostId !== identity.hostId) continue;
       if (entry.leases > 0) continue;
+      if (entry.handle.store.getState().status === "reaped") continue;
       return entry.instanceId;
     }
     return null;
@@ -244,9 +249,13 @@ export class TerminalSessionRegistry {
     return true;
   }
 
-  release(instanceId: string): void {
+  release(instanceId: string, handle: TerminalSessionStoreHandle): void {
     const entry = this.entries.get(instanceId);
     if (entry === undefined) return;
+    // A defunct handle may be replaced while an older consumer is still
+    // mounted. Its eventual effect cleanup must not release a lease belonging
+    // to the replacement incarnation now registered under the same instance.
+    if (entry.handle !== handle) return;
     if (entry.leases <= 0) return;
     entry.leases -= 1;
     if (entry.leases > 0) return;
@@ -347,23 +356,26 @@ export class TerminalSessionRegistry {
 
 function shouldKeepLeaseFree(handle: TerminalSessionStoreHandle): boolean {
   const state = handle.store.getState();
-  return state.kind === "terminal-agent" && state.status !== "exited";
+  return (
+    state.kind === "terminal-agent" &&
+    state.status !== "exited" &&
+    state.status !== "reaped"
+  );
 }
 
 /**
  * A released plain terminal lingers for
  * {@link PLAIN_TERMINAL_RELEASE_LINGER_MS} only while its stream can still
- * serve a reattach (creating/running). "Lost" is excluded: the stream client
- * never redials after `closed` (transient drops surface as "reconnecting"),
- * so a lost handle would be revived as a permanently dead terminal - the
- * landing tile has no recovery hook - and would shadow the fresh
- * create-then-acquire bootstrap after the host recreates the session.
+ * serve a reattach (creating/running). "Lost" and "reaped" are excluded: the
+ * stream client cannot address a PTY from either state, so reviving that handle
+ * would shadow the fresh create-then-acquire bootstrap after recovery.
  */
 function shouldLingerLeaseFree(handle: TerminalSessionStoreHandle): boolean {
   const state = handle.store.getState();
   return (
     state.kind === "terminal" &&
     state.status !== "exited" &&
-    state.status !== "lost"
+    state.status !== "lost" &&
+    state.status !== "reaped"
   );
 }

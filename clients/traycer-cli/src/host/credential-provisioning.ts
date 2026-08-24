@@ -35,6 +35,7 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
 } from "./pid-metadata";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 // Post-install host-credential provisioning: the short-lived stream
 // connection that leaves a freshly-installed host holding its own
@@ -377,6 +378,7 @@ export async function provisionInstalledHostCredential(
       pongTimeoutMs: PONG_TIMEOUT_MS,
       initialBackoffMs: INITIAL_BACKOFF_MS,
       maxBackoffMs: MAX_BACKOFF_MS,
+      clientIdentity: CLI_CLIENT_IDENTITY,
     });
     client = activeClient;
 

@@ -40,6 +40,7 @@ import type {
 } from "@traycer/protocol/framework/ws-protocol";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -493,6 +494,7 @@ describe("HostClient", () => {
     };
 
     const wsClient = new WsRpcClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry,
       requestId: () => "req-1",
       webSocketFactory: factory,
@@ -556,6 +558,7 @@ describe("HostClient", () => {
     ctx.release();
 
     const wsClient = new WsRpcClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry,
       requestId: () => "req-1",
       webSocketFactory: factory,

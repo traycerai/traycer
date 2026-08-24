@@ -130,7 +130,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a");
+    registry.release("inst-a", ownedA.handle);
 
     adoptWarmSessionInstance(
       { hostId: HOST_B, sessionId: SHARED_ID },
@@ -152,7 +152,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a");
+    registry.release("inst-a", ownedA.handle);
 
     const ownedB = createOwnedHandle(SHARED_ID);
     registry.acquire("inst-b", () => ownedB.handle, HOST_B);
@@ -223,7 +223,7 @@ describe("xterm host fleet identity", () => {
       makeEntry(SHARED_ID, HOST_A),
     );
     releaseXtermHost("inst-a", true);
-    registry.release("inst-a");
+    registry.release("inst-a", ownedA.handle);
 
     adoptWarmSessionInstance(
       { hostId: HOST_A, sessionId: SHARED_ID },
@@ -243,7 +243,7 @@ describe("xterm host fleet identity", () => {
       HOST_A,
     );
     expect(revived).toBe(ownedA.handle);
-    registry.release("inst-reopen");
+    registry.release("inst-reopen", ownedA.handle);
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
     expect(ownedA.closeCount()).toBe(1);
   });

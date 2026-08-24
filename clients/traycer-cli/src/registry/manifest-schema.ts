@@ -1,3 +1,4 @@
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type {
   HostPlatformAsset,
@@ -201,6 +202,18 @@ function parseVersionEntry(
     sourceLabel,
     "requiredCliVersion",
   );
+  // The host build's baked compatibility floor, recorded for RELEASE TOOLING -
+  // nothing on the client acts on it (the host enforces its own floor at
+  // connection time from its own bytes).
+  //
+  // ADDITIVE-SAFE IN BOTH DIRECTIONS, which is the whole reason it is parsed
+  // this leniently. Every entry written before this field existed omits it, and
+  // a rerun of an older workflow revision still writes entries without it, so
+  // requiring it would reject the manifest this client depends on to install
+  // anything at all. A present-but-malformed value is a different matter and
+  // throws: this parser is the boundary, and silently mapping "not a number" to
+  // "no floor" is the one reading that fails permissively.
+  const minimumEpoch = parseNullableEpoch(obj.minimumEpoch, sourceLabel);
   if (
     obj.platforms === null ||
     typeof obj.platforms !== "object" ||
@@ -229,8 +242,29 @@ function parseVersionEntry(
     yanked: obj.yanked,
     deprecationReason,
     requiredCliVersion,
+    minimumEpoch,
     platforms,
   };
+}
+
+/**
+ * A nullable, absent-tolerant positive-integer field.
+ *
+ * `undefined` (the key is absent) and `null` are the same claim - no floor -
+ * because both are how a manifest entry written by a workflow revision that
+ * predates the field looks. Anything else present must be a positive safe
+ * integer or the manifest is invalid; there is no coercion arm, so a stringly
+ * `"2"` is refused rather than read.
+ */
+function parseNullableEpoch(raw: unknown, sourceLabel: string): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "number" || !isValidCompatibilityEpoch(raw)) {
+    throw manifestInvalid(
+      sourceLabel,
+      "'minimumEpoch' must be a positive integer, null, or absent",
+    );
+  }
+  return raw;
 }
 
 function parsePlatformAsset(

@@ -38,8 +38,12 @@ import {
   type OverviewDegradeReason,
 } from "@/components/settings/panels/host-overview-model";
 import {
+  liveBusyBreakdown,
   liveBusySessionCount,
+  liveHostBusy,
+  settledBusyBreakdown,
   settledBusySessionCount,
+  settledHostBusy,
 } from "@/components/settings/panels/my-hosts-model";
 import { persistedDraftFromIdentity } from "@/components/settings/panels/host-settings-panel-model";
 import { LocalPackageManagerUpgradeHint } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -83,7 +87,10 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
 import type { HostIdentity } from "@traycer/protocol/host/identity/index";
 import type { HostRestartBusyVerdict } from "@traycer/protocol/host/restart/index";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostStatusUpdateProgress } from "@traycer/protocol/host/status/index";
+import type {
+  HostBusyBreakdown,
+  HostStatusUpdateProgress,
+} from "@traycer/protocol/host/status/index";
 
 // Matches the RPC Doctor card's own tail size, so a report read over the
 // bridge shows the same amount of log as one read over `diagnostics.logs.tail`.
@@ -506,7 +513,9 @@ export function HostOverviewPanel(props: {
     busy: corePending,
     hostId: scope.hostId,
     scopeUsable: usable,
+    settledBusy: view.settledBusy,
     settledBusySessionCount: view.settledBusySessionCount,
+    settledBusyBreakdown: view.settledBusyBreakdown,
     refetchStatus: () => {
       void serviceStatusQuery.refetch();
     },
@@ -754,7 +763,9 @@ export function HostOverviewPanel(props: {
         version={view.hostVersion ?? host.version}
         // What the HOST says about its own work, which is the fact that decides
         // whether Restart is safe to press. `null` until it answers.
-        sessionCount={view.busySessionCount}
+        busy={view.busy}
+        busySessionCount={view.busySessionCount}
+        busyBreakdown={view.busyBreakdown}
         nameAction={
           !usable ? null : (
             <HostOverviewNameAction
@@ -833,7 +844,9 @@ export function HostOverviewPanel(props: {
             item={registryItem}
             mutation={policyMutation}
             liveBusySessionCount={view.busySessionCount}
+            liveBusyBreakdown={view.busyBreakdown}
             settledBusySessionCount={view.settledBusySessionCount}
+            settledBusyBreakdown={view.settledBusyBreakdown}
           />
         )}
       </HostIdentityCard>
@@ -1392,21 +1405,25 @@ interface OverviewDisplay {
   readonly hostVersion: string | null;
   readonly updateProgress: HostStatusUpdateProgress | null;
   /**
-   * Live open-session count from `host.status`, or `null` when this client has
-   * no live read of the host. `null` is not zero — see `deriveUpdateAffordance`.
+   * Live busy total from `host.status`, or `null` when this client has no live
+   * read of the host. `null` is not zero — see `deriveUpdateAffordance`.
    *
    * The DISPLAY read: it survives a refetch of stale data so the row does not
    * blank for a round trip.
    */
+  readonly busy: boolean;
   readonly busySessionCount: number | null;
+  readonly busyBreakdown: HostBusyBreakdown | null;
   /**
-   * The same count, but only when the read is SETTLED — what the drain force
-   * may be armed and confirmed against. Diverges from `busySessionCount`
-   * exactly while a fetch is in flight, which is the window in which the
-   * confirm-time equality guard would otherwise compare a retained number to
-   * itself and wave through a force sized to a count nobody was shown.
+   * The same facts, but only when the read is SETTLED — what the drain force
+   * and re-register confirm may be armed against. Diverges from the display
+   * fields exactly while a fetch is in flight, which is the window in which
+   * the confirm-time equality guard would otherwise compare a retained number
+   * to itself and wave through a force sized to a count nobody was shown.
    */
+  readonly settledBusy: boolean;
   readonly settledBusySessionCount: number | null;
+  readonly settledBusyBreakdown: HostBusyBreakdown | null;
 }
 
 function useOverviewDisplay(input: {
@@ -1424,6 +1441,7 @@ function useOverviewDisplay(input: {
   };
 }): OverviewDisplay {
   const { scope, host, identity, status, statusHealth } = input;
+  const busy = overviewBusySnapshot(status, statusHealth);
   return {
     identity,
     displayName: identity?.effectiveName ?? host?.name ?? scope.hostLabel,
@@ -1431,27 +1449,61 @@ function useOverviewDisplay(input: {
     // The loopback URL and pid that used to ride alongside this are GONE, and
     // with them the local/remote fork in the meta line. They were the page's
     // one legitimate per-kind difference, and what they bought was a monospace
-    // band nobody acts on from Settings; the session count is the half that
+    // band nobody acts on from Settings; the busy snapshot is the half that
     // answers a question the buttons below actually depend on.
-    //
-    // Routed through `liveBusySessionCount` rather than read straight off the
-    // response: a retained cache entry is not a live read, and this count is
-    // what the chip states and the drain force is sized from.
-    busySessionCount: liveBusySessionCount({
-      reportedCount: status?.busySessionCount ?? null,
-      isError: statusHealth.isError,
-      fetchStatus: statusHealth.fetchStatus,
-      isStale: statusHealth.isStale,
-      hasLiveSource: statusHealth.hasLiveSource,
-    }),
     hostVersion: status?.hostVersion ?? null,
     updateProgress: status?.updateProgress ?? null,
-    settledBusySessionCount: settledBusySessionCount({
-      reportedCount: status?.busySessionCount ?? null,
-      isError: statusHealth.isError,
-      fetchStatus: statusHealth.fetchStatus,
-      isStale: statusHealth.isStale,
-      hasLiveSource: statusHealth.hasLiveSource,
+    ...busy,
+  };
+}
+
+/**
+ * Routed through the live-source helpers rather than read straight off the
+ * response: a retained cache entry is not a live read, and this snapshot is
+ * what the chip states and the drain force is sized from.
+ */
+function overviewBusySnapshot(
+  status: ResponseOfMethod<HostRpcRegistry, "host.status"> | null,
+  statusHealth: {
+    readonly isError: boolean;
+    readonly fetchStatus: "fetching" | "paused" | "idle";
+    readonly isStale: boolean;
+    readonly hasLiveSource: boolean;
+  },
+): Pick<
+  OverviewDisplay,
+  | "busy"
+  | "busySessionCount"
+  | "busyBreakdown"
+  | "settledBusy"
+  | "settledBusySessionCount"
+  | "settledBusyBreakdown"
+> {
+  const liveSource = {
+    reportedCount: status?.busySessionCount ?? null,
+    isError: statusHealth.isError,
+    fetchStatus: statusHealth.fetchStatus,
+    isStale: statusHealth.isStale,
+    hasLiveSource: statusHealth.hasLiveSource,
+  };
+  return {
+    busy: liveHostBusy({
+      ...liveSource,
+      reportedBusy: status?.busy ?? false,
+    }),
+    busySessionCount: liveBusySessionCount(liveSource),
+    busyBreakdown: liveBusyBreakdown({
+      ...liveSource,
+      reportedBreakdown: status?.busyBreakdown ?? null,
+    }),
+    settledBusy: settledHostBusy({
+      ...liveSource,
+      reportedBusy: status?.busy ?? false,
+    }),
+    settledBusySessionCount: settledBusySessionCount(liveSource),
+    settledBusyBreakdown: settledBusyBreakdown({
+      ...liveSource,
+      reportedBreakdown: status?.busyBreakdown ?? null,
     }),
   };
 }

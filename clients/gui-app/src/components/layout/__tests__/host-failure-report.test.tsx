@@ -105,6 +105,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
       compatiblePresentation({
         busy: true,
         busySessionCount: null,
+        busyBreakdown: null,
         hostVersion: "1.0.0",
       }),
     );
@@ -118,6 +119,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
       compatiblePresentation({
         busy: true,
         busySessionCount: 0,
+        busyBreakdown: null,
         hostVersion: "1.1.0",
       }),
     );
@@ -130,6 +132,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
         compatiblePresentation({
           busy: true,
           busySessionCount: 1,
+          busyBreakdown: null,
           hostVersion: "1.1.0",
         }),
       ),
@@ -139,6 +142,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
         compatiblePresentation({
           busy: true,
           busySessionCount: 3,
+          busyBreakdown: null,
           hostVersion: "1.1.0",
         }),
       ),
@@ -150,6 +154,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
       compatiblePresentation({
         busy: true,
         busySessionCount: null,
+        busyBreakdown: null,
         hostVersion: "1.0.0",
       }),
     );
@@ -157,6 +162,7 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
       compatiblePresentation({
         busy: true,
         busySessionCount: 0,
+        busyBreakdown: null,
         hostVersion: "1.1.0",
       }),
     );
@@ -168,10 +174,30 @@ describe("hostFailureReportIssueAction — busySessionCount null vs 0 (traycer#8
       compatiblePresentation({
         busy: false,
         busySessionCount: 0,
+        busyBreakdown: null,
         hostVersion: "1.1.0",
       }),
     );
     expect(message).not.toContain("busy");
+  });
+
+  it("names the typed breakdown instead of sessions when the host sent one", () => {
+    const message = reportedMessage(
+      compatiblePresentation({
+        busy: true,
+        busySessionCount: 3,
+        busyBreakdown: {
+          workingAgents: 2,
+          activeTerminalAgents: 0,
+          busyTerminals: 1,
+        },
+        hostVersion: "1.2.0",
+      }),
+    );
+    expect(message).toContain(
+      "compat compatible, busy 2 agents · 1 terminal working",
+    );
+    expect(message).not.toMatch(/session/i);
   });
 
   it("omits the busy clause when there is no host-status answer at all", () => {

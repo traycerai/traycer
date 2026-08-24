@@ -46,9 +46,11 @@ import {
 } from "../manifest/cli-manifest";
 import {
   effectiveUpgradeGuidance,
+  clientCompatibilityRecoveryHintForVector,
   resolveCompatRecovery,
   type CompatRecoveryPlan,
 } from "../host/compat-recovery";
+import { readCliFeedCompatibilityEpoch } from "../registry/cli-versions";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
 import type { Environment } from "../runner/environment";
 import { CliError } from "../runner/errors";
@@ -937,11 +939,30 @@ async function incompatibleRpcIssue(
     source,
   );
 
+  // AN EPOCH REJECTION WINS over the guidance-derived summary, and resolves the
+  // remedy through the install vector's own mechanism. `routing.plan.summary`
+  // answers "which side is stale" from two booleans; the host has already
+  // answered that and gone further - it named the generation it needs - so
+  // restating the vaguer answer beside it would be printing the worse of two.
+  //
+  // The `manual` vector is the only one that reaches the network here (see
+  // `clientCompatibilityRecoveryHintForVector`), and it cannot throw: an
+  // unreachable feed degrades the advice rather than replacing a compatibility
+  // rejection with a registry error.
+  const epochHint = await clientCompatibilityRecoveryHintForVector({
+    requirement: err.fatalDetails?.clientCompatibilityRequirement ?? null,
+    source,
+    readFeedEpoch: readCliFeedCompatibilityEpoch,
+  });
+
   return {
     code: DOCTOR_ISSUE_CODES.HOST_RPC_INCOMPATIBLE,
     severity: "error",
     title: "Host/CLI protocol mismatch",
-    message: `The host is reachable but its RPC protocol is incompatible with this client. ${routing.plan.summary}`,
+    message:
+      epochHint === null
+        ? `The host is reachable but its RPC protocol is incompatible with this client. ${routing.plan.summary}`
+        : `The host is reachable but ${epochHint}.`,
     fixAction: routing.fixAction,
     terminalCommand: routing.terminalCommand,
     details: {

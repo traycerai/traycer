@@ -75,6 +75,7 @@ import {
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
@@ -302,6 +303,7 @@ class ProtocolMockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor(negotiatedVersion: SchemaVersion) {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

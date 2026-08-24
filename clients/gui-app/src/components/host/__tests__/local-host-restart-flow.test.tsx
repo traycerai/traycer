@@ -356,7 +356,11 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
           "host.restart": () =>
             Promise.resolve({
               outcome: "busy" as const,
-              verdict: { busySessionCount, blockers: null },
+              verdict: {
+                busySessionCount,
+                blockers: null,
+                busyBreakdown: null,
+              },
             }),
         },
       });
@@ -543,7 +547,11 @@ describe("<LocalHostRestartFlow /> - host runtime binding present, local host re
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -787,7 +795,11 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
           restartCallCount += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -859,7 +871,11 @@ describe("<LocalHostRestartFlow /> - a local host identity change under an open 
           restartCallCount += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },

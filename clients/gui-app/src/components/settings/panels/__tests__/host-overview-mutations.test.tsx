@@ -379,7 +379,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -489,7 +493,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes", () => {
           transitionIds.push(req.transitionId);
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -554,7 +562,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -612,7 +624,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3, blockers: null },
+            verdict: {
+              busySessionCount: 3,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -660,7 +676,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -747,7 +767,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 3, blockers: null },
+            verdict: {
+              busySessionCount: 3,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -813,7 +837,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -873,7 +901,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
           attempt += 1;
           return Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: attempt, blockers: null },
+            verdict: {
+              busySessionCount: attempt,
+              blockers: null,
+              busyBreakdown: null,
+            },
           });
         },
       },
@@ -936,7 +968,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 4, blockers: null },
+            verdict: {
+              busySessionCount: 4,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -1032,7 +1068,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -1126,7 +1166,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 1, blockers: null },
+            verdict: {
+              busySessionCount: 1,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
@@ -1215,7 +1259,11 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
         "host.restart": () =>
           Promise.resolve({
             outcome: "busy" as const,
-            verdict: { busySessionCount: 2, blockers: null },
+            verdict: {
+              busySessionCount: 2,
+              blockers: null,
+              busyBreakdown: null,
+            },
           }),
       },
     });
