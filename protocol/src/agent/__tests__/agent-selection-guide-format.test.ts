@@ -96,13 +96,14 @@ describe("formatAgentSelectionGuideResponse", () => {
     expect(text).not.toContain("## Global");
   });
 
-  it("renders a lone workspace guide as plain attributed content", () => {
+  it("retains the path scope for a lone workspace guide", () => {
     const text = formatAgentSelectionGuideResponse(
       found([workspaceSource(APP_DIR, "app body", 2)]),
     );
-    expect(text).toBe(
-      `Agent selection instructions from ${APP_DIR}/.traycer/agent-selection-guide.md:\n\napp body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
-    );
+    expect(text).toContain(`apply only to files under ${APP_DIR}`);
+    expect(text).toContain("Do not apply them to files outside");
+    expect(text).toContain(`## Workspace instructions — ${APP_DIR}`);
+    expect(text).toContain("app body");
   });
 
   it("forbids inferred permission-mode overrides", () => {
