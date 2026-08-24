@@ -1,53 +1,21 @@
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
  * # Canonical transcript row order
  *
- * The one definition of "what order does a chat's rows go in", shared by the
- * host (which numbers rows for the windowed `chat.subscribe` line) and the
- * renderer (which draws them).
+ * The comparator and the row-materializing event predicates, shared by the host
+ * (which numbers rows for the windowed `chat.subscribe` line) and the renderer
+ * (which draws them).
  *
- * ## INCOMPLETE - do not number ordinals from this yet
+ * ## The ENUMERATION lives in `row-projection.ts`, not here
  *
- * A cold review found this module's row ENUMERATION does not match the
- * renderer's, in three ways. The comparator and the event predicates below are
- * correct and in use; `buildCanonicalTranscriptRows` is not yet a truthful
- * model of the rendered transcript, and nothing may serve ordinals from it
- * until these are closed:
- *
- * 1. **One row per `Message` is wrong.** The renderer folds every
- *    `AssistantMessage` sharing a `turnId` into ONE turn
- *    (`renderPersistedAssistantMessageTurn` returns `[]` for a turn key it has
- *    already emitted), then may SPLIT that turn into several rows around steer
- *    blocks, and suppresses steered persisted user records at top level. So
- *    records->rows is many-to-many, not one-to-one, and any mismatch shifts
- *    every later ordinal.
- * 2. **Rows exist that no `Message` or admitted event produces.** Persisted
- *    `setup.*` / `worktree.missing` events fold into historical setup-card
- *    rows, and a `turn.stopped` arriving before any assistant record
- *    synthesizes a durable completed row. Both are drawn in legacy mode and
- *    are invisible here, so a windowed client could neither reserve nor
- *    hydrate them.
- * 3. **The sort key is wrong for assistant rows.** This module orders them by
- *    `Message.timestamp`, which the host REWRITES on every streaming delta.
- *    The renderer anchors an assistant row at `rowAnchorAt`, which resolves to
- *    `min(startedAt) ?? lastUserTimestamp ?? max(timestamp)` - and every row of
- *    one turn shares that single value, so intra-turn order is carried by SORT
- *    STABILITY alone. A late edit to an old turn moves it to the tail here and
- *    leaves it in place there.
- *
- * The fix is a shared row PROJECTION - turn folding, steer splitting,
- * steered-user suppression, setup-card weave and stopped-turn synthesis - not a
- * comparator with a better key, because placement is not purely a sort: the
- * genesis setup card pins to the top regardless of `createdAt` and a mid-chat
- * one is woven above its anchor BY ID. Ordinals are assigned after that weave.
- *
- * That projection is a prerequisite of the ordinal scheme. It is NOT the wider
- * "shared derivation" move (segment models, `marked`, the composer plain-text
- * projection): the enumeration reads exactly one thing off a content block -
- * `block.type === "steer"` - and never looks inside one. Those two were briefly
- * conflated; they are not the same size and they do not gate the same things.
+ * This module briefly claimed to be "the one definition of row order" and
+ * shipped a `buildCanonicalTranscriptRows` that mapped one persisted record to
+ * one row. A cold review found that false three ways over - records to rows is
+ * many-to-many, rows exist that no record produces, and an assistant row's sort
+ * key is `rowAnchorAt` rather than the record timestamp. What survived is what
+ * this file is now: a comparator, and the two content-dependent predicates that
+ * decide whether an event draws a row at all.
  *
  * ## Why this has to be shared code rather than two agreeing implementations
  *
@@ -60,22 +28,19 @@ import type { Message } from "@traycer/protocol/persistence/epic/messages";
  *
  * Two implementations that agree by inspection is exactly the arrangement that
  * drifts the first time someone adds a row-materializing event kind on one
- * side. So there is one comparator and one enumeration, here.
+ * side. So the comparator lives here and both sides call it.
  *
  * ## What the order IS
  *
- * `createdAt` ascending, STABLY - ties keep their input order, which for the
- * host is the projection's insertion order (`ChatProjectionState.messages` is
- * documented "ordered by first insert; a re-upsert replaces in place, never
- * reorders").
+ * `createdAt` ascending, STABLY - ties keep their input order, which is the
+ * order the projection assembled its rows in.
  *
- * This is a description of what the renderer already does, not a new rule -
- * see `rendered-messages.ts`, whose no-card fast path is
- * `baseRows.sort((a, b) => a.createdAt - b.createdAt)` and whose card path is
- * the same sort followed by an anchor weave. Choosing anything else would
- * reorder existing transcripts on upgrade.
+ * Stability is load-bearing rather than incidental here. Every row of one
+ * assistant turn carries the SAME `createdAt` (the turn's `rowAnchorAt`), so a
+ * turn's internal order - slice, steer bubble, slice - is carried entirely by
+ * the sort keeping input order. Breaking ties on anything would scramble it.
  *
- * ### Why NOT the projection's own array order
+ * ### Why NOT the authority's own array order
  *
  * It is tempting, because the host already holds it and it needs no sort. It
  * is also wrong. `applyChatOp`'s `upsertEntry` appends a record it has not
@@ -130,28 +95,6 @@ export function sortIntoCanonicalRowOrder<T>(
 }
 
 /**
- * The event kinds that materialize a TRANSCRIPT ROW of their own.
- *
- * The skeleton describes rows, not records: an event that renders as a row
- * occupies an ordinal, and one that does not must not. Getting this set wrong
- * shifts every ordinal after the first mistake, so it is enumerated rather
- * than inferred.
- *
- * The two sources, both of which `rendered-messages.ts` now builds THROUGH the
- * functions below rather than beside them:
- *
- * - `chat.forked` -> the forked-chat link row, when its metadata carries both
- *   `sourceChatId` and `sourceHostId` ({@link forkedChatLinkRowSource}).
- * - `send.failed` -> the notification-anchor error row, when it carries a
- *   message and `metadata.notificationAnchor === true`
- *   ({@link eventDrawsNotificationAnchorRow}).
- *
- * Both predicates are content-dependent, which is why this is a function and
- * not a `Set` of type strings. Worktree setup cards are the third row-bearing
- * source and are deliberately absent: they are derived from workspace state
- * rather than from a chat event, and they are woven by anchor rather than
- * ordered by timestamp.
- */
 /**
  * A metadata value the renderer would accept as present.
  *
@@ -249,43 +192,5 @@ export function eventMaterializesTranscriptRow(event: ChatEvent): boolean {
   return (
     forkedChatLinkRowSource(event) !== null ||
     notificationAnchorRowSource(event) !== null
-  );
-}
-
-/**
- * A persisted record in canonical order, tagged with which side it came from.
- *
- * The host builds its skeleton from this: messages and row-materializing
- * events are interleaved by `createdAt` into one ordinal space, because that
- * is the space the renderer draws.
- */
-export type CanonicalTranscriptRow =
-  | { readonly kind: "message"; readonly message: Message }
-  | { readonly kind: "event"; readonly event: ChatEvent };
-
-/**
- * Interleaves a chat's messages and row-materializing events into the one
- * ordinal space the windowed transcript addresses.
- *
- * Events that materialize no row are dropped here rather than filtered by the
- * caller, so there is a single place where "does this occupy an ordinal"
- * is decided.
- */
-export function buildCanonicalTranscriptRows(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
-): readonly CanonicalTranscriptRow[] {
-  const rows: CanonicalTranscriptRow[] = messages.map((message) => ({
-    kind: "message",
-    message,
-  }));
-  for (const event of events) {
-    if (!eventMaterializesTranscriptRow(event)) continue;
-    rows.push({ kind: "event", event });
-  }
-  return sortIntoCanonicalRowOrder(rows, (row) =>
-    row.kind === "message"
-      ? { createdAt: row.message.timestamp }
-      : { createdAt: row.event.timestamp },
   );
 }

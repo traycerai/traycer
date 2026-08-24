@@ -9,7 +9,9 @@ import {
   readMetadataString,
   readMetadataValue,
 } from "@/lib/chat/event-metadata";
-import { SETUP_EVENT_TYPES } from "@/lib/chat/setup-tone";
+// The lifecycle windowing is shared with the host, which reserves an ordinal
+// per window - see `row-projection.ts`.
+import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import type {
   SetupCardViewModel,
@@ -82,145 +84,50 @@ export interface SetupCardRow {
 }
 
 /**
- * Project the persisted `setup.*` chat events into the setup-card view-model
- * (T1's contract). Pure - no store, no React, no rendering. Returns one row per
- * setup *lifecycle*, in chronological (createdAt-ascending) order, for T3 to
- * merge into the createdAt-sorted transcript.
+ * Project the persisted `setup.*` chat events into the setup-card view-model.
+ * Pure - no store, no React, no rendering. One row per setup *lifecycle*, in
+ * chronological order, for the transcript merge.
  *
- * A chat log can hold MORE than one lifecycle. A retry updates a workspace in
- * place (same lifecycle, same row), but a same-host re-bind appends a fresh
- * `setup.running` to the SAME log after the prior worktree went missing - the
- * old card must stay `ready` and a NEW card must appear at the re-bind moment,
- * not flip the old one back to `setting-up`. (A cross-host re-bind clones the
- * chat artifact, so that case never reaches one log.)
- *
- * So the walk partitions `events` (in append/chronological order) into lifecycle
- * windows, splitting on:
- *  - `worktree.missing` - the primary boundary: the worktree was reset, so the
- *    next setup belongs to a new lifecycle (covers re-bind to a different path).
- *  - a `setup.running` for a workspace the current window already saw `succeeded`
- *    - a defensive ready->running boundary for any re-bind that didn't emit
- *    `worktree.missing`. A `failed`/`cancelled`->`running` retry has no such
- *    boundary, so it stays in-place within the same window and supersedes.
- *
- * Each non-empty window becomes one consolidated row with one `SetupCardWorkspace`
- * per `workspacePath`, anchored at that window's earliest setup-event timestamp.
- * The final window is flagged `isActive` only when no boundary closed it (it is
- * the live lifecycle); every earlier window, and a final one closed by a trailing
- * boundary, is historical.
+ * **The lifecycle WINDOWING is not here.** It moved to
+ * `@traycer/protocol`'s `partitionSetupCardWindows`, because a setup card is a
+ * transcript ROW: the host reserves an ordinal for it and must fold the same
+ * events into the same number of windows. What stays here is the view model -
+ * per-workspace state rollup, retry routing, terminal liveness - which the host
+ * has no use for. That split is what let the windowing become shared code
+ * without dragging component types into the protocol package.
  */
 export function buildSetupCardRows(
   events: ReadonlyArray<ChatEvent>,
   binding: SetupCardBinding,
 ): ReadonlyArray<SetupCardRow> {
-  const windows: ChatEvent[][] = [];
-  let current: ChatEvent[] | null = null;
-
-  for (const event of events) {
-    // `worktree.missing` is the lifecycle boundary: it isn't a setup event
-    // itself, but it marks the binding reset that separates two lifecycles.
-    if (event.type === "worktree.missing") {
-      current = null;
-      continue;
-    }
-    if (!SETUP_EVENT_TYPES.has(event.type)) continue;
-
-    // A path-less setup event (e.g. the generic `SETUP_AWAIT_FAILED` catch) can
-    // neither name a workspace nor drive its retry, so it never forms or affects
-    // a window. The per-workspace typed failure carries its own `workspacePath`.
-    const workspacePath = readMetadataString(event, "workspacePath");
-    if (workspacePath === null || workspacePath.length === 0) continue;
-
-    // Lifecycle boundary: a NEW worktree creation must open its own window so its
-    // card renders near the message that triggered it, never folding into an
-    // earlier card. Close the current window when:
-    //  - `setup.running` arrives for a path the window already marked `succeeded`
-    //    (a defensive re-bind that skipped `worktree.missing`).
-    //  - `setup.creating` arrives once the window has moved past its initial
-    //    creating phase, i.e. it already holds a non-creating setup event
-    //    (`windowHasProgressedPastCreating`). That marks a SEPARATE create send -
-    //    including one targeting a different workspace than the window's. The
-    //    consecutive `setup.creating` events of ONE multi-worktree send are all
-    //    emitted BEFORE any `setup.running` (see `materializeStagedWorktreeIntent`),
-    //    so they still consolidate into a single window.
-    //  - `setup.creating` repeats for a path already `creating` in the window
-    //    (the first create attempt was abandoned before it ran).
-    if (
-      current !== null &&
-      ((event.type === "setup.running" &&
-        windowHasSucceeded(current, workspacePath)) ||
-        (event.type === "setup.creating" &&
-          (windowHasProgressedPastCreating(current) ||
-            windowHasCreating(current, workspacePath))))
-    ) {
-      current = null;
-    }
-
-    if (current === null) {
-      current = [];
-      windows.push(current);
-    }
-    current.push(event);
-  }
-
-  // `current` is non-null only when the final window is still open (no closing
-  // boundary followed its last setup event), and it always references that
-  // last-pushed window - so an identity check marks exactly the one live
-  // lifecycle active. A historical window stranded at `setting-up` (worktree
-  // vanished mid-setup, no terminal setup event) is therefore NOT active.
-  return windows.map((windowEvents) =>
-    deriveRow(windowEvents, binding, windowEvents === current),
-  );
+  return partitionSetupCardWindows(events).map((window) => ({
+    createdAt: window.createdAt,
+    isActive: window.isActive,
+    hasCreatingEvent: window.hasCreatingEvent,
+    triggeringMessageId: window.triggeringMessageId,
+    model: deriveViewModel(
+      window.events,
+      binding,
+      window.createdAt,
+      window.isActive,
+    ),
+  }));
 }
 
 /**
- * True once the window holds a setup event PAST its initial creating phase - any
- * `setup.running`/`succeeded`/`failed`/`cancelled`. A fresh `setup.creating`
- * arriving after this point belongs to a SEPARATE create send and must open a new
- * window. The consecutive `setup.creating` events of ONE multi-worktree send all
- * arrive before any such event, so they still consolidate into one window.
+ * Build one lifecycle window's consolidated VIEW MODEL.
+ *
+ * `createdAt` and `isActive` arrive from `partitionSetupCardWindows` rather
+ * than being re-derived here - they are placement facts the host reads too, and
+ * a second derivation of the window anchor is exactly the drift the shared
+ * projection exists to prevent.
  */
-function windowHasProgressedPastCreating(
-  windowEvents: ReadonlyArray<ChatEvent>,
-): boolean {
-  return windowEvents.some((event) => event.type !== "setup.creating");
-}
-
-/**
- * True when this lifecycle window already holds a `setup.creating` for the
- * workspace - i.e. a create was already announced for it before this one.
- */
-function windowHasCreating(
-  windowEvents: ReadonlyArray<ChatEvent>,
-  workspacePath: string,
-): boolean {
-  return windowEvents.some(
-    (event) =>
-      event.type === "setup.creating" &&
-      readMetadataString(event, "workspacePath") === workspacePath,
-  );
-}
-
-function windowHasSucceeded(
-  windowEvents: ReadonlyArray<ChatEvent>,
-  workspacePath: string,
-): boolean {
-  return windowEvents.some(
-    (event) =>
-      event.type === "setup.succeeded" &&
-      readMetadataString(event, "workspacePath") === workspacePath,
-  );
-}
-
-/**
- * Build one consolidated row from a single lifecycle window's setup events
- * (every event already filtered to a setup type carrying a non-empty path).
- */
-function deriveRow(
+function deriveViewModel(
   windowEvents: ReadonlyArray<ChatEvent>,
   binding: SetupCardBinding,
+  createdAt: number,
   isActive: boolean,
-): SetupCardRow {
+): SetupCardViewModel {
   // Group by `workspacePath`, preserving first-seen order so the consolidated
   // card lists workspaces in the order their lifecycle began.
   const groups = new Map<string, ChatEvent[]>();
@@ -238,37 +145,7 @@ function deriveRow(
     deriveWorkspace(workspacePath, groupEvents),
   );
 
-  // Anchor the row at the genesis of THIS lifecycle: the earliest setup-event
-  // timestamp in the window. This is the transcript sort key and the live
-  // elapsed counter's seed. Use the min timestamp (not array position) so
-  // out-of-order arrivals still anchor deterministically at the true start.
-  const createdAt = windowEvents.reduce(
-    (earliest, event) => Math.min(earliest, event.timestamp),
-    windowEvents[0].timestamp,
-  );
-
-  // The window's `setup.creating` event (if any) is emitted ONLY by the in-chat
-  // send path. Resolve it once and derive both signals from it:
-  //  - `hasCreatingEvent` (its PRESENCE) marks a live mid-conversation creation
-  //    (reliable `createdAt`) vs the chat's back-filled genesis worktree, and
-  //    drives the genesis-pin discriminator.
-  //  - `triggeringMessageId` (the ID it carries) drives the transcript anchor.
-  // These are intentionally distinct, not redundant: a creating event missing
-  // its id (a defensive shape the host never emits today) still marks a
-  // mid-chat creation (so it must NOT pin as genesis) yet has no anchor target
-  // (so it floats by `createdAt`). Pinning on presence and anchoring on the id
-  // keeps that case correct. Every creating event in a window is from the same
-  // send, so `.find` (first match) is authoritative. See the field docs above.
-  const creatingEvent = windowEvents.find(
-    (event) => event.type === "setup.creating",
-  );
-  const hasCreatingEvent = creatingEvent !== undefined;
-  const triggeringMessageId =
-    creatingEvent === undefined
-      ? null
-      : readMetadataString(creatingEvent, "triggeringMessageId");
-
-  const model: SetupCardViewModel = {
+  return {
     aggregate: {
       epicId: binding.epicId,
       ownerId: binding.ownerId,
@@ -282,7 +159,6 @@ function deriveRow(
     // re-deriving it from the row state.
     isActive,
   };
-  return { createdAt, model, isActive, hasCreatingEvent, triggeringMessageId };
 }
 
 function deriveWorkspace(

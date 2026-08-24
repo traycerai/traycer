@@ -32,6 +32,24 @@ import {
 // host's fork-boundary derivation groups by the same key, and a chat must not
 // change where it forks depending on which side computed it.
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+// The row ENUMERATION - which rows a chat has, and in what order. The host
+// numbers ordinals from these exact functions, so every decision that changes a
+// row's existence, id, or position is consumed from here rather than restated:
+// the steer split, the trailing-boundary rule, steered-user suppression, the
+// stopped-turn fold, and every row id.
+import {
+  assistantRowId,
+  assistantSliceRowId,
+  assistantTurnNeedsTrailingRow,
+  chatTranscriptEventRowId,
+  forkedChatLinkRowId,
+  nestedSteeredMessageIds,
+  planAssistantTurnRows,
+  queueSteerRowId,
+  turnStoppedInfoByTurnKey,
+  type AssistantTurnRowPlan,
+  type TurnStoppedInfo,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   isNoOpCheckpointEntry,
   turnCheckpointManifestSchema,
@@ -77,7 +95,6 @@ import {
   buildSetupCardRows,
   type SetupCardRow,
 } from "@/stores/chats/setup-card-rows";
-import { chatTranscriptEventRowId } from "@/stores/chats/chat-transcript-jump-store";
 
 type PlanContentBlock = Extract<ContentBlock, { type: "plan" }>;
 
@@ -428,40 +445,18 @@ function queueItemsFromEventMetadata(
 
 /**
  * Pure event-log projection of a `turn.stopped` event - everything
- * `turnStoppedInfoFromEvents` can know without looking at the turn's
+ * `turnStoppedInfoByTurnKey` can know without looking at the turn's
  * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
  * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
  * visibility, which this pure scan does not.
  */
-interface TurnStoppedEventInfo {
-  readonly stoppedAt: number;
-  readonly reason: string | null;
-  readonly messageId: string | null;
-}
-
-/**
- * `turn.stopped` events keyed by `turnId`, mirroring `steeredMessageIdsFromEvents`.
- * A user Stop (direct or cascaded `agent.stop`) always lands exactly one such
- * event per turn - the host's terminal latch (`recordTerminalTurn`) guarantees
- * at most one terminal event per turn attempt, so last-write-wins here is only
- * a defensive fallback, never an expected overwrite. `event.message` carries
- * the host's stop reason (e.g. "Stop requested by owner.") - see
- * `chat-session-manager.ts`'s `turn.stopped` handling.
+/*
+ * `turn.stopped` folding lives in the shared row projection: a stopped turn can
+ * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
+ * (a Stop that landed before any assistant record), so the host numbers
+ * ordinals from this exact fold. Consumed here rather than mirrored.
  */
-function turnStoppedInfoFromEvents(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlyMap<string, TurnStoppedEventInfo> {
-  const out = new Map<string, TurnStoppedEventInfo>();
-  for (const event of events) {
-    if (event.type !== "turn.stopped" || event.turnId === null) continue;
-    out.set(event.turnId, {
-      stoppedAt: event.timestamp,
-      reason: event.message,
-      messageId: event.messageId,
-    });
-  }
-  return out;
-}
+type TurnStoppedEventInfo = TurnStoppedInfo;
 
 interface TurnLifecycleTiming {
   readonly startedAt: number | null;
@@ -986,7 +981,7 @@ export function useRenderedMessages(
     [input.events],
   );
   const turnStoppedByTurnKey = useMemo(
-    () => turnStoppedInfoFromEvents(input.events),
+    () => turnStoppedInfoByTurnKey(input.events),
     [input.events],
   );
   const turnLifecycleTimingByTurnKey = useMemo(
@@ -1472,7 +1467,7 @@ function buildForkedChatLinkMessages(
     if (source === null) return [];
     const { sourceChatId, sourceHostId } = source;
     const sourceChatTitle = source.sourceChatTitle ?? "Untitled agent";
-    const id = `forked-chat-link:${event.eventId}`;
+    const id = forkedChatLinkRowId(event.eventId);
     return [
       {
         id,
@@ -1665,7 +1660,7 @@ interface PersistedMessagesRenderInput {
   readonly activeRunState: ChatMessageRunState | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly steeredMessageIds: ReadonlySet<string>;
-  /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoFromEvents`. */
+  /** `turn.stopped` event info by `turnId`. See `turnStoppedInfoByTurnKey`. */
   readonly turnStoppedByTurnKey: ReadonlyMap<string, TurnStoppedEventInfo>;
   /** Provider-turn lifecycle evidence and timing by `turnId`. */
   readonly turnLifecycleTimingByTurnKey: ReadonlyMap<
@@ -1818,19 +1813,16 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
+/*
+ * Steered-user suppression decides whether a persisted user record occupies a
+ * top-level row, so it decides an ordinal. Shared with the host - see
+ * `row-projection.ts`.
+ */
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
-  userMessagesById: ReadonlyMap<string, UserMessage>,
+  usersById: ReadonlyMap<string, UserMessage>,
 ): ReadonlySet<string> {
-  const messageIds = new Set<string>();
-  for (const acc of turnAccumulator.values()) {
-    for (const block of acc.blocks) {
-      if (block.type === "steer" && userMessagesById.has(block.messageId)) {
-        messageIds.add(block.messageId);
-      }
-    }
-  }
-  return messageIds;
+  return nestedSteeredMessageIds(turnAccumulator.values(), usersById);
 }
 
 function renderPersistedUserMessage(
@@ -2419,109 +2411,67 @@ interface AssistantTurnRenderInput {
   readonly chatId: string;
 }
 
-type AssistantTurnTimelineEntry = {
-  readonly kind: "block";
-  readonly block: ContentBlock;
-  readonly timestamp: number;
-  readonly order: number;
-};
-
+/**
+ * Renders one turn's rows from the SHARED plan.
+ *
+ * The plan - which blocks group into which slice, where the steer bubbles fall,
+ * whether an empty turn still draws a row - is `planAssistantTurnRows` in
+ * `@traycer/protocol`, because it decides this turn's row COUNT and the host
+ * numbers ordinals from the same function. This body renders the plan; it does
+ * not re-derive it. A chunking loop here that agreed with that one by
+ * inspection is precisely the drift the projection exists to prevent.
+ */
 function renderAssistantTurnRows(
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  const entries = assistantTurnTimelineEntries(input.acc.blocks);
-  const split = entries.some(entrySplitsAssistantTurn);
-  const rowIdByBlockId = assistantRowIdsByBlockId(
-    entries,
-    input.turnKey,
-    split,
-  );
-  const rows: ChatMessageModel[] = [];
-  let chunk: ContentBlock[] = [];
-  let chunkIndex = 0;
+  const blocks = input.acc.blocks;
+  const plan = planAssistantTurnRows(blocks);
+  const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
-  const flushChunk = (): void => {
-    if (chunk.length === 0) return;
-    rows.push(
-      renderAssistantTurnSlice({
-        acc: input.acc,
-        turnKey: input.turnKey,
-        checkpointView: input.checkpointView,
-        turnComplete: input.turnComplete,
-        runState: split ? null : input.runState,
-        pause: input.pause,
-        ctx: input.ctx,
-        epicId: input.epicId,
-        chatId: input.chatId,
-        blocks: chunk,
-        chunkIndex,
-        split,
-        rowAnchorAt: input.rowAnchorAt,
-        elapsedStartedAt: input.elapsedStartedAt,
-        rowIdByBlockId,
-      }),
-    );
-    chunk = [];
-    chunkIndex += 1;
-  };
-
-  for (const entry of entries) {
-    if (entry.block.type === "steer") {
-      flushChunk();
+  const rows = plan.entries.map((entry): ChatMessageModel => {
+    if (entry.kind === "steer") {
+      const block = blocks[entry.blockIndex];
+      if (block.type !== "steer") {
+        throw new Error("rendered-messages: plan named a non-steer block");
+      }
       // Anchor the nested steer row at the turn start too, so it stays
       // contiguous with its surrounding slices under the stable `createdAt`
       // sort instead of jumping out by its own block timestamp.
-      rows.push({
+      return {
         ...renderSteerBlockUserMessage(
-          entry.block,
+          block,
           input.ctx,
-          input.userMessagesById.get(entry.block.messageId) ?? null,
+          input.userMessagesById.get(block.messageId) ?? null,
         ),
         createdAt: input.rowAnchorAt,
-      });
-      continue;
+      };
     }
-    chunk.push(entry.block);
-  }
-  flushChunk();
+    return renderAssistantTurnSlice({
+      acc: input.acc,
+      turnKey: input.turnKey,
+      checkpointView: input.checkpointView,
+      turnComplete: input.turnComplete,
+      // A split turn's run indicator belongs on the trailing slice, which
+      // `attachRunStateToTrailingAssistantSlice` resolves once for the turn.
+      runState: plan.split ? null : input.runState,
+      pause: input.pause,
+      ctx: input.ctx,
+      epicId: input.epicId,
+      chatId: input.chatId,
+      blocks: entry.blockIndices.map((index) => blocks[index]),
+      chunkIndex: entry.chunkIndex,
+      split: plan.split,
+      rowAnchorAt: input.rowAnchorAt,
+      elapsedStartedAt: input.elapsedStartedAt,
+      rowIdByBlockId,
+    });
+  });
 
-  if (rows.length === 0 && !split) {
-    return withTurnCompletion(
-      [
-        renderAssistantTurnSlice({
-          acc: input.acc,
-          turnKey: input.turnKey,
-          checkpointView: input.checkpointView,
-          turnComplete: input.turnComplete,
-          runState: input.runState,
-          pause: input.pause,
-          ctx: input.ctx,
-          epicId: input.epicId,
-          chatId: input.chatId,
-          blocks: [],
-          chunkIndex: 0,
-          split: false,
-          rowAnchorAt: input.rowAnchorAt,
-          elapsedStartedAt: input.elapsedStartedAt,
-          rowIdByBlockId,
-        }),
-      ],
-      input,
-    );
-  }
-
-  if (split) {
-    return withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(
-        rows,
-        input,
-        chunkIndex,
-        rowIdByBlockId,
-      ),
-      input,
-    );
-  }
-  return withTurnCompletion(rows, input);
+  if (!plan.split) return withTurnCompletion(rows, input);
+  return withTurnCompletion(
+    attachRunStateToTrailingAssistantSlice(rows, input, plan, rowIdByBlockId),
+    input,
+  );
 }
 
 /**
@@ -2579,29 +2529,23 @@ function withTurnCompletion(
   );
 }
 
-function entrySplitsAssistantTurn(entry: AssistantTurnTimelineEntry): boolean {
-  return entry.block.type === "steer";
-}
-
+/**
+ * Which row each block ended up on, for in-turn block targeting (jump-to-block,
+ * image resolution). Read straight off the plan so it cannot disagree with the
+ * rows actually rendered from it.
+ */
 function assistantRowIdsByBlockId(
-  entries: ReadonlyArray<AssistantTurnTimelineEntry>,
+  plan: AssistantTurnRowPlan,
+  blocks: ReadonlyArray<ContentBlock>,
   turnKey: string,
-  split: boolean,
 ): ReadonlyMap<string, string> {
   const rowIdByBlockId = new Map<string, string>();
-  let chunkIndex = 0;
-  let chunkHasBlocks = false;
-  for (const entry of entries) {
-    if (entry.block.type === "steer") {
-      if (chunkHasBlocks) chunkIndex += 1;
-      chunkHasBlocks = false;
-      continue;
+  for (const entry of plan.entries) {
+    if (entry.kind === "steer") continue;
+    const rowId = assistantSliceRowId(turnKey, entry.chunkIndex, plan.split);
+    for (const index of entry.blockIndices) {
+      rowIdByBlockId.set(blocks[index].blockId, rowId);
     }
-    rowIdByBlockId.set(
-      entry.block.blockId,
-      assistantSliceRowId(turnKey, chunkIndex, split),
-    );
-    chunkHasBlocks = true;
   }
   return rowIdByBlockId;
 }
@@ -2719,25 +2663,29 @@ function deduplicatedAssistantImageTargets(
 function attachRunStateToTrailingAssistantSlice(
   rows: ReadonlyArray<ChatMessageModel>,
   input: AssistantTurnRenderInput,
-  nextChunkIndex: number,
+  plan: AssistantTurnRowPlan,
   rowIdByBlockId: ReadonlyMap<string, string>,
 ): ReadonlyArray<ChatMessageModel> {
-  // A live turn needs a trailing indicator row. A STOPPED turn needs one too,
-  // for a different reason: `withTurnCompletion` stamps `completedAt`/`stopped`
-  // onto whichever row is last, and when the turn's last persisted block is a
-  // steer, that's a `role: "user"` row that can't carry them - without a
-  // trailing assistant row here, the marker lands on the assistant chunk
-  // BEFORE the steer (wrong boundary) or, if the turn is steer-only, on no
-  // row at all (dropped entirely). A non-stopped completed turn never sets
-  // `input.stopped`, so it falls through this check unchanged.
-  const needsTrailingRow =
-    input.runState !== null || (input.turnComplete && input.stopped !== null);
-  if (!needsTrailingRow) return rows;
-  const lastAssistantIndex = lastAssistantRowIndex(rows);
-  if (lastAssistantIndex === rows.length - 1) {
+  // Whether this turn gains a trailing row is a ROW-COUNT decision, so it is
+  // the shared projection's to make (`assistantTurnNeedsTrailingRow`) - it is
+  // also the reason a turn's durable row count depends on an event and not
+  // only on its records. The `hasRunState` arm is the live half, which the
+  // durable projection passes as `false`.
+  const needsTrailingRow = assistantTurnNeedsTrailingRow({
+    plan,
+    turnComplete: input.turnComplete,
+    stopped: input.stopped !== null,
+    hasRunState: input.runState !== null,
+  });
+  if (!needsTrailingRow) {
+    // No row is added - but a LIVE turn whose last row is already an assistant
+    // row still takes the indicator in place. That combination is the only way
+    // to reach here with a run state, and it guarantees the last row is the
+    // assistant one, so no empty-result guard is needed (or reachable).
     if (input.runState === null) return rows;
+    const lastIndex = lastAssistantRowIndex(rows);
     return rows.map((row, index) =>
-      index === lastAssistantIndex ? { ...row, runState: input.runState } : row,
+      index === lastIndex ? { ...row, runState: input.runState } : row,
     );
   }
   // Live case (unchanged): bump past every existing row so the trailing
@@ -2764,7 +2712,7 @@ function attachRunStateToTrailingAssistantSlice(
       epicId: input.epicId,
       chatId: input.chatId,
       blocks: [],
-      chunkIndex: nextChunkIndex,
+      chunkIndex: plan.nextChunkIndex,
       split: true,
       rowAnchorAt: createdAt,
       elapsedStartedAt: input.elapsedStartedAt,
@@ -2778,17 +2726,6 @@ function lastAssistantRowIndex(rows: ReadonlyArray<ChatMessageModel>): number {
     if (rows[index]?.role === "assistant") return index;
   }
   return -1;
-}
-
-function assistantTurnTimelineEntries(
-  blocks: ReadonlyArray<ContentBlock>,
-): ReadonlyArray<AssistantTurnTimelineEntry> {
-  return blocks.map((block, index) => ({
-    kind: "block",
-    block,
-    timestamp: block.timestamp,
-    order: index * 2,
-  }));
 }
 
 /**
@@ -3167,25 +3104,8 @@ function renderStoppedTurnsWithoutAssistantRecords(
     }));
 }
 
-function assistantRowId(turnKey: string): string {
-  return `assistant:${turnKey}`;
-}
-
-function assistantSliceRowId(
-  turnKey: string,
-  chunkIndex: number,
-  split: boolean,
-): string {
-  if (!split) return assistantRowId(turnKey);
-  return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
-}
-
 const NO_IMAGE_RESOLUTIONS: ReadonlyArray<AssistantMarkdownImageResolution> =
   [];
-
-function queueSteerRowId(queueItemId: string): string {
-  return `steer:${queueItemId}`;
-}
 
 function buildAssistantSegments(
   blocks: ReadonlyArray<ContentBlock>,

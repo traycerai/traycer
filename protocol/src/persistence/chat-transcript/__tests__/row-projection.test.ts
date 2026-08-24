@@ -1,0 +1,614 @@
+import { describe, expect, it } from "vitest";
+import {
+  chatEventSchema,
+  type ChatEvent,
+} from "@traycer/protocol/persistence/epic/chat-events";
+import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
+import {
+  messageSchema,
+  type Message,
+} from "@traycer/protocol/persistence/epic/messages";
+import {
+  planAssistantTurnRows,
+  projectTranscriptRows,
+  assistantTurnNeedsTrailingRow,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
+
+/**
+ * These pin the rules a cold review found the previous record-level enumeration
+ * getting wrong. Each `describe` maps to one of them, because each one shifts
+ * every later ordinal when it breaks - and a shifted ordinal renders a
+ * neighbour's body under a row rather than failing.
+ */
+
+function textBlock(blockId: string, timestamp: number): ContentBlock {
+  return {
+    blockId,
+    status: "completed" as const,
+    timestamp,
+    type: "text" as const,
+    text: "hi",
+    providerNotice: null,
+  };
+}
+
+function steerBlock(
+  blockId: string,
+  timestamp: number,
+  messageId: string,
+): ContentBlock {
+  return {
+    blockId,
+    status: "completed" as const,
+    timestamp,
+    type: "steer" as const,
+    queueItemId: `q-${blockId}`,
+    messageId,
+    content: { type: "doc" },
+    mode: "safe_point" as const,
+    sender: null,
+  };
+}
+
+function userMessage(fields: {
+  messageId: string;
+  timestamp: number;
+}): Message {
+  return messageSchema.parse({
+    role: "user",
+    messageId: fields.messageId,
+    sender: { type: "user", userId: "u-1" },
+    message: { kind: "user", content: { type: "doc" } },
+    timestamp: fields.timestamp,
+    sessionAnchor: null,
+  });
+}
+
+function assistantMessage(fields: {
+  messageId: string;
+  timestamp: number;
+  turnId: string | null;
+  startedAt: number | null;
+  blocks: readonly ContentBlock[];
+}): Message {
+  return messageSchema.parse({
+    role: "assistant",
+    messageId: fields.messageId,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "agent-1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: fields.blocks,
+    startedAt: fields.startedAt,
+    timestamp: fields.timestamp,
+    turnId: fields.turnId,
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  });
+}
+
+function stoppedEvent(fields: {
+  eventId: string;
+  turnId: string;
+  timestamp: number;
+  messageId: string | null;
+}): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: "turn.stopped",
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: "Stop requested by owner.",
+    turnId: fields.turnId,
+    messageId: fields.messageId,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: null,
+  });
+}
+
+function setupEvent(fields: {
+  eventId: string;
+  type: "setup.creating" | "setup.running" | "setup.succeeded";
+  timestamp: number;
+  workspacePath: string;
+  triggeringMessageId?: string;
+}): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: fields.type,
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata:
+      fields.triggeringMessageId === undefined
+        ? { workspacePath: fields.workspacePath }
+        : {
+            workspacePath: fields.workspacePath,
+            triggeringMessageId: fields.triggeringMessageId,
+          },
+  });
+}
+
+function project(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+  activeTurnId: string | null,
+): readonly string[] {
+  return projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId,
+    chatId: "chat-1",
+  }).map((row) => row.rowId);
+}
+
+describe("turn folding", () => {
+  it("folds several records sharing a turn id into ONE row", () => {
+    // The defect that started this module: three records, one rendered row.
+    // A one-per-record enumeration would reserve three ordinals here and put
+    // every later body two rows out of place.
+    const records = [1, 2, 3].map((n) =>
+      assistantMessage({
+        messageId: `m-${n}`,
+        timestamp: n,
+        turnId: "t-1",
+        startedAt: 10,
+        blocks: [textBlock(`b-${n}`, n)],
+      }),
+    );
+
+    expect(project(records, [], null)).toEqual(["assistant:t-1"]);
+  });
+
+  it("keeps records with different turn ids as separate rows", () => {
+    const first = assistantMessage({
+      messageId: "m-1",
+      timestamp: 1,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1)],
+    });
+    const second = assistantMessage({
+      messageId: "m-2",
+      timestamp: 2,
+      turnId: "t-2",
+      startedAt: 2,
+      blocks: [textBlock("b-2", 2)],
+    });
+
+    expect(project([first, second], [], null)).toEqual([
+      "assistant:t-1",
+      "assistant:t-2",
+    ]);
+  });
+
+  it("groups legacy records with no turnId by their own timestamp", () => {
+    const legacy = assistantMessage({
+      messageId: "m-1",
+      timestamp: 7,
+      turnId: null,
+      startedAt: null,
+      blocks: [textBlock("b-1", 7)],
+    });
+
+    expect(project([legacy], [], null)).toEqual(["assistant:ts:7"]);
+  });
+});
+
+describe("the steer split", () => {
+  it("splits one turn into slice / steer / slice", () => {
+    const steered = userMessage({ messageId: "m-steer", timestamp: 5 });
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [
+        textBlock("b-1", 1),
+        steerBlock("b-2", 5, "m-steer"),
+        textBlock("b-3", 6),
+      ],
+    });
+
+    // The steered user record is suppressed at top level and rendered nested,
+    // under its own message id.
+    expect(project([steered, turn], [], null)).toEqual([
+      "assistant:t-1:part:0",
+      "m-steer",
+      "assistant:t-1:part:1",
+    ]);
+  });
+
+  it("renames every slice of a turn once it splits - `split` is sticky", () => {
+    const unsplit = planAssistantTurnRows([textBlock("b-1", 1)]);
+    const split = planAssistantTurnRows([
+      textBlock("b-1", 1),
+      steerBlock("b-2", 2, "m-x"),
+    ]);
+
+    expect(unsplit.split).toBe(false);
+    expect(split.split).toBe(true);
+  });
+
+  it("an orphaned steer block renders under its QUEUE ITEM, not a record", () => {
+    // The block survives a checkpoint rewrite; the user row does not.
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [steerBlock("b-1", 2, "m-gone")],
+    });
+
+    expect(project([turn], [], null)).toEqual(["steer:q-b-1"]);
+  });
+
+  it("an empty turn still draws exactly one row", () => {
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [],
+    });
+
+    expect(project([turn], [], null)).toEqual(["assistant:t-1"]);
+  });
+});
+
+describe("the stopped-turn trailing row", () => {
+  it("adds a boundary row when a STOPPED turn ends on a steer", () => {
+    // The row count of a turn depends on an EVENT here, not only on its
+    // records - the case a messages-only enumeration cannot see.
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1), steerBlock("b-2", 2, "m-gone")],
+    });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 11,
+      messageId: null,
+    });
+
+    expect(project([turn], [stopped], null)).toEqual([
+      "assistant:t-1:part:0",
+      "steer:q-b-2",
+      "assistant:t-1:part:1",
+    ]);
+  });
+
+  it("adds NO boundary row when the same turn was not stopped", () => {
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1), steerBlock("b-2", 2, "m-gone")],
+    });
+
+    expect(project([turn], [], null)).toEqual([
+      "assistant:t-1:part:0",
+      "steer:q-b-2",
+    ]);
+  });
+
+  it("adds no boundary row to a stopped turn that already ends on an assistant slice", () => {
+    const plan = planAssistantTurnRows([
+      steerBlock("b-1", 1, "m-x"),
+      textBlock("b-2", 2),
+    ]);
+
+    expect(
+      assistantTurnNeedsTrailingRow({
+        plan,
+        turnComplete: true,
+        stopped: true,
+        hasRunState: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("adds no boundary row while the turn is still ACTIVE", () => {
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [steerBlock("b-1", 2, "m-gone")],
+    });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 11,
+      messageId: null,
+    });
+
+    expect(project([turn], [stopped], "t-1")).toEqual(["steer:q-b-1"]);
+  });
+});
+
+describe("stopped turns with no assistant record", () => {
+  it("synthesizes a completed row when the Stop names a retained user message", () => {
+    const user = userMessage({ messageId: "m-1", timestamp: 1 });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 5,
+      messageId: "m-1",
+    });
+
+    expect(project([user], [stopped], null)).toEqual(["m-1", "assistant:t-1"]);
+  });
+
+  it("synthesizes nothing when the Stop names a message no longer in the transcript", () => {
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 5,
+      messageId: "m-branched-away",
+    });
+
+    expect(project([], [stopped], null)).toEqual([]);
+  });
+
+  it("synthesizes nothing when the turn DOES have a record - it folds instead", () => {
+    const user = userMessage({ messageId: "m-1", timestamp: 1 });
+    const turn = assistantMessage({
+      messageId: "m-2",
+      timestamp: 4,
+      turnId: "t-1",
+      startedAt: 2,
+      blocks: [textBlock("b-1", 3)],
+    });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 5,
+      messageId: "m-1",
+    });
+
+    expect(project([user, turn], [stopped], null)).toEqual([
+      "m-1",
+      "assistant:t-1",
+    ]);
+  });
+});
+
+describe("the sort key", () => {
+  it("orders an assistant turn by startedAt, NOT by the record timestamp", () => {
+    // `timestamp` is rewritten on every streaming delta. An old turn edited
+    // late must stay where it was drawn.
+    const early = assistantMessage({
+      messageId: "m-1",
+      timestamp: 9_000,
+      turnId: "t-early",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1)],
+    });
+    const late = assistantMessage({
+      messageId: "m-2",
+      timestamp: 20,
+      turnId: "t-late",
+      startedAt: 10,
+      blocks: [textBlock("b-2", 10)],
+    });
+
+    expect(project([early, late], [], null)).toEqual([
+      "assistant:t-early",
+      "assistant:t-late",
+    ]);
+  });
+
+  it("falls back to the last non-suppressed user timestamp for a legacy record", () => {
+    const user = userMessage({ messageId: "m-1", timestamp: 100 });
+    const legacyTurn = assistantMessage({
+      messageId: "m-2",
+      timestamp: 500,
+      turnId: "t-1",
+      startedAt: null,
+      blocks: [textBlock("b-1", 400)],
+    });
+    const laterUser = userMessage({ messageId: "m-3", timestamp: 200 });
+
+    const rows = projectTranscriptRows({
+      messages: [user, legacyTurn, laterUser],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    });
+
+    // The turn anchors at 100 - the user record that preceded it in WALK
+    // order - not at its own rewritten 500.
+    const turnRow = rows.find((row) => row.rowId === "assistant:t-1");
+    expect(turnRow?.createdAt).toBe(100);
+  });
+
+  it("gives every row of one turn the same createdAt, leaving order to sort stability", () => {
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 3,
+      blocks: [
+        textBlock("b-1", 4),
+        steerBlock("b-2", 5, "m-gone"),
+        textBlock("b-3", 6),
+      ],
+    });
+
+    const rows = projectTranscriptRows({
+      messages: [turn],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    });
+
+    expect(rows.map((row) => row.createdAt)).toEqual([3, 3, 3]);
+    expect(rows.map((row) => row.rowId)).toEqual([
+      "assistant:t-1:part:0",
+      "steer:q-b-2",
+      "assistant:t-1:part:1",
+    ]);
+  });
+});
+
+describe("setup cards", () => {
+  it("pins a genesis card (no creating event) to ordinal 0, ahead of an earlier message", () => {
+    const user = userMessage({ messageId: "m-1", timestamp: 1 });
+    // Back-filled: its stamp lands AFTER the first message.
+    const genesis = setupEvent({
+      eventId: "e-1",
+      type: "setup.running",
+      timestamp: 999,
+      workspacePath: "/w",
+    });
+
+    expect(project([user], [genesis], null)).toEqual([
+      "setup-card:chat-1:0:999",
+      "m-1",
+    ]);
+  });
+
+  it("weaves a mid-chat card immediately ABOVE its triggering message, by id not timestamp", () => {
+    const user = userMessage({ messageId: "m-1", timestamp: 100 });
+    const later = userMessage({ messageId: "m-2", timestamp: 300 });
+    // Announced before the slow worktree add, so its stamp is BELOW m-1's...
+    const creating = setupEvent({
+      eventId: "e-1",
+      type: "setup.creating",
+      timestamp: 200,
+      workspacePath: "/w",
+      triggeringMessageId: "m-2",
+    });
+
+    // ...and it still renders directly above m-2, not between m-1 and m-2 by
+    // timestamp - which is the same place here, so the ORDER below is what
+    // distinguishes anchoring from sorting only in the next test.
+    expect(project([user, later], [creating], null)).toEqual([
+      "m-1",
+      "setup-card:chat-1:0:200",
+      "m-2",
+    ]);
+  });
+
+  it("keeps an anchored card above its message even when its timestamp sorts it elsewhere", () => {
+    const first = userMessage({ messageId: "m-1", timestamp: 100 });
+    const second = userMessage({ messageId: "m-2", timestamp: 200 });
+    // Timestamp AFTER m-2, anchor points at m-1: a sort would put the card
+    // last, the weave puts it above m-1.
+    const creating = setupEvent({
+      eventId: "e-1",
+      type: "setup.creating",
+      timestamp: 900,
+      workspacePath: "/w",
+      triggeringMessageId: "m-1",
+    });
+
+    expect(project([first, second], [creating], null)).toEqual([
+      "setup-card:chat-1:0:900",
+      "m-1",
+      "m-2",
+    ]);
+  });
+
+  it("floats a card whose anchor was branched away, rather than dropping it", () => {
+    const survivor = userMessage({ messageId: "m-2", timestamp: 300 });
+    const creating = setupEvent({
+      eventId: "e-1",
+      type: "setup.creating",
+      timestamp: 200,
+      workspacePath: "/w",
+      triggeringMessageId: "m-gone",
+    });
+
+    expect(project([survivor], [creating], null)).toEqual([
+      "setup-card:chat-1:0:200",
+      "m-2",
+    ]);
+  });
+});
+
+describe("event rows", () => {
+  it("orders all fork links before all notification anchors for equal timestamps", () => {
+    // The renderer concatenates its two event-row arrays in this order, so a
+    // tie resolves this way and NOT in the event log's own order. Matching that
+    // exactly is the point.
+    const anchor = chatEventSchema.parse({
+      eventId: "e-anchor",
+      type: "send.failed",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message: "boom",
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "error",
+      metadata: { notificationAnchor: true },
+    });
+    const fork = chatEventSchema.parse({
+      eventId: "e-fork",
+      type: "chat.forked",
+      timestamp: 50,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: { sourceChatId: "c", sourceHostId: "h" },
+    });
+
+    expect(project([], [anchor, fork], null)).toEqual([
+      "forked-chat-link:e-fork",
+      "chat-event:e-anchor",
+    ]);
+  });
+
+  it("gives an event that materializes no row no ordinal", () => {
+    const started = chatEventSchema.parse({
+      eventId: "e-1",
+      type: "turn.started",
+      timestamp: 5,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: null,
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    });
+    const user = userMessage({ messageId: "m-1", timestamp: 10 });
+
+    expect(project([user], [started], null)).toEqual(["m-1"]);
+  });
+});

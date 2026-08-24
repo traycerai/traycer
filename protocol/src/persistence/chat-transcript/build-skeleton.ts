@@ -1,12 +1,19 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
-import type {
-  Message,
-  UserMessage,
-} from "@traycer/protocol/persistence/epic/messages";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
-import { buildCanonicalTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-order";
+import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  buildTranscriptRecordLookup,
+  type TranscriptRecordLookup,
+} from "@traycer/protocol/persistence/chat-transcript/read-range";
+import {
+  projectTranscriptRows,
+  type TranscriptRowDescriptor,
+  type TranscriptRowProjectionInput,
+  type TranscriptRowSource,
+} from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   ROW_SKELETON_PREVIEW_MAX_CHARS,
   type RowSkeletonEntry,
@@ -15,11 +22,14 @@ import {
 /**
  * # Building the row skeleton
  *
- * Turns a chat's persisted records into one skeleton entry per transcript ROW,
- * in canonical order. Shared code because two producers must agree: the live
- * host serving `chat.subscribe`, and the publisher writing the head's index
- * section. A published copy and a live chat that disagreed about ordinals would
- * be the same chat rendering differently depending on how it was opened.
+ * Projects a chat's records into one skeleton entry per transcript ROW, in
+ * projection order. Shared code because two producers must agree: the live host
+ * serving `chat.subscribe`, and the publisher writing the head's index section.
+ * A published copy and a live chat that disagreed about ordinals would be the
+ * same chat rendering differently depending on how it was opened.
+ *
+ * The enumeration is entirely `row-projection.ts`'s; this is a projection OF
+ * that one, which is what keeps the ordinal of a row equal to its index here.
  *
  * ## Why the preview projection is injected
  *
@@ -87,10 +97,10 @@ function collapsedPreview(text: string): string | undefined {
   if (out.length === 0) return undefined;
   // The loop can overshoot by one: it appends the pending space AND the
   // character before testing, so `"x".repeat(200) + " y"` reaches 202 - one
-  // past the cap, which `messageRowSkeletonEntrySchema` rejects outright. The
-  // check cannot simply move before the append without also handling a
-  // surrogate pair straddling the boundary, so the clamp lives here instead,
-  // where it is one operation and obviously total.
+  // past the cap, which `rowSkeletonEntrySchema` rejects outright. The check
+  // cannot simply move before the append without also handling a surrogate
+  // pair straddling the boundary, so the clamp lives here instead, where it is
+  // one operation and obviously total.
   return sliceWholeCodePoints(out, ROW_SKELETON_PREVIEW_MAX_CHARS);
 }
 
@@ -106,73 +116,182 @@ function sliceWholeCodePoints(text: string, maxUnits: number): string {
   return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }
 
-/**
- * The preview a HUMAN user row carries, or `undefined` for every other row.
- *
- * Assistant rows take their minimap label from role and status, and an A2A row
- * from its sender, so previewing either would be bytes nothing reads.
- */
-function userRowPreview(
-  message: UserMessage,
-  previewText: TranscriptPreviewProjection,
-): string | undefined {
-  if (message.sender.type === "agent") return undefined;
-  return collapsedPreview(previewText(message.message.content));
-}
-
-function messageSkeletonEntry(
-  message: Message,
-  previewText: TranscriptPreviewProjection,
-): RowSkeletonEntry {
-  const byteLength = recordByteLength(message);
-  if (message.role === "user") {
-    const preview = userRowPreview(message, previewText);
-    return {
-      kind: "message",
-      id: message.messageId,
-      createdAt: message.timestamp,
-      role: "user",
-      byteLength,
-      ...(preview === undefined ? {} : { preview }),
-      ...(message.sender.type === "agent" ? { sentByAgent: true } : {}),
-    };
+/** The role a row RENDERS as - not the role of the record behind it. */
+function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
+  switch (source.kind) {
+    case "user":
+    case "steer":
+      return "user";
+    case "assistant-slice":
+    case "stopped-turn":
+    case "notification-anchor":
+      return "assistant";
+    case "forked-chat-link":
+    case "setup-card":
+      return "system";
   }
-  return {
-    kind: "message",
-    id: message.messageId,
-    createdAt: message.timestamp,
-    role: "assistant",
-    byteLength,
-    ...(message.usage === null ? {} : { usage: message.usage }),
-  };
-}
-
-function eventSkeletonEntry(event: ChatEvent): RowSkeletonEntry {
-  return {
-    kind: "event",
-    id: event.eventId,
-    createdAt: event.timestamp,
-    eventType: event.type,
-    byteLength: recordByteLength(event),
-  };
 }
 
 /**
- * One entry per transcript row, in canonical order.
+ * A row's size hint, in bytes.
+ *
+ * Charged per ROW, not per record: an assistant turn's records are shared by
+ * every slice of that turn, so billing each slice the whole turn would
+ * over-estimate a heavily-steered turn's height several times over. A slice is
+ * therefore measured by the blocks it actually renders, which is what the
+ * `blockIds` provenance exists for.
+ *
+ * A hint, never a contract - see `byteLength`'s doc on the schema.
+ */
+function rowByteLength(
+  source: TranscriptRowSource,
+  lookup: TranscriptRecordLookup,
+  blocksById: ReadonlyMap<string, unknown>,
+): number {
+  switch (source.kind) {
+    case "user": {
+      const message = lookup.messagesById.get(source.messageId);
+      return message === undefined ? 0 : recordByteLength(message);
+    }
+    case "assistant-slice":
+      return blockBytes(source.blockIds, blocksById);
+    case "steer": {
+      const block = blockBytes([source.blockId], blocksById);
+      if (source.steeredMessageId === null) return block;
+      const message = lookup.messagesById.get(source.steeredMessageId);
+      return message === undefined ? block : recordByteLength(message);
+    }
+    case "stopped-turn":
+    case "forked-chat-link":
+    case "notification-anchor": {
+      const event = lookup.eventsById.get(source.eventId);
+      return event === undefined ? 0 : recordByteLength(event);
+    }
+    case "setup-card":
+      return source.eventIds.reduce((total, eventId) => {
+        const event = lookup.eventsById.get(eventId);
+        return event === undefined ? total : total + recordByteLength(event);
+      }, 0);
+  }
+}
+
+function blockBytes(
+  blockIds: readonly string[],
+  blocksById: ReadonlyMap<string, unknown>,
+): number {
+  return blockIds.reduce((total, blockId) => {
+    const block = blocksById.get(blockId);
+    return block === undefined
+      ? total
+      : total + utf8ByteLength(JSON.stringify(block));
+  }, 0);
+}
+
+function blocksByIdFrom(
+  messages: readonly Message[],
+): ReadonlyMap<string, unknown> {
+  const blocks = new Map<string, unknown>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) blocks.set(block.blockId, block);
+  }
+  return blocks;
+}
+
+/**
+ * The usage a row reports, if any.
+ *
+ * Carried by a turn's LAST row so a split turn reports once. The context chip
+ * scans backwards for the most recent, so reporting on every slice would be
+ * harmless for that consumer and wrong for anything that sums.
+ */
+function rowUsage(
+  source: TranscriptRowSource,
+  lookup: TranscriptRecordLookup,
+  isLastRowOfTurn: boolean,
+): RowSkeletonEntry["usage"] {
+  if (source.kind !== "assistant-slice" || !isLastRowOfTurn) return undefined;
+  for (let index = source.messageIds.length - 1; index >= 0; index -= 1) {
+    const message = lookup.messagesById.get(source.messageIds[index]);
+    if (message === undefined || message.role !== "assistant") continue;
+    if (message.usage !== null) return message.usage;
+  }
+  return undefined;
+}
+
+function isHumanUserRecord(
+  source: TranscriptRowSource,
+  lookup: TranscriptRecordLookup,
+): { readonly message: Message | undefined; readonly sentByAgent: boolean } {
+  const messageId =
+    source.kind === "user"
+      ? source.messageId
+      : source.kind === "steer"
+        ? source.steeredMessageId
+        : null;
+  if (messageId === null) return { message: undefined, sentByAgent: false };
+  const message = lookup.messagesById.get(messageId);
+  if (message === undefined || message.role !== "user") {
+    return { message: undefined, sentByAgent: false };
+  }
+  return { message, sentByAgent: message.sender.type === "agent" };
+}
+
+/**
+ * One entry per transcript row, in projection order.
  *
  * The ordinal of a row IS its index in the returned array, so this and
- * {@link buildCanonicalTranscriptRows} must stay the same enumeration - which
- * they do by construction, since this is a projection of that one. Events that
- * materialize no row are dropped there, not here.
+ * {@link projectTranscriptRows} are the same enumeration - which they are by
+ * construction, since this maps over that one.
  */
 export function buildRowSkeleton(
-  messages: readonly Message[],
-  events: readonly ChatEvent[],
+  input: TranscriptRowProjectionInput,
   previewText: TranscriptPreviewProjection,
 ): readonly RowSkeletonEntry[] {
-  return buildCanonicalTranscriptRows(messages, events).map((row) =>
-    row.kind === "message"
-      ? messageSkeletonEntry(row.message, previewText)
-      : eventSkeletonEntry(row.event),
-  );
+  const rows = projectTranscriptRows(input);
+  const lookup = buildTranscriptRecordLookup(input.messages, input.events);
+  const blocksById = blocksByIdFrom(input.messages);
+  const lastRowIndexByTurn = lastRowIndexByTurnKey(rows);
+
+  return rows.map((row, index) => {
+    const { source } = row;
+    const human = isHumanUserRecord(source, lookup);
+    const preview =
+      human.message === undefined || human.sentByAgent
+        ? undefined
+        : collapsedPreview(previewText(userContent(human.message)));
+    const isLastOfTurn =
+      source.kind === "assistant-slice" &&
+      lastRowIndexByTurn.get(source.turnKey) === index;
+    return {
+      rowId: row.rowId,
+      createdAt: row.createdAt,
+      role: rowRole(source),
+      byteLength: rowByteLength(source, lookup, blocksById),
+      ...(preview === undefined ? {} : { preview }),
+      ...(human.sentByAgent ? { sentByAgent: true } : {}),
+      ...((): { usage?: RowSkeletonEntry["usage"] } => {
+        const usage = rowUsage(source, lookup, isLastOfTurn);
+        return usage === undefined ? {} : { usage };
+      })(),
+    };
+  });
+}
+
+function userContent(message: Message): JsonContent {
+  if (message.role !== "user") {
+    throw new Error("build-skeleton: expected a user record");
+  }
+  return message.message.content;
+}
+
+function lastRowIndexByTurnKey(
+  rows: readonly TranscriptRowDescriptor[],
+): ReadonlyMap<string, number> {
+  const lastIndex = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.source.kind !== "assistant-slice") return;
+    lastIndex.set(row.source.turnKey, index);
+  });
+  return lastIndex;
 }

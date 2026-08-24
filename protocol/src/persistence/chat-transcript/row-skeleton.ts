@@ -1,12 +1,12 @@
 import { z } from "zod";
 
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
-import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-events";
 
 /**
  * # The row skeleton
  *
- * One entry per transcript ROW, in canonical order (`row-order.ts`), carrying
+ * One entry per transcript ROW, in projection order (`row-projection.ts`),
+ * carrying
  * everything the renderer needs to draw the chat WITHOUT the row's body:
  * lay out the scrollback, populate the minimap, answer "can this be forked",
  * and size the context-usage chip.
@@ -32,6 +32,18 @@ import { chatEventTypeSchema } from "@traycer/protocol/persistence/epic/chat-eve
  * the exception and it is a HINT (see its doc). Everything else here is either
  * fixed at write time or bounded by construction, which is what keeps a
  * 20k-row skeleton to ~1-2 MB.
+ *
+ * **No record identity.** An entry is keyed by its ROW id, not by a
+ * `(kind, messageId|eventId)` pair. The first version of this schema used
+ * record identity and it was wrong in both directions: one assistant turn's
+ * several records produce ONE row (so the id was ambiguous), one turn can
+ * produce SEVERAL rows (so the id was not unique), and a setup card or a
+ * synthesized stopped row has no single record to name at all. A row id is the
+ * only thing that addresses a row.
+ *
+ * **No `eventType`.** It followed from record identity and admitted every event
+ * kind, including kinds that can never draw a row. With rows keyed by row id
+ * the field has no consumer and the invariant is structural.
  *
  * **No fork-eligibility fields.** An earlier draft put
  * `completedAt`/`runState`/`persistentMessageId` on every message entry so the
@@ -80,29 +92,39 @@ const byteLengthSchema = z.number().int().nonnegative();
  */
 export const ROW_SKELETON_PREVIEW_MAX_CHARS = 201;
 
-export const messageRowSkeletonEntrySchema = z.object({
-  kind: z.literal("message"),
-  /** The persisted `messageId`. The identity every cross-reference uses. */
-  id: z.string(),
+export const rowSkeletonEntrySchema = z.object({
   /**
-   * The canonical-order sort key (`Message.timestamp`). Present so a client can
-   * verify the ordering it was handed rather than trust it - a host and client
-   * that disagree about order put bodies under the wrong rows, and this is the
-   * field that makes that detectable rather than silent.
+   * The row's identity, built by `row-projection.ts`. Opaque here on purpose -
+   * a client matches it, it does not parse it.
+   */
+  rowId: z.string(),
+  /**
+   * The projection's placement key. Present so a client can verify the ordering
+   * it was handed rather than trust it - a host and client that disagree about
+   * order put bodies under the wrong rows, and this is the field that makes
+   * that detectable rather than silent.
+   *
+   * For an assistant row this is `rowAnchorAt`, NOT the record timestamp: every
+   * row of one turn shares the same value and their relative order comes from
+   * sort stability. So equal `createdAt` across neighbouring rows is ordinary
+   * here, not a tie to break.
    */
   createdAt: z.number(),
   /**
-   * The persisted roles, and only those. `messageSchema` is a two-arm union of
-   * user and assistant; the renderer's third role, `system`, belongs to WORKTREE
-   * SETUP CARDS, which are derived from workspace state rather than from a chat
-   * record and are woven by anchor rather than ordered by timestamp (see
-   * `row-order.ts`). Admitting `system` here would advertise a row this side can
-   * never produce.
+   * The role the row RENDERS as, which is not the same as a record's role.
+   * `system` is the setup card and the forked-chat link; a notification anchor
+   * and a synthesized stopped-turn boundary render as `assistant`; a steer
+   * bubble renders as `user`.
+   *
+   * An earlier draft narrowed this to the two persisted roles on the grounds
+   * that `system` had no persisted counterpart. That was right about records
+   * and wrong about rows - which is the whole distinction this schema now
+   * carries.
    */
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "system"]),
   byteLength: byteLengthSchema,
   /**
-   * Minimap text for HUMAN user turns only. Assistant rows get their minimap
+   * Minimap text for HUMAN user rows only. Assistant rows get their minimap
    * label from role and status, and an A2A row from its sender - so previewing
    * them would be bytes nothing reads.
    *
@@ -125,59 +147,9 @@ export const messageRowSkeletonEntrySchema = z.object({
    * Present on assistant rows that reported usage. The context chip scans
    * backwards for the most recent one, so it must be answerable from the
    * skeleton alone.
+   *
+   * Carried by the turn's LAST row, so a split turn reports its usage once.
    */
   usage: tokenUsageSchema.optional(),
 });
-export type MessageRowSkeletonEntry = z.infer<
-  typeof messageRowSkeletonEntrySchema
->;
-
-/**
- * A row materialized by an EVENT rather than a message - the forked-chat link
- * and the notification anchor (see `eventMaterializesTranscriptRow`).
- *
- * These occupy ordinals like any other row. Omitting them would make every
- * ordinal after the first one wrong, which is the failure this entry exists to
- * prevent; they are cheap because the row's content is derived from the
- * event's own metadata rather than from a body.
- */
-export const eventRowSkeletonEntrySchema = z.object({
-  kind: z.literal("event"),
-  /** The persisted `eventId`. */
-  id: z.string(),
-  createdAt: z.number(),
-  eventType: chatEventTypeSchema,
-  byteLength: byteLengthSchema,
-});
-export type EventRowSkeletonEntry = z.infer<
-  typeof eventRowSkeletonEntrySchema
->;
-
-export const rowSkeletonEntrySchema = z.discriminatedUnion("kind", [
-  messageRowSkeletonEntrySchema,
-  eventRowSkeletonEntrySchema,
-]);
 export type RowSkeletonEntry = z.infer<typeof rowSkeletonEntrySchema>;
-
-/**
- * The id of a skeleton row, for the identity check a `range` response carries.
- *
- * `kind` is part of it because a message and an event are separate id spaces:
- * nothing guarantees a `messageId` and an `eventId` cannot collide, and a
- * check that could confuse them is not a check.
- */
-export interface RowSkeletonRowId {
-  readonly kind: RowSkeletonEntry["kind"];
-  readonly id: string;
-}
-
-export function rowSkeletonRowId(entry: RowSkeletonEntry): RowSkeletonRowId {
-  return { kind: entry.kind, id: entry.id };
-}
-
-export function rowSkeletonRowIdEquals(
-  a: RowSkeletonRowId,
-  b: RowSkeletonRowId,
-): boolean {
-  return a.kind === b.kind && a.id === b.id;
-}

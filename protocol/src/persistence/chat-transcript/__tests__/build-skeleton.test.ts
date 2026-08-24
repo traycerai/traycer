@@ -82,7 +82,7 @@ function assistantMessage(fields: {
     },
     blocks: [
       {
-        blockId: "b-1",
+        blockId: `b-${fields.messageId}`,
         status: "completed",
         timestamp: fields.timestamp,
         type: "text",
@@ -156,28 +156,53 @@ describe("buildRowSkeleton", () => {
     });
 
     const entries = buildRowSkeleton(
-      [human, a2a, assistantWithUsage, assistantNoUsage],
-      [dropped, forked],
+      {
+        messages: [human, a2a, assistantWithUsage, assistantNoUsage],
+        events: [dropped, forked],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
       previewText,
     );
 
     expect(entries).toHaveLength(5);
-    expect(entries.map((e) => e.id)).toEqual([
+    // Two rules are visible in this order, and the second one surprised the
+    // author of this test:
+    //
+    // 1. Assistant rows are keyed by TURN, not by record. These fixtures carry
+    //    `turnId: null`, so the key falls back to `ts:<timestamp>`.
+    // 2. Both assistant fixtures also carry `startedAt: null`, so each turn
+    //    anchors at the LAST USER TIMESTAMP (2) rather than at its own
+    //    timestamp - the legacy fallback. Both turns therefore tie at 2 and
+    //    sort ahead of the fork link at 5, even though one of them has
+    //    `timestamp: 6`. Ordering assistant rows by the record timestamp would
+    //    put the fork link between them; that is precisely the sort-key defect
+    //    this projection exists to fix, so the "natural-looking" order here
+    //    would be the wrong one.
+    expect(entries.map((e) => e.rowId)).toEqual([
       "m-human",
       "m-a2a",
-      "m-assistant",
-      "e-forked",
-      "m-assistant-2",
+      "assistant:ts:4",
+      "assistant:ts:6",
+      "forked-chat-link:e-forked",
     ]);
-    expect(entries[3]?.kind).toBe("event");
+    expect(entries[4]?.role).toBe("system");
   });
 
   it("gives a human user row a preview and no sentByAgent", () => {
     const human = humanUserMessage({ messageId: "m-1", timestamp: 1, text: "hello world" });
 
-    const [entry] = buildRowSkeleton([human], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [human],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect(entry.preview).toBe("hello world");
     expect("sentByAgent" in entry).toBe(false);
   });
@@ -185,9 +210,17 @@ describe("buildRowSkeleton", () => {
   it("gives an A2A user row sentByAgent: true and no preview", () => {
     const a2a = a2aUserMessage({ messageId: "m-1", timestamp: 1 });
 
-    const [entry] = buildRowSkeleton([a2a], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [a2a],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect(entry.sentByAgent).toBe(true);
     expect("preview" in entry).toBe(false);
   });
@@ -200,9 +233,17 @@ describe("buildRowSkeleton", () => {
       usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
     });
 
-    const [entry] = buildRowSkeleton([assistant], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [assistant],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect(entry.usage).toEqual({ inputTokens: 10, outputTokens: 20, totalTokens: 30 });
   });
 
@@ -214,9 +255,17 @@ describe("buildRowSkeleton", () => {
       usage: null,
     });
 
-    const [entry] = buildRowSkeleton([assistant], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [assistant],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect("usage" in entry).toBe(false);
   });
 
@@ -227,18 +276,34 @@ describe("buildRowSkeleton", () => {
       text: "  hello   world  ",
     });
 
-    const [entry] = buildRowSkeleton([human], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [human],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect(entry.preview).toBe("hello world");
   });
 
   it("omits preview entirely for an all-whitespace human message, rather than an empty string", () => {
     const human = humanUserMessage({ messageId: "m-1", timestamp: 1, text: "   " });
 
-    const [entry] = buildRowSkeleton([human], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [human],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect("preview" in entry).toBe(false);
   });
 
@@ -249,9 +314,17 @@ describe("buildRowSkeleton", () => {
       text: "x".repeat(250),
     });
 
-    const [entry] = buildRowSkeleton([human], [], previewText);
+    const [entry] = buildRowSkeleton(
+      {
+        messages: [human],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
-    if (entry?.kind !== "message") throw new Error("expected message entry");
+    if (entry === undefined) throw new Error("expected an entry");
     expect(entry.preview).toHaveLength(ROW_SKELETON_PREVIEW_MAX_CHARS);
     expect(entry.preview).toBe("x".repeat(ROW_SKELETON_PREVIEW_MAX_CHARS));
   });
@@ -265,7 +338,15 @@ describe("buildRowSkeleton", () => {
       usage: null,
     });
 
-    const [smallEntry, largeEntry] = buildRowSkeleton([small, large], [], previewText);
+    const [smallEntry, largeEntry] = buildRowSkeleton(
+      {
+        messages: [small, large],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
     expect(smallEntry?.byteLength).toBeGreaterThan(0);
     expect(largeEntry?.byteLength).toBeGreaterThan(0);
@@ -283,7 +364,15 @@ describe("buildRowSkeleton", () => {
     });
     const forked = forkedChatEvent({ eventId: "e-1", timestamp: 4 });
 
-    const entries = buildRowSkeleton([human, a2a, assistant], [forked], previewText);
+    const entries = buildRowSkeleton(
+      {
+        messages: [human, a2a, assistant],
+        events: [forked],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
     for (const entry of entries) {
       expect(() => rowSkeletonEntrySchema.parse(entry)).not.toThrow();
@@ -295,9 +384,17 @@ describe("buildRowSkeleton", () => {
     const dropped = nonMaterializingEvent({ eventId: "e-drop", timestamp: 2 });
     const after = humanUserMessage({ messageId: "m-after", timestamp: 3, text: "after" });
 
-    const entries = buildRowSkeleton([before, after], [dropped], previewText);
+    const entries = buildRowSkeleton(
+      {
+        messages: [before, after],
+        events: [dropped],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
 
     expect(entries).toHaveLength(2);
-    expect(entries.map((e) => e.id)).toEqual(["m-before", "m-after"]);
+    expect(entries.map((e) => e.rowId)).toEqual(["m-before", "m-after"]);
   });
 });

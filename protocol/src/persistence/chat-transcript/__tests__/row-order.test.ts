@@ -5,7 +5,6 @@ import type {
 } from "@traycer/protocol/persistence/epic/chat-events";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import {
-  buildCanonicalTranscriptRows,
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
   sortIntoCanonicalRowOrder,
@@ -224,49 +223,5 @@ describe("eventMaterializesTranscriptRow", () => {
     });
 
     expect(eventMaterializesTranscriptRow(event)).toBe(false);
-  });
-});
-
-describe("buildCanonicalTranscriptRows", () => {
-  it("interleaves messages and row-materializing events into one ordinal space, dropping non-materializing events without consuming an ordinal", () => {
-    const first = makeUserMessage({ messageId: "m-1", timestamp: 1 });
-    // A droppable event sits BETWEEN the two messages in time. If the
-    // function mistakenly reserved it an ordinal, the second message would
-    // land at ordinal 2 instead of 1 - the exact off-by-one this function
-    // exists to prevent.
-    const droppable = makeChatEvent({
-      eventId: "e-drop",
-      type: "turn.started",
-      timestamp: 2,
-      message: null,
-      metadata: null,
-    });
-    const second = makeUserMessage({ messageId: "m-2", timestamp: 3 });
-
-    const rows = buildCanonicalTranscriptRows([first, second], [droppable]);
-
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ kind: "message", message: first });
-    expect(rows[1]).toEqual({ kind: "message", message: second });
-  });
-
-  it("gives a row-materializing event its own ordinal, ordered by timestamp among messages", () => {
-    const before = makeUserMessage({ messageId: "m-before", timestamp: 1 });
-    const forked = makeChatEvent({
-      eventId: "e-forked",
-      type: "chat.forked",
-      timestamp: 2,
-      message: null,
-      metadata: { sourceChatId: "chat-1", sourceHostId: "host-1" },
-    });
-    const after = makeUserMessage({ messageId: "m-after", timestamp: 3 });
-
-    const rows = buildCanonicalTranscriptRows([before, after], [forked]);
-
-    expect(rows).toEqual([
-      { kind: "message", message: before },
-      { kind: "event", event: forked },
-      { kind: "message", message: after },
-    ]);
   });
 });
