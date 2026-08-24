@@ -84,7 +84,26 @@ function collapsedPreview(text: string): string | undefined {
     out += char;
     if (out.length >= ROW_SKELETON_PREVIEW_MAX_CHARS) break;
   }
-  return out.length === 0 ? undefined : out;
+  if (out.length === 0) return undefined;
+  // The loop can overshoot by one: it appends the pending space AND the
+  // character before testing, so `"x".repeat(200) + " y"` reaches 202 - one
+  // past the cap, which `messageRowSkeletonEntrySchema` rejects outright. The
+  // check cannot simply move before the append without also handling a
+  // surrogate pair straddling the boundary, so the clamp lives here instead,
+  // where it is one operation and obviously total.
+  return sliceWholeCodePoints(out, ROW_SKELETON_PREVIEW_MAX_CHARS);
+}
+
+/**
+ * Truncates to at most `maxUnits` UTF-16 units without splitting a surrogate
+ * pair - dropping the trailing high surrogate rather than emitting half a code
+ * point. Mirrors the minimap's own slice.
+ */
+function sliceWholeCodePoints(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  const cut = text.slice(0, maxUnits);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
 }
 
 /**

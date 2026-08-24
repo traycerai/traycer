@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   assistantTurnKey,
   latestForkableAssistantMessageId,
@@ -29,7 +30,7 @@ const AGENT_SENDER = {
 
 const USER_SENDER = { type: "user" as const, userId: "user-1" };
 
-function textBlock(blockId: string, timestamp: number) {
+function textBlock(blockId: string, timestamp: number): ContentBlock {
   return {
     blockId,
     status: "completed" as const,
@@ -39,7 +40,7 @@ function textBlock(blockId: string, timestamp: number) {
   };
 }
 
-function steerBlock(blockId: string, timestamp: number) {
+function steerBlock(blockId: string, timestamp: number): ContentBlock {
   return {
     blockId,
     status: "completed" as const,
@@ -55,9 +56,7 @@ function assistantMessage(input: {
   messageId: string;
   timestamp: number;
   turnId: string | null;
-  blocks: ReadonlyArray<
-    ReturnType<typeof textBlock> | ReturnType<typeof steerBlock>
-  >;
+  blocks: ReadonlyArray<ContentBlock>;
 }): AssistantMessage {
   return assistantMessageSchema.parse({
     role: "assistant",

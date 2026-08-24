@@ -8,6 +8,39 @@ import type { Message } from "@traycer/protocol/persistence/epic/messages";
  * host (which numbers rows for the windowed `chat.subscribe` line) and the
  * renderer (which draws them).
  *
+ * ## INCOMPLETE - do not number ordinals from this yet
+ *
+ * A cold review found this module's row ENUMERATION does not match the
+ * renderer's, in three ways. The comparator and the event predicates below are
+ * correct and in use; `buildCanonicalTranscriptRows` is not yet a truthful
+ * model of the rendered transcript, and nothing may serve ordinals from it
+ * until these are closed:
+ *
+ * 1. **One row per `Message` is wrong.** The renderer folds every
+ *    `AssistantMessage` sharing a `turnId` into ONE turn
+ *    (`renderPersistedAssistantMessageTurn` returns `[]` for a turn key it has
+ *    already emitted), then may SPLIT that turn into several rows around steer
+ *    blocks, and suppresses steered persisted user records at top level. So
+ *    records->rows is many-to-many, not one-to-one, and any mismatch shifts
+ *    every later ordinal.
+ * 2. **Rows exist that no `Message` or admitted event produces.** Persisted
+ *    `setup.*` / `worktree.missing` events fold into historical setup-card
+ *    rows, and a `turn.stopped` arriving before any assistant record
+ *    synthesizes a durable completed row. Both are drawn in legacy mode and
+ *    are invisible here, so a windowed client could neither reserve nor
+ *    hydrate them.
+ * 3. **The sort key is wrong for assistant rows.** This module orders them by
+ *    `Message.timestamp`, which the host REWRITES on every streaming delta.
+ *    The renderer anchors an assistant row at `rowAnchorAt`, which resolves to
+ *    `startedAt` (set once at turn start). A late edit to an old turn moves it
+ *    to the tail here and leaves it in place there.
+ *
+ * The shape of the fix is a shared row PROJECTION - turn folding, steer
+ * splitting, steered-user suppression, card and stopped-turn synthesis - not a
+ * comparator with a better key. That makes the shared-derivation extraction a
+ * hard PREREQUISITE of the ordinal scheme rather than a later step, which is
+ * the real cost this review uncovered.
+ *
  * ## Why this has to be shared code rather than two agreeing implementations
  *
  * Under the windowed transcript a row is addressed by its ORDINAL - its index
