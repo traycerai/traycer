@@ -1039,19 +1039,13 @@ function manualRecoveryPlan(): DesktopCompatRecoveryPlan {
  * four, which is exactly why this is a separate function rather than a flag on
  * that one.
  *
- * RC-TAG-FILTERED, and this is not a detail. `projectDesktopRelease` accepts
- * stable and rc tags alike; it is safe in the shipping path only because that
- * path runs exclusively under `allowPrerelease`. Reusing it unfiltered here
- * would let a stable build that is not Latest surface as the answer, turning
- * "Enable RC updates" into a channel switch performed to reach a STABLE
- * release - a build the RC feed would then not resolve. That corner is a manual
- * link, and this filter is what keeps it one.
+ * SELECTOR-FAITHFUL: enabling prereleases makes the shipping resolver consider
+ * stable and RC tags together, newest-first. The probe must inspect that same
+ * ordered set and decide from the FIRST usable candidate. Skipping an
+ * insufficient stable candidate to offer an older sufficient RC would promise
+ * a build the updater will never select after consent.
  *
- * EPOCH-FILTERED BEFORE deep validation, so the expensive check runs only for
- * candidates that could actually help. An unstamped candidate is skipped, never
- * inferred - see {@link readCompatibilityEpoch}.
- *
- * DEEP-VALIDATED before being offered, with the same
+ * DEEP-VALIDATED before its epoch or channel can authorize an offer, with the same
  * `validateDesktopReleaseManifest` the shipping path uses: a candidate that
  * would fail the OS floor, the architecture filter, or a missing checksum is
  * not a remedy, and offering it would spend the user's channel opt-in on a
@@ -1127,25 +1121,9 @@ async function runRcRecoveryProbe(
     return null;
   }
   const all = await collectDesktopReleaseCandidates(coordinate, signal);
-  const releaseCandidates = all
-    .filter((candidate) => candidate.version.includes("-rc."))
-    // NEWER THAN THE RUNNING BUILD, or the offer cannot be honoured. This
-    // updater never sets `autoUpdater.allowDowngrade`, so electron-updater
-    // reports a candidate at or below `CURRENT_VERSION` as "not available" -
-    // and the failure lands AFTER the user has already consented to the RC
-    // channel, leaving them switched over with nothing to install and no
-    // explanation. Epoch and SemVer are independent (that is the whole design),
-    // so a sufficient-epoch RC that is older by version is a real shape: a
-    // release line predating an epoch backport produces exactly one.
-    //
-    // Strictly `> 0`, which also fails closed on an unparseable version:
-    // `compareHostVersions` (the cli-discovery numeric form used throughout
-    // this file) returns 0 for anything it cannot parse, and 0 is not newer.
-    .filter(
-      (candidate) =>
-        compareHostVersions(candidate.version, CURRENT_VERSION) > 0,
-    )
-    .sort((a, b) => compareHostVersions(b.version, a.version));
+  const releaseCandidates = [...all].sort((a, b) =>
+    compareHostVersions(b.version, a.version),
+  );
   const token = PRIVATE_UPDATE_TOKEN.trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
@@ -1176,14 +1154,6 @@ async function runRcRecoveryProbe(
     if (rawManifest === null) {
       continue;
     }
-    const epoch = readManifestCompatibilityEpoch(
-      rawManifest,
-      channelFile,
-      request.url,
-    );
-    if (epoch === null || epoch < minimumEpoch) {
-      continue;
-    }
     const validation = validateDesktopReleaseManifest(
       rawManifest,
       channelFile,
@@ -1194,6 +1164,24 @@ async function runRcRecoveryProbe(
       isArm64Mac,
     );
     if (validation.ok) {
+      const epoch = readManifestCompatibilityEpoch(
+        rawManifest,
+        channelFile,
+        request.url,
+      );
+      const isRc = candidate.version.includes("-rc.");
+      const isNewer =
+        compareHostVersions(candidate.version, CURRENT_VERSION) > 0;
+      if (!isRc || !isNewer || epoch === null || epoch < minimumEpoch) {
+        log.info("[updater] RC recovery probe found no selectable RC remedy", {
+          selectedVersion: candidate.version,
+          compatibilityEpoch: epoch,
+          minimumEpoch,
+          isRc,
+          isNewer,
+        });
+        return null;
+      }
       log.info("[updater] RC recovery probe found a sufficient candidate", {
         version: candidate.version,
         compatibilityEpoch: epoch,

@@ -2157,15 +2157,31 @@ describe("compat recovery: RC probe", () => {
     expect(updater.getAppUpdateSnapshot().allowPrerelease).toBe(false);
   });
 
-  it("skips a stable-tagged candidate even when it is newest and sufficient", async () => {
-    // projectDesktopRelease accepts stable and rc alike; reusing it unfiltered
-    // would turn "Enable RC updates" into a channel switch performed to reach
-    // a STABLE release. The filter keeps that corner a manual link.
+  it("does not offer an RC channel switch when the post-opt-in selector chooses stable", async () => {
+    // projectDesktopRelease accepts stable and RC alike. The probe must inspect
+    // the same first usable candidate as the shipping selector, then refuse to
+    // describe a stable build as the result of "Enable RC updates".
     setPlatform("darwin");
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     const plan = await probe(updater, autoUpdater, [
       { tag: "desktop-v1.3.0", prerelease: false, epoch: 2 },
       { tag: "desktop-v1.2.0-rc.1", prerelease: true, epoch: 1 },
+    ]);
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+  });
+
+  it("does not offer an older sufficient RC when the post-opt-in selector chooses a newer insufficient stable", async () => {
+    // Enabling prereleases makes the shipping resolver sort stable and RC
+    // desktop tags together. The first usable build is therefore the stable
+    // one, even though its epoch does not clear the host floor. Skipping it in
+    // the probe would promise the older RC while the updater installs (or
+    // offers) a different build.
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const plan = await probe(updater, autoUpdater, [
+      { tag: "desktop-v1.3.0", prerelease: false, epoch: 1 },
+      { tag: "desktop-v1.2.0-rc.1", prerelease: true, epoch: 2 },
     ]);
     expect(plan.route).toBe("manual");
     expect(plan.rcCandidateVersion).toBeNull();
