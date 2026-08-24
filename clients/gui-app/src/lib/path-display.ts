@@ -14,12 +14,48 @@ export function separatorOf(path: string): string {
 }
 
 /**
- * Length of the leading run that is structurally a root: `/`, `C:\`, or
- * `\\server\share`. Nothing below it may be stripped or presented as a base.
+ * Paths here are HOST-native, not client-native: a Windows host writes
+ * `C:\Users\alice` and a POSIX host writes `/Users/alice`, so both
+ * separators are accepted everywhere and a path is echoed back in the one it
+ * already uses. Nothing has to be CONVERTED - Windows accepts `/` too.
  */
 const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
+
+/**
+ * `\\server\share` - the shortest thing on a UNC path that is still a root.
+ * Windows accepts forward slashes here too (`//server/share`), so both lead-in
+ * separators count; a genuine POSIX path virtually never starts with a doubled
+ * slash, and POSIX itself leaves that prefix implementation-defined.
+ */
 const WINDOWS_UNC_ROOT = /^[\\/]{2}[^\\/]+[\\/][^\\/]+/;
 
+/** A path the host can resolve without a working directory. */
+export function isAbsolutePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    WINDOWS_DRIVE_ROOT.test(path) ||
+    WINDOWS_UNC_ROOT.test(path)
+  );
+}
+
+/**
+ * `\` counts as a separator only once the path is known to be Windows-native.
+ * On a POSIX host a backslash is an ordinary filename character, so a folder
+ * genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses
+ * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
+ */
+export function lastSeparatorIndex(path: string): number {
+  if (path.startsWith("/") && !WINDOWS_UNC_ROOT.test(path)) {
+    return path.lastIndexOf("/");
+  }
+  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+}
+
+/**
+ * Length of the leading run that navigation may never chop into: `/`, `C:\`,
+ * or `\\server\share`. Without it, going up from `C:\Users` would land on
+ * `C:` - a drive-relative path, not a folder - instead of stopping at `C:\`.
+ */
 export function rootLengthOf(path: string): number {
   const unc = WINDOWS_UNC_ROOT.exec(path);
   if (unc !== null) return unc[0].length;

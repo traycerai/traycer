@@ -31,7 +31,15 @@ import {
   type FuzzyMatch,
   type FuzzyRange,
 } from "@/lib/fuzzy-folder-match";
-import { commonBasePath, relativeTo, tildeCollapse } from "@/lib/path-display";
+import {
+  commonBasePath,
+  isAbsolutePath,
+  lastSeparatorIndex,
+  relativeTo,
+  rootLengthOf,
+  separatorOf,
+  tildeCollapse,
+} from "@/lib/path-display";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
 import { useWorkspaceGetHomeDir } from "@/hooks/workspace/use-workspace-get-home-dir-query";
 import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
@@ -820,70 +828,6 @@ const INVALID_INPUT: ParsedBrowseInput = {
   directoryPath: null,
   filter: "",
 };
-
-/**
- * Paths here are HOST-native, not client-native: `workspace.browseFolders`
- * runs on the host and answers in whatever that OS writes, so a Windows host
- * sends `C:\Users\alice` and a POSIX host sends `/Users/alice`. The picker
- * therefore accepts BOTH separators everywhere and echoes back the one a path
- * is already written with.
- *
- * It never has to CONVERT: Windows accepts `/` as a separator too, so a path
- * the user types with forward slashes still resolves on the host, and mixing
- * them (`~/proj` expanded against `C:\Users\alice`) is fine.
- */
-const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
-
-/**
- * `\\server\share` - the shortest thing on a UNC path that is still a root.
- * Windows accepts forward slashes here too (`//server/share`), so both lead-in
- * separators count; a genuine POSIX path virtually never starts with a doubled
- * slash, and POSIX itself leaves that prefix implementation-defined.
- */
-const WINDOWS_UNC_ROOT = /^[\\/]{2}[^\\/]+[\\/][^\\/]+/;
-
-function isAbsolutePath(path: string): boolean {
-  return (
-    path.startsWith("/") ||
-    WINDOWS_DRIVE_ROOT.test(path) ||
-    WINDOWS_UNC_ROOT.test(path)
-  );
-}
-
-/**
- * Length of the leading run that navigation may never chop into: `/`, `C:\`,
- * or `\\server\share`. Without it, going up from `C:\Users` would land on
- * `C:` (a drive-relative path, not a folder) instead of stopping at `C:\`.
- */
-function rootLengthOf(path: string): number {
-  const unc = WINDOWS_UNC_ROOT.exec(path);
-  if (unc !== null) return unc[0].length;
-  if (WINDOWS_DRIVE_ROOT.test(path)) return 3;
-  return 1;
-}
-
-/**
- * `\` counts as a separator only once the path is known to be Windows-native.
- * On a POSIX host a backslash is an ordinary filename character, so a folder
- * genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses
- * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
- */
-function lastSeparatorIndex(path: string): number {
-  if (path.startsWith("/") && !WINDOWS_UNC_ROOT.test(path)) {
-    return path.lastIndexOf("/");
-  }
-  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-}
-
-/**
- * The separator a path already uses. A POSIX absolute path always wins, so a
- * directory legitimately NAMED with a backslash cannot flip the whole path to
- * Windows separators.
- */
-function separatorOf(path: string): string {
-  if (path.startsWith("/")) return "/";
-  return path.includes("\\") ? "\\" : "/";
-}
 
 /**
  * Display-only inverse of `withTrailingSeparator`. A ROOT keeps its own

@@ -161,9 +161,13 @@ function pathInput(): HTMLInputElement {
   return element;
 }
 
-/** The search field: filters the CURRENT folder, never navigates. */
+/**
+ * The search field: filters the CURRENT folder, never navigates. Located the
+ * way a screen reader would - by role and accessible name - so the query also
+ * asserts that the combobox is still announced as one.
+ */
 function searchInput(): HTMLInputElement {
-  const element = screen.getByTestId("remote-folder-picker-filter");
+  const element = screen.getByRole("combobox", { name: "Search folders" });
   if (!(element instanceof HTMLInputElement)) {
     throw new Error("search field is not an input");
   }
