@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  type PointerEvent as ReactPointerEvent,
-  type ReactNode,
-} from "react";
+import type { ReactNode } from "react";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import type { FuzzyRange } from "@/lib/fuzzy-folder-match";
@@ -71,69 +65,6 @@ export function TailAnchoredPath(props: {
       <bdi dir="ltr">{props.path}</bdi>
     </span>
   );
-}
-
-/**
- * Long-press recognizer for a row whose tap already means something else.
- *
- * Cancels on movement (the press was the start of a scroll) and on release
- * before the threshold, and reports whether it fired so the row's click
- * handler can stand down — otherwise revealing the path would also pick the
- * folder.
- */
-export function useLongPress(onLongPress: () => void): {
-  readonly handlers: {
-    readonly onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
-    readonly onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
-    readonly onPointerUp: () => void;
-    readonly onPointerCancel: () => void;
-  };
-  readonly consumeFired: () => boolean;
-} {
-  const timerRef = useRef<number | null>(null);
-  const originRef = useRef<{ x: number; y: number } | null>(null);
-  const firedRef = useRef(false);
-
-  const clear = useCallback((): void => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    originRef.current = null;
-  }, []);
-
-  useEffect(() => clear, [clear]);
-
-  return {
-    handlers: {
-      onPointerDown: (event) => {
-        firedRef.current = false;
-        originRef.current = { x: event.clientX, y: event.clientY };
-        timerRef.current = window.setTimeout(() => {
-          firedRef.current = true;
-          timerRef.current = null;
-          onLongPress();
-        }, 450);
-      },
-      onPointerMove: (event) => {
-        const origin = originRef.current;
-        if (origin === null) return;
-        const moved =
-          Math.abs(event.clientX - origin.x) > 10 ||
-          Math.abs(event.clientY - origin.y) > 10;
-        if (moved) clear();
-      },
-      onPointerUp: clear,
-      onPointerCancel: clear,
-    },
-    // Read once per click: a press that fired suppresses exactly the click it
-    // produced, and the next tap starts clean.
-    consumeFired: () => {
-      const fired = firedRef.current;
-      firedRef.current = false;
-      return fired;
-    },
-  };
 }
 
 /**

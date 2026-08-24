@@ -1,12 +1,5 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
-import { CornerLeftUp, Folder, Search, X } from "lucide-react";
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { CornerLeftUp, Folder } from "lucide-react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorkspaceBrowseFolderEntry,
@@ -23,15 +16,16 @@ import {
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
-import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   FullPathSheet,
   HighlightedName,
   TailAnchoredPath,
-  useLongPress,
 } from "@/components/folder-picker-path-view";
+import { RemoteFolderPickerHeader } from "@/components/remote-folder-picker-header";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useLongPress } from "@/hooks/ui/use-long-press";
 import {
   fuzzyMatchNames,
   type FuzzyMatch,
@@ -114,14 +108,15 @@ function RemoteFolderPickerBody(): ReactNode {
   const [fullPath, setFullPath] = useState<string | null>(null);
   // The host's home, learned from the root (null-path) response; anchors `~`.
   const [homePath, setHomePath] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  /** Bumped to pull focus back to the search field; see the header. */
+  const [focusSearchToken, setFocusSearchToken] = useState(0);
+  // Mount focus is for a keyboard, not a thumb: on a phone it raises the
+  // on-screen keyboard over the listing the dialog was opened to read.
+  const coarsePointer = useCoarsePointer();
 
-  // Focus the field on mount: Radix focuses it when the dialog opens, but a
-  // second requestPick remounts this keyed body inside an already-open
-  // dialog, which Radix does not refocus.
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  const requestSearchFocus = (): void => {
+    setFocusSearchToken((token) => token + 1);
+  };
 
   // Both are conveniences that must never gate browsing: each fails closed
   // against a v1.0 host and is read here as "absent", never as an error.
@@ -183,21 +178,14 @@ function RemoteFolderPickerBody(): ReactNode {
     [listingError, data?.entries, filter, parsed.filter],
   );
   const upPath = readUpPath(data, parsed);
-  // `..` is navigation, not a result: while a filter is running, the rows are
-  // answers to the query and a parent directory is not one. The Up button in
-  // the header keeps the move available the whole time, so nothing is lost.
+  // `..` is navigation, not a result: while a search is running the rows are
+  // answers to the query, and a parent directory is not one.
   const upRowPresent = upPath !== null && query === "";
-  // Row 0 is the ".." row whenever it is showing.
-  const rowCount = (upRowPresent ? 1 : 0) + matches.length;
-  // An untouched selection rests on the first real FOLDER, never on "..":
-  // "go up" is a poor default for Enter, and on a touch device the resting
-  // highlight is the only thing the fill communicates — pointing it at the
-  // parent row reads as though something were already chosen.
-  const defaultIndex = upRowPresent ? 1 : 0;
-  const clampedIndex = Math.min(
-    selectedIndex === UNSET_SELECTION ? defaultIndex : selectedIndex,
-    Math.max(rowCount - 1, 0),
-  );
+  const { rowCount, clampedIndex } = readRowSelection({
+    selectedIndex,
+    upRowPresent,
+    matchCount: matches.length,
+  });
 
   const setPath = (path: string): void => {
     setRawInput(path);
@@ -245,130 +233,44 @@ function RemoteFolderPickerBody(): ReactNode {
 
   return (
     <div className="flex min-h-0 flex-col">
-      <div className="flex shrink-0 flex-col gap-2 border-b border-border/60 px-3 py-3">
-        {/* Search is the headline control. The path is not typed here and
-            never appears here — it belongs to the heading below, which is the
-            one place in this dialog that renders a location. */}
-        {/* No back arrow here. Up-navigation is the ".." ROW and only that
-            row: an arrow in a dialog's top-left corner reads as "close", not
-            as "parent folder", and two affordances for one move means the
-            ambiguous one gets tapped. The row speaks the list's own
-            grammar — tap a row, go there — with a full-width touch target.
-            The accepted cost is that going up while a search is active means
-            clearing the search first, since ".." is not a search result. */}
-        <div className="flex items-center gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md bg-foreground/8 px-2">
-            <Search className="size-4 shrink-0 text-muted-foreground" />
-            <input
-              className="min-w-0 flex-1 bg-transparent py-2 text-ui-sm outline-none placeholder:text-muted-foreground"
-              role="combobox"
-              aria-label="Filter folders"
-              aria-controls="remote-folder-picker-listbox"
-              // The listbox popup is always presented while the dialog is
-              // open (it may be empty); only the active option comes and goes.
-              aria-expanded
-              aria-activedescendant={
-                rowCount > 0 ? pickerOptionId(clampedIndex) : undefined
-              }
-              data-testid="remote-folder-picker-filter"
-              value={filter}
-              placeholder="Search this folder"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              onChange={(event) => {
-                setFilter(event.target.value);
-                setSelectedIndex(UNSET_SELECTION);
-              }}
-              onKeyDown={(event) => {
-                handlePickerFieldKeys(event, {
-                  addCurrent,
-                  openSelectedRow,
-                  moveSelection,
-                });
-              }}
-            />
-            {filter === "" ? null : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Clear search"
-                data-testid="remote-folder-picker-filter-clear"
-                onClick={() => {
-                  setFilter("");
-                  setSelectedIndex(UNSET_SELECTION);
-                }}
-              >
-                <X className="size-4" />
-              </Button>
-            )}
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            data-testid="remote-folder-picker-add"
-            disabled={addTarget === null}
-            onClick={addCurrent}
-          >
-            Add
-            <PrimaryActionShortcutHint />
-          </Button>
-        </div>
-        {/* Pinned rather than scrolled with the rows: it is the only statement
-            of where these rows come from, so it may not leave the screen. */}
-        {editingPath ? (
-          <input
-            // The raw absolute path, one tap behind the heading. Reachable,
-            // never the resting presentation.
-            className="w-full min-w-0 bg-transparent font-mono text-ui-xs outline-none placeholder:text-muted-foreground"
-            ref={inputRef}
-            aria-label="Folder path"
-            data-testid="remote-folder-picker-path"
-            value={shownInput}
-            placeholder="/path/on/the/host"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onBlur={() => {
-              setEditingPath(false);
-            }}
-            onChange={(event) => {
-              setRawInput(event.target.value);
-              setSelectedIndex(UNSET_SELECTION);
-            }}
-            onKeyDown={(event) => {
-              handlePickerFieldKeys(event, {
-                addCurrent,
-                openSelectedRow,
-                moveSelection,
-              });
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            className="flex w-full min-w-0 items-baseline gap-1 text-left text-ui-xs text-muted-foreground"
-            data-testid="remote-folder-picker-location"
-            aria-label="Edit folder path"
-            onClick={() => {
-              setEditingPath(true);
-            }}
-          >
-            <span className="shrink-0">in</span>
-            <TailAnchoredPath
-              // Trailing separator dropped for display only: the field still
-              // carries it, but on screen it pushes the leaf — the one
-              // segment that identifies this folder — a character further
-              // from the edge that truncation eats toward.
-              path={dropTrailingSeparator(
-                tildeCollapse(shownInput, effectiveHome),
-              )}
-              className="min-w-0 flex-1 font-mono"
-            />
-          </button>
+      <RemoteFolderPickerHeader
+        filter={filter}
+        onFilterChange={(next) => {
+          setFilter(next);
+          setSelectedIndex(UNSET_SELECTION);
+        }}
+        activeOptionId={rowCount > 0 ? pickerOptionId(clampedIndex) : undefined}
+        addDisabled={addTarget === null}
+        onAdd={addCurrent}
+        editingPath={editingPath}
+        onBeginEditPath={() => {
+          setEditingPath(true);
+        }}
+        onEndEditPath={() => {
+          setEditingPath(false);
+        }}
+        pathValue={shownInput}
+        onPathChange={(next) => {
+          setRawInput(next);
+          setSelectedIndex(UNSET_SELECTION);
+        }}
+        // Trailing separator dropped for display only: the field still
+        // carries it, but on screen it pushes the leaf - the one segment
+        // that identifies this folder - a character further from the edge
+        // that truncation eats toward.
+        displayPath={dropTrailingSeparator(
+          tildeCollapse(shownInput, effectiveHome),
         )}
-      </div>
+        focusSearchToken={focusSearchToken}
+        autoFocusSearch={!coarsePointer}
+        onFieldKeyDown={(event) => {
+          handlePickerFieldKeys(event, {
+            addCurrent,
+            openSelectedRow,
+            moveSelection,
+          });
+        }}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         <RemoteFolderPickerRecents
           entries={recentEntries}
@@ -381,7 +283,7 @@ function RemoteFolderPickerBody(): ReactNode {
             // (Enter/Space) never triggers that, so focus would land nowhere
             // and the field would stop accepting typing, arrows and cmd+Enter.
             setPath(path);
-            inputRef.current?.focus();
+            requestSearchFocus();
           }}
         />
         {/* No group header here: the location line at the top of the dialog
@@ -404,7 +306,7 @@ function RemoteFolderPickerBody(): ReactNode {
             // Retry receives focus and disappears when it succeeds - hand
             // the keyboard back to the combobox field either way.
             void browseQuery.refetch().finally(() => {
-              inputRef.current?.focus();
+              requestSearchFocus();
             });
           }}
         />
@@ -555,8 +457,7 @@ function RemoteFolderPickerRecents(props: {
         {props.entries.map((entry) => {
           // Relative when it sits under the shared base, otherwise the whole
           // path — a row is never shown a name it does not own.
-          const relative =
-            base === null ? null : relativeTo(entry.path, base);
+          const relative = base === null ? null : relativeTo(entry.path, base);
           return (
             <li key={entry.path} role="presentation">
               <PickerRow
@@ -587,8 +488,7 @@ function RemoteFolderPickerListing(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntry>>
-    | undefined;
+    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntry>> | undefined;
   readonly upPresent: boolean;
   readonly selectedIndex: number;
   readonly filtering: boolean;
@@ -691,8 +591,7 @@ function RemoteFolderPickerListingStatus(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntry>>
-    | undefined;
+    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntry>> | undefined;
   readonly filtering: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -829,6 +728,36 @@ function isHostUnsupported(error: Error): boolean {
  * selection can land on the first real folder rather than on "..".
  */
 const UNSET_SELECTION = -1;
+
+interface RowSelection {
+  /** Rows actually painted, `..` included when it is showing. */
+  readonly rowCount: number;
+  /** Highlighted row, always inside the painted range. */
+  readonly clampedIndex: number;
+}
+
+/**
+ * Resolve which row is highlighted.
+ *
+ * An untouched selection rests on the first real FOLDER, never on `..`: "go
+ * up" is a poor default for Enter, and on a touch device the resting fill is
+ * the only thing that highlight communicates - pointing it at the parent row
+ * reads as though something had already been chosen.
+ */
+function readRowSelection(args: {
+  readonly selectedIndex: number;
+  readonly upRowPresent: boolean;
+  readonly matchCount: number;
+}): RowSelection {
+  const rowCount = (args.upRowPresent ? 1 : 0) + args.matchCount;
+  const resting = args.upRowPresent ? 1 : 0;
+  const wanted =
+    args.selectedIndex === UNSET_SELECTION ? resting : args.selectedIndex;
+  return {
+    rowCount,
+    clampedIndex: Math.min(wanted, Math.max(rowCount - 1, 0)),
+  };
+}
 
 function pickerOptionId(index: number): string {
   return `remote-folder-picker-option-${String(index)}`;

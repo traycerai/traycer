@@ -27,10 +27,19 @@ export function rootLengthOf(path: string): number {
   return 1;
 }
 
-/** Path segments below the root, in order. Empty for a bare root. */
+/**
+ * Path segments below the root, in order. Empty for a bare root.
+ *
+ * `\` counts as a separator only once the path is known to be Windows-native.
+ * On a POSIX host a backslash is an ordinary filename character, so a folder
+ * genuinely named `foo\bar` is ONE segment — splitting it would let
+ * `commonBasePath` report a shared base (`/srv/foo/bar`) that names no
+ * directory on that machine.
+ */
 export function segmentsOf(path: string): ReadonlyArray<string> {
   const rest = path.slice(rootLengthOf(path));
-  return rest.split(/[\\/]/).filter((segment) => segment !== "");
+  const separators = separatorOf(path) === "/" ? /\// : /[\\/]/;
+  return rest.split(separators).filter((segment) => segment !== "");
 }
 
 /** The last segment — the name the row is really about. */
@@ -50,16 +59,12 @@ export function leafOf(path: string): string {
  * - a base at the filesystem root (`/` is not news);
  * - a base that is one of the paths itself (that row's remainder is empty).
  */
-export function commonBasePath(
-  paths: ReadonlyArray<string>,
-): string | null {
+export function commonBasePath(paths: ReadonlyArray<string>): string | null {
   if (paths.length < 2) return null;
   const first = paths[0];
   const root = first.slice(0, rootLengthOf(first));
   // Different roots (two drives, a UNC share and a local disk) share nothing.
-  if (
-    paths.some((path) => path.slice(0, rootLengthOf(path)) !== root)
-  ) {
+  if (paths.some((path) => path.slice(0, rootLengthOf(path)) !== root)) {
     return null;
   }
   const separator = separatorOf(first);
@@ -100,4 +105,3 @@ export function tildeCollapse(path: string, home: string | null): string {
   if (!path.startsWith(prefix)) return path;
   return "~" + separator + path.slice(prefix.length);
 }
-
