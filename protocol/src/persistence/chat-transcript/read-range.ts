@@ -98,7 +98,12 @@ export function sliceTranscriptRange(
 
   const lastOrdinal = rows.length - 1;
   const from = clamp(request.fromOrdinal, 0, lastOrdinal);
-  const to = clamp(request.toOrdinal, from, lastOrdinal);
+  // `to` is NOT clamped up to `from`. An inverted span (`toOrdinal` below
+  // `fromOrdinal`) is a request for nothing, and raising it to `from` would
+  // quietly serve one row the caller did not ask for - a client computing an
+  // empty viewport span would hydrate a row and never know why. Left below
+  // `from`, the loop simply does not run.
+  const to = Math.min(request.toOrdinal, lastOrdinal);
 
   const rowIds: RowSkeletonRowId[] = [];
   const messages: Message[] = [];
