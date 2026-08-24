@@ -5,6 +5,7 @@ import {
 } from "@/lib/artifacts/artifact-export";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -25,6 +26,7 @@ export interface EpicExportArtifactsInput {
 
 export function useEpicExportArtifacts() {
   const epicHandle = useOpenEpicHandle();
+  const openSaved = useOpenSavedFile();
 
   return useMutation<SavedFile | null, Error, EpicExportArtifactsInput>({
     mutationKey: epicMutationKeys.exportArtifacts(),
@@ -72,7 +74,7 @@ export function useEpicExportArtifacts() {
           format: input.format,
           artifact_count: input.artifacts.length,
         });
-        toastSavedFile(saved);
+        toastSavedFile(saved, openSaved.mutate);
       }
     },
     onError: (error, input) => {

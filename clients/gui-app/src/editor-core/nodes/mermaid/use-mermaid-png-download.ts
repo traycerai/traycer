@@ -4,6 +4,7 @@ import { svgToPngBlob } from "@/editor-core/nodes/mermaid/mermaid-service";
 import { readMermaidPalette } from "@/editor-core/nodes/mermaid/mermaid-theme";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { appLogger } from "@/lib/logger";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -26,6 +27,7 @@ export function useMermaidPngDownload(
   params: UseMermaidPngDownloadParams,
 ): UseMermaidPngDownloadResult {
   const { svg, enabled } = params;
+  const openSaved = useOpenSavedFile();
   const { mutate, isPending } = useMutation<
     SavedFile | null,
     Error,
@@ -42,7 +44,7 @@ export function useMermaidPngDownload(
     },
     onSuccess: (saved) => {
       if (saved !== null) {
-        toastSavedFile(saved);
+        toastSavedFile(saved, openSaved.mutate);
       }
     },
     onError: (err) => {

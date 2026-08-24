@@ -8,6 +8,7 @@ import {
 } from "@/lib/analytics";
 import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { copyImageBlobPromiseToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { captureUsageExportImageBlob } from "@/lib/usage-analytics/usage-export-image";
 import { appLogger } from "@/lib/logger";
@@ -89,6 +90,7 @@ export function useUsageImageExport(
     analyticsSource,
   } = params;
 
+  const openSaved = useOpenSavedFile();
   const mutation = useMutation<SavedFile | null, Error, UsageImageExportInput>({
     mutationKey: imageMutationKeys.usageExport(),
     mutationFn: async (input) => {
@@ -120,7 +122,7 @@ export function useUsageImageExport(
           action: "download",
           source: analyticsSource,
         });
-        toastSavedFile(saved);
+        toastSavedFile(saved, openSaved.mutate);
       }
     },
     onError: (err, input) => {

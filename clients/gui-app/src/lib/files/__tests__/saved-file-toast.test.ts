@@ -18,20 +18,6 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const toastFromRunnerError = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/runner-error-toast", () => ({
-  toastFromRunnerError,
-}));
-
-const errorSummary = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/logger", () => ({
-  appLogger: {
-    errorSummary,
-  },
-}));
-
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import { toastSavedFile } from "@/lib/files/saved-file-toast";
 
@@ -94,25 +80,27 @@ afterEach(() => {
 describe("toastSavedFile", () => {
   describe("browser runtime (no runnerHost bridge)", () => {
     it("shows a plain success toast with no action", () => {
-      toastSavedFile({ name: "a.md", path: null });
+      toastSavedFile({ name: "a.md", path: null }, vi.fn());
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
     });
   });
 
   describe("desktop runtime (runnerHost.fileDrops bridge present)", () => {
-    it("adds an Open file action whose onClick opens the saved path", () => {
-      const openSavedFileMock = vi.fn<(path: string) => Promise<void>>(() =>
-        Promise.resolve(),
-      );
+    it("adds an Open file action whose onClick hands the saved file to openSaved", () => {
+      const openSaved =
+        vi.fn<(saved: { name: string; path: string | null }) => void>();
       setRunnerHost({
         saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
           Promise.resolve(null),
         ),
-        openSavedFile: openSavedFileMock,
+        openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
+          Promise.resolve(),
+        ),
       });
 
-      toastSavedFile({ name: "a.md", path: "/tmp/x/a.md" });
+      const saved = { name: "a.md", path: "/tmp/x/a.md" };
+      toastSavedFile(saved, openSaved);
 
       expect(toastSuccess).toHaveBeenCalledTimes(1);
       const [, options] = toastSuccess.mock.calls[0];
@@ -123,7 +111,7 @@ describe("toastSavedFile", () => {
 
       options.action.onClick({} as ReactMouseEvent<HTMLButtonElement>);
 
-      expect(openSavedFileMock).toHaveBeenCalledWith("/tmp/x/a.md");
+      expect(openSaved).toHaveBeenCalledWith(saved);
     });
 
     it("shows a plain toast when the saved file has no path", () => {
@@ -136,39 +124,9 @@ describe("toastSavedFile", () => {
         ),
       });
 
-      toastSavedFile({ name: "a.md", path: null });
+      toastSavedFile({ name: "a.md", path: null }, vi.fn());
 
       expect(toastSuccess).toHaveBeenCalledWith("Saved a.md");
-    });
-
-    it("reports the open failure via toastFromRunnerError and appLogger when opening rejects", async () => {
-      const failure = new Error("gone");
-      setRunnerHost({
-        saveFile: vi.fn<(input: DesktopSaveFileInput) => Promise<unknown>>(() =>
-          Promise.resolve(null),
-        ),
-        openSavedFile: vi.fn<(path: string) => Promise<void>>(() =>
-          Promise.reject(failure),
-        ),
-      });
-
-      toastSavedFile({ name: "a.md", path: "/tmp/x/a.md" });
-
-      const [, options] = toastSuccess.mock.calls[0];
-      if (!isActionToast(options)) {
-        throw new Error("Expected an action toast.");
-      }
-      options.action.onClick({} as ReactMouseEvent<HTMLButtonElement>);
-
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-
-      expect(errorSummary).toHaveBeenCalledTimes(1);
-      expect(toastFromRunnerError).toHaveBeenCalledWith(
-        failure,
-        "Could not open a.md",
-      );
     });
   });
 });
