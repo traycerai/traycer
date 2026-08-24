@@ -400,6 +400,26 @@ export interface DesktopAppUpdateSnapshot {
   readonly currentVersion: string;
   readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
+  /**
+   * The client-compatibility EPOCH the resolved candidate declares, stamped
+   * into the updater feed alongside its version. Same lifecycle as
+   * {@link latestVersion}: set when a candidate is found, carried through
+   * downloading and ready, cleared when there is no candidate.
+   *
+   * `null` means "this candidate declares no epoch we could read", and that is
+   * NOT the same as "epoch 1". A feed published before stamping existed, a
+   * feed that failed to parse, a candidate resolved by electron-updater's
+   * deep-validation fallback rather than the one the release gate proved - all
+   * arrive here as `null`, and all of them are cases where offering the update
+   * as a remedy for a compatibility rejection would restart the app straight
+   * back into the same rejection.
+   *
+   * So every consumer must treat `null` as INSUFFICIENT. The mapping of "no
+   * declared epoch" to the legacy generation is honest only for a client the
+   * host observed on the wire; here it would be a guess about a build nobody
+   * has run.
+   */
+  readonly latestCompatibilityEpoch: number | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
   readonly downloadProgress: number | null;
@@ -423,6 +443,65 @@ export interface DesktopAppUpdateSnapshot {
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
 }
 
+/**
+ * Outcome of a channel-preference mutation.
+ *
+ *   - `changed`   - persisted durably; the new channel is live.
+ *   - `unchanged` - the requested channel was already selected.
+ *   - `refused-update-pending` - a download is in flight, or a staged artifact
+ *     could not be discarded on this platform. On macOS this is a STANDING
+ *     outcome, not a transient one: a natively staged update cannot be
+ *     withdrawn, so RC opt-in stays refused until it has applied and the app has
+ *     relaunched. The recovery surface must sequence that rather than retry.
+ *
+ * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
+ */
+export type DesktopAppUpdateChannelChangeOutcome =
+  "changed" | "unchanged" | "refused-update-pending";
+
+export interface DesktopAppUpdateChannelChange {
+  readonly outcome: DesktopAppUpdateChannelChangeOutcome;
+  readonly snapshot: DesktopAppUpdateSnapshot;
+}
+
+/**
+ * Where a compatibility-rejected app should send the user, decided in the main
+ * process because the platform, the staged-artifact state, and the RC feed all
+ * live there.
+ *
+ *   - `update-available`        the selected feed already holds a build that
+ *                               clears the floor; the ordinary affordances
+ *                               apply and no channel change is offered.
+ *   - `enable-rc`               stable cannot help, the rejecting host is on the
+ *                               RC line, and a bounded read-only probe found a
+ *                               sufficient RC build.
+ *   - `restart-to-clear-staged` macOS with an insufficient update natively
+ *                               staged. It applies at the next quit whatever the
+ *                               user does; recovery re-evaluates after that hop.
+ *   - `manual`                  everything else, including the corner where the
+ *                               only sufficient build is a stable release the
+ *                               updater cannot resolve.
+ *
+ * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
+ */
+export type DesktopCompatRecoveryRoute =
+  "update-available" | "enable-rc" | "restart-to-clear-staged" | "manual";
+
+export interface DesktopCompatRecoveryPlan {
+  readonly route: DesktopCompatRecoveryRoute;
+  /** The RC build the probe found, on the `enable-rc` route only. */
+  readonly rcCandidateVersion: string | null;
+  /**
+   * The insufficient artifact still staged for install, on the
+   * `restart-to-clear-staged` route only - the build that WILL apply at the
+   * next quit whatever the user does.
+   */
+  readonly stagedVersion: string | null;
+  // No snapshot: the discard a plan may perform is published through the
+  // ordinary change event the renderer already subscribes to. Mirrored from
+  // `desktop/src/ipc-contracts/app-update-types.ts`.
+}
+
 export interface DesktopAppUpdatesBridge {
   getSnapshot(): Promise<DesktopAppUpdateSnapshot>;
   checkForUpdates(
@@ -430,9 +509,22 @@ export interface DesktopAppUpdatesBridge {
   ): Promise<DesktopAppUpdateSnapshot>;
   setAllowPrerelease(
     allowPrerelease: boolean,
-  ): Promise<DesktopAppUpdateSnapshot>;
+  ): Promise<DesktopAppUpdateChannelChange>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
+  /**
+   * Asks main where recovery from an epoch rejection should send this user.
+   *
+   * `hostAllowsRcRecovery` is the CALLER's interpretation of the rejection's
+   * `hostReleaseChannel`, via `hostReleaseChannelAllowsRcRecovery` in the
+   * protocol package - main is told the verdict, never the channel string, so
+   * there is exactly one place that decides whether an unknown future line
+   * authorizes an RC hop.
+   */
+  resolveCompatRecovery(request: {
+    readonly minimumEpoch: number;
+    readonly hostAllowsRcRecovery: boolean;
+  }): Promise<DesktopCompatRecoveryPlan>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose(): void;
   };

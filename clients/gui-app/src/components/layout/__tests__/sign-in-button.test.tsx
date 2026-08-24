@@ -73,6 +73,7 @@ function makeMessengerFactory(): (args: {
             busy: false,
             busySessionCount: 0,
             updateProgress: null,
+            busyBreakdown: null,
           }),
       },
     });

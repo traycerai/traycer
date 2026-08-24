@@ -308,6 +308,7 @@ function narratorProps(which: GalleryFace): WindowHostModalProps {
             code: "HOST_PROTOCOL_TOO_OLD",
             hostVersion: "1.1.4",
             minSupportedVersion: "1.2.0",
+            clientCompatibility: null,
           },
         },
         bootBody: null,

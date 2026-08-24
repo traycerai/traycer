@@ -40,9 +40,11 @@ import {
 import { resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
+  clientCompatibilityRecoveryHint,
   compatRecoveryHint,
   effectiveUpgradeGuidance,
 } from "../host/compat-recovery";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 const FRAME_TIMEOUT_MS = 15_000;
 
@@ -226,6 +228,7 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
         // The CLI has no selection authority to feed: there is no window, no
         // kernel, and nothing that could act on a failover verdict.
         evidence: NO_TRANSPORT_EVIDENCE,
+        clientIdentity: CLI_CLIENT_IDENTITY,
       }),
       revalidator,
     ),
@@ -527,9 +530,18 @@ function mapHostRpcError(err: HostRpcError): CliError {
     // (client-newer, `fatalDetails: null`) maps to "update the host" - the
     // SAME verdict `traycer host doctor` derives - instead of falling through
     // null guidance to an ineffective "restart" hint.
+    //
+    // An EPOCH rejection wins over both: the host named the generation it
+    // needs and the build that provides it, which is strictly more than the
+    // two guidance booleans can express. `exitCode: 1` and no retry are
+    // unchanged and are the point - the same binary against the same host
+    // reaches the same verdict, so a reconnect is a loop.
+    const epochHint = clientCompatibilityRecoveryHint(
+      err.fatalDetails?.clientCompatibilityRequirement ?? null,
+    );
     return cliError({
       code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
-      message: `traycer: ${err.message} - ${compatRecoveryHint(effectiveUpgradeGuidance(err.code, err.fatalDetails?.upgradeGuidance ?? null))}.`,
+      message: `traycer: ${err.message} - ${epochHint ?? compatRecoveryHint(effectiveUpgradeGuidance(err.code, err.fatalDetails?.upgradeGuidance ?? null))}.`,
       details: null,
       exitCode: 1,
     });

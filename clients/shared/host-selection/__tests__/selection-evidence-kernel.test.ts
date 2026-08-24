@@ -288,6 +288,7 @@ describe("SelectionEvidenceKernel - compat evidence", () => {
         code: "protocol-major-behind",
         hostVersion: "1.2.3",
         minSupportedVersion: "2.0.0",
+        clientCompatibility: null,
       },
     });
 
@@ -311,6 +312,7 @@ describe("SelectionEvidenceKernel - compat evidence", () => {
           code: "protocol-major-behind",
           hostVersion: "1.2.3",
           minSupportedVersion: "2.0.0",
+          clientCompatibility: null,
         },
         at: 7,
       },

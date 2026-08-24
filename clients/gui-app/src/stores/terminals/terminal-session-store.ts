@@ -38,10 +38,10 @@ export type TerminalReattachMode = "fresh" | "live";
  * (within its detach-linger window, T13); auto-recovery
  * (`useTerminalSessionRecovery`) is worth attempting.
  * `"reaped"` - the host explicitly confirmed via `TERMINAL_NOT_FOUND` that
- * this session no longer exists (linger expired + reaped, or the host
- * restarted and lost it) - a DEFINITIVE dead end. Retrying is guaranteed to
- * fail identically every time, so this bypasses auto-recovery entirely and
- * maps to the terminal "Session lost" tile state (Journey 4).
+ * the PTY addressed by this handle no longer exists (linger expired + reaped,
+ * or the host restarted and lost it). This handle is definitively dead, but a
+ * durable terminal with the same logical id may already have been restored;
+ * bounded recovery must replace the handle and consult current host authority.
  */
 export type TerminalLifecycleStatus =
   "creating" | "running" | "exited" | "lost" | "reaped";
@@ -233,12 +233,12 @@ function removePendingAction(
 
 /**
  * `TERMINAL_NOT_FOUND` (see `terminal-stream-resolver.ts`'s subscribe-time
- * catch) is the host authoritatively confirming this session id no longer
- * exists - reattaching to it can never succeed. Every other closed reason
- * (a plain transport drop, another fatal code, or no reason at all) is
- * treated as recoverable: the session may simply be unreachable right now.
+ * catch) authoritatively confirms that this handle's PTY incarnation no longer
+ * exists. A durable terminal with the same session id may already be restored,
+ * so the renderer must replace this handle before reattaching. Every other
+ * closed reason is treated as a recoverable attachment loss.
  */
-function isDefinitiveSessionLoss(reason: StreamCloseReason | null): boolean {
+function isDefinitiveHandleLoss(reason: StreamCloseReason | null): boolean {
   return (
     reason !== null &&
     reason.kind === "fatalError" &&
@@ -254,7 +254,7 @@ function nextLifecycleStatusAfterConnectionStatus(
   if (status !== "closed" || current === "exited") {
     return current;
   }
-  if (isDefinitiveSessionLoss(reason)) {
+  if (isDefinitiveHandleLoss(reason)) {
     return "reaped";
   }
   return "lost";
@@ -638,11 +638,12 @@ export function createTerminalSessionStore(
       },
       onExit: (frame) => {
         if (disposed || frame.sessionId !== options.sessionId) return;
-        // A live exit frame carries no reason - it is only ever a genuine
-        // process exit or an explicit kill to an attached viewer (a reaped
-        // idle session has no viewer, so it is observed via the reattach
-        // snapshot's `session.exitReason` instead). Leave `exitReason`
-        // untouched here; the snapshot path is authoritative for it.
+        // A live exit frame carries no reason. It is NOT only ever a genuine
+        // process exit to an attached viewer: the host's setup-terminal reap
+        // kills sessions whose canvas tiles are live subscribers. The reason
+        // for such a kill arrives on the `sessionUpdated` frame the host
+        // broadcasts immediately before this exit frame (handled below), so
+        // leave `exitReason` untouched here rather than clearing it.
         set({
           status: "exited",
           exitCode: frame.exitCode,
@@ -664,6 +665,13 @@ export function createTerminalSessionStore(
         set({
           status: frame.session.status === "exited" ? "exited" : "running",
           exitCode: frame.session.exitCode,
+          // The one live carrier of the exit reason for an attached viewer.
+          // The host kills setup terminals whose tiles are subscribed (the
+          // reap keys on typed input, not viewers), and its `handlePtyExit`
+          // broadcasts this frame - reason included - before the reasonless
+          // `exit` frame. Dropping it here classified every reaped setup
+          // shell as a crash ("exited unexpectedly" notifications).
+          exitReason: frame.session.exitReason ?? get().exitReason,
           title: frame.session.title,
           activeProcessName: activeProcessNameFromSession(frame.session),
           currentCwd: currentCwd === undefined ? get().currentCwd : currentCwd,
@@ -688,8 +696,9 @@ export function createTerminalSessionStore(
           // If the stream drops before a snapshot, "creating" would otherwise
           // survive forever and leave the tile stuck on its loading state.
           // Exited sessions remain exited. A closed stream otherwise splits on
-          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal is a definitive
-          // "this session is gone" ("reaped") - anything else is a recoverable
+          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal definitively ends
+          // this handle's PTY incarnation ("reaped"). The durable session id
+          // may already point at a replacement; anything else is a recoverable
           // "lost" renderer attachment worth auto-retrying.
           status: nextLifecycleStatusAfterConnectionStatus(
             status,

@@ -95,6 +95,7 @@ function isDesktopAppUpdatesBridge(
     typeof value.setAllowPrerelease === "function" &&
     typeof value.downloadUpdate === "function" &&
     typeof value.installUpdate === "function" &&
+    typeof value.resolveCompatRecovery === "function" &&
     typeof value.onChange === "function"
   );
 }

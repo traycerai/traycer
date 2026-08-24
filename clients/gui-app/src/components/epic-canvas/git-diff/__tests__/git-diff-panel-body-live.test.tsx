@@ -44,6 +44,7 @@ import { useSurfaceHostSelectionStore } from "@/stores/host/surface-host-selecti
 import { gitDiffPanelSurfaceKey } from "@/stores/host/surface-host-selection-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { expectModuleHeaderPreview } from "./git-module-header-test-utils";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const testState = vi.hoisted(() => ({
   rows: [] as WorktreeBindingSelectorRowV12[],
@@ -432,6 +433,7 @@ const rootSelected: GitPanelSelectedRepo = {
 /** A real, never-dialed transport - identity is all these arms compare. */
 function streamClientFixture(): WsStreamClient<HostStreamRpcRegistry> {
   return new WsStreamClient<HostStreamRpcRegistry>({
+    clientIdentity: TEST_CLIENT_IDENTITY,
     registry: hostStreamRpcRegistry,
     endpoint: () => null,
     bearer: () => null,
@@ -726,9 +728,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     ).toBeDefined();
     await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
-      "pinned commit out of date",
+      "Checkout differs from parent reference",
     );
-    expect(screen.queryByText("pinned commit out of date")).toBeNull();
+    expect(screen.getByText("Differs from parent")).toBeDefined();
     expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
     expect(
       screen

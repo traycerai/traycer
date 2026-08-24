@@ -9,6 +9,10 @@ import {
   schemaVersionSchema,
 } from "../framework/ws-protocol";
 import type { SchemaVersion } from "../framework/versioned-rpc-types";
+import {
+  clientHandshakeIdentitySchema,
+  type ClientHandshakeIdentity,
+} from "../framework/client-identity";
 
 /**
  * Shared client<->host mux wire contract carried E2E-encrypted inside the
@@ -238,6 +242,20 @@ export interface SessionOpenPayload {
    * zod 4 rather than assumed.
    */
   readonly capabilities?: readonly string[];
+  /**
+   * Who is connecting - see {@link ClientHandshakeIdentity}.
+   *
+   * `.optional()` for exactly the reason spelled out above `capabilities`,
+   * and it matters at least as much here: a required key holding `undefined`
+   * still fails zod's shape check, which would turn every pre-identity
+   * client's `open` into `UNAUTHORIZED: Malformed OPEN frame` - a fleet-wide
+   * break delivered by a purely additive field.
+   *
+   * The remote session gates ONCE, on this frame. Unary calls and streams
+   * multiplexed inside it inherit that verdict rather than re-declaring
+   * identity per logical stream.
+   */
+  readonly clientIdentity?: ClientHandshakeIdentity;
 }
 
 /**
@@ -359,6 +377,7 @@ export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> = z.object(
     authz: reservedAuthzSlotSchema,
     resume: z.null(),
     capabilities: z.array(z.string()).optional(),
+    clientIdentity: clientHandshakeIdentitySchema.optional(),
   },
 );
 

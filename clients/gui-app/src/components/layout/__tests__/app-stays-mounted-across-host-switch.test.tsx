@@ -74,6 +74,7 @@ const compatibleHostStatus: HostStatusResponse = {
   busy: false,
   busySessionCount: 0,
   updateProgress: null,
+  busyBreakdown: null,
 };
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

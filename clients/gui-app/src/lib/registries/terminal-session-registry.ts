@@ -169,9 +169,12 @@ export function useTerminalSessionHandle(
       const existingHostId = handleHostIds.get(existing) ?? null;
       const existingOwnerIdentityKey =
         handleOwnerIdentityKeys.get(existing) ?? null;
+      const existingStatus = existing.store.getState().status;
       if (
         existingHostId !== args.hostId ||
-        existingOwnerIdentityKey !== ownerIdentityKey
+        existingOwnerIdentityKey !== ownerIdentityKey ||
+        existingStatus === "lost" ||
+        existingStatus === "reaped"
       ) {
         registry.forceRelease(args.instanceId);
       }
@@ -231,7 +234,7 @@ export function useTerminalSessionHandle(
     setHandle(next);
 
     return () => {
-      registry.release(args.instanceId);
+      registry.release(args.instanceId, next);
     };
     // `openTransport` is referentially stable and reads its deps live;
     // `transportKey` already encodes user + host + endpoint identity;

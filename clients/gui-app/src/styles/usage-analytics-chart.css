@@ -52,9 +52,19 @@
   --usage-series-16: #991b1b; /* red, shade */
   --usage-series-other: var(--muted-foreground);
   /* Sequential ramp for the activity heatmap (dataviz skill blue ramp,
-     steps 150/300/450/650 light): one hue, light→dark, monotonic
-     lightness; level 0 is the neutral no-usage tile. Dark mode below picks
-     its OWN steps (650→250, dark→bright) rather than flipping these.
+     steps 150/300/450/650 light): one hue, monotonic lightness. Light mode
+     runs light→dark, so the DARKER tile is the busier day.
+
+     The ramp DELIBERATELY INVERTS in dark mode below (dark→bright), which
+     is GitHub's own convention, not an oversight - their light ramp is
+     #9be9a8→#216e39 and their dark ramp is #0e4429→#39d353. "Busier" has
+     to mean "further from the surface", and on a dark canvas that is
+     BRIGHTER, not darker. Flipping dark mode to light→dark for symmetry
+     was tried and reverted: it dropped the level-4 tile to 1.30-2.24:1
+     against the dark preset cards (1.30:1 on nord) while level 1 sat at
+     6.6-11.3:1, i.e. the quietest days became the loudest marks. These are
+     10px borderless marks, so surface separation is the ONLY channel they
+     have. `usage-heat-ramp.test.ts` pins both directions.
 
      Level 0 is a surface-relative foreground alpha, NOT `--muted`: the tiles
      are 10px and borderless, so the no-usage cell IS the grid's lattice. The
@@ -88,6 +98,7 @@
   --usage-series-16: #fca5a5; /* red, tint */
   --usage-series-other: var(--muted-foreground);
   --usage-heat-0: color-mix(in oklab, var(--foreground) 8%, transparent);
+  /* Dark→bright, mirroring GitHub's dark ramp - see the note above. */
   --usage-heat-1: #104281;
   --usage-heat-2: #256abf;
   --usage-heat-3: #5598e7;

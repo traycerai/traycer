@@ -52,6 +52,7 @@ import {
   createStoreBackedRevalidator,
 } from "../store/credentials-store";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 
 /**
  * `traycer monitor` — long-running background command spawned inside a Claude
@@ -239,6 +240,7 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: CLI_CLIENT_IDENTITY,
   });
 
   // Proactively refresh the bearer shortly before its ~4h TTL so a long-running

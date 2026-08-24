@@ -20,6 +20,7 @@ function incompatibility(
     code: "protocol-major-behind",
     hostVersion: "1.0.0",
     minSupportedVersion: "1.2.0",
+    clientCompatibility: null,
     ...overrides,
   };
 }
@@ -228,6 +229,7 @@ describe("deriveWindowNarration", () => {
         code: "protocol-major-behind",
         hostVersion: "1.2.3",
         minSupportedVersion: "1.3.0",
+        clientCompatibility: null,
       } as const;
       const state = deriveWindowNarration(
         baseInput({
@@ -337,6 +339,7 @@ describe("deriveWindowNarration", () => {
         code: "protocol-major-behind",
         hostVersion: "1.2.3",
         minSupportedVersion: "1.3.0",
+        clientCompatibility: null,
       } as const;
       const state = deriveWindowNarration(
         baseInput({
@@ -548,5 +551,104 @@ describe("hostUpdateSkew / hostUpdateActionApplies", () => {
     const skew = hostUpdateSkew(detail, "1.2.0");
     expect(skew.direction).toBe("client-outdated");
     expect(hostUpdateActionApplies(detail, "1.2.0")).toBe(false);
+  });
+});
+
+describe("update-client: the host's structured epoch rejection", () => {
+  const requirement = {
+    minimumCompatibilityEpoch: 2,
+    observedCompatibilityEpoch: 1,
+    failure: "below-minimum" as const,
+    observedClientKind: "desktop",
+    observedClientAppVersion: "1.1.10",
+    observedClientAppVersionStatus: "valid" as const,
+    minimumKnownClientAppVersion: "1.2.0-rc.2",
+    upgradeChannel: "rc" as const,
+  };
+
+  it("takes precedence over the generic update-host variant on the target arm", () => {
+    // The host NAMED what it needs. The generic arm would instead infer which
+    // leg is behind by comparing two version strings that have no shared
+    // ordering, and could land on "Update host" - an action that cannot help
+    // when the host is the newer leg by construction.
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-a", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: requirement }),
+        }),
+      ],
+      "host-a",
+    );
+    expect(variant).toEqual({
+      kind: "update-client",
+      hostId: "host-a",
+      isTargetHost: true,
+      requirement,
+    });
+  });
+
+  it("takes precedence on the fallback arm too, and keeps isTargetHost false", () => {
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-target", { reason: "offline" }),
+        deadLease("host-b", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: requirement }),
+        }),
+      ],
+      "host-target",
+    );
+    expect(variant).toEqual({
+      kind: "update-client",
+      hostId: "host-b",
+      isTargetHost: false,
+      requirement,
+    });
+  });
+
+  it("falls back to update-host when the host said nothing structured", () => {
+    // Every host that predates the epoch gate, and every incompatibility that
+    // was a method-manifest disagreement rather than an epoch rejection.
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-a", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: null }),
+        }),
+      ],
+      "host-a",
+    );
+    expect(variant.kind).toBe("update-host");
+  });
+
+  it("is reachable as the ∅ verdict, and is NOT softened by the cold-start grace", () => {
+    // The grace exists to stop a launch flashing "No host is available" while
+    // a boot is running. An epoch rejection is a fix the user could walk RIGHT
+    // NOW, so hiding it behind "Starting Traycer…" for the length of an outage
+    // would be a suppression, not a softening.
+    const state = deriveWindowNarration(
+      baseInput({
+        effectiveHostId: null,
+        targetHostId: "host-a",
+        hasBeenServed: false,
+        leases: [
+          deadLease("host-a", {
+            reason: "incompatible",
+            detail: incompatibility({ clientCompatibility: requirement }),
+          }),
+        ],
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: {
+        kind: "update-client",
+        hostId: "host-a",
+        isTargetHost: true,
+        requirement,
+      },
+    });
   });
 });
