@@ -724,11 +724,19 @@ function FileTreeBodyForResolvedHost(
         pierreSearch.value.length > 0 &&
         pierreSearch.matchingPaths.length === 0;
 
-  const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    const treePath = extractPierreItemPathFromEvent(event);
-    if (treePath === null) return;
-    handlersRef.current.onOpen(treePath);
-  }, []);
+  const handleDoubleClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      // A touch browser synthesises `dblclick` from a rapid double tap, which
+      // would promote the preview to a permanent tile - the one outcome this
+      // viewport cannot undo, since nothing there lists or closes an open
+      // workspace-file tile. Promotion stays a pointer gesture.
+      if (isMobileViewport) return;
+      const treePath = extractPierreItemPathFromEvent(event);
+      if (treePath === null) return;
+      handlersRef.current.onOpen(treePath);
+    },
+    [isMobileViewport],
+  );
 
   // Bridge Pierre's shadow-DOM rows into the root dnd-kit drag flow. Files keep
   // their canvas-openable source; directory rows carry a composer-only mention
