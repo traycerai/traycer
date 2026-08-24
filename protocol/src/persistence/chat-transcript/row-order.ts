@@ -32,14 +32,22 @@ import type { Message } from "@traycer/protocol/persistence/epic/messages";
  * 3. **The sort key is wrong for assistant rows.** This module orders them by
  *    `Message.timestamp`, which the host REWRITES on every streaming delta.
  *    The renderer anchors an assistant row at `rowAnchorAt`, which resolves to
- *    `startedAt` (set once at turn start). A late edit to an old turn moves it
- *    to the tail here and leaves it in place there.
+ *    `min(startedAt) ?? lastUserTimestamp ?? max(timestamp)` - and every row of
+ *    one turn shares that single value, so intra-turn order is carried by SORT
+ *    STABILITY alone. A late edit to an old turn moves it to the tail here and
+ *    leaves it in place there.
  *
- * The shape of the fix is a shared row PROJECTION - turn folding, steer
- * splitting, steered-user suppression, card and stopped-turn synthesis - not a
- * comparator with a better key. That makes the shared-derivation extraction a
- * hard PREREQUISITE of the ordinal scheme rather than a later step, which is
- * the real cost this review uncovered.
+ * The fix is a shared row PROJECTION - turn folding, steer splitting,
+ * steered-user suppression, setup-card weave and stopped-turn synthesis - not a
+ * comparator with a better key, because placement is not purely a sort: the
+ * genesis setup card pins to the top regardless of `createdAt` and a mid-chat
+ * one is woven above its anchor BY ID. Ordinals are assigned after that weave.
+ *
+ * That projection is a prerequisite of the ordinal scheme. It is NOT the wider
+ * "shared derivation" move (segment models, `marked`, the composer plain-text
+ * projection): the enumeration reads exactly one thing off a content block -
+ * `block.type === "steer"` - and never looks inside one. Those two were briefly
+ * conflated; they are not the same size and they do not gate the same things.
  *
  * ## Why this has to be shared code rather than two agreeing implementations
  *
