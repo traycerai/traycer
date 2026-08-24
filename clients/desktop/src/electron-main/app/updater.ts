@@ -166,6 +166,8 @@ function currentInstallBlockedReason(): string | null {
 
 let installed = false;
 let checkInFlight = false;
+let checkSettled: Promise<void> = Promise.resolve();
+let settleCheck: (() => void) | null = null;
 let checkIntent: DesktopAppUpdateCheckIntent | null = null;
 let checkErrorEmitted = false;
 let downloadInProgress = false;
@@ -564,6 +566,9 @@ export async function checkForUpdatesNow(
     return currentSnapshot;
   }
   checkInFlight = true;
+  checkSettled = new Promise<void>((resolve) => {
+    settleCheck = resolve;
+  });
   checkGeneration = channelGeneration;
   checkIntent = intent;
   checkErrorEmitted = false;
@@ -606,6 +611,8 @@ export async function checkForUpdatesNow(
     }
   } finally {
     checkInFlight = false;
+    settleCheck?.();
+    settleCheck = null;
     checkGeneration = null;
     checkIntent = null;
     checkErrorEmitted = false;
@@ -924,6 +931,13 @@ export async function resolveCompatRecovery(input: {
     // No feed, no candidate, and no ability to acquire either. The manual link
     // is the only honest answer, and it is the one this surface falls back to.
     return manualRecoveryPlan();
+  }
+  // An automatic check deliberately leaves the public snapshot at `idle`.
+  // Wait for it before deciding the selected feed cannot help; otherwise a
+  // faster RC probe can offer an unnecessary prerelease opt-in while the
+  // stable check is about to publish a sufficient candidate.
+  while (checkInFlight) {
+    await checkSettled;
   }
   const held = currentSnapshot;
   const holdsCandidate =

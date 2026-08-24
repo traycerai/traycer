@@ -1940,6 +1940,45 @@ describe("compat recovery: RC probe", () => {
     return plan;
   }
 
+  it("waits for an in-flight selected-feed check before offering RC", async () => {
+    setPlatform("darwin");
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    let finishCheck = (): void => {
+      throw new Error("check did not start");
+    };
+    autoUpdater.checkForUpdates.mockImplementation(
+      () =>
+        new Promise<null>((resolve) => {
+          finishCheck = () => {
+            autoUpdater.emit("update-available", {
+              version: "2.0.0",
+              compatibilityEpoch: 2,
+            });
+            resolve(null);
+          };
+        }),
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    const check = updater.checkForUpdatesNow(false, "automatic");
+    await flushPromises();
+    const recovery = updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+    await flushPromises();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    finishCheck();
+    await check;
+    await expect(recovery).resolves.toMatchObject({
+      route: "update-available",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("returns manual when the probe's network wait exceeds its deadline", async () => {
     // A stalled request never rejects, so without a wall-clock ceiling the
     // `manual` fallback is unreachable and the blocking dialog sits on a
