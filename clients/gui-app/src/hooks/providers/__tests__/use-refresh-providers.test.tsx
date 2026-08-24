@@ -160,4 +160,75 @@ describe("useRefreshProviders", () => {
     unsubscribe();
     coordinator.dispose();
   });
+
+  it("invalidates both harness catalogs alongside the direct providers.list write - a sign-in can now flip `available`", async () => {
+    const queryClient = createAppQueryClient();
+    let requestSeq = 0;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestSeq += 1;
+          return `req-${String(requestSeq)}`;
+        },
+        handlers: {
+          "providers.list": () => ({
+            providers: [pendingProvider()],
+            native: null,
+          }),
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    runtimeMock.client = spine.createRequester(mockLocalHostEntry);
+
+    const guiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.gui.listHarnesses"
+    >(mockLocalHostEntry.hostId, "agent.gui.listHarnesses", {});
+    const tuiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.tui.listHarnesses"
+    >(mockLocalHostEntry.hostId, "agent.tui.listHarnesses", {});
+    queryClient.setQueryData(guiKey, { harnesses: [] });
+    queryClient.setQueryData(tuiKey, { harnesses: [] });
+
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => ({
+        active: useRefreshProviders(),
+        tab: useTabRefreshProviders(),
+      }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await result.current.active();
+    });
+    expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+
+    // Re-seed as fresh, then confirm the tab-scoped hook does the same.
+    queryClient.setQueryData(guiKey, { harnesses: [] });
+    queryClient.setQueryData(tuiKey, { harnesses: [] });
+    await act(async () => {
+      await result.current.tab();
+    });
+    expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
 });

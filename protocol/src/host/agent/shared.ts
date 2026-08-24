@@ -226,6 +226,40 @@ export const guiHarnessIdSchemaV60 = harnessIdSchema.extract([
 ]);
 export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
 
+/**
+ * Frozen harness id set as shipped in protocol v7.0 (with Hugging Face).
+ *
+ * Taken when v7.1 opened for the auth-aware enablement row fields
+ * (`authStatus` / `enablementMode`): v7.0 stops being the head line there, so
+ * it can no longer track the live enum. Identical to `guiHarnessIdSchema` at
+ * the freeze cut - the freeze pins the SET, so a future harness cannot widen a
+ * line v1.2.0-rc.1 peers already negotiate. Do NOT add new harnesses here -
+ * extend the latest `guiHarnessIdSchema`; a v8.0 bridge drops post-v7.0 ids
+ * for older callers.
+ */
+export const guiHarnessIdSchemaV70 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdV70 = z.infer<typeof guiHarnessIdSchemaV70>;
+
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
   "codex",

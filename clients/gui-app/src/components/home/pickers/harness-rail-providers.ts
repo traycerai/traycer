@@ -2,6 +2,7 @@ import type { HarnessOption } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { sortGuiHarnessesByProviderOrder } from "@/lib/provider-ordering";
+import { isHarnessRowSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   profileAccentDotInput,
   profileCommitId,
@@ -225,15 +226,58 @@ export function visibleRailHarnesses(
  * The API-key arm stays availability-gated: `requiresApiKey` means the
  * provider authenticates BY key, and the point of degrading it is to keep an
  * unavailable entry visible for its add-key CTA rather than hiding the row.
+ *
+ * SOURCE UPGRADED, PREDICATE UNCHANGED. The signed-out arm now also reads the
+ * catalog row's own `authStatus` (`agent.gui.listHarnesses@7.1`), which is what
+ * closes the model-picker bug: `degradedHarnessIds` comes from a separately
+ * timed `providers.list` query, so a provider that signed out during that
+ * query's staleness window rendered as a fully-lit, selectable tab the send
+ * gate would then refuse. The row travels with the harness the rail is already
+ * rendering, so it cannot lag it.
+ *
+ * The two sources are OR'd rather than the row REPLACING the set, and that is
+ * load-bearing. `degradedHarnessIdsFromProviderStates` reads
+ * `isProviderAmbientSignedOut`, which reconciles TWO signals - the
+ * provider-level probe and the ambient PROFILE row - precisely because they
+ * transiently disagree, and the profile row is the one that flips first. The
+ * catalog row carries the provider-level verdict only, so replacing the set
+ * with it would re-open the exact half-converged case that predicate exists to
+ * catch. OR keeps every source, and each is definitive-only, so no source can
+ * degrade a provider the other would have cleared.
  */
 export function railHarnessDegraded(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
   return (
+    (isHarnessRowSignedOut(harness) && !harnessRowExplicitlyOff(harness)) ||
     degradedHarnessIds.has(harness.id) ||
     (!harness.available && harness.requiresApiKey)
   );
+}
+
+/**
+ * The one enablement state the row's signed-out verdict must NOT reach.
+ *
+ * `railHarnessVisible` ORs degradation INTO visibility, which is what keeps a
+ * signed-out provider browseable so the user can fix it. Applied to a provider
+ * the user deliberately switched OFF, that same OR resurrects it: it is
+ * unavailable AND signed out, so it would come back as a "setup required" tab
+ * for an account nobody asked to be reminded about.
+ *
+ * Keyed on the MODE, deliberately not on effective `enabled`. Those differ on
+ * exactly the row this feature exists for: an `auto` provider with no detected
+ * account is `enabled: false` too, and it must stay visible - that is the
+ * "sign in to enable" offer. Only `off` is the user having said no.
+ *
+ * This is the same guard `providerNeedsPickerReauth` already applies on the
+ * `providers.list` arm (`provider.enabled && …`); without it here the two arms
+ * of this predicate disagree about disabled providers. On a host below
+ * `agent.gui.listHarnesses@7.1` the field is absent - so is `authStatus`, and
+ * the first operand is already false.
+ */
+function harnessRowExplicitlyOff(harness: HarnessOption): boolean {
+  return harness.enablementMode === "off";
 }
 
 /**

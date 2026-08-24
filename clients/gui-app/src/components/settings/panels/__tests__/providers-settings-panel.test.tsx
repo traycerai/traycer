@@ -14,7 +14,11 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -125,6 +129,15 @@ type RecolorProfileMutate = (
   options: MutationSuccessOptions,
 ) => void;
 
+// `providers.setEnabled@2.2`'s request shape - typing this mock's calls lets
+// the three-way control's tests read `.mock.calls[0]` without an unsafe `any`
+// destructure.
+type SetEnabledVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.setEnabled"
+>;
+type SetEnabledMutate = (variables: SetEnabledVariables) => void;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
@@ -137,7 +150,7 @@ const providerMocks = vi.hoisted(() => ({
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
-  setEnabledMutate: vi.fn(),
+  setEnabledMutate: vi.fn<SetEnabledMutate>(),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
   setTerminalAgentArgsMutate: vi.fn(),
@@ -668,6 +681,65 @@ vi.mock("sonner", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+
+// Radix's Select needs a pointer-capable layout to open its listbox, which
+// jsdom does not provide. Mirrors the stand-in
+// `provider-model-provider-connect-dialog.test.tsx` uses: same element
+// structure, every option always rendered, `onValueChange` forwarded so a
+// test can pick an option by clicking it - plus `disabled` forwarding on both
+// `Select` and `SelectItem`, which that mock doesn't need but the enablement
+// floor here does (the "Off" item disables itself rather than vanishing).
+vi.mock("@/components/ui/select", async () => {
+  const { createContext, useContext } = await import("react");
+  const ValueChangeContext = createContext<(value: string) => void>(() => {});
+  return {
+    Select: (props: {
+      readonly children: ReactNode;
+      readonly value?: string;
+      readonly onValueChange?: (value: string) => void;
+      readonly disabled?: boolean;
+    }) => (
+      <ValueChangeContext.Provider
+        value={
+          props.disabled === true
+            ? () => {}
+            : (props.onValueChange ?? (() => {}))
+        }
+      >
+        <div>{props.children}</div>
+      </ValueChangeContext.Provider>
+    ),
+    SelectTrigger: (props: {
+      readonly children: ReactNode;
+      readonly id?: string;
+    }) => (
+      <button type="button" id={props.id}>
+        {props.children}
+      </button>
+    ),
+    SelectValue: () => null,
+    SelectContent: (props: { readonly children: ReactNode }) => (
+      <div>{props.children}</div>
+    ),
+    SelectItem: (props: {
+      readonly children: ReactNode;
+      readonly value: string;
+      readonly disabled?: boolean;
+    }) => {
+      const onValueChange = useContext(ValueChangeContext);
+      return (
+        <button
+          type="button"
+          data-value={props.value}
+          disabled={props.disabled ?? false}
+          onClick={() => onValueChange(props.value)}
+        >
+          {props.children}
+        </button>
+      );
+    },
+  };
+});
 /**
  * The only thing the panel calls on a scope client, so the only thing a stub
  * has to be. Named rather than asserted: the real `HostClient` is far wider
@@ -963,6 +1035,12 @@ function firstAwaitLoginCall(): readonly [
   const call = providerMocks.awaitLoginMutate.mock.calls.at(0);
   if (call === undefined) throw new Error("Expected await login call.");
   return call;
+}
+
+function firstSetEnabledCall(): SetEnabledVariables {
+  const call = providerMocks.setEnabledMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected setEnabled call.");
+  return call[0];
 }
 
 function firstSubmitLoginCodeCall(): readonly [
@@ -2319,6 +2397,369 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  describe("three-way Auto/On/Off enablement control", () => {
+    function singleProvider(overrides: {
+      readonly enabled: boolean;
+      readonly enablementMode?: "auto" | "on" | "off";
+      readonly enablementSource?:
+        "sticky" | "auto-detected" | "auto-undetected";
+    }): void {
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: overrides.enabled,
+            enablementMode: overrides.enablementMode,
+            enablementSource: overrides.enablementSource,
+          },
+        ],
+      };
+    }
+
+    it("with enablementMode present, renders the Auto/On/Off select instead of the binary switch and sends mode on change", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "auto",
+        enablementSource: "auto-detected",
+      });
+
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(screen.getByRole("button", { name: "Auto" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "On" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Off" })).toBeDefined();
+
+      fireEvent.click(screen.getByRole("button", { name: "On" }));
+
+      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
+        providerId: "traycer",
+        // legacyEnabledForMode("on", ...) === true, required alongside mode.
+        enabled: true,
+        profileAction: null,
+        mode: "on",
+      });
+    });
+
+    it("with enablementMode absent, renders today's binary switch and sends no mode", () => {
+      // Two enabled providers so the one-enabled floor doesn't block the click.
+      providerMocks.listResult.data = {
+        providers: [
+          providerState({
+            providerId: "traycer",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+          }),
+          providerState({
+            providerId: "opencode",
+            selected: { kind: "bundled" },
+            candidates: OPENCODE_CANDIDATES,
+            envOverrides: [],
+            nativeCapabilities: FULL_TABS,
+          }),
+        ],
+      };
+      expect(providerMocks.listResult.data.providers[0]).not.toHaveProperty(
+        "enablementMode",
+      );
+
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      expect(screen.queryByRole("button", { name: "Auto" })).toBeNull();
+      const switchElement = screen.getByRole("switch");
+      fireEvent.click(switchElement);
+
+      expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
+      const variables = firstSetEnabledCall();
+      expect(variables).not.toHaveProperty("mode");
+      // Default-selected provider is whichever ORDERED_PROVIDERS ranks
+      // first (opencode, ahead of traycer) - the row identity isn't the
+      // point of this test, the absent `mode` is.
+      expect(variables).toMatchObject({
+        providerId: "opencode",
+        profileAction: null,
+      });
+    });
+
+    it("shows 'account detected' for auto-detected and 'no account detected' for auto-undetected, and nothing for sticky", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "auto",
+        enablementSource: "auto-detected",
+      });
+      const { unmount } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(
+        screen.getByText("Auto · enabled — account detected"),
+      ).toBeDefined();
+      unmount();
+
+      singleProvider({
+        enabled: false,
+        enablementMode: "auto",
+        enablementSource: "auto-undetected",
+      });
+      const { unmount: unmount2 } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(
+        screen.getByText("Auto · disabled — no account detected"),
+      ).toBeDefined();
+      unmount2();
+
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByText(/account detected/)).toBeNull();
+    });
+
+    it("blocks choosing Off for the last effectively-enabled provider - the floor applies to the tri-state control too", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      const offButton = screen.getByRole("button", { name: "Off" });
+      if (!(offButton instanceof HTMLButtonElement)) {
+        throw new Error("Expected the Off option to render as a button.");
+      }
+      expect(offButton.disabled).toBe(true);
+      fireEvent.click(offButton);
+      expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+      // ...and the floor hint renders alongside it, same copy as the binary
+      // switch's tooltip.
+      expect(
+        screen.getByText("At least one provider must stay enabled."),
+      ).toBeDefined();
+    });
+
+    it("does NOT gate switching to Auto by the one-enabled floor - the outcome is the host's to compute", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Auto" }));
+      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
+        providerId: "traycer",
+        // legacyEnabledForMode("auto", currentlyEnabled) === currentlyEnabled.
+        enabled: true,
+        profileAction: null,
+        mode: "auto",
+      });
+    });
+
+    it("legacyEnabledForMode: on -> true regardless of current effective value", () => {
+      singleProvider({
+        enabled: false,
+        enablementMode: "off",
+        enablementSource: "sticky",
+      });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "On" }));
+      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "on", enabled: true }),
+      );
+    });
+
+    it("legacyEnabledForMode: off -> false regardless of current effective value", () => {
+      // Two providers so the floor doesn't block reaching Off on the second.
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: true,
+            enablementMode: "on" as const,
+            enablementSource: "sticky" as const,
+          },
+          {
+            ...providerState({
+              providerId: "opencode",
+              selected: { kind: "bundled" },
+              candidates: OPENCODE_CANDIDATES,
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: true,
+            enablementMode: "on" as const,
+            enablementSource: "sticky" as const,
+          },
+        ],
+      };
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      // Default-selected provider is whichever ORDERED_PROVIDERS ranks first
+      // (opencode, ahead of traycer).
+      fireEvent.click(screen.getByRole("button", { name: "Off" }));
+      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
+        providerId: "opencode",
+        enabled: false,
+        profileAction: null,
+        mode: "off",
+      });
+    });
+
+    it("legacyEnabledForMode: auto -> forwards the CURRENT effective value, not a guess", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+      render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Auto" }));
+      const variables = firstSetEnabledCall();
+      expect(variables).toMatchObject({ mode: "auto", enabled: true });
+    });
+  });
+
+  describe("detail pane inert gate: mode, not effective enabled", () => {
+    function singleProvider(overrides: {
+      readonly enabled: boolean;
+      readonly enablementMode?: "auto" | "on" | "off";
+      readonly enablementSource?:
+        "sticky" | "auto-detected" | "auto-undetected";
+    }): void {
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: overrides.enabled,
+            enablementMode: overrides.enablementMode,
+            enablementSource: overrides.enablementSource,
+          },
+        ],
+      };
+    }
+
+    // Load-bearing: an `auto` provider with no detected account is
+    // `enabled: false` too. Gating the pane on `!state.enabled` instead of
+    // the mode would re-inert exactly this row, blocking the sign-in control
+    // that is the only way out of "no account detected".
+    it("leaves the pane reachable for an auto-undetected provider even though enabled is false", () => {
+      singleProvider({
+        enabled: false,
+        enablementMode: "auto",
+        enablementSource: "auto-undetected",
+      });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).toBeNull();
+      expect(container.querySelector(".pointer-events-none")).toBeNull();
+    });
+
+    it("makes the pane inert when the mode is explicitly Off", () => {
+      singleProvider({ enabled: false, enablementMode: "off" });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      expect(container.querySelector(".pointer-events-none")).not.toBeNull();
+    });
+
+    it("leaves the pane reachable when the mode is On", () => {
+      singleProvider({
+        enabled: true,
+        enablementMode: "on",
+        enablementSource: "sticky",
+      });
+      const { container } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).toBeNull();
+    });
+
+    it("falls back to !enabled on an old host with no enablementMode", () => {
+      singleProvider({ enabled: false });
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      unmount();
+
+      singleProvider({ enabled: true });
+      const { container: container2 } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container2.querySelector("[inert]")).toBeNull();
+    });
   });
 
   it("renders capability-driven tabs and hides unsupported ones", () => {
