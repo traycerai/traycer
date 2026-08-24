@@ -382,7 +382,14 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       ]),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    expect(
+      screen.getByRole("button", {
+        name: "Worktree creation failed. fatal: could not create work tree dir",
+      }),
+    ).toBeTruthy();
+    const createStep = screen.getByText("Creating worktree").closest("li");
+    expect(createStep?.querySelector(".text-destructive")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry creation" }));
     expect(createMutate).toHaveBeenCalledTimes(1);
     expect(createMutate.mock.calls[0][0]).toEqual({
       epicId: EPIC_ID,
@@ -428,7 +435,7 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
         }),
       ]),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry creation" }));
 
     const options = createMutate.mock.calls[0][1];
     expect(options).toBeDefined();
