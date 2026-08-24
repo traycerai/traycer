@@ -1948,7 +1948,10 @@ describe("compat recovery: RC probe", () => {
     await updater.installAutoUpdater(true, makeDeps(true));
     autoUpdater.setFeedURL.mockClear();
     // Never settles, and never rejects. That is the shape a hung socket has.
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined)),
+    );
 
     vi.useFakeTimers();
     try {
@@ -2001,10 +2004,9 @@ describe("compat recovery: RC probe", () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
-      fetchRouter(
-        [macReleaseFixture("desktop-v2.0.0-rc.1", true)],
-        { "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2) },
-      ),
+      fetchRouter([macReleaseFixture("desktop-v2.0.0-rc.1", true)], {
+        "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2),
+      }),
     );
     await updater.installAutoUpdater(true, makeDeps(true));
     autoUpdater.emit("update-available", {
@@ -2031,10 +2033,9 @@ describe("compat recovery: RC probe", () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     vi.stubGlobal(
       "fetch",
-      fetchRouter(
-        [macReleaseFixture("desktop-v2.0.0-rc.1", true)],
-        { "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2) },
-      ),
+      fetchRouter([macReleaseFixture("desktop-v2.0.0-rc.1", true)], {
+        "desktop-v2.0.0-rc.1": stampedYaml("desktop-v2.0.0-rc.1", 2),
+      }),
     );
     await updater.installAutoUpdater(true, makeDeps(true));
     await updater.setAllowPrereleaseUpdates(true);
@@ -2203,9 +2204,7 @@ describe("compat recovery: RC probe", () => {
     await flushPromises();
     expect(listingWaits).toHaveLength(1);
 
-    listingWaits[0]?.(
-      new Response(JSON.stringify([]), { status: 200 }),
-    );
+    listingWaits[0]?.(new Response(JSON.stringify([]), { status: 200 }));
     const [a, b] = await Promise.all([first, second]);
     expect(a.route).toBe("manual");
     expect(b.route).toBe("manual");

@@ -1050,15 +1050,16 @@ async function probeRcRecoveryCandidate(
   if (existing !== undefined) {
     return existing;
   }
-  const probe = withRcRecoveryProbeDeadline(runRcRecoveryProbe(minimumEpoch))
-    .catch((error: unknown) => {
-      // A probe failure is not a verdict about RC - it is "we could not find
-      // out". Route it exactly like "nothing found": the manual link. Surfacing
-      // a discovery error on top of "your app is too old" adds noise to a state
-      // that already has one clear instruction.
-      log.warn("[updater] RC recovery probe failed", error);
-      return null;
-    });
+  const probe = withRcRecoveryProbeDeadline(
+    runRcRecoveryProbe(minimumEpoch),
+  ).catch((error: unknown) => {
+    // A probe failure is not a verdict about RC - it is "we could not find
+    // out". Route it exactly like "nothing found": the manual link. Surfacing
+    // a discovery error on top of "your app is too old" adds noise to a state
+    // that already has one clear instruction.
+    log.warn("[updater] RC recovery probe failed", error);
+    return null;
+  });
   rcRecoveryProbesInFlight.set(minimumEpoch, probe);
   try {
     return await probe;
@@ -1084,7 +1085,7 @@ async function probeRcRecoveryCandidate(
 function withRcRecoveryProbeDeadline(
   probe: Promise<DesktopReleaseCandidate | null>,
 ): Promise<DesktopReleaseCandidate | null> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let timer: NodeJS.Timeout | null = null;
   const deadline = new Promise<DesktopReleaseCandidate | null>((resolve) => {
     timer = setTimeout(() => {
       log.warn("[updater] RC recovery probe timed out", {
@@ -1122,7 +1123,8 @@ async function runRcRecoveryProbe(
     // `compareHostVersions` (the cli-discovery numeric form used throughout
     // this file) returns 0 for anything it cannot parse, and 0 is not newer.
     .filter(
-      (candidate) => compareHostVersions(candidate.version, CURRENT_VERSION) > 0,
+      (candidate) =>
+        compareHostVersions(candidate.version, CURRENT_VERSION) > 0,
     )
     .sort((a, b) => compareHostVersions(b.version, a.version));
   const token = PRIVATE_UPDATE_TOKEN.trim();

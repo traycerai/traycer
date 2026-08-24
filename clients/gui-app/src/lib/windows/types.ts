@@ -485,10 +485,7 @@ export interface DesktopAppUpdateChannelChange {
  * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
  */
 export type DesktopCompatRecoveryRoute =
-  | "update-available"
-  | "enable-rc"
-  | "restart-to-clear-staged"
-  | "manual";
+  "update-available" | "enable-rc" | "restart-to-clear-staged" | "manual";
 
 export interface DesktopCompatRecoveryPlan {
   readonly route: DesktopCompatRecoveryRoute;

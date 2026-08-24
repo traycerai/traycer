@@ -209,6 +209,22 @@ describe("clientCompatibilityRecoveryHintForVector", () => {
     expect(hint).toMatch(/'traycer cli upgrade' will not resolve it/u);
   });
 
+  it("bounds a stalled recovery-only feed lookup", async () => {
+    vi.useFakeTimers();
+    try {
+      const hintPromise = clientCompatibilityRecoveryHintForVector({
+        requirement: requirement(),
+        source: "manual",
+        readFeedEpoch: () => new Promise(() => undefined),
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      const hint = await hintPromise;
+      expect(hint).toContain("https://github.com/traycerai/traycer/releases");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(
     Object.keys(PACKAGE_MANAGER_UPGRADE_HINT) as Array<
       keyof typeof PACKAGE_MANAGER_UPGRADE_HINT
@@ -241,4 +257,3 @@ describe("clientCompatibilityRecoveryHintForVector", () => {
     expect(hint).toContain(CLIENT_UPGRADE_HINT_FOR_SOURCE.desktop);
   });
 });
-

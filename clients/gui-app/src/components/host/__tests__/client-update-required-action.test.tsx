@@ -1,5 +1,11 @@
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -15,6 +21,14 @@ import type {
   DesktopCompatRecoveryPlan,
 } from "@/lib/windows/types";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
+
+const mocks = vi.hoisted(() => ({
+  toastFromRunnerError: vi.fn(),
+}));
+
+vi.mock("@/lib/runner-error-toast", () => ({
+  toastFromRunnerError: mocks.toastFromRunnerError,
+}));
 
 /**
  * The remedy on the blocking "Update Traycer to continue" surface.
@@ -674,6 +688,38 @@ describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
     fireEvent.click(rcButton);
     await waitFor(() => {
       expect(bridge.setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("reports a failed RC channel change", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    bridge.resolveCompatRecovery.mockResolvedValue({
+      route: "enable-rc",
+      rcCandidateVersion: "1.2.0-rc.4",
+      stagedVersion: null,
+    });
+    const error = new Error("preference write failed");
+    bridge.setAllowPrerelease.mockRejectedValue(error);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ hostReleaseChannel: "rc" })}
+      />,
+      bridge,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Enable RC updates and get 1\.2\.0-rc\.4/u,
+      }),
+    );
+    await waitFor(() => {
+      expect(mocks.toastFromRunnerError).toHaveBeenCalledWith(
+        error,
+        "Couldn't enable RC updates",
+      );
     });
   });
 

@@ -1092,7 +1092,9 @@ describe("<DesktopDialogHost />", () => {
       ): Promise<DesktopAppUpdateSnapshot> {
         return Promise.resolve(IDLE);
       }
-      setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateChannelChange> {
+      setAllowPrerelease(
+        _allow: boolean,
+      ): Promise<DesktopAppUpdateChannelChange> {
         return Promise.resolve({ outcome: "changed", snapshot: IDLE });
       }
       resolveCompatRecovery(): Promise<DesktopCompatRecoveryPlan> {

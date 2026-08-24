@@ -23,6 +23,7 @@ import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework
 import { hostReleaseChannelAllowsRcRecovery } from "@traycer/protocol/framework/index";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { runnerHostQueryScopeId } from "@/lib/query-keys/runner-mutation-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import type {
   DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
@@ -179,10 +180,20 @@ export function ClientUpdateRequiredAction(props: {
 
   if (snapshot.status === "checking") {
     return (
-      <Button type="button" size="sm" variant="default" disabled data-testid="client-update-required-checking">
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        disabled
+        data-testid="client-update-required-checking"
+      >
         <span className="inline-flex items-center gap-1.5">
           <span>Checking for updates</span>
-          <AgentSpinningDots className="text-current" testId={undefined} variant={undefined} />
+          <AgentSpinningDots
+            className="text-current"
+            testId={undefined}
+            variant={undefined}
+          />
         </span>
       </Button>
     );
@@ -197,7 +208,8 @@ function renderCachedUpdateAction(input: {
   readonly cachedUpdateSufficient: boolean;
   readonly openInstallGuidance: () => void;
 }): ReactNode | null {
-  const { bridge, snapshot, cachedUpdateSufficient, openInstallGuidance } = input;
+  const { bridge, snapshot, cachedUpdateSufficient, openInstallGuidance } =
+    input;
   if (bridge !== null && cachedUpdateSufficient) {
     if (snapshot.status === "available") {
       // A blocked location (macOS app outside /Applications) cannot install
@@ -381,32 +393,34 @@ function useAppUpdateResolveCompatRecoveryPlan(input: {
   readonly candidateStatus: DesktopAppUpdateSnapshot["status"];
 }): UseQueryResult<DesktopCompatRecoveryPlan> {
   const { bridge } = input;
-  return useQuery(queryOptions({
-    queryKey: runnerQueryKeys.appUpdateCompatRecovery({
-      runnerHostScopeId: bridge === null ? 0 : runnerHostQueryScopeId(bridge),
-      minimumEpoch: input.minimumEpoch,
-      hostAllowsRcRecovery: input.hostAllowsRcRecovery,
-      candidateSufficient: input.candidateSufficient,
-      allowPrerelease: input.allowPrerelease,
-      candidateStatus: input.candidateStatus,
-    }),
-    queryFn: () => {
-      if (bridge === null) {
-        throw new Error("No desktop app-update bridge is available.");
-      }
-      return bridge.resolveCompatRecovery({
+  return useQuery(
+    queryOptions({
+      queryKey: runnerQueryKeys.appUpdateCompatRecovery({
+        runnerHostScopeId: bridge === null ? 0 : runnerHostQueryScopeId(bridge),
         minimumEpoch: input.minimumEpoch,
         hostAllowsRcRecovery: input.hostAllowsRcRecovery,
-      });
-    },
-    enabled: bridge !== null,
-    // One attempt. A failed probe is not a verdict about RC, and the component
-    // already routes an unanswered plan to the manual link - retrying would
-    // only make a blocking dialog spend longer being unhelpful.
-    retry: false,
-    staleTime: Infinity,
-    gcTime: Infinity,
-  }));
+        candidateSufficient: input.candidateSufficient,
+        allowPrerelease: input.allowPrerelease,
+        candidateStatus: input.candidateStatus,
+      }),
+      queryFn: () => {
+        if (bridge === null) {
+          throw new Error("No desktop app-update bridge is available.");
+        }
+        return bridge.resolveCompatRecovery({
+          minimumEpoch: input.minimumEpoch,
+          hostAllowsRcRecovery: input.hostAllowsRcRecovery,
+        });
+      },
+      enabled: bridge !== null,
+      // One attempt. A failed probe is not a verdict about RC, and the component
+      // already routes an unanswered plan to the manual link - retrying would
+      // only make a blocking dialog spend longer being unhelpful.
+      retry: false,
+      staleTime: Infinity,
+      gcTime: Infinity,
+    }),
+  );
 }
 
 /**
@@ -432,6 +446,9 @@ function useAppUpdateEnableRcRecovery(
     mutationKey: runnerMutationKeys.setAllowPrereleaseUpdates(),
     mutationFn: (target: DesktopAppUpdatesBridge) =>
       target.setAllowPrerelease(true),
+    onError: (error) => {
+      toastFromRunnerError(error, "Couldn't enable RC updates");
+    },
     onSettled: () => {
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.appUpdateCompatRecoveryScope(

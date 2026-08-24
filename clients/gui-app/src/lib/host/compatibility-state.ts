@@ -647,6 +647,7 @@ function clientCompatibilityKey(
   requirement: ClientCompatibilityRequirement | null,
 ): readonly (string | number | null)[] | null {
   if (requirement === null) return null;
+  const legacyRemedy = legacyRemedySegments(requirement);
   return [
     requirement.minimumCompatibilityEpoch,
     requirement.observedCompatibilityEpoch,
@@ -654,8 +655,7 @@ function clientCompatibilityKey(
     requirement.observedClientKind,
     requirement.observedClientAppVersion,
     requirement.observedClientAppVersionStatus,
-    requirement.minimumKnownClientAppVersion,
-    requirement.upgradeChannel,
+    ...legacyRemedy,
     // `?? null` because this member is OPTIONAL on the wire, not nullable: a
     // host predating the field omits the key entirely, so the value here is
     // `string | undefined` while every other segment is `string | number |
@@ -665,6 +665,17 @@ function clientCompatibilityKey(
     // requirements from colliding onto one key.
     requirement.hostReleaseChannel ?? null,
   ];
+}
+
+interface LegacyRemedySegmentsSource {
+  readonly minimumKnownClientAppVersion: string | null;
+  readonly upgradeChannel: "stable" | "rc" | null;
+}
+
+function legacyRemedySegments(
+  requirement: LegacyRemedySegmentsSource,
+): readonly [string | null, string | null] {
+  return [requirement.minimumKnownClientAppVersion, requirement.upgradeChannel];
 }
 
 /**

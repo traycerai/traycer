@@ -58,7 +58,8 @@ export function registerAppUpdateIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.appUpdateResolveCompatRecovery,
-    (_event, request) => resolveCompatRecovery(parseCompatRecoveryRequest(request)),
+    (_event, request) =>
+      resolveCompatRecovery(parseCompatRecoveryRequest(request)),
   );
 
   bridge.disposeFns.push(

@@ -255,16 +255,9 @@ function parseVersionEntry(
  * integer or the manifest is invalid; there is no coercion arm, so a stringly
  * `"2"` is refused rather than read.
  */
-function parseNullableEpoch(
-  raw: unknown,
-  sourceLabel: string,
-): number | null {
+function parseNullableEpoch(raw: unknown, sourceLabel: string): number | null {
   if (raw === undefined || raw === null) return null;
-  if (
-    typeof raw !== "number" ||
-    !Number.isSafeInteger(raw) ||
-    raw <= 0
-  ) {
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) {
     throw manifestInvalid(
       sourceLabel,
       "'minimumEpoch' must be a positive integer, null, or absent",

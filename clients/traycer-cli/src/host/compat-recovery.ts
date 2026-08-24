@@ -37,6 +37,8 @@ export const CLIENT_UPGRADE_HINT_FOR_SOURCE: Record<CliInstallSource, string> =
     ...PACKAGE_MANAGER_UPGRADE_HINT,
   };
 
+const RECOVERY_FEED_LOOKUP_DEADLINE_MS = 3_000;
+
 export interface CompatRecoveryPlan {
   // `hostShouldUpgrade`: the shared host is the stale side - reinstall the
   // latest host (the only host-update trigger that fires post-launch).
@@ -210,11 +212,26 @@ export async function clientCompatibilityRecoveryHintForVector(input: {
   const remedy =
     input.source === "manual"
       ? manualVectorRemedy(
-          await input.readFeedEpoch(),
+          await readRecoveryFeedEpoch(input.readFeedEpoch),
           requirement.minimumCompatibilityEpoch,
         )
       : CLIENT_UPGRADE_HINT_FOR_SOURCE[input.source];
   return `${describeCompatibilityGap(requirement)} ${remedy} ${COMPATIBILITY_REASSURANCE}`;
+}
+
+async function readRecoveryFeedEpoch(
+  readFeedEpoch: () => Promise<number | null>,
+): Promise<number | null> {
+  let timer: NodeJS.Timeout | null = null;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), RECOVERY_FEED_LOOKUP_DEADLINE_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([readFeedEpoch().catch(() => null), deadline]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
 }
 
 function manualVectorRemedy(

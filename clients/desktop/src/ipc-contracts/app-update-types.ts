@@ -130,10 +130,7 @@ export interface DesktopAppUpdateChannelChange {
  *                               release the updater cannot resolve.
  */
 export type DesktopCompatRecoveryRoute =
-  | "update-available"
-  | "enable-rc"
-  | "restart-to-clear-staged"
-  | "manual";
+  "update-available" | "enable-rc" | "restart-to-clear-staged" | "manual";
 
 export interface DesktopCompatRecoveryPlan {
   readonly route: DesktopCompatRecoveryRoute;

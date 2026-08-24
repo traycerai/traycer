@@ -128,8 +128,9 @@ function customKey(value: object): unknown {
 describe("electron-updater 6.8.9 vendored contracts", () => {
   it("pins the dependency this suite is describing", () => {
     const pkg: unknown = JSON.parse(readFileSync(DESKTOP_PACKAGE_JSON, "utf8"));
-    expect(readStringField(readField(pkg, "dependencies"), "electron-updater"))
-      .toBe("^6.8.9");
+    expect(
+      readStringField(readField(pkg, "dependencies"), "electron-updater"),
+    ).toBe("^6.8.9");
   });
 
   it("BaseUpdater re-reads autoInstallOnAppQuit INSIDE the registered quit callback", () => {
@@ -229,7 +230,10 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
     // Matching hash: the cached file is offered back, so the fixture is
     // genuinely valid and the mismatch below is the only variable.
     await expect(
-      probe({ info: { sha512: staleSha }, url: new URL("https://x.invalid/a") }, logger),
+      probe(
+        { info: { sha512: staleSha }, url: new URL("https://x.invalid/a") },
+        logger,
+      ),
     ).resolves.toBe(artifact);
     expect(existsSync(artifact)).toBe(true);
 
@@ -261,7 +265,9 @@ describe("electron-updater 6.8.9 vendored contracts", () => {
     // Custom-key survival: `compatibilityEpoch` stamped on the channel file
     // reaches the updater only because this is a bare load.
     const source = readOut("providers/Provider.js");
-    expect(source).toContain("function parseUpdateInfo(rawData, channelFile, channelFileUrl)");
+    expect(source).toContain(
+      "function parseUpdateInfo(rawData, channelFile, channelFileUrl)",
+    );
     expect(source).toContain("result = (0, js_yaml_1.load)(rawData);");
     expect(source).toContain("return result;");
     expect(source).not.toMatch(/return \{[^}]*version:/u);
