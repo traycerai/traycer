@@ -586,27 +586,20 @@ function FileTreeBodyForResolvedHost(
       onLatchHost();
       navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
     };
-    // Preview-vs-permanent is a tab-strip concept, and a touch viewport has no
-    // tab strip: it shows one tile at a time and navigates through the switcher.
-    // There a preview tile is silently replaced by the next row tapped, and the
-    // double-click that promotes it to permanent has no touch equivalent - so
-    // the file tree would be the one surface a phone can never open two of.
-    // Tapping a row opens permanently instead, which is also what every other
-    // switcher category's row does (`useSwitcherActivate`). `openTile` dedupes
-    // on the ref either way, so a re-tap focuses the tile already open.
+    // Preview is right on a touch viewport too, even though the double-click
+    // that promotes it there has no touch equivalent: that viewport shows ONE
+    // tile at a time, none of its lists surfaces an open workspace-file tile,
+    // and nothing there can close one - so a permanent open buys nothing
+    // visible and leaves an unreachable tile behind. Recycling the single
+    // preview is what browsing a tree by tap wants, and the row itself is the
+    // way back to a file already visited.
     handlersRef.current.onSelect = (treePath) => {
-      openInTab(
-        treePath,
-        isMobileViewport
-          ? prepareOpenTileInTabFocusTarget
-          : prepareOpenTilePreviewInTabFocusTarget,
-      );
+      openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
     };
     handlersRef.current.onOpen = (treePath) => {
       openInTab(treePath, prepareOpenTileInTabFocusTarget);
     };
   }, [
-    isMobileViewport,
     navigateNested,
     workspaceFileRefForTreePath,
     props.epicId,

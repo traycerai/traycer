@@ -1431,7 +1431,7 @@ describe("file tree on a touch viewport", () => {
     expect(capturedItemHeight).toBe(44);
   });
 
-  it("opens a tapped row permanently, because there is no tab strip to promote it from", () => {
+  it("recycles the single preview tile for a tapped row rather than accumulating one per file", () => {
     const client = new MockWsStreamClient("unknown");
     renderPanel(client);
     act(() => {
@@ -1455,9 +1455,9 @@ describe("file tree on a touch viewport", () => {
       capturedOnSelectionChange?.(["readme.md"]);
     });
 
-    expect(openPreviewSpy).not.toHaveBeenCalled();
-    expect(openPermanentSpy).toHaveBeenCalledTimes(1);
-    expect(openPermanentSpy).toHaveBeenCalledWith(
+    expect(openPermanentSpy).not.toHaveBeenCalled();
+    expect(openPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(openPreviewSpy).toHaveBeenCalledWith(
       TAB_ID,
       expect.objectContaining({ filePath: "readme.md" }),
     );
