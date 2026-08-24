@@ -19,6 +19,7 @@ import {
   listGuiHarnessesResponseSchemaV40,
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
+  listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
   guiHarnessOptionSchemaV30,
@@ -43,8 +44,14 @@ import {
 // harnesses; v2.0 carries them and is frozen without Amp; v3.0 carries Amp and
 // is frozen without Devin/Pi; v4.0 carries Devin/Pi and is frozen without
 // Hermes; v5.0 carries Hermes and is frozen without omp; v6.0 carries omp and
-// is frozen without Hugging Face; v7.0 carries Hugging Face.
+// is frozen without Hugging Face; v7.0 carries Hugging Face and is frozen
+// without the auth-aware enablement row fields; v7.1 carries them.
 // Bridges drop ids an older caller can't decode.
+//
+// v7.1 is a MINOR, not a new major: `authStatus` / `enablementMode` are
+// additive optional row fields, and `versioned-rpc.ts` rejects a major bump
+// that isn't a breaking change. The v7 -> older downgrades therefore start at
+// 7.1 (the line's latest minor), which the registry validator enforces.
 export const agentGuiListHarnessesV10 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -478,7 +485,12 @@ export const agentGuiListHarnessesV70 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  responseSchema: listGuiHarnessesResponseSchema,
+  // Frozen: `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1` shipped this line, so it
+  // must serve the row shape those peers negotiate rather than the live one,
+  // which v7.1 grew with `authStatus` / `enablementMode`. Until v7.1 opened it
+  // pointed at the canonical schema, which is how the released 2.1-6.0 rows
+  // ended up tracking the live body too - see `guiHarnessOptionBaseShapeV70`.
+  responseSchema: listGuiHarnessesResponseSchemaV70,
 });
 
 export const agentGuiListHarnessesUpgradeV6ToV7 = defineUpgradePath<
@@ -493,11 +505,34 @@ export const agentGuiListHarnessesUpgradeV6ToV7 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentGuiListHarnessesDowngradeV7ToV6 = defineDowngradePath<
+export const agentGuiListHarnessesV71 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 7, minor: 1 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  responseSchema: listGuiHarnessesResponseSchema,
+});
+
+export const agentGuiListHarnessesUpgradeV70ToV71 = defineUpgradePath<
   typeof agentGuiListHarnessesV70,
-  typeof agentGuiListHarnessesV60
+  typeof agentGuiListHarnessesV71
 >({
   from: { major: 7, minor: 0 },
+  to: { major: 7, minor: 1 },
+  // 7.1 adds the auth-aware enablement row fields (`authStatus`,
+  // `enablementMode`) over the frozen 7.0 row. Nothing is filled: both are
+  // `.optional()` precisely so "this host predates auto enablement" stays
+  // distinguishable from any concrete value, and a v7.0 host IS such a host.
+  // Filling them would fabricate a verdict the client then trusts over its own
+  // `providers.list` fallback.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentGuiListHarnessesDowngradeV7ToV6 = defineDowngradePath<
+  typeof agentGuiListHarnessesV71,
+  typeof agentGuiListHarnessesV60
+>({
+  from: { major: 7, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Hugging Face so an already-shipped v6.0 client's strict decode never
@@ -513,10 +548,10 @@ export const agentGuiListHarnessesDowngradeV7ToV6 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV7ToV5 = defineDowngradePath<
-  typeof agentGuiListHarnessesV70,
+  typeof agentGuiListHarnessesV71,
   typeof agentGuiListHarnessesV50
 >({
-  from: { major: 7, minor: 0 },
+  from: { major: 7, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop omp/Hugging Face so an already-shipped v5.0 client's strict decode
@@ -532,10 +567,10 @@ export const agentGuiListHarnessesDowngradeV7ToV5 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV7ToV4 = defineDowngradePath<
-  typeof agentGuiListHarnessesV70,
+  typeof agentGuiListHarnessesV71,
   typeof agentGuiListHarnessesV40
 >({
-  from: { major: 7, minor: 0 },
+  from: { major: 7, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Hermes/omp/Hugging Face so an already-shipped v4.0 client's strict
@@ -551,10 +586,10 @@ export const agentGuiListHarnessesDowngradeV7ToV4 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV7ToV3 = defineDowngradePath<
-  typeof agentGuiListHarnessesV70,
+  typeof agentGuiListHarnessesV71,
   typeof agentGuiListHarnessesV30
 >({
-  from: { major: 7, minor: 0 },
+  from: { major: 7, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Devin/Pi/Hermes/omp/Hugging Face so an already-shipped v3.0 client's
@@ -570,10 +605,10 @@ export const agentGuiListHarnessesDowngradeV7ToV3 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV7ToV2 = defineDowngradePath<
-  typeof agentGuiListHarnessesV70,
+  typeof agentGuiListHarnessesV71,
   typeof agentGuiListHarnessesV21
 >({
-  from: { major: 7, minor: 0 },
+  from: { major: 7, minor: 1 },
   // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
   // contract parse then strips the 2.1-only `enabled` field.
   to: { major: 2, minor: 1 },
@@ -589,10 +624,10 @@ export const agentGuiListHarnessesDowngradeV7ToV2 = defineDowngradePath<
 });
 
 export const agentGuiListHarnessesDowngradeV7ToV1 = defineDowngradePath<
-  typeof agentGuiListHarnessesV70,
+  typeof agentGuiListHarnessesV71,
   typeof agentGuiListHarnessesV10
 >({
-  from: { major: 7, minor: 0 },
+  from: { major: 7, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

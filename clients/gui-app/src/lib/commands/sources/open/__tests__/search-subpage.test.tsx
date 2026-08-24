@@ -7,6 +7,8 @@ interface Row {
   readonly hostId: string;
   readonly runningDir: string;
   readonly disabledReason: string | null;
+  readonly mode: "local" | "worktree";
+  readonly isGitRepo: boolean;
 }
 
 const state = vi.hoisted(() => ({ rows: [] as ReadonlyArray<Row> }));
@@ -64,8 +66,13 @@ function items(): ReadonlyArray<CommandItem> {
   ).result.current;
 }
 
-function row(runningDir: string, disabledReason: string | null): Row {
-  return { hostId: "host-a", runningDir, disabledReason };
+function row(
+  runningDir: string,
+  disabledReason: string | null,
+  mode: "local" | "worktree",
+  isGitRepo: boolean,
+): Row {
+  return { hostId: "host-a", runningDir, disabledReason, mode, isGitRepo };
 }
 
 beforeEach(() => {
@@ -84,16 +91,18 @@ describe("useSearchOpenerItems (step 1: target selection)", () => {
     expect(result[0].subpage?.id).toBe("open:search:run:artifact");
   });
 
-  it("lists only browsable workspace/worktree roots after the artifact target", () => {
+  it("lists setup-pending roots but excludes a genuinely missing worktree", () => {
     state.rows = [
-      row("/ws/alpha", null),
-      row("/ws/disabled", "setup_pending"),
-      row("/worktrees/feature", null),
+      row("/ws/alpha", null, "local", false),
+      row("/worktrees/setting-up", "setup_pending", "worktree", true),
+      row("/worktrees/missing", "missing_worktree_path", "worktree", false),
+      row("/worktrees/feature", null, "worktree", true),
     ];
     const result = items();
     expect(result.map((i) => i.label)).toEqual([
       "Artifacts",
       "alpha",
+      "setting-up",
       "feature",
     ]);
     expect(result[1].subpage?.id).toBe(

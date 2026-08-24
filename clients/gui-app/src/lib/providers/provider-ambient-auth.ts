@@ -1,3 +1,4 @@
+import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
@@ -48,6 +49,33 @@ export function isProviderAmbientSignedOut(
     provider.auth.status === "unauthenticated" ||
     ambientProfileAuthStatus(provider) === "unauthenticated"
   );
+}
+
+/**
+ * The same definitive signed-out verdict, read from a HARNESS CATALOG ROW
+ * (`agent.gui.listHarnesses@7.1`'s `authStatus`) instead of a
+ * `providers.list` state.
+ *
+ * Why a second reader rather than a second predicate: the surfaces that
+ * classify a provider (the rail, the model picker, the palette subpages)
+ * render from the catalog, and until 7.1 they had to JOIN against a
+ * separately-timed `providers.list` query to learn about auth. That join is
+ * the model-picker bug - a provider signed out minutes ago still rendered as a
+ * normal, sendable row until the other query refetched. Reading the verdict
+ * off the row the surface already has closes that window with no extra fetch.
+ *
+ * DEFINITIVE ONLY, exactly like {@link isProviderAmbientSignedOut}:
+ * `unknown`/`unavailable` are read errors and fail OPEN. This is not a style
+ * choice - `railHarnessVisible` ORs the degraded predicate into VISIBILITY, so
+ * widening this to non-definitive states would keep a sticky-enabled provider
+ * with no CLI installed permanently in the rail as a tab that can never run.
+ *
+ * `undefined` (a host below 7.1) is not a verdict either. Callers that have a
+ * `providers.list`-derived set fall back to it; callers that don't (the
+ * palette) simply behave as they did before the field existed.
+ */
+export function isHarnessRowSignedOut(harness: GuiHarnessOption): boolean {
+  return harness.authStatus === "unauthenticated";
 }
 
 /**

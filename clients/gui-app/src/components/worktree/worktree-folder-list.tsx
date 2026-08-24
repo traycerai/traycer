@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
-import { WorktreeRowDisabledBadge } from "@/components/worktree/worktree-row-disabled-badge";
+import { WorktreeRowStatusBadge } from "@/components/worktree/worktree-row-status-badge";
 import type { WorktreeFolderRowBadge } from "@/lib/worktree/worktree-folder-disabled-reason";
 import {
   Command,
@@ -28,11 +28,10 @@ export interface WorktreeFolderListProps {
   readonly selectedRow: WorktreeBindingSelectorRowV12 | null;
   readonly secondaryLabel: (row: WorktreeBindingSelectorRowV12) => string;
   /**
-   * Badge for a non-selectable row; `pending: true` renders muted with a
-   * spinner (unverified facts, converging), otherwise destructive (a real
-   * disabled reason).
+   * Status badge for a row. `disabled` independently controls selection, so a
+   * failed setup can remain visible without blocking its usable directory.
    */
-  readonly disabledBadge: (
+  readonly rowBadge: (
     row: WorktreeBindingSelectorRowV12,
   ) => WorktreeFolderRowBadge | null;
   readonly onSelect: (row: WorktreeBindingSelectorRowV12) => void;
@@ -90,8 +89,8 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
             {props.rows.map((row) => {
               const label = formatGitWorktreeLabel(row);
               const secondary = props.secondaryLabel(row);
-              const badge = props.disabledBadge(row);
-              const disabled = badge !== null;
+              const badge = props.rowBadge(row);
+              const disabled = badge?.disabled ?? false;
               const selected =
                 selectedRowKey !== null &&
                 worktreeRowKey(row) === selectedRowKey;
@@ -121,9 +120,11 @@ export function WorktreeFolderList(props: WorktreeFolderListProps): ReactNode {
                     </StartTruncatedText>
                   </div>
                   {badge === null ? null : (
-                    <WorktreeRowDisabledBadge
+                    <WorktreeRowStatusBadge
                       label={badge.label}
                       pending={badge.pending}
+                      tone={badge.tone}
+                      detail={badge.detail}
                     />
                   )}
                 </CommandItem>

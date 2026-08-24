@@ -19,6 +19,7 @@ import {
   providersListRequestSchemaV70,
   providersListResponseSchema,
   providersListResponseSchemaV60,
+  providersListResponseSchemaV70,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -174,21 +175,31 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("the registered v7.0 RPC contract names the canonical schemas, being the head", () => {
-    // The inverse of what this test asserted while a v8.0 sat above v7.0.
-    // Collapsing that unreleased major made v7.0 the head again, and the head
-    // is the one line that tracks live - so the v7-era pins below back no
-    // contract at all. Stated as an assertion rather than left implicit,
-    // because "a line that has STOPPED being the head still points at live" is
-    // the actual defect the freeze rule exists to catch, and telling the two
-    // apart is the whole judgement.
-    const contract = hostRpcRegistry["providers.list"][7].versions[0].contract;
-    expect(contract.requestSchema).toBe(providersListRequestSchema);
-    expect(contract.responseSchema).toBe(providersListResponseSchema);
-    expect(contract.requestSchema).not.toBe(providersListRequestSchemaV70);
-    expect(contract.responseSchema).not.toBe(
-      providersListResponseSchemaV70Preimage,
-    );
+  it("v7.1 is the head and names the canonical response; v7.0 names its freeze", () => {
+    // This assertion has now flipped twice, and the flips ARE the judgement the
+    // freeze rule exists to force. While an unreleased v8.0 sat above v7.0,
+    // v7.0 was pinned; collapsing that major made v7.0 the head and it tracked
+    // live again; opening v7.1 for the auth-aware enablement fields made it a
+    // non-head line once more, so it is pinned again - this time to the REAL
+    // v7.0 freeze (`providersListResponseSchemaV70`), not to the pre-image,
+    // which still backs no contract and remains the v6 -> v7 bridge's
+    // first-pass target.
+    //
+    // "A line that has STOPPED being the head still points at live" is the
+    // defect being guarded, so both halves are asserted: the head names live,
+    // and the line below it does not.
+    const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
+    const v71 = hostRpcRegistry["providers.list"][7].versions[1].contract;
+    expect(v71.responseSchema).toBe(providersListResponseSchema);
+    expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
+    expect(v70.responseSchema).not.toBe(providersListResponseSchema);
+    expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
+    // The REQUEST side did not move: the freeze covered only the response, so
+    // both minors still bind the live request and `providersListRequestSchemaV70`
+    // remains the hand-copy held equal to it by the pin above.
+    expect(v70.requestSchema).toBe(providersListRequestSchema);
+    expect(v71.requestSchema).toBe(providersListRequestSchema);
+    expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 
   it("providerIdSchemaV70 includes huggingface, the sole v7.0-only provider id", () => {
