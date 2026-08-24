@@ -455,10 +455,27 @@ function computeSeededStack(
 }
 
 /**
- * Creates a router history seeded from the explicit `initialRoute` override
- * merged into this window's `localStorage` history, or from that history alone
- * when the shell provides no route. Intended for the Electron renderer only -
- * the browser web app should use TanStack's default browser history.
+ * Creates a router history the app OWNS - entries, index, and the controller
+ * brand that lets `goBack` / `goForward` step it semantically - for the two
+ * shells that have no browser to own one for them.
+ *
+ * `windowId` selects between them, and it is the only switch:
+ *
+ * - **A window id (Electron renderer)** - seeded from the explicit
+ *   `initialRoute` override merged into that window's `localStorage` history,
+ *   or from that history alone when the shell provides no route, and written
+ *   back on every navigation. The renderer's scheme drops the path on relaunch,
+ *   so this is what boots it at the last visited route with no async gate.
+ * - **`null` (the installed mobile app)** - in-memory and SESSION-scoped.
+ *   `loadPersistedState` and `persistState` both refuse a null window, so
+ *   nothing is read at boot and nothing is written. That is deliberate, not an
+ *   oversight to tidy up: a phone's process outlives every navigation in one
+ *   sitting, so the stack already survives a resume, while a stack restored
+ *   across a COLD launch would hand the first back swipe a surface from
+ *   yesterday.
+ *
+ * The browser web app uses neither - it has a URL bar and its own back button,
+ * so TanStack's default browser history is correct there.
  */
 export function createPersistentMemoryHistory(
   initialRoute: string | null,

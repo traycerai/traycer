@@ -482,5 +482,13 @@ describe("the history the mobile app actually boots with", () => {
       expect(focusedKind()).toBe("settings");
     });
     expect(controller.getIndex()).toBe(1);
+
+    // The next COLD LAUNCH, through the same boot path that produced the stack
+    // above: a second router, same arguments, and none of it carried over. The
+    // stack is the session's, and the session ends with the process.
+    const relaunched = getHistoryController(mobileAppHistory());
+    if (relaunched === null) throw new Error("mobile history lost its brand");
+    expect(relaunched.getIndex()).toBe(0);
+    expect(relaunched.getEntries()).toEqual(["/"]);
   });
 });
