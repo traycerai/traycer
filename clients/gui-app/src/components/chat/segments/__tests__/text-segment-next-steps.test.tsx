@@ -184,6 +184,30 @@ describe("TextSegment next steps rendering", () => {
     expect(screen.queryByText(/TRAYCER_NEXT_STEPS/)).toBeNull();
   });
 
+  it("renders one-option next steps as prose without an action card", () => {
+    render(
+      <TextSegment
+        findUnitId={null}
+        markdown={[
+          "<TRAYCER_NEXT_STEPS>",
+          "The safe checkpoint is ready.",
+          "",
+          "- [] Weiter mit frischem Builder",
+          "</TRAYCER_NEXT_STEPS>",
+        ].join("\n")}
+        isStreaming={false}
+        nextStepActions={{ canSend: true, onSend: () => true }}
+      />,
+    );
+
+    expect(screen.getByText("The safe checkpoint is ready.")).toBeTruthy();
+    expect(screen.queryByTestId("traycer-next-steps")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Weiter mit frischem Builder" }),
+    ).toBeNull();
+    expect(screen.getByText("Weiter mit frischem Builder")).toBeTruthy();
+  });
+
   it("spaces next-steps away from a preceding body that ends in a horizontal rule", () => {
     // Body markdown and next-steps prose are separate `.md-prose` trees. The
     // Tailmark first/last margin zeroing collapses both sides of that boundary,
@@ -220,7 +244,7 @@ describe("TextSegment next steps rendering", () => {
     render(
       <TextSegment
         findUnitId={null}
-        markdown={COMPLETE_BLOCK.replace("\n</TRAYCER_NEXT_STEPS>", "")}
+        markdown={`${COMPLETE_BLOCK.replace("\n</TRAYCER_NEXT_STEPS>", "")}\n`}
         isStreaming
         nextStepActions={{ canSend: true, onSend: () => true }}
       />,
