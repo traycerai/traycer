@@ -19,11 +19,11 @@ import {
   Paintbrush,
   Pencil,
   Pin,
-  RefreshCwIcon,
   Search,
   Trash2,
   X,
 } from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   ContextMenu,
@@ -947,9 +947,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               disabled={refresh.refreshing || hostId === null}
               onClick={refresh.trigger}
             >
-              <RefreshCwIcon
-                className={cn("size-4", refresh.refreshing && "animate-spin")}
-              />
+              <RefreshIcon refreshing={refresh.refreshing} />
             </Button>
           </>
         )}
