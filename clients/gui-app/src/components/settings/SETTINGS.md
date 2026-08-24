@@ -1536,9 +1536,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     default - reverting the SELECTED shell via `config.shell.revertArgs`). **On Windows hosts with WSL
     selected** (classified by binary via `windowsShellCaptionFamily`, shared
     with the host resolver) a single quiet line sits directly under the picker
-    in its column - "Agents won't see tools installed in WSL", amber dot +
-    `Info` glyph - with the explanation and the "run the Traycer host inside
-    WSL" remedy link (docs.traycer.ai/settings/shell#using-wsl) in a
+    in its column - "WSL applies to terminal tabs only", amber dot + `Info`
+    glyph - with the shell/host boundary and an "Install Traycer in WSL" WSLg
+    remedy link (docs.traycer.ai/install#windows-via-wsl) in a
     `HoverCard`; the glyph is itself a focusable anchor to that docs page so
     keyboard users reach the remedy without the pointer-only hover card. Only
     WSL earns a caption: PowerShell / Git Bash profile loading and cmd's plain
