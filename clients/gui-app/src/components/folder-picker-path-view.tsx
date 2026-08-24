@@ -31,6 +31,7 @@ export function HighlightedName(props: {
     pieces.push(
       <span
         key={`hit-${String(index)}`}
+        data-testid="folder-picker-name-hit"
         className="font-semibold text-primary underline decoration-primary/40 underline-offset-2"
       >
         {props.name.slice(range.start, range.end)}

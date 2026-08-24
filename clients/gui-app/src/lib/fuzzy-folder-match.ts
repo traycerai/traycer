@@ -76,8 +76,31 @@ interface NameMatch {
   readonly span: number;
 }
 
+/**
+ * Lowercase `name` while keeping every index aligned with the original.
+ *
+ * A plain `toLowerCase()` can change length - Turkish `\u0130` folds to two code
+ * units - and every range this module produces is later used to SLICE the
+ * original string. A folded offset that has drifted marks the wrong
+ * characters, so alignment matters more here than perfect case folding.
+ */
+function foldAligned(name: string): string {
+  let folded = "";
+  for (const character of name) {
+    const lower = character.toLowerCase();
+    if (lower.length === character.length) {
+      folded += lower;
+    } else if (lower.length > character.length) {
+      folded += lower.slice(0, character.length);
+    } else {
+      folded += lower + character.slice(lower.length);
+    }
+  }
+  return folded;
+}
+
 function matchName(name: string, foldedQuery: string): NameMatch | null {
-  const folded = name.toLowerCase();
+  const folded = foldAligned(name);
   if (folded.startsWith(foldedQuery)) {
     return {
       ranges: [{ start: 0, end: foldedQuery.length }],
@@ -97,16 +120,44 @@ function matchName(name: string, foldedQuery: string): NameMatch | null {
 }
 
 /**
- * In-order character match, greedy from the left, coalescing adjacent hits
- * into one range so a run of matched characters underlines as one word rather
- * than as separate letters.
+ * In-order character match, coalescing adjacent hits into one range so a run
+ * of matched characters underlines as one word rather than as separate
+ * letters.
+ *
+ * Every occurrence of the query's first character is tried as a start, and
+ * the tightest result wins. Committing to the leftmost start instead would
+ * rank by an accident of where the name happens to begin: for query `ab`,
+ * `a---b-a-b` matches with a span of 5 from its first `a` but only 3 from its
+ * second, and the sorter would place it behind a genuinely looser name.
  */
 function matchSubsequence(
   folded: string,
   foldedQuery: string,
 ): NameMatch | null {
+  // The caller answers an empty query before ranking, so this is a guard on
+  // the type rather than a reachable state.
+  if (foldedQuery.length === 0) return null;
+  const firstCharacter = foldedQuery[0];
+  let best: NameMatch | null = null;
+  for (let start = 0; start < folded.length; start += 1) {
+    if (folded[start] !== firstCharacter) continue;
+    const candidate = matchSubsequenceFrom(folded, foldedQuery, start);
+    // A greedy match from a fixed start already ends as early as possible,
+    // so the minimum over starts is the minimum overall.
+    if (candidate === null) continue;
+    if (best === null || candidate.span < best.span) best = candidate;
+  }
+  return best;
+}
+
+/** Greedy in-order match anchored at `start`; null when it cannot complete. */
+function matchSubsequenceFrom(
+  folded: string,
+  foldedQuery: string,
+  start: number,
+): NameMatch | null {
   const ranges: FuzzyRange[] = [];
-  let cursor = 0;
+  let cursor = start;
   for (const character of foldedQuery) {
     const found = folded.indexOf(character, cursor);
     if (found < 0) return null;
@@ -118,8 +169,6 @@ function matchSubsequence(
     }
     cursor = found + 1;
   }
-  // A non-empty query that matched produced at least one range; an empty one
-  // never reaches here (the caller answers it before ranking).
   if (ranges.length === 0) return null;
   const first = ranges[0];
   const final = ranges[ranges.length - 1];

@@ -81,7 +81,11 @@ export function commonBasePath(paths: ReadonlyArray<string>): string | null {
   // show; keep one segment back so every row still has a name.
   if (shared >= shortest) shared = shortest - 1;
   if (shared <= 0) return null;
-  return root + reference.slice(0, shared).join(separator);
+  // A UNC root (`\\\\server\\share`) carries no trailing separator, unlike `/`
+  // and `C:\\`, so joining segments straight onto it would fuse the share name
+  // to the first segment.
+  const prefix = root.endsWith(separator) ? root : root + separator;
+  return prefix + reference.slice(0, shared).join(separator);
 }
 
 /**

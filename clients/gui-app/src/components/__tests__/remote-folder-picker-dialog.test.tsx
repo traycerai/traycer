@@ -916,6 +916,18 @@ describe("<RemoteFolderPickerDialog />", () => {
       await expect(pick).resolves.toBe("C:\\");
     });
 
+    it("keeps the drive root's separator in the heading", async () => {
+      // Dropping it would leave `C:`, which names the drive-RELATIVE current
+      // directory rather than the drive itself, so the heading would quietly
+      // claim a different location than the one being browsed.
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      await screen.findAllByTestId("remote-folder-picker-row");
+      fireEvent.change(pathInput(), { target: { value: "C:\\" } });
+      fireEvent.blur(screen.getByTestId("remote-folder-picker-path"));
+      expect(locationText()).toBe("C:\\");
+    });
+
     it("expands ~ against the Windows home", async () => {
       render(<RemoteFolderPickerDialog />);
       void useRemoteFolderPickerStore.getState().requestPick(makeClient());
@@ -1078,7 +1090,10 @@ describe("<RemoteFolderPickerDialog />", () => {
       const [row] = screen.getAllByTestId("remote-folder-picker-row");
       // The hit is marked in place; the rest of the name still renders.
       expect(row.textContent).toBe("code");
-      expect(row.querySelector(".text-primary")?.textContent).toBe("cod");
+      expect(
+        row.querySelector("[data-testid='folder-picker-name-hit']")
+          ?.textContent,
+      ).toBe("cod");
     });
 
     it("moving to another folder drops the search with it", async () => {
@@ -1118,7 +1133,15 @@ describe("<RemoteFolderPickerDialog />", () => {
         void useRemoteFolderPickerStore.getState().requestPick(makeClient());
         await vi.advanceTimersByTimeAsync(0);
         const [row] = screen.getAllByTestId("remote-folder-picker-row");
-        fireEvent.pointerDown(row, { clientX: 10, clientY: 10 });
+        // The recognizer is touch-only: a mouse already has a right-click,
+        // and a long left-click there is an interrupted drag, not an intent.
+        fireEvent.pointerDown(row, {
+          clientX: 10,
+          clientY: 10,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true,
+        });
         act(() => {
           vi.advanceTimersByTime(500);
         });
@@ -1140,8 +1163,20 @@ describe("<RemoteFolderPickerDialog />", () => {
         void useRemoteFolderPickerStore.getState().requestPick(makeClient());
         await vi.advanceTimersByTimeAsync(0);
         const [row] = screen.getAllByTestId("remote-folder-picker-row");
-        fireEvent.pointerDown(row, { clientX: 10, clientY: 10 });
-        fireEvent.pointerMove(row, { clientX: 10, clientY: 60 });
+        fireEvent.pointerDown(row, {
+          clientX: 10,
+          clientY: 10,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true,
+        });
+        fireEvent.pointerMove(row, {
+          clientX: 10,
+          clientY: 60,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true,
+        });
         act(() => {
           vi.advanceTimersByTime(500);
         });

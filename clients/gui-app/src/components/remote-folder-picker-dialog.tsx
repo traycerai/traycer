@@ -389,7 +389,10 @@ function PickerRow(props: {
   readonly onOpen: () => void;
   readonly onShowFullPath: () => void;
 }): ReactNode {
-  const longPress = useLongPress(props.onShowFullPath);
+  const longPress = useLongPress({
+    onLongPress: props.onShowFullPath,
+    disabled: false,
+  });
   return (
     <Button
       type="button"
@@ -411,7 +414,7 @@ function PickerRow(props: {
       onClick={() => {
         // The long-press already answered this gesture; picking as well
         // would move the user off the row they were inspecting.
-        if (longPress.consumeFired()) return;
+        if (longPress.consumedTap()) return;
         props.onOpen();
       }}
     >
@@ -882,10 +885,15 @@ function separatorOf(path: string): string {
   return path.includes("\\") ? "\\" : "/";
 }
 
-/** Display-only inverse of `withTrailingSeparator`; a root keeps its own. */
+/**
+ * Display-only inverse of `withTrailingSeparator`. A ROOT keeps its own
+ * separator: `C:\\` without it is `C:`, which names the drive-relative
+ * current directory rather than the drive, so the heading would read `in C:`
+ * and mean something else entirely.
+ */
 function dropTrailingSeparator(path: string): string {
   const separator = separatorOf(path);
-  if (path.length <= 1) return path;
+  if (path.length <= rootLengthOf(path)) return path;
   return path.endsWith(separator) ? path.slice(0, -1) : path;
 }
 

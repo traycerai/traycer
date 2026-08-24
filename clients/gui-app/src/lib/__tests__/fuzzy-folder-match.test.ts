@@ -158,3 +158,22 @@ describe("fuzzyMatchNames case-insensitivity", () => {
     expect(result[0].tier).toBe(FUZZY_TIER_PREFIX);
   });
 });
+
+describe("index alignment and span minimisation", () => {
+  it("marks the character the user actually matched when folding resizes", () => {
+    // `\u0130`.toLowerCase() is TWO code units, so a naive fold shifts every
+    // later index and the highlight lands on the wrong character - and these
+    // ranges are used to slice the ORIGINAL name.
+    const ranked = fuzzyMatchNames(["\u0130foo"], (name) => name, "f");
+    expect(ranked).toHaveLength(1);
+    const range = ranked[0].ranges[0];
+    expect("\u0130foo".slice(range.start, range.end)).toBe("f");
+  });
+
+  it("takes the tightest run, not the leftmost one", () => {
+    // "a---b-a-b" spans 5 from its first `a` but only 3 from its second.
+    // Ranking on the leftmost start would place it behind "a--b" (span 4).
+    const ranked = fuzzyMatchNames(["a---b-a-b", "a--b"], (name) => name, "ab");
+    expect(ranked.map((entry) => entry.item)).toEqual(["a---b-a-b", "a--b"]);
+  });
+});
