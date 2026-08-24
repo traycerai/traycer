@@ -30,6 +30,15 @@ const AGENT_SENDER = {
 
 const USER_SENDER = { type: "user" as const, userId: "user-1" };
 
+/*
+ * These build FULL blocks rather than relying on the schema's defaults to fill
+ * the gaps. The fixtures are typed `ContentBlock` - the schema's OUTPUT type -
+ * so every field a parsed block carries has to be here. That is not pedantry:
+ * the first version of these helpers was typed `ReturnType<typeof textBlock>`,
+ * which infers the shape from whatever the literal happens to contain, so an
+ * incomplete fixture type-checked against itself and asserted nothing about
+ * agreeing with a real block. Naming the concrete type is what surfaced it.
+ */
 function textBlock(blockId: string, timestamp: number): ContentBlock {
   return {
     blockId,
@@ -37,6 +46,7 @@ function textBlock(blockId: string, timestamp: number): ContentBlock {
     timestamp,
     type: "text" as const,
     text: "hi",
+    providerNotice: null,
   };
 }
 
@@ -49,6 +59,8 @@ function steerBlock(blockId: string, timestamp: number): ContentBlock {
     queueItemId: `q-${blockId}`,
     messageId: `m-${blockId}`,
     content: { type: "doc" },
+    mode: "safe_point" as const,
+    sender: null,
   };
 }
 
