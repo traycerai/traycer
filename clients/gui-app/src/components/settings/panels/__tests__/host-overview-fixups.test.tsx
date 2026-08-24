@@ -176,6 +176,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
               ? { outcome: "cli-unavailable" as const }
               : {
                   outcome: "ok" as const,
+                  effectiveIncludePreReleases: false,
+                  includePreReleasesSource: "stable-default" as const,
                   manifest: updateCheckManifest("1.6.0"),
                 },
           ),
@@ -212,6 +214,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
@@ -246,6 +250,8 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
@@ -457,6 +463,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           armedHostCalls += 1;
           return {
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           };
         },
@@ -470,6 +478,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
           otherHostCalls += 1;
           return Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.7.0"),
           });
         },
@@ -535,6 +545,8 @@ describe("<HostSettingsPanel /> Overview arm-time capture — the remaining RPCs
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": async () => {

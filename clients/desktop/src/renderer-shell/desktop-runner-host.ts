@@ -60,7 +60,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostGetInstallationInfoResponse,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
 } from "../ipc-contracts/host-management-types";
 import type {
   AccessibilityThemeSnapshot,
@@ -329,7 +329,7 @@ export interface DesktopHostManagementBridge {
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
   maintenanceUpdateCheck(
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
-  ): Promise<HostUpdateCheckResponse>;
+  ): Promise<HostUpdateCheckResponseV11>;
   maintenanceDoctor(input: {
     readonly expectedHostId: string;
   }): Promise<MaintenanceDoctorProjection>;

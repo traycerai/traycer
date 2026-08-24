@@ -27,7 +27,7 @@ import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 import type {
   HostDoctorIssue as MaintenanceDoctorIssue,
   HostGetInstallationInfoResponse,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -1441,7 +1441,18 @@ export interface HostAvailableSnapshot {
 }
 
 export interface HostAvailableVersionsInput {
-  readonly includePreReleases: boolean;
+  /**
+   * The catalog override, tri-state: `true` explicitly includes release
+   * candidates, `false` explicitly excludes them, and `undefined` asks the CLI
+   * to derive inclusion from the installed host.
+   *
+   * `boolean | undefined` rather than an optional property, so a caller must
+   * state which of the three it means. Read it with `=== undefined`; the
+   * absent state is a real request, not a missing argument, and collapsing it
+   * to `false` is what would make an RC host's default catalog silently
+   * stable-only again.
+   */
+  readonly includePreReleases: boolean | undefined;
 }
 
 export type HostDoctorSeverity = "info" | "warning" | "error" | "fatal";
@@ -1931,7 +1942,7 @@ export interface IHostManagement {
   /** `host.update.check`'s answer from this machine's bundled CLI. */
   readonly maintenanceUpdateCheck: (
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
-  ) => Promise<HostUpdateCheckResponse>;
+  ) => Promise<HostUpdateCheckResponseV11>;
   /** `host.doctor`'s answer, minus the caller-owned transport vantage. */
   readonly maintenanceDoctor: (input: {
     readonly expectedHostId: string;

@@ -22,7 +22,7 @@ import type {
   HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
   InstallVersionOk,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
@@ -93,7 +93,7 @@ export interface HostManagementBridgeSurface {
   // response shapes, classified in main (see `host-management-ipc.ts`).
   maintenanceUpdateCheck(
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
-  ): Promise<HostUpdateCheckResponse>;
+  ): Promise<HostUpdateCheckResponseV11>;
   maintenanceDoctor(input: {
     readonly expectedHostId: string;
   }): Promise<MaintenanceDoctorProjection>;
@@ -214,7 +214,7 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
       ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceUpdateCheck, {
         includePreReleases,
         expectedHostId,
-      }) as Promise<HostUpdateCheckResponse>,
+      }) as Promise<HostUpdateCheckResponseV11>,
     maintenanceDoctor: ({ expectedHostId }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerMaintenanceDoctor, {
         expectedHostId,

@@ -59,5 +59,5 @@ export type {
 // and the preload keep their single ipc-contracts import path.
 export type {
   HostGetInstallationInfoResponse,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";

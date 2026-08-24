@@ -54,18 +54,6 @@ export function useDesktopAppUpdates(): DesktopAppUpdatesState {
   return { bridge, snapshot };
 }
 
-/**
- * The active release channel, as pushed from the Electron main process to
- * every window. This is the single per-window source of truth for the channel:
- * host-registry query identity, the Settings → Host available-versions filter,
- * and the RC toggle all read it, so they can never disagree within a window.
- *
- * `false` (stable only) in shells without the desktop update bridge.
- */
-export function useAllowPrereleaseUpdates(): boolean {
-  return useDesktopAppUpdates().snapshot.allowPrerelease;
-}
-
 function getDesktopAppUpdateStore(
   bridge: DesktopAppUpdatesBridge,
 ): DesktopAppUpdateStore {
