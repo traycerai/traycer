@@ -99,24 +99,14 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export interface FormatSingleLineOptions {
-  maxLength: number;
-  ellipsis: string;
-}
-
 /**
- * Trim, collapse whitespace, and truncate with an ellipsis. Returns the
- * empty string when the input has no non-whitespace characters.
+ * Re-exported, not defined here. The implementation moved to
+ * `lib/text/format-single-line.ts` so that a caller needing only the string
+ * helper does not pull in `clsx` + `tailwind-merge` through this module - see
+ * that file for why the chat find projection made that matter. Callers may
+ * import from either place; there is one implementation.
  */
-export function formatSingleLine(
-  input: string,
-  options: FormatSingleLineOptions,
-): string {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return "";
-  const singleLine = trimmed.replace(/\s+/g, " ");
-  const { maxLength, ellipsis } = options;
-  if (singleLine.length <= maxLength) return singleLine;
-  const cutoff = Math.max(0, maxLength - ellipsis.length);
-  return `${singleLine.slice(0, cutoff)}${ellipsis}`;
-}
+export {
+  formatSingleLine,
+  type FormatSingleLineOptions,
+} from "@/lib/text/format-single-line";

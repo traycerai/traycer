@@ -15,7 +15,7 @@ import type {
 } from "@/lib/composer/types";
 import { normalizeComposerContent } from "@/lib/composer/composer-content-normalizer";
 import { DEFAULT_GITHUB_MENTION_HOST } from "@traycer/protocol/common/github-mention-host";
-import { githubMentionTokenReference } from "@/lib/composer/mentions/github-mention-display";
+import { githubMentionTokenReference } from "@/lib/composer/mentions/github-mention-token";
 
 // Recognizes both picker triggers. This is only the LEXICAL shape - `$` in
 // particular matches far more prose than it should (`$20`, `$PATH`), so what a
