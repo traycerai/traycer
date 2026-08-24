@@ -403,6 +403,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
           row: row({
             runningDir: "/setup-failed",
             repoIdentifier: { owner: "acme", repo: "setup-failed" },
+            setupState: "failed",
             disabledReason: "setup_failed",
           }),
           fileChangeCount: null,
@@ -426,15 +427,22 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     });
 
     expect(model.rows.map((item) => item.disabledLabel)).toEqual([
-      "failed",
+      null,
       "not git",
     ]);
+    expect(model.rows[0].statusBadge).toEqual({
+      label: "setup failed",
+      pending: false,
+      disabled: false,
+      tone: "warning",
+      detail: "Setup did not complete, but the worktree is still usable.",
+    });
   });
 
   // The host's `isGitResolvePending` flag drives the render: a pending row
   // reads as "checking"; a resolved non-git row reads "not git"; a real
-  // setup-state reason keeps its label even if (defensively) marked pending.
-  it("renders a pending row as checking, resolved rows by their real label", () => {
+  // setup failure remains visible but is no longer a blocking label.
+  it("renders pending and blocking rows distinctly from setup warnings", () => {
     const model = buildGitDiffRepoSwitcherModel({
       roots: [
         rootInput({
@@ -465,6 +473,7 @@ describe("buildGitDiffRepoSwitcherModel", () => {
           row: row({
             runningDir: "/setup-failed",
             repoIdentifier: { owner: "acme", repo: "setup-failed" },
+            setupState: "failed",
             disabledReason: "setup_failed",
             isGitResolvePending: false,
           }),
@@ -485,7 +494,14 @@ describe("buildGitDiffRepoSwitcherModel", () => {
     ).toEqual([
       { disabledLabel: "checking", pending: true },
       { disabledLabel: "not git", pending: false },
-      { disabledLabel: "failed", pending: false },
+      { disabledLabel: null, pending: false },
     ]);
+    expect(model.rows[2].statusBadge).toEqual({
+      label: "setup failed",
+      pending: false,
+      disabled: false,
+      tone: "warning",
+      detail: "Setup did not complete, but the worktree is still usable.",
+    });
   });
 });
