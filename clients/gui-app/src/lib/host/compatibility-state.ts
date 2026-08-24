@@ -617,10 +617,18 @@ export function useHostStatusReprobeOnRowVersionChange(
  * The identifying members of a structured epoch requirement, as one nested
  * key segment.
  *
- * Every member is included rather than just the epoch:
- * `minimumKnownClientAppVersion` and `upgradeChannel` are what the dialog
- * actually PRINTS, so a change in either is a change the user would see, and
- * `observedClientAppVersionStatus` selects between the two body copies.
+ * Every member is included rather than just the epoch, and the list must stay
+ * in lockstep with `clientCompatibilityEquals` in
+ * `selection-authority-contract.ts` - the two are the same identity judgment
+ * made by two dedupe layers, and a member present in one and absent from the
+ * other lets a materially different requirement read as a duplicate at
+ * whichever layer runs first. `hostReleaseChannel` is the member that made
+ * this bite: it routes recovery (RC opt-in vs manual), so dropping a verdict
+ * whose only change is the channel leaves the dialog offering the wrong
+ * route. `minimumKnownClientAppVersion` and `upgradeChannel` are deprecated
+ * and currently `null` on the wire, but they remain schema members, so they
+ * stay here too rather than becoming a silent divergence from the equality
+ * check.
  *
  * A FIXED-LENGTH ARRAY, and `null` is preserved rather than coalesced. Two of
  * these members - `observedClientKind` and `observedClientAppVersion` - are
@@ -639,6 +647,7 @@ function clientCompatibilityKey(
   requirement: ClientCompatibilityRequirement | null,
 ): readonly (string | number | null)[] | null {
   if (requirement === null) return null;
+  const legacyRemedy = legacyRemedySegments(requirement);
   return [
     requirement.minimumCompatibilityEpoch,
     requirement.observedCompatibilityEpoch,
@@ -646,9 +655,27 @@ function clientCompatibilityKey(
     requirement.observedClientKind,
     requirement.observedClientAppVersion,
     requirement.observedClientAppVersionStatus,
-    requirement.minimumKnownClientAppVersion,
-    requirement.upgradeChannel,
+    ...legacyRemedy,
+    // `?? null` because this member is OPTIONAL on the wire, not nullable: a
+    // host predating the field omits the key entirely, so the value here is
+    // `string | undefined` while every other segment is `string | number |
+    // null`. Mapping absent to `null` keeps the array's fixed-length,
+    // no-coalescing-to-empty-string property intact - `null` and `""` still
+    // serialize differently, which is what stops two materially different
+    // requirements from colliding onto one key.
+    requirement.hostReleaseChannel ?? null,
   ];
+}
+
+interface LegacyRemedySegmentsSource {
+  readonly minimumKnownClientAppVersion: string | null;
+  readonly upgradeChannel: "stable" | "rc" | null;
+}
+
+function legacyRemedySegments(
+  requirement: LegacyRemedySegmentsSource,
+): readonly [string | null, string | null] {
+  return [requirement.minimumKnownClientAppVersion, requirement.upgradeChannel];
 }
 
 /**

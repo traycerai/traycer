@@ -277,8 +277,9 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
-    minimumKnownClientAppVersion: "1.2.0-rc.2",
-    upgradeChannel: "rc",
+    minimumKnownClientAppVersion: null,
+    upgradeChannel: null,
+    hostReleaseChannel: "rc",
   };
 
   function updateClientProps(
@@ -298,7 +299,7 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
     });
   }
 
-  it("titles the app update and names both versions", () => {
+  it("titles the app update and names the observed version plus the generic remedy", () => {
     renderModalWithProviders(updateClientProps({}));
     expect(screen.getByTestId("window-host-modal-title").textContent).toBe(
       "Update Traycer to continue",
@@ -307,7 +308,8 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
       "window-host-modal-description",
     ).textContent;
     expect(description).toContain("1.1.10");
-    expect(description).toContain("1.2.0-rc.2");
+    expect(description).toContain("the latest version");
+    expect(description).not.toContain("1.2.0-rc.2");
   });
 
   it("says so plainly when the host could not read a version", () => {

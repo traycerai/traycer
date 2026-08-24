@@ -1,5 +1,11 @@
 import type { ReactElement } from "react";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
@@ -9,10 +15,20 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
 } from "@/lib/windows/types";
 import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
+
+const mocks = vi.hoisted(() => ({
+  toastFromRunnerError: vi.fn(),
+}));
+
+vi.mock("@/lib/runner-error-toast", () => ({
+  toastFromRunnerError: mocks.toastFromRunnerError,
+}));
 
 /**
  * The remedy on the blocking "Update Traycer to continue" surface.
@@ -48,9 +64,12 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 /**
- * The host's structured requirement. `minimumKnownClientAppVersion` is the one
- * the version-sufficiency specs below vary: it is what a cached update has to
- * clear before this surface will offer it.
+ * The host's structured requirement.
+ *
+ * Current hosts always send `minimumKnownClientAppVersion` / `upgradeChannel`
+ * as null and stamp `hostReleaseChannel` with their own line. Sufficiency is
+ * compared as epochs, never as versions: `null` on the candidate is
+ * insufficient, not a free pass.
  */
 function requirement(
   overrides: Partial<ClientCompatibilityRequirement>,
@@ -62,8 +81,9 @@ function requirement(
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
-    minimumKnownClientAppVersion: "1.2.0",
-    upgradeChannel: "stable",
+    minimumKnownClientAppVersion: null,
+    upgradeChannel: null,
+    hostReleaseChannel: "stable",
     ...overrides,
   };
 }
@@ -74,6 +94,7 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "1.1.10",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -90,13 +111,36 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   );
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
-  readonly setAllowPrerelease = vi.fn(() => Promise.resolve(this.snapshot));
+  // Annotated with the full change type. Inference from this default narrows
+  // `outcome` to the literal `"changed"`, which then rejects a
+  // `mockResolvedValue` for `refused-update-pending` - the macOS standing
+  // refusal, which is exactly the case worth testing.
+  readonly setAllowPrerelease = vi.fn(
+    (): Promise<DesktopAppUpdateChannelChange> =>
+      Promise.resolve({ outcome: "changed", snapshot: this.snapshot }),
+  );
+  // Annotated with the full plan type rather than inferred from this default.
+  // Inference narrows `route` to the literal `"manual"`, which then rejects
+  // every `mockResolvedValue` for the other three routes - the exact cases
+  // these tests exist to cover.
+  readonly resolveCompatRecovery = vi.fn(
+    (): Promise<DesktopCompatRecoveryPlan> =>
+      Promise.resolve({
+        route: "manual",
+        rcCandidateVersion: null,
+        stagedVersion: null,
+      }),
+  );
 
   readonly getSnapshot = vi.fn((): Promise<DesktopAppUpdateSnapshot> =>
     Promise.resolve(this.snapshot),
   );
 
-  constructor(readonly snapshot: DesktopAppUpdateSnapshot) {}
+  private readonly handlers = new Set<
+    (snapshot: DesktopAppUpdateSnapshot) => void
+  >();
+
+  constructor(public snapshot: DesktopAppUpdateSnapshot) {}
 
   /**
    * Delivers the snapshot to the store immediately on subscribe.
@@ -108,8 +152,19 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
     dispose(): void;
   } {
+    this.handlers.add(handler);
     queueMicrotask(() => handler(this.snapshot));
-    return { dispose: () => undefined };
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  /** A later push from main - the update check landing after mount. */
+  push(next: DesktopAppUpdateSnapshot): void {
+    this.snapshot = next;
+    for (const handler of this.handlers) handler(next);
   }
 }
 
@@ -287,47 +342,20 @@ describe("<ClientUpdateRequiredAction /> manual fallback", () => {
     }
   });
 
-  it("routes an rc remedy straight to the link when this install follows stable", async () => {
-    // Channel mismatch: the updater will report "up to date" forever while the
-    // host keeps refusing, so offering a Download button that cannot find the
-    // build is the most confusing state this surface can produce.
-    const bridge = new FakeAppUpdatesBridge({
-      ...IDLE_SNAPSHOT,
-      status: "available",
-      allowPrerelease: false,
-      latestVersion: "1.1.11",
-    });
-    renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ upgradeChannel: "rc" })}
-      />,
-      bridge,
-    );
-    await waitFor(() => {
-      expect(bridge.getSnapshot).toHaveBeenCalled();
-    });
-    expect(
-      screen.getByTestId("client-update-required-download-page"),
-    ).toBeTruthy();
-    expect(screen.queryByTestId("client-update-required-download")).toBeNull();
-  });
-
-  it("prefers the updater when it has a build to offer", async () => {
+  it("prefers the updater when it has a build whose epoch clears the floor", async () => {
     const bridge = new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       status: "available",
       allowPrerelease: true,
       latestVersion: "1.2.0-rc.2",
+      latestCompatibilityEpoch: 2,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
     });
     renderAction(
       <ClientUpdateRequiredAction
         requirement={requirement({
-          upgradeChannel: "rc",
-          // The build the cache is holding IS the one the host asks for, so
-          // this spec stays about updater-vs-link preference rather than
-          // about version sufficiency (covered in its own describe below).
-          minimumKnownClientAppVersion: "1.2.0-rc.2",
+          hostReleaseChannel: "rc",
+          minimumCompatibilityEpoch: 2,
         })}
       />,
       bridge,
@@ -347,89 +375,106 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   /**
    * THE CACHED UPDATE IS NOT AUTOMATICALLY THE REMEDY.
    *
-   * The updater's snapshot is a cache: it can hold an `available` /
-   * `downloading` / `ready` build found at launch while the host raised its
-   * floor afterwards. Offering that build produces a restart into the SAME
-   * rejection - an update loop that never converges, behind a button that
-   * looks like the fix.
+   * Compared as epochs, never as versions. A `1.9.0` hotfix branched off a
+   * pre-epoch line is newer by every SemVer comparison and still does not
+   * clear a floor of 2 - Fable's channel-scoped invariant in test form: a
+   * stable `desktop-v*` below an RC-only floor is still the RC resolver's
+   * newest candidate, and only its own `compatibilityEpoch` refuses it.
    *
-   * Compared with the shared strict-SemVer comparator rather than by string,
-   * because prerelease ordering decides two of these cases and a lexical
-   * compare gets both backwards.
+   * `null` IS INSUFFICIENT. The predecessor read `minimumKnownClientAppVersion
+   * === null` as "the host named no minimum, so anything satisfies it" - a
+   * catastrophic reading now that epoch-only policy leaves that field
+   * permanently null. Here `null` means the candidate's generation could not
+   * be established.
    */
   function bridgeWith(
     status: "available" | "ready" | "downloading",
+    latestCompatibilityEpoch: number | null,
     latestVersion: string | null,
   ): FakeAppUpdatesBridge {
     return new FakeAppUpdatesBridge({
       ...IDLE_SNAPSHOT,
       status,
       latestVersion,
+      latestCompatibilityEpoch,
       allowPrerelease: true,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
       lastCheckIntent: "automatic",
     });
   }
 
-  it.each([
-    ["greater", "1.3.0", "1.2.0"],
-    ["equal", "1.2.0", "1.2.0"],
-    ["a release over the required prerelease", "1.2.0", "1.2.0-rc.2"],
-    ["a later prerelease", "1.2.0-rc.3", "1.2.0-rc.2"],
-  ])(
-    "OFFERS a cached update that is %s (%s >= %s)",
-    async (_label, latestVersion, required) => {
-      const bridge = bridgeWith("available", latestVersion);
-      renderAction(
-        <ClientUpdateRequiredAction
-          requirement={requirement({ minimumKnownClientAppVersion: required })}
-        />,
-        bridge,
-      );
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("client-update-required-download"),
-        ).toBeTruthy();
-      });
-    },
-  );
+  it("a null epoch on a READY snapshot must not render the install affordance", async () => {
+    // THE INVERTED ARM, asserted directly rather than via a recovery route:
+    // `status: "ready"` used to be enough to offer "Restart to update".
+    const bridge = bridgeWith("ready", null, "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.getSnapshot).toHaveBeenCalled();
+    });
+    await flushMicrotasks();
+    expect(screen.queryByTestId("client-update-required-install")).toBeNull();
+    expect(bridge.installUpdate).not.toHaveBeenCalled();
+  });
 
   it.each([
-    ["older", "1.2.0", "1.3.0"],
-    ["a prerelease of the required release", "1.2.0-rc.2", "1.2.0"],
-    ["an earlier prerelease", "1.2.0-rc.1", "1.2.0-rc.2"],
-    ["unparseable", "not-a-version", "1.2.0"],
-  ])(
-    "REFUSES a cached update that is %s (%s < %s) and shows the releases page",
-    async (_label, latestVersion, required) => {
-      const bridge = bridgeWith("available", latestVersion);
-      renderAction(
-        <ClientUpdateRequiredAction
-          requirement={requirement({ minimumKnownClientAppVersion: required })}
-        />,
-        bridge,
-      );
-      await waitFor(() => {
-        expect(
-          screen.getByTestId("client-update-required-download-page"),
-        ).toBeTruthy();
-      });
-      expect(
-        screen.queryByTestId("client-update-required-download"),
-      ).toBeNull();
-      // And it must not have been downloaded on our behalf either.
-      expect(bridge.downloadUpdate).not.toHaveBeenCalled();
-    },
-  );
-
-  it("REFUSES to offer a stale READY build - the restart would change nothing", async () => {
-    // The worst arm: `ready` means the insufficient build is already
-    // downloaded, so "Restart to update" is one click from a restart into the
-    // same rejection.
-    const bridge = bridgeWith("ready", "1.2.0");
+    ["equal to the floor", 2],
+    ["higher than the floor", 3],
+  ])("OFFERS a cached update whose epoch is %s", async (_label, epoch) => {
+    const bridge = bridgeWith("available", epoch, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download"),
+      ).toBeTruthy();
+    });
+  });
+
+  it("REFUSES a cached update whose epoch is below the floor", async () => {
+    const bridge = bridgeWith("available", 1, "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("client-update-required-download")).toBeNull();
+    expect(bridge.downloadUpdate).not.toHaveBeenCalled();
+  });
+
+  it("never lets a higher SemVer decide: lower epoch is still insufficient", async () => {
+    const bridge = bridgeWith("available", 1, "1.9.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-download-page"),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByTestId("client-update-required-download")).toBeNull();
+  });
+
+  it("REFUSES to offer a stale READY build - the restart would change nothing", async () => {
+    const bridge = bridgeWith("ready", 1, "1.2.0");
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
       />,
       bridge,
     );
@@ -443,10 +488,10 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
   });
 
   it("REFUSES to show progress for a stale DOWNLOADING build", async () => {
-    const bridge = bridgeWith("downloading", "1.2.0");
+    const bridge = bridgeWith("downloading", 1, "1.2.0");
     renderAction(
       <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
       />,
       bridge,
     );
@@ -458,41 +503,6 @@ describe("<ClientUpdateRequiredAction /> cached-update sufficiency", () => {
     expect(
       screen.queryByTestId("client-update-required-downloading"),
     ).toBeNull();
-  });
-
-  it("OFFERS the cached update when the host named no minimum build", async () => {
-    // Nothing to compare against. Refusing here would strand the user with no
-    // updater path at all over a fact the host declined to state, and the
-    // host's own reason already degrades to "install the latest version".
-    const bridge = bridgeWith("available", "1.2.0");
-    renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: null })}
-      />,
-      bridge,
-    );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("client-update-required-download"),
-      ).toBeTruthy();
-    });
-  });
-
-  it("REFUSES a cached update the updater cannot name", async () => {
-    // `latestVersion: null` with an `available` status - nothing proves the
-    // build helps, and an install that changes nothing costs a restart.
-    const bridge = bridgeWith("available", null);
-    renderAction(
-      <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
-      />,
-      bridge,
-    );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("client-update-required-download-page"),
-      ).toBeTruthy();
-    });
   });
 });
 
@@ -517,13 +527,14 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
       ...IDLE_SNAPSHOT,
       status: "available",
       latestVersion: "1.2.0",
+      latestCompatibilityEpoch: 1,
       allowPrerelease: true,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
       lastCheckIntent: "automatic",
     });
     renderAction(
       <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
       />,
       bridge,
     );
@@ -543,13 +554,14 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
       ...IDLE_SNAPSHOT,
       status: "available",
       latestVersion: "1.3.0",
+      latestCompatibilityEpoch: 2,
       allowPrerelease: true,
       lastCheckedAt: "2026-06-15T00:00:00.000Z",
       lastCheckIntent: "automatic",
     });
     renderAction(
       <ClientUpdateRequiredAction
-        requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+        requirement={requirement({ minimumCompatibilityEpoch: 2 })}
       />,
       bridge,
     );
@@ -573,12 +585,13 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
         status,
         installInFlight,
         latestVersion: "1.2.0",
+        latestCompatibilityEpoch: 1,
         allowPrerelease: true,
         lastCheckedAt: "2026-06-15T00:00:00.000Z",
       });
       renderAction(
         <ClientUpdateRequiredAction
-          requirement={requirement({ minimumKnownClientAppVersion: "1.3.0" })}
+          requirement={requirement({ minimumCompatibilityEpoch: 2 })}
         />,
         bridge,
       );
@@ -589,4 +602,240 @@ describe("<ClientUpdateRequiredAction /> does not re-ask an updater holding a bu
       expect(bridge.checkForUpdates).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("<ClientUpdateRequiredAction /> hostReleaseChannel routing", () => {
+  /**
+   * Interpreted HERE, once, and passed to main as a verdict. Assert on the
+   * argument the bridge received so there is never a second place that could
+   * decide an unrecognized channel means RC.
+   */
+  function idleBridge(): FakeAppUpdatesBridge {
+    return new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+  }
+
+  it("passes hostAllowsRcRecovery: true only for the exact string rc", async () => {
+    const bridge = idleBridge();
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ hostReleaseChannel: "rc" })}
+      />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.resolveCompatRecovery).toHaveBeenCalledWith({
+        minimumEpoch: 2,
+        hostAllowsRcRecovery: true,
+      });
+    });
+  });
+
+  it.each([
+    ["stable", "stable"],
+    ["dev", "dev"],
+    ["absent", undefined],
+    ["an unknown line", "canary"],
+  ] as const)(
+    "passes hostAllowsRcRecovery: false for %s",
+    async (_label, hostReleaseChannel) => {
+      const bridge = idleBridge();
+      renderAction(
+        <ClientUpdateRequiredAction
+          requirement={requirement({ hostReleaseChannel })}
+        />,
+        bridge,
+      );
+      await waitFor(() => {
+        expect(bridge.resolveCompatRecovery).toHaveBeenCalledWith({
+          minimumEpoch: 2,
+          hostAllowsRcRecovery: false,
+        });
+      });
+    },
+  );
+});
+
+describe("<ClientUpdateRequiredAction /> enable-rc arm", () => {
+  it("names the probe's version and calls setAllowPrerelease(true)", async () => {
+    const snapshot: DesktopAppUpdateSnapshot = {
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    };
+    const bridge = new FakeAppUpdatesBridge(snapshot);
+    bridge.resolveCompatRecovery.mockResolvedValue({
+      route: "enable-rc",
+      rcCandidateVersion: "1.2.0-rc.4",
+      stagedVersion: null,
+    });
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ hostReleaseChannel: "rc" })}
+      />,
+      bridge,
+    );
+    // Role query, not a test id: this is an interactive control, and its
+    // ACCESSIBLE NAME is the thing the user reads before consenting to a
+    // channel change. Asserting on the name is what pins that the build is
+    // actually named in the offer.
+    const rcButton = await screen.findByRole("button", {
+      name: /Enable RC updates and get 1\.2\.0-rc\.4/u,
+    });
+    fireEvent.click(rcButton);
+    await waitFor(() => {
+      expect(bridge.setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("reports a failed RC channel change", async () => {
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    bridge.resolveCompatRecovery.mockResolvedValue({
+      route: "enable-rc",
+      rcCandidateVersion: "1.2.0-rc.4",
+      stagedVersion: null,
+    });
+    const error = new Error("preference write failed");
+    bridge.setAllowPrerelease.mockRejectedValue(error);
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ hostReleaseChannel: "rc" })}
+      />,
+      bridge,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Enable RC updates and get 1\.2\.0-rc\.4/u,
+      }),
+    );
+    await waitFor(() => {
+      expect(mocks.toastFromRunnerError).toHaveBeenCalledWith(
+        error,
+        "Couldn't enable RC updates",
+      );
+    });
+  });
+
+  it("re-resolves the plan when a check lands an insufficient candidate after mount", async () => {
+    // THE SIDE-EFFECT REGRESSION, not a caching nicety. The plan is cached at
+    // `staleTime: Infinity`, and resolving one is what discards an insufficient
+    // staged artifact, disarms quit-time install, and produces the macOS
+    // staged-update warning.
+    //
+    // Opening sequence: the dialog mounts while the mount-triggered check is
+    // still in flight, so the first plan resolves against NOTHING held. The
+    // check then lands an INSUFFICIENT candidate. `candidateSufficient` is
+    // still false and `allowPrerelease` has not moved - so without the held
+    // candidate's status in the key, main is never asked again and every one of
+    // those side effects is silently skipped.
+    const bridge = new FakeAppUpdatesBridge({
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    });
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(bridge.resolveCompatRecovery).toHaveBeenCalledTimes(1);
+    });
+
+    bridge.push({
+      ...IDLE_SNAPSHOT,
+      sequence: 2,
+      status: "available",
+      latestVersion: "1.2.0",
+      latestCompatibilityEpoch: 1,
+      lastCheckedAt: "2026-06-15T00:00:01.000Z",
+      lastCheckIntent: "automatic",
+    });
+
+    await waitFor(() => {
+      expect(bridge.resolveCompatRecovery).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("a refused opt-in invalidates the plan and re-resolves to the honest next step", async () => {
+    // Main can answer refused-update-pending if a download started between
+    // the probe and the click, or (macOS) an artifact reached native staging
+    // in that window. Asking again is the correct response; reporting a
+    // failure is not.
+    const snapshot: DesktopAppUpdateSnapshot = {
+      ...IDLE_SNAPSHOT,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    };
+    const bridge = new FakeAppUpdatesBridge(snapshot);
+    bridge.setAllowPrerelease.mockResolvedValue({
+      outcome: "refused-update-pending",
+      snapshot,
+    });
+    bridge.resolveCompatRecovery
+      .mockResolvedValueOnce({
+        route: "enable-rc",
+        rcCandidateVersion: "1.2.0-rc.4",
+        stagedVersion: null,
+      })
+      .mockResolvedValueOnce({
+        route: "restart-to-clear-staged",
+        rcCandidateVersion: null,
+        stagedVersion: "1.1.11",
+      });
+    renderAction(
+      <ClientUpdateRequiredAction
+        requirement={requirement({ hostReleaseChannel: "rc" })}
+      />,
+      bridge,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Enable RC updates/u }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-staged-note"),
+      ).toBeTruthy();
+    });
+    expect(bridge.resolveCompatRecovery).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("<ClientUpdateRequiredAction /> restart-to-clear-staged arm", () => {
+  it("states the staged fact, keeps the manual link, and offers no install", async () => {
+    const snapshot: DesktopAppUpdateSnapshot = {
+      ...IDLE_SNAPSHOT,
+      status: "ready",
+      latestVersion: "1.1.11",
+      latestCompatibilityEpoch: 1,
+      lastCheckedAt: "2026-06-15T00:00:00.000Z",
+      lastCheckIntent: "automatic",
+    };
+    const bridge = new FakeAppUpdatesBridge(snapshot);
+    bridge.resolveCompatRecovery.mockResolvedValue({
+      route: "restart-to-clear-staged",
+      rcCandidateVersion: null,
+      stagedVersion: "1.1.11",
+    });
+    renderAction(
+      <ClientUpdateRequiredAction requirement={requirement({})} />,
+      bridge,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("client-update-required-staged-note"),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("client-update-required-download-page"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("client-update-required-install")).toBeNull();
+    expect(screen.queryByTestId("client-update-required-enable-rc")).toBeNull();
+  });
 });

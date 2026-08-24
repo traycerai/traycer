@@ -162,7 +162,9 @@ describe("compat verdict dedupe and the client-compatibility requirement", () =>
       ),
     ]);
     expect(reported).toHaveLength(2);
-    expect(reported[1]?.minimumKnownClientAppVersion).toBe("1.3.0");
+    expect(reported[1]).toMatchObject({
+      minimumKnownClientAppVersion: "1.3.0",
+    });
   });
 
   it("STILL dedupes an identical verdict re-rendered", () => {

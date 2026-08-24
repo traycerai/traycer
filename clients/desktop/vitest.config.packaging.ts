@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { ZOD_INLINE_SERVER_DEPS } from "./vitest.shared";
 
 // Dedicated config for the real `electron-builder` packaging test - kept
 // entirely separate from `vitest.config.ts` (the default `bun run test`
@@ -10,6 +11,7 @@ import { defineConfig } from "vitest/config";
 // `bun run test:packaging`.
 export default defineConfig({
   test: {
+    server: ZOD_INLINE_SERVER_DEPS,
     include: ["scripts/prepack/__integration_tests__/**/*.test.ts"],
     globals: false,
     fileParallelism: false,

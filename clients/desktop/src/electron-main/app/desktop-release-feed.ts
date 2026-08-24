@@ -16,6 +16,7 @@ import type {
   UpdateFileInfo,
   UpdateInfo,
 } from "electron-updater/out/types";
+import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
 
 // electron-updater's HTTP executor reads a `redirect` field the node `http`
@@ -309,6 +310,61 @@ function releaseHasApplicableInstaller(
       lowerName.endsWith(extension),
     );
   });
+}
+
+/**
+ * THE one reading of `compatibilityEpoch` off an update document, wherever that
+ * document reaches us.
+ *
+ * Two callers with genuinely different shapes in hand - the updater's
+ * `update-available` / `update-downloaded` `info` object, and a channel manifest
+ * this module fetched itself during the RC probe - and they must agree to the
+ * letter, because a candidate the probe calls sufficient is one the updater will
+ * later re-read at `update-available` and must not then call insufficient.
+ *
+ * `unknown` in, narrowed here, and NOT via a cast: `UpdateInfo` declares no such
+ * member (the key survives as an unknown top-level YAML key, see
+ * `parseUpdateInfo`), and this repo bans `as any` / `as unknown`. Same shape as
+ * {@link readManifestString} directly below, deliberately.
+ *
+ * `null` is returned for absent, non-numeric, non-integer, and non-positive
+ * alike, and the caller must treat all of them as INSUFFICIENT rather than as
+ * "legacy". A build nobody has run yet has not asserted epoch 1 by omission -
+ * only a client the host observed on the wire ever gets that reading.
+ */
+export function readCompatibilityEpoch(value: unknown): number | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const candidate: unknown = value["compatibilityEpoch"];
+  // SCALAR VALIDITY comes from the protocol package, which is where the host's
+  // own admission gate reads it from. Re-deriving "positive safe integer" here
+  // is how the desktop and the CLI drifted into two copies of one rule; the
+  // record-field extraction above is the only part that is genuinely local to
+  // this carrier shape.
+  return typeof candidate === "number" && isValidCompatibilityEpoch(candidate)
+    ? candidate
+    : null;
+}
+
+/**
+ * The stamped epoch of a channel manifest, read through electron-updater's own
+ * parser.
+ *
+ * Going through {@link parseManifest} rather than a local YAML read is the
+ * point: the RC probe must see the document exactly as the updater would if the
+ * feed were pointed at this release, custom-key survival included. A manifest
+ * that does not parse reads `null` - the same conservative answer as one that
+ * carries no stamp.
+ */
+export function readManifestCompatibilityEpoch(
+  rawManifest: string,
+  channelFile: string,
+  manifestUrl: string,
+): number | null {
+  return readCompatibilityEpoch(
+    parseManifest(rawManifest, channelFile, manifestUrl),
+  );
 }
 
 export function readReleaseAssets(value: unknown): DesktopReleaseAsset[] {
