@@ -40,7 +40,7 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
-    "@capacitor/cli": "8.4.2",
+    "@capacitor/cli": "8.5.0",
     "@rolldown/plugin-babel": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/router-plugin": "catalog:",
