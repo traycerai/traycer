@@ -1,14 +1,15 @@
-// The whole chain the mobile back swipe rides, end to end on the history a
-// phone actually gets: a PLAIN memory history with no persistent-history
-// controller brand, which is what the Capacitor bundle boots with. The pieces
-// are all real - the tab-navigation controller, its route bridge, the tabs
-// store and the shared `goBack` action - because the claim under test is that
-// they compose, not that any one of them works.
+// The whole chain the mobile back swipe rides, end to end. The pieces are all
+// real - the tab-navigation controller, its route bridge, the tabs store and
+// the shared `goBack` action - because the claim under test is that they
+// compose, not that any one of them works.
 //
-// What makes this worth pinning: `goBack` refused outright on an unbranded
-// history until the fallback existed, so every assertion here would have held
-// against a shell where the swipe did nothing at all. The activations before
-// the back are what make it a real re-activation rather than a no-op.
+// TWO HISTORIES, and the split is the point. The suites below build a PLAIN
+// history to pin the unbranded fallback, which is still what a browser tab
+// gets and what `goBack` must keep answering on. The last suite asks the
+// question none of them can: which history the installed mobile app actually
+// BOOTS with. Every fixture here constructs its own, so all of them would hold
+// against a shell whose real history nothing ever writes to - and that is the
+// shape this feature shipped in, recognizing perfectly and navigating nowhere.
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,7 +33,11 @@ import {
   type UseNavigateResult,
 } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
-import type { AppRouter } from "@/router";
+import { createAppRouter, type AppRouter } from "@/router";
+import {
+  getHistoryController,
+  historyNavChromeAvailable,
+} from "@/lib/history-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -99,6 +104,30 @@ function focusedKind(): string | null {
 }
 
 /**
+ * Two CROSS-ITEM activations, which is what makes them pushes rather than
+ * focus-replaces - the same shape as a phone leaving one top-level surface for
+ * another.
+ */
+async function activateSettingsThenHistory(): Promise<void> {
+  const navigate = navigateProbe.current;
+  if (navigate === null) throw new Error("router never published navigate");
+  await act(async () => {
+    activateTabIntent(navigate, settingsTabIntent("general"), undefined);
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(focusedKind()).toBe("settings");
+  });
+  await act(async () => {
+    activateTabIntent(navigate, historyTabIntent(), undefined);
+    await Promise.resolve();
+  });
+  await waitFor(() => {
+    expect(focusedKind()).toBe("history");
+  });
+}
+
+/**
  * The app's real route tree, for the suite that only needs router CONTEXT -
  * the swipe hook reads `useRouter().history` and never renders a route.
  */
@@ -135,29 +164,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  setMobileApp(false);
   __resetTabNavigationControllerForTesting();
 });
 
 describe("mobile back navigation over a plain history", () => {
-  async function activateSettingsThenHistory(): Promise<void> {
-    const navigate = navigateProbe.current;
-    if (navigate === null) throw new Error("router never published navigate");
-    await act(async () => {
-      activateTabIntent(navigate, settingsTabIntent("general"), undefined);
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(focusedKind()).toBe("settings");
-    });
-    await act(async () => {
-      activateTabIntent(navigate, historyTabIntent(), undefined);
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(focusedKind()).toBe("history");
-    });
-  }
-
   it("re-activates the previous surface on a back step", async () => {
     const { history, router } = buildRouter();
     render(<RouterProvider router={router} />);
@@ -395,5 +406,81 @@ describe("useMobileHistorySwipes", () => {
 
       expect(backSpy).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// The half every suite above was handed for free: a stack with something in it.
+// Each one CONSTRUCTS its history, so all of them would pass unchanged on a
+// shell whose real history nothing ever writes to - which is exactly the shape
+// the feature shipped in. What is pinned here is the boot decision itself:
+// which history the installed mobile app gets, and that ordinary surface
+// changes make it grow.
+describe("the history the mobile app actually boots with", () => {
+  function mobileAppHistory(): RouterHistory {
+    setMobileApp(true);
+    return createAppRouter(null, null).history;
+  }
+
+  /** The lightweight tree from this file's other suites, over a given history. */
+  function renderShellOver(history: RouterHistory) {
+    const rootRoute = createRootRoute({ component: ShellLike });
+    const anyRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "$",
+      component: () => <div data-testid="surface" />,
+    });
+    return createRouter({
+      routeTree: rootRoute.addChildren([anyRoute]),
+      history,
+    });
+  }
+
+  it("owns its back stack, which the browser build still does not", () => {
+    const mobile = mobileAppHistory();
+    expect(getHistoryController(mobile)).not.toBeNull();
+
+    setMobileApp(false);
+    expect(
+      getHistoryController(createAppRouter(null, null).history),
+    ).toBeNull();
+  });
+
+  // The stack is the phone's, the CHROME is not: the same brand that lights up
+  // the desktop's arrows, mouse buttons and palette rows must stay dark on a
+  // header with no room for them.
+  it("carries the stack without carrying the desktop's chrome", () => {
+    const mobile = mobileAppHistory();
+    expect(historyNavChromeAvailable(mobile)).toBe(false);
+  });
+
+  it("grows an entry when the user changes surface", async () => {
+    const history = mobileAppHistory();
+    const controller = getHistoryController(history);
+    if (controller === null) throw new Error("mobile history lost its brand");
+    // A cold launch starts at the landing with nothing behind it - the state
+    // every one of these surfaces is reached FROM, and the state that makes a
+    // seeded fixture unable to see this bug.
+    expect(controller.getIndex()).toBe(0);
+    expect(history.canGoBack()).toBe(false);
+
+    render(<RouterProvider router={renderShellOver(history)} />);
+    await waitFor(() => {
+      expect(navigateProbe.current).not.toBeNull();
+    });
+    await activateSettingsThenHistory();
+
+    // Two cross-item activations, two entries. Without them the recognizer
+    // fires, every gate passes, and `goBack` lands on an index that cannot move.
+    expect(controller.getIndex()).toBe(2);
+    expect(history.canGoBack()).toBe(true);
+
+    await act(async () => {
+      goBack({ history });
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(focusedKind()).toBe("settings");
+    });
+    expect(controller.getIndex()).toBe(1);
   });
 });
