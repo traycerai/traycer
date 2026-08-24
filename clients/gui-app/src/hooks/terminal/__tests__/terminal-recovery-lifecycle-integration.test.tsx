@@ -123,6 +123,13 @@ interface HostFixture {
   createCallCount: () => number;
 }
 
+function requireHandle(
+  handle: TerminalSessionStoreHandle | null,
+): TerminalSessionStoreHandle {
+  if (handle === null) throw new Error("expected terminal session handle");
+  return handle;
+}
+
 function buildHostFixture(
   sessionId: string,
   kind: TerminalSessionKind,
@@ -199,7 +206,7 @@ function BootstrapSubtree(props: BootstrapSubtreeProps): ReactNode {
   const createMutate = create.mutate;
   useEffect(() => {
     if (hostHasSession === null) return;
-    if (hostHasSession === true) return;
+    if (hostHasSession) return;
     if (!createIsIdle) return;
     createMutate({
       scope: SCOPE,
@@ -322,8 +329,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       );
 
       await waitFor(() => expect(latestHandle).not.toBeNull());
-      const firstHandle = latestHandle;
-      if (firstHandle === null) throw new Error("expected initial handle");
+      const firstHandle = requireHandle(latestHandle);
       expect(firstHandle.store.getState().reattachMode).toBe("live");
       expect(fixture.createCallCount()).toBe(0);
 
@@ -339,8 +345,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
         expect(latestHandle).not.toBeNull();
         expect(latestHandle).not.toBe(firstHandle);
       });
-      const secondHandle = latestHandle;
-      if (secondHandle === null) throw new Error("expected recovered handle");
+      const secondHandle = requireHandle(latestHandle);
       expect(secondHandle.store.getState().reattachMode).toBe("live");
       expect(secondHandle.store.getState().status).not.toBe("reaped");
       // Reattached to the still-listed session - never created a new one.
@@ -380,8 +385,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
       );
 
       await waitFor(() => expect(latestHandle).not.toBeNull());
-      const firstHandle = latestHandle;
-      if (firstHandle === null) throw new Error("expected initial handle");
+      const firstHandle = requireHandle(latestHandle);
       expect(firstHandle.store.getState().reattachMode).toBe("live");
 
       // The transport drops (recoverable "lost", not a confirmed reap) AND
@@ -398,8 +402,7 @@ describe("terminal recovery lifecycle integration (real recovery + registry + li
         expect(latestHandle).not.toBeNull();
         expect(latestHandle).not.toBe(firstHandle);
       });
-      const secondHandle = latestHandle;
-      if (secondHandle === null) throw new Error("expected recovered handle");
+      const secondHandle = requireHandle(latestHandle);
       expect(secondHandle.store.getState().reattachMode).toBe("fresh");
       expect(secondHandle.store.getState().status).not.toBe("lost");
       expect(fixture.createCallCount()).toBe(1);
