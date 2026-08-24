@@ -233,12 +233,12 @@ function removePendingAction(
 
 /**
  * `TERMINAL_NOT_FOUND` (see `terminal-stream-resolver.ts`'s subscribe-time
- * catch) is the host authoritatively confirming this session id no longer
- * exists - reattaching to it can never succeed. Every other closed reason
- * (a plain transport drop, another fatal code, or no reason at all) is
- * treated as recoverable: the session may simply be unreachable right now.
+ * catch) authoritatively confirms that this handle's PTY incarnation no longer
+ * exists. A durable terminal with the same session id may already be restored,
+ * so the renderer must replace this handle before reattaching. Every other
+ * closed reason is treated as a recoverable attachment loss.
  */
-function isDefinitiveSessionLoss(reason: StreamCloseReason | null): boolean {
+function isDefinitiveHandleLoss(reason: StreamCloseReason | null): boolean {
   return (
     reason !== null &&
     reason.kind === "fatalError" &&
@@ -254,7 +254,7 @@ function nextLifecycleStatusAfterConnectionStatus(
   if (status !== "closed" || current === "exited") {
     return current;
   }
-  if (isDefinitiveSessionLoss(reason)) {
+  if (isDefinitiveHandleLoss(reason)) {
     return "reaped";
   }
   return "lost";
@@ -696,8 +696,9 @@ export function createTerminalSessionStore(
           // If the stream drops before a snapshot, "creating" would otherwise
           // survive forever and leave the tile stuck on its loading state.
           // Exited sessions remain exited. A closed stream otherwise splits on
-          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal is a definitive
-          // "this session is gone" ("reaped") - anything else is a recoverable
+          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal definitively ends
+          // this handle's PTY incarnation ("reaped"). The durable session id
+          // may already point at a replacement; anything else is a recoverable
           // "lost" renderer attachment worth auto-retrying.
           status: nextLifecycleStatusAfterConnectionStatus(
             status,

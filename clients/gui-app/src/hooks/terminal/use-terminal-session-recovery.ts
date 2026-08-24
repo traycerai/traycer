@@ -7,12 +7,13 @@
  * refresh.
  *
  * This hook drives a SCOPED refresh instead: on a `"lost"` or `"reaped"`
- * handle it force-releases the dead session store and bumps `recoverNonce`.
- * The owning tile keys its bootstrap subtree on that nonce, so the whole
- * `terminal.list -> create -> resume` bootstrap re-runs - for a TUI agent that
- * re-issues `prepareLaunch`, which resumes the conversation from disk.
- * Re-running the real bootstrap reuses its create-then-acquire ordering, so the
- * fresh store never subscribes to the dead handle.
+ * handle it force-releases the dead session store, waits for a fresh
+ * `terminal.list`, and then bumps `recoverNonce`. The owning tile keys its
+ * bootstrap subtree on that nonce, so the whole `terminal.list -> create ->
+ * resume` bootstrap re-runs - for a TUI agent that re-issues `prepareLaunch`,
+ * which resumes the conversation from disk. Waiting for fresh host authority
+ * prevents retained query data from remounting a subscriber against the
+ * already-dead PTY incarnation.
  *
  * Auto-recovery is capped at {@link MAX_AUTO_RECOVERIES} consecutive attempts so
  * a session that keeps dying can't loop forever; past the cap the tile shows a
@@ -48,22 +49,34 @@ export function useTerminalSessionRecovery(input: {
   const queryClient = useQueryClient();
   const autoAttemptsRef = useRef(0);
   const recoveryExhaustionReportedRef = useRef(false);
+  const recoveryInFlightRef = useRef(false);
   const [recoverNonce, setRecoverNonce] = useState(0);
   const [recoveryExhausted, setRecoveryExhausted] = useState(false);
 
-  const doRecover = useCallback(() => {
+  const doRecover = useCallback((): boolean => {
+    if (recoveryInFlightRef.current) return false;
+    recoveryInFlightRef.current = true;
     // Drop the dead, warm-kept store so the remounted bootstrap acquires a fresh
-    // one instead of re-resolving the lost handle, and invalidate the
-    // host-session list so `hostHasSession` reflects the reaped PTY before the
-    // new store subscribes (the bootstrap gates acquisition on the list).
+    // one instead of re-resolving the lost handle. Do not remount until the
+    // active host-session list refetch has settled: TanStack retains old data
+    // while fetching, and that stale `running` row would otherwise enable a
+    // premature subscription to the same missing PTY.
     getTerminalSessionRegistry().forceRelease(instanceId);
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(hostId, "terminal.list"),
-    });
-    setRecoverNonce((n) => n + 1);
+    void queryClient
+      .invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(hostId, "terminal.list"),
+      })
+      .then(() => {
+        setRecoverNonce((n) => n + 1);
+      })
+      .finally(() => {
+        recoveryInFlightRef.current = false;
+      });
+    return true;
   }, [instanceId, hostId, queryClient]);
 
   const onSessionLost = useCallback(() => {
+    if (recoveryInFlightRef.current) return;
     if (autoAttemptsRef.current >= MAX_AUTO_RECOVERIES) {
       setRecoveryExhausted(true);
       if (!recoveryExhaustionReportedRef.current) {
@@ -72,8 +85,7 @@ export function useTerminalSessionRecovery(input: {
       }
       return;
     }
-    autoAttemptsRef.current += 1;
-    doRecover();
+    if (doRecover()) autoAttemptsRef.current += 1;
   }, [doRecover, onRecoveryExhausted]);
 
   const onSessionHealthy = useCallback(() => {

@@ -249,9 +249,13 @@ export class TerminalSessionRegistry {
     return true;
   }
 
-  release(instanceId: string): void {
+  release(instanceId: string, handle: TerminalSessionStoreHandle): void {
     const entry = this.entries.get(instanceId);
     if (entry === undefined) return;
+    // A defunct handle may be replaced while an older consumer is still
+    // mounted. Its eventual effect cleanup must not release a lease belonging
+    // to the replacement incarnation now registered under the same instance.
+    if (entry.handle !== handle) return;
     if (entry.leases <= 0) return;
     entry.leases -= 1;
     if (entry.leases > 0) return;

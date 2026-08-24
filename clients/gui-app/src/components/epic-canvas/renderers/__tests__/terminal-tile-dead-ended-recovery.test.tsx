@@ -10,7 +10,6 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
-import type { TerminalLifecycleStatus } from "@/stores/terminals/terminal-session-store";
 
 // `terminal-tile.tsx` drives automatic recovery off a handle that can no
 // longer address its PTY: `if (status === "lost" || status === "reaped")
@@ -45,7 +44,7 @@ const recoveryHandle = {
   store: create(() => ({
     // Not `as const`: the tests below mutate `status` post-mount, which a
     // single-literal-narrowed type would reject at the `setState` call site.
-    status: "running" as TerminalLifecycleStatus,
+    status: "running",
     connectionStatus: "open" as const,
     exitCode: null as number | null,
     exitReason: null as TerminalSessionExitReason | null,

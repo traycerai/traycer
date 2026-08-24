@@ -234,7 +234,7 @@ export function useTerminalSessionHandle(
     setHandle(next);
 
     return () => {
-      registry.release(args.instanceId);
+      registry.release(args.instanceId, next);
     };
     // `openTransport` is referentially stable and reads its deps live;
     // `transportKey` already encodes user + host + endpoint identity;

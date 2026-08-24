@@ -948,7 +948,6 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalConnectionOverlay
             state={overlayState}
             onReconnect={props.recovery.onManualReconnect}
-            onClose={props.onClose}
             testId={`terminal-connection-overlay-${props.tileId}`}
           />
         ) : null}

@@ -5,7 +5,6 @@ import { create } from "zustand";
 import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { TerminalLifecycleStatus } from "@/stores/terminals/terminal-session-store";
 
 // `terminal-tile.tsx` and `tui-agent-tile.tsx` both drive automatic recovery
 // off the SAME condition: `if (status === "lost" || status === "reaped")
@@ -30,7 +29,7 @@ const recoveryHandle = {
   store: create(() => ({
     // Not `as const`: the tests below mutate `status` post-mount, which a
     // single-literal-narrowed type would reject at the `setState` call site.
-    status: "running" as TerminalLifecycleStatus,
+    status: "running",
     connectionStatus: "open" as const,
     exitCode: null as number | null,
     exitReason: null as TerminalSessionExitReason | null,
