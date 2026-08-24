@@ -4,7 +4,7 @@ import type { LeftPanelHeaderSlotProps } from "@/components/epic-canvas/sidebar/
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { RefreshIcon } from "@/components/refresh-icon";
 import {
   selectGitPanelEpicState,
   useGitPanelStore,
@@ -120,13 +120,7 @@ export function GitDiffPanelActions(props: LeftPanelHeaderSlotProps) {
           disabled={selectedRepo === null || refresh.refreshing}
           data-testid="git-diff-panel-refresh"
         >
-          {refresh.refreshing ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
+          <RefreshIcon refreshing={refresh.refreshing} />
           Refresh
         </DropdownMenuItem>
       </DropdownMenuContent>

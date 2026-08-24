@@ -443,9 +443,15 @@ function ProfileRateLimitMenuTrigger({
   }
   const label = switchLabel(primaryTarget.profile);
   return (
+    // `w-full` below `sm`, where the banner is a single column: the group is
+    // `w-fit` by default, which would leave the chevron trigger mid-row and
+    // make the menu's `align="end"` measure from a left-of-centre edge. Spanning
+    // the row puts the trigger back on the row's end, so one alignment is
+    // correct at every width - and the primary action's `flex-1` finally has
+    // room to do what it was written for.
     <ButtonGroup
       aria-label="Profile switch actions"
-      className="min-w-0 max-w-full sm:justify-self-end"
+      className="w-full min-w-0 max-w-full sm:w-fit sm:justify-self-end"
     >
       <Button
         type="button"
@@ -505,11 +511,21 @@ function ProfileRateLimitMenuContent({
   readonly onSwitchProfile: (profileId: string | null) => void;
 }): ReactNode {
   return (
+    // `side="top"` is a preference, not a pin: the menu wants to open over the
+    // transcript rather than down across the composer it belongs to, and it
+    // keeps the usage sidecar's preferred right-hand space clear of the send
+    // controls. Collisions stay ON so that preference yields when the space is
+    // not actually there - a pinned placement on a phone put a 24rem menu off
+    // the left edge, and a surface the viewport has clipped protects nothing.
+    // The sidecar is unaffected: it re-measures its anchor once Radix's real
+    // placement lands (`waitForAnchorPlacement`), which a shifted or flipped
+    // placement satisfies exactly as a static one does, and it hides itself
+    // when neither side has room. `collisionPadding` comes from the primitive,
+    // which defaults it to the device insets.
     <DropdownMenuContent
       align="end"
       side="top"
       sideOffset={8}
-      avoidCollisions={false}
       className="w-[min(90vw,24rem)]"
       onInteractOutside={(event) => {
         if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();

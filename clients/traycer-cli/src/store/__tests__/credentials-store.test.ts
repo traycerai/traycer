@@ -10,6 +10,7 @@ import {
   createStoreBackedRevalidator,
   withCommitRetry,
 } from "../credentials-store";
+import { fakeCredentialsMutationStore } from "../../__tests__/support/credentials-mutation-store";
 
 // Unit-tests the store-backed revalidator's outcome mapping (§7). The locked
 // `rotate` itself (WAL commit, guards, single-spend) is covered in the protocol
@@ -28,17 +29,7 @@ function pair(token: string): StoredCredentials {
 function storeReturning(
   rotate: () => Promise<MutationResult>,
 ): CredentialsMutationStore {
-  return {
-    read: vi.fn(),
-    rotate: vi.fn(rotate),
-    signIn: vi.fn(),
-    signOut: vi.fn(),
-    updateProfile: vi.fn(),
-    guardedSignIn: vi.fn(),
-    migrateFirstWrite: vi.fn(),
-    hasPendingContinuation: () => false,
-    dispose: vi.fn(),
-  };
+  return fakeCredentialsMutationStore({ rotate: vi.fn(rotate) });
 }
 
 function revalidatorFor(

@@ -22,6 +22,7 @@ import {
 import { ArrowLeftIcon } from "lucide-react";
 import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
+import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
 import {
   OpenerDeepView,
@@ -63,7 +64,11 @@ export function PaneOpener(props: PaneOpenerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!active) return;
+    // Suppress autofocus on coarse pointers: opening an empty pane on a phone
+    // would otherwise pop the soft keyboard. Desktop (fine pointer) is
+    // unchanged. Command-time read - the opener never re-opens across a
+    // viewport change, so it needs no reactive dependency.
+    if (!active || isMobileViewport()) return;
     const input = containerRef.current?.querySelector<HTMLInputElement>(
       'input[data-slot="command-input"]',
     );

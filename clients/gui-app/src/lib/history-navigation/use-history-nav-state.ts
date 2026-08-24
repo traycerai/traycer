@@ -18,6 +18,24 @@ const DISABLED_STATE: HistoryNavState = {
 };
 
 /**
+ * What a history with no controller brand can report. Frozen module constants
+ * rather than fresh objects, because `useSyncExternalStore` compares snapshots
+ * by reference and would re-render forever on a new one per read.
+ *
+ * `canGoForward` is false in BOTH of them, and that is not a claim that there
+ * is nothing ahead - a plain history cannot answer the question at all (see
+ * `stepPlainHistory`). It is the honest reading of a signal that does not
+ * exist: a control is only shown as available when something can prove it
+ * leads somewhere. The ACTION stays attemptable regardless, which is the whole
+ * asymmetry - a deliberate gesture may try and land nowhere, while a
+ * permanently-lit affordance would be a standing lie.
+ */
+const BACK_ONLY_STATE: HistoryNavState = {
+  canGoBack: true,
+  canGoForward: false,
+};
+
+/**
  * Load-free enabled/disabled signal for the back/forward arrows.
  *
  * Subscribes to BOTH the CURRENT router history's controller store AND
@@ -32,8 +50,11 @@ const DISABLED_STATE: HistoryNavState = {
  * stack has room to move; a scan bounded by the (capped) entry count is cheap
  * enough to run on every snapshot read.
  *
- * Under browser/memory history (no controller) the snapshot is the stable
- * `DISABLED_STATE`, so both arrows stay disabled.
+ * Under a history with no controller (browser/memory) it subscribes to that
+ * history instead and reports the one thing it can prove: whether the session
+ * has navigated at all, read off the index the router stamps into each entry.
+ * See `BACK_ONLY_STATE` for why forward is reported unavailable rather than
+ * unknown.
  *
  * The snapshot is cached and only rebuilt when `canGoBack`/`canGoForward`
  * actually change, so `useSyncExternalStore` sees a stable reference and does
@@ -46,7 +67,10 @@ export function useHistoryNavState(): HistoryNavState {
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
-      if (controller === null) return () => {};
+      // The history's own subscription is what a plain backend has in place of
+      // the controller store: it fires on every push, replace and pop, which
+      // covers every way the index this snapshot reads can move.
+      if (controller === null) return router.history.subscribe(onStoreChange);
       const unsubscribeController = controller.subscribe(onStoreChange);
       const unsubscribeCanvas = useEpicCanvasStore.subscribe(onStoreChange);
       return () => {
@@ -54,11 +78,13 @@ export function useHistoryNavState(): HistoryNavState {
         unsubscribeCanvas();
       };
     },
-    [controller],
+    [controller, router],
   );
 
   const getSnapshot = useCallback(() => {
-    if (controller === null) return DISABLED_STATE;
+    if (controller === null) {
+      return router.history.canGoBack() ? BACK_ONLY_STATE : DISABLED_STATE;
+    }
     const previous = cacheRef.current;
     const entries = controller.getEntries();
     const index = controller.getIndex();
@@ -78,7 +104,7 @@ export function useHistoryNavState(): HistoryNavState {
     const next: HistoryNavState = { canGoBack, canGoForward };
     cacheRef.current = next;
     return next;
-  }, [controller]);
+  }, [controller, router]);
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }

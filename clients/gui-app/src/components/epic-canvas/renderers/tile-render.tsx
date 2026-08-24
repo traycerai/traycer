@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
@@ -188,7 +189,9 @@ export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
         epicId={args.epicId}
         isActive={args.isActive}
       >
-        {tileRenderer(args.node.type)(args)}
+        <TileMinimapScope tileInstanceId={args.node.instanceId}>
+          {tileRenderer(args.node.type)(args)}
+        </TileMinimapScope>
       </TileFindScope>
     </TabHostProvider>
   );

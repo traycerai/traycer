@@ -19,8 +19,12 @@
  * than a second copy of that validation.
  */
 import { readRotatedTokens } from "./auth-validation";
+import {
+  composeRequestAbort,
+  type ComposedRequestAbort,
+} from "./request-abort";
 
-export type DeviceClientId = "cli" | "desktop";
+export type DeviceClientId = "cli" | "desktop" | "mobile";
 
 /**
  * Per-request cancellation + timeout for the device HTTP calls. `signal` is the
@@ -50,21 +54,15 @@ export const DEFAULT_DEVICE_REQUEST_TIMEOUT_MS = 30_000;
  * `signal` (if any) with a fresh per-request timeout. Returns the merged signal
  * plus a `clear` to cancel the pending timeout once the request settles so the
  * timer can't fire (or leak) after the fetch resolves.
+ *
+ * The composition itself lives in `request-abort.ts` because it cannot use
+ * `AbortSignal.any` - that API postdates this app's iOS floor and throws
+ * rather than degrading. See that module.
  */
-function buildRequestSignal(options: DeviceRequestOptions): {
-  readonly signal: AbortSignal;
-  readonly clear: () => void;
-} {
-  const timeoutController = new AbortController();
-  const timer = setTimeout(() => timeoutController.abort(), options.timeoutMs);
-  const clear = (): void => clearTimeout(timer);
-  if (options.signal === undefined) {
-    return { signal: timeoutController.signal, clear };
-  }
-  return {
-    signal: AbortSignal.any([options.signal, timeoutController.signal]),
-    clear,
-  };
+function buildRequestSignal(
+  options: DeviceRequestOptions,
+): ComposedRequestAbort {
+  return composeRequestAbort(options.signal ?? null, options.timeoutMs);
 }
 
 /**
@@ -223,6 +221,30 @@ export async function pollDeviceToken(
 
   // 5xx (e.g. Redis down) and any other unexpected status are transient.
   return { kind: "network-error" };
+}
+
+/**
+ * Appends this build's registered deep-link scheme to the browser verification
+ * URL as `return_scheme`, so the cloud's /device approval page can deep-link
+ * back to THE APP THAT ASKED - per-environment (`traycer` / `traycer-dev`) and
+ * slot-suffixed under multi-run dev - instead of a hardcoded production scheme
+ * (which launches an installed prod Traycer when a dev build signs in). The
+ * page validates the value against a strict allowlist and fires nothing when
+ * it is absent or malformed, so a manually typed verification URL simply gets
+ * no return deep link. Defensive: an unparseable URL passes through untouched.
+ *
+ * Shared by the desktop and mobile shells; both apply it to
+ * `verificationUriComplete` only - the short display URI stays clean for
+ * manual entry.
+ */
+export function withReturnScheme(uri: string, scheme: string): string {
+  try {
+    const url = new URL(uri);
+    url.searchParams.set("return_scheme", scheme);
+    return url.toString();
+  } catch {
+    return uri;
+  }
 }
 
 // --- Backoff helper --------------------------------------------------------
@@ -397,12 +419,17 @@ async function readErrorCode(response: Response): Promise<string | null> {
 }
 
 /**
- * Parses a `Retry-After` header value. The device-token endpoint only ever
- * emits integer seconds, so the HTTP-date form is intentionally not handled;
- * an absent or unparseable value yields `null` and the caller falls back to
- * its own backoff increment.
+ * Parses a `Retry-After` header value. The poll endpoints only ever emit
+ * integer seconds, so the HTTP-date form is intentionally not handled; an
+ * absent or unparseable value yields `null` and the caller falls back to its
+ * own backoff increment. Returning `null` rather than a number is the whole
+ * point: a numeric fallback of zero reads as "retry immediately", which is
+ * the opposite of what a 429 asked for.
+ *
+ * Shared with the link-login poll client, whose 429s come from the same two
+ * sources (a paced record throttle and a request budget).
  */
-function parseRetryAfterSeconds(header: string | null): number | null {
+export function parseRetryAfterSeconds(header: string | null): number | null {
   if (header === null) {
     return null;
   }

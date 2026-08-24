@@ -25,7 +25,7 @@ export function HostRuntimeBootFallback(props: {
 }): ReactNode {
   return (
     <div
-      className="flex min-h-svh w-full flex-col bg-background text-foreground"
+      className="flex min-h-safe-svh w-full flex-col bg-background text-foreground"
       data-testid="host-runtime-boot-fallback"
     >
       <div aria-hidden className={cn("shrink-0", APP_HEADER_HEIGHT_CLASS)} />

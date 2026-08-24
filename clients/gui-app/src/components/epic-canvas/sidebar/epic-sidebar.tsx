@@ -1232,7 +1232,11 @@ function GitDiffPanelBody(props: LeftPanelBodyProps): ReactNode {
   return <GitDiffPanelBodyLive epicId={props.epicId} tabId={props.tabId} />;
 }
 
-function FileTreePanelBody(props: LeftPanelBodyProps) {
+// Exported (export-only, desktop-neutral) so the mobile "Switch tab" sheet can
+// embed the same file-tree body the desktop left panel renders, rather than
+// forking it. The `SnapshotGate` resolves against the canvas-side
+// `SnapshotLoadingProvider` that already wraps the mobile tile view.
+export function FileTreePanelBody(props: LeftPanelBodyProps) {
   return (
     <SnapshotGate skeleton={FILE_TREE_PANEL_SKELETON}>
       <FileTreePanelBodyLive epicId={props.epicId} tabId={props.tabId} />

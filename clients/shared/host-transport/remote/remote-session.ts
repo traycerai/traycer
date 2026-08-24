@@ -49,7 +49,7 @@ import {
   prepareStreamSubscribeRequest,
   type ParamsOf,
 } from "../ws-stream-client";
-import { backoffFor, jitteredBackoffFor } from "../backoff";
+import { jitteredBackoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
   CLIENT_REAUTH_JITTER_MS,
@@ -146,8 +146,12 @@ function qosForStreamMethod(method: string): QosClassValue {
  *     → openAck{manifest, capabilities}  → compat mirror
  *     → re-subscribe every live stream → ready
  *
- * Backoff resets ONLY at the ready boundary (transport open · E2E handshake ·
- * session open · subscriptions restored) — never on socket-open.
+ * Backoff resets ONLY after a connection SURVIVES: the ready boundary
+ * (transport open · E2E handshake · session open · subscriptions restored) must
+ * be reached AND held for `RECONNECT_STABLE_RESET_MS`. Never on socket-open,
+ * never on the boundary alone, and never on a wake — a connection that opens
+ * and dies repeatedly must escalate, not present itself as a first failure
+ * forever.
  *
  * Host blip (`host_detached`/`host_attached`) is NOT a resume: the same Noise
  * session persists; the scheduler pauses (holding frames, not losing them to a
@@ -360,6 +364,36 @@ export interface IRemoteSession<
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
+  /**
+   * Tells the session that something outside it has evidence its connection
+   * should be re-established sooner than the backoff schedule intends.
+   *
+   * Two callers, one meaning - "this session was demonstrably needed and did
+   * not deliver":
+   *  - the runtime resume signal, swept in through `wakeHeldRemoteSessions`
+   *    (`IHostStreamClient.reconnectAll` ← `subscribeWakeSignals`). A runtime
+   *    that was frozen - laptop sleep, a mobile WebView suspended on every app
+   *    switch - comes back with a socket that may already be dead and a backoff
+   *    timer armed for a failure that is now minutes old;
+   *  - a `sendUnary` caller whose parked request has just failed PRE-SEND,
+   *    which is what the user's Retry looks like from down here.
+   *
+   * Note what is NOT a caller: a request merely arriving at a session that is
+   * not ready. Waking on the way in lets ambient polling reads collapse the
+   * long tiers continuously, which turns an unavailable host into a dial loop.
+   * The wake is earned by a proven failure, not by demand.
+   *
+   * The session decides what that evidence is worth. A pending redial is pulled
+   * forward once - to a jittered sub-second delay, never instantly, and never
+   * more than once per armed timer - and a connection that still reads open is
+   * probed on a short deadline rather than trusted, because the drop that made
+   * it dead may never have been delivered. It never lengthens a pending redial,
+   * never disturbs a healthy session, never cancels an attach already in
+   * flight, and never forgives the escalation (that needs a connection to
+   * SURVIVE; see the class contract). So repeated wakes cannot become a dial
+   * loop, and a fleet woken by one shared event does not redial in a herd.
+   */
+  wake(reason: string): void;
   /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
    * shared session, once every consumer released) or a terminal session
@@ -630,6 +664,20 @@ export class RemoteSession<
 
   private phaseTimer: TimerHandle | null = null;
   private backoffTimer: TimerHandle | null = null;
+  /**
+   * When the pending `backoffTimer` was armed, and for how long - together, the
+   * deadline it will actually fire on. Read by {@link collapseBackoff}, which
+   * may only move that deadline EARLIER.
+   */
+  private backoffArmedAt = 0;
+  private backoffDelayMs = 0;
+  /**
+   * Whether the pending `backoffTimer` has already spent its one wake-driven
+   * collapse. Cleared when `scheduleReconnect` arms a fresh timer, so each
+   * failure earns exactly one accelerated redial no matter how many wakes
+   * arrive during it.
+   */
+  private backoffCollapsed = false;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /**
@@ -810,7 +858,29 @@ export class RemoteSession<
       // Throws on a terminal session, a failed attach, or the caller's
       // authority being aborted while parked; returns once this session is
       // ready to carry the frame.
-      await this.awaitReadyBoundary(requestId, method, abortSignal);
+      try {
+        await this.awaitReadyBoundary(requestId, method, abortSignal);
+      } catch (cause) {
+        if (cause instanceof RetryableTransportError) {
+          // The attach this caller was riding has now PROVABLY failed, before
+          // anything was sent. That is the moment a wake is earned: someone
+          // was demonstrably waiting on this session and got nothing, and
+          // their retry budget (`createRetryingMessenger`) is about to be
+          // spent against the same cached session - so the next attempt
+          // should ride an accelerated timer rather than the tier this
+          // failure just escalated to.
+          //
+          // Only here. Waking on the way IN - before knowing whether the
+          // in-progress attach would have succeeded - lets ambient polling
+          // reads collapse the 16s and 30s tiers continuously, which turns a
+          // genuinely unavailable host into a dial loop and a relay herd.
+          // Aborts, terminal closures, post-send ambiguity and host-originated
+          // failures never reach this branch: they are not
+          // `RetryableTransportError`.
+          this.wake("pre-send-failure");
+        }
+        throw cause;
+      }
       // LOAD-BEARING, not belt-and-braces. The abort listener above cannot
       // cover every ordering: an abort queued as a MICROTASK before
       // `settleReadyWaiters` resolves this waiter runs before the
@@ -1141,6 +1211,31 @@ export class RemoteSession<
       json: { bearer },
       binary: null,
     });
+  }
+
+  /** See {@link IRemoteSession.wake}. */
+  wake(reason: string): void {
+    if (this.phase === "closed" || this.phase === "idle") {
+      // Closed is terminal, and idle has never dialed - `start()` owns that,
+      // and every caller that wants a session calls it first.
+      return;
+    }
+    if (this.phase === "ready" && this.connection !== null) {
+      // A ready session is the only one that can be sitting on a socket the
+      // runtime never saw die: its liveness rests on an INTERVAL, which was
+      // frozen along with the runtime, so an overdue tick is all that stands
+      // between a dead socket and work being parked on it. A dial caught
+      // mid-flight is bounded by its own one-shot phase timer instead, which
+      // comes back overdue and fires on its own, so it needs nothing here.
+      //
+      // Order matters. The poke can land in `handleConnectionLost` (when the
+      // socket is ALREADY provably stale), which arms a fresh backoff - so the
+      // collapse below has to run afterwards to pull that redial forward too.
+      // A socket that merely looks alive is left connected and answers the
+      // poke's probe on its own deadline.
+      this.connection.relaySocket.pokeKeepalive();
+    }
+    this.collapseBackoff(reason);
   }
 
   /** See {@link IRemoteSession.onClosed}. */
@@ -2599,11 +2694,6 @@ export class RemoteSession<
   }
 
   /**
-   * Arms the backoff redial and returns the armed delay, so failure paths can
-   * report the SAME value they actually scheduled (never a second jitter/
-   * growth roll purely for the log line).
-   */
-  /**
    * Arms the ladder reset. Deliberately a TIMER rather than an assignment at
    * the ready boundary: reaching ready proves a session was established, not
    * that it is healthy, and rewarding establishment alone is what let a
@@ -2614,6 +2704,11 @@ export class RemoteSession<
     this.stableResetTimer = setTimeout(() => {
       this.stableResetTimer = null;
       this.reconnectAttempt = 0;
+      // The dial-failure log's recovery line waits for the same proof: a
+      // flapping connection that never survives the dwell never logs
+      // "recovered", so the log cannot claim a recovery the ladder does not
+      // believe in.
+      this.dialFailures.recordSuccess();
     }, RECONNECT_STABLE_RESET_MS);
   }
 
@@ -2687,6 +2782,17 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Arms the backoff redial and returns the armed delay, so failure paths can
+   * report the SAME value they actually scheduled (never a second jitter/
+   * growth roll purely for the log line).
+   *
+   * The delay carries equal jitter. Every client that shares a cause - a relay
+   * deploy, a `window 'online'` event crossing a fleet at once - would
+   * otherwise walk the identical 1/2/4/8/16/30 ladder in lockstep and arrive
+   * back at the relay in a herd, at each rung, indefinitely. Jitter is what
+   * makes the tiers a spread rather than a schedule.
+   */
   private scheduleReconnect(): number {
     if (this.phase === "closed") {
       return 0;
@@ -2709,20 +2815,25 @@ export class RemoteSession<
     // retries are evidence about host liveness, and doubling their rate would
     // both hammer a host that is legitimately down and accelerate the
     // death-streak machinery that reads those attempts.
+    // Every non-immediate rung carries equal jitter: clients that share a
+    // cause (a relay deploy, an `online` event crossing a fleet) would
+    // otherwise walk the identical ladder in lockstep and arrive back at the
+    // relay in a herd, at each rung, indefinitely.
     const immediate = this.reconnectAttempt === 0 && this.hasReachedReadyOnce;
     const rung = this.reconnectAttempt - this.recoveryRungOffset;
     const delay = immediate
       ? 0
-      : backoffFor(
+      : jitteredBackoffFor(
           Math.max(0, rung),
           RECONNECT_INITIAL_BACKOFF_MS,
           RECONNECT_MAX_BACKOFF_MS,
+          () => this.pseudoJitter(),
         );
     this.reconnectAttempt += 1;
-    this.backoffTimer = setTimeout(() => {
-      this.backoffTimer = null;
-      this.beginConnectGuarded();
-    }, delay);
+    // A newly armed timer has not been collapsed, so the next wake gets its
+    // one draw against it.
+    this.backoffCollapsed = false;
+    this.armBackoffTimer(Date.now(), delay);
     return delay;
   }
 
@@ -2747,7 +2858,7 @@ export class RemoteSession<
 
   /**
    * Starts a congestion-triggered reconnect at the capped backoff rung while
-   * preserving the ordinary scheduler and its ready-boundary reset.
+   * preserving the ordinary scheduler and its sustained-ready reset.
    */
   private raiseReconnectBackoffToMax(): void {
     const rungAtMaxBackoff = Math.ceil(
@@ -2757,6 +2868,85 @@ export class RemoteSession<
       this.reconnectAttempt,
       rungAtMaxBackoff + this.recoveryRungOffset,
     );
+  }
+
+  /**
+   * Arms the redial for the deadline `armedAt + delayMs`, recording both so
+   * {@link wake} can reason about how long this session has ALREADY been
+   * waiting rather than restarting the clock.
+   *
+   * The delay is expressed against `armedAt`, not against now, so re-arming an
+   * EXISTING deadline stays a deadline: the timer is set to whatever is left of
+   * it. Passing `Date.now()` as `armedAt` - what a fresh backoff does - makes
+   * the two the same thing.
+   */
+  private armBackoffTimer(armedAt: number, delayMs: number): void {
+    this.backoffArmedAt = armedAt;
+    this.backoffDelayMs = delayMs;
+    this.backoffTimer = setTimeout(
+      () => {
+        this.backoffTimer = null;
+        this.beginConnectGuarded();
+      },
+      Math.max(0, armedAt + delayMs - Date.now()),
+    );
+  }
+
+  /**
+   * Pulls a pending redial forward, ONCE per armed timer, to a jittered
+   * sub-second delay measured from now.
+   *
+   * Two properties do all the work, and they are why {@link wake} can be wired
+   * to signals that fire freely (every app switch, every proven pre-send
+   * failure):
+   *
+   *  - **One collapse per armed timer.** The draw happens on the first wake
+   *    against a given timer and is then recorded as spent. Later wakes do not
+   *    redraw and do not shorten again, so a burst buys exactly ONE redial
+   *    rather than N increasingly early ones - and the timer that eventually
+   *    fires re-arms a fresh, un-collapsed one.
+   *  - **Jittered, never fixed.** A shared `online` event or a relay deploy
+   *    wakes a whole fleet on the same edge; a fixed sub-second collapse would
+   *    turn every one of those wakes into a synchronized redial. The draw is
+   *    equal jitter across `[RECONNECT_INITIAL_BACKOFF_MS / 2,
+   *    RECONNECT_INITIAL_BACKOFF_MS)`, which still reads as immediate to the
+   *    person who just tapped Retry.
+   *
+   * It can only ever SHORTEN: a draw landing later than the deadline already
+   * armed is discarded (though it still spends this timer's one collapse, so a
+   * wake never becomes a delay and never becomes a retry lottery). And
+   * `reconnectAttempt` is deliberately untouched - the schedule resets only
+   * after the connection has SURVIVED (see {@link maybeReachReadyBoundary}), so
+   * a host that is genuinely gone keeps escalating between wakes instead of
+   * being pinned at the fastest tier.
+   */
+  private collapseBackoff(reason: string): void {
+    if (this.backoffTimer === null || this.backoffCollapsed) {
+      return;
+    }
+    // Spent whether or not the draw wins below: this timer has had its wake.
+    this.backoffCollapsed = true;
+    const now = Date.now();
+    const wokenDelayMs = jitteredBackoffFor(
+      0,
+      RECONNECT_INITIAL_BACKOFF_MS,
+      RECONNECT_INITIAL_BACKOFF_MS,
+      () => this.pseudoJitter(),
+    );
+    const armedRemainingMs = this.backoffArmedAt + this.backoffDelayMs - now;
+    if (wokenDelayMs >= armedRemainingMs) {
+      return;
+    }
+    clearTimeout(this.backoffTimer);
+    this.backoffTimer = null;
+    // Worth a line of its own: the failure log reported the delay this session
+    // ORIGINALLY armed, so without this the log claims a 30s wait that a wake
+    // then cut to one - and the difference between those two is the whole
+    // difference between a session that recovers and one that looks dead.
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) redialing early (${reason}) in ${wokenDelayMs}ms - ${Math.round(armedRemainingMs)}ms of backoff left`,
+    );
+    this.armBackoffTimer(now, wokenDelayMs);
   }
 
   /**
@@ -3078,7 +3268,6 @@ export class RemoteSession<
     // whether this was a REATTACH at all, so the flag is raised after it.
     this.logReattachBreakdown();
     this.hasReachedReadyOnce = true;
-    this.dialFailures.recordSuccess();
     // The ready boundary is the ONLY site that mints a session id, and it runs
     // once per connect generation (the guard above). Order matters: the dial
     // success clears the host's death streak, and the announcement then makes
@@ -3088,11 +3277,13 @@ export class RemoteSession<
       "success",
     );
     this.announceSession(`${this.evidenceScope}:s${this.connectGeneration}`);
-    // EVERY ready boundary is availability evidence, the clean first open
-    // included: queries that raced this session's first dial have already
-    // errored pre-send and exhausted their retry, and this emission is the
-    // only automatic signal that can un-strand them (see the
-    // `subscribeAvailabilityRecovered` contract).
+    // Recovery is NOT held behind the dwell either: every ready boundary is
+    // availability evidence, the clean first open included - queries that
+    // raced this session's first dial have already errored pre-send and
+    // exhausted their retry, and this emission is the only automatic signal
+    // that can un-strand them (see the `subscribeAvailabilityRecovered`
+    // contract). Delaying forgiveness must never mean delaying the data
+    // coming back.
     this.emitAvailabilityRecovered();
   }
 
@@ -3297,6 +3488,11 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    // The connection did not survive its dwell, so the streak is not forgiven.
+    // This is the single choke point for losing a connection - every drop,
+    // fatal and caller close routes through here - which is what keeps the
+    // survival test honest without a clear() at each call site.
+    this.clearStableResetTimer();
     if (connection === null) {
       return;
     }

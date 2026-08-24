@@ -963,6 +963,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
           tuiOnly={resolvedInput.tuiOnly ?? false}

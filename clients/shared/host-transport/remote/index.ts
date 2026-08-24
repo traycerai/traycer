@@ -25,6 +25,7 @@ export {
   hasReadyRemoteSession,
   remoteSessionCacheKey,
   retireAllRemoteSessions,
+  wakeHeldRemoteSessions,
   subscribeRemoteSessionReadiness,
   resetRemoteSessionReadinessListenersForTest,
 } from "./active-remote-sessions";

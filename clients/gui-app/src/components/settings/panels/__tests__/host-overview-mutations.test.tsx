@@ -1323,6 +1323,8 @@ describe("<HostSettingsPanel /> Overview update-install degrade", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>

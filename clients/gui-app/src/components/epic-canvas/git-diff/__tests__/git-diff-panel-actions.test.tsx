@@ -81,7 +81,8 @@ describe("<GitDiffPanelActions />", () => {
     expect(
       screen.getByRole("menuitem", { name: "Switch to tree view" }),
     ).toBeDefined();
-    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeDefined();
+    const refresh = screen.getByRole("menuitem", { name: "Refresh" });
+    expect(refresh.querySelector(".lucide-refresh-cw")).not.toBeNull();
   });
 
   it("toggles list layout from the header action", () => {

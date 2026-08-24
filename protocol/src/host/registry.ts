@@ -223,7 +223,9 @@ import {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
+  hostUpdateCheckV11,
   hostUpdateInstallV10,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
@@ -3660,8 +3662,7 @@ export const workspacePrepareFoldersUpgradeV11ToV12 = defineUpgradePath<
   to: workspacePrepareFoldersV12.schemaVersion,
   upgradeRequest: (request) => ({
     ...request,
-    bumpRecency:
-      request.operation === "recordRecentWorkspace" ? true : null,
+    bumpRecency: request.operation === "recordRecentWorkspace" ? true : null,
   }),
   upgradeResponse: (response) => response,
 });
@@ -3971,14 +3972,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // v1.1 adds the tri-state catalog override and the resolved-inclusion +
+  // provenance the Settings copy reads. A minor, not a major: the request
+  // only grows a third (absent) state on an already-optional key and the `ok`
+  // response only gains fields, so `upgradeFromPreviousVersion` is the whole
+  // bridge and no `downgradePathsFromLatest` entry is warranted - those cross
+  // majors. A v1.0 peer keeps stable-only default semantics; provenance is
+  // reported only where v1.1 is negotiated.
   "host.update.check": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateCheckV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateCheckV11,
+          upgradeFromPreviousVersion: hostUpdateCheckUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6536,8 +6548,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         1: {
           contract: terminalPlainEnsureRunningV21,
-          upgradeFromPreviousVersion:
-            terminalPlainEnsureRunningUpgradeV10ToV21,
+          upgradeFromPreviousVersion: terminalPlainEnsureRunningUpgradeV10ToV21,
           semanticMajorBreakFromPreviousMajor: true,
         },
       },
@@ -6587,8 +6598,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         1: {
           contract: terminalPlainImportLegacyV21,
-          upgradeFromPreviousVersion:
-            terminalPlainImportLegacyUpgradeV10ToV21,
+          upgradeFromPreviousVersion: terminalPlainImportLegacyUpgradeV10ToV21,
           semanticMajorBreakFromPreviousMajor: true,
         },
       },

@@ -113,7 +113,7 @@ function NextStepAction(props: NextStepActionProps) {
           type="button"
           variant="ghost"
           size="icon-sm"
-          className="pointer-events-none absolute top-1/2 right-1.5 z-10 -translate-y-1/2 bg-muted/80 text-muted-foreground opacity-0 transition-opacity group-hover/next-step:pointer-events-auto group-hover/next-step:opacity-100 group-focus-within/next-step:pointer-events-auto group-focus-within/next-step:opacity-100 hover:bg-muted hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100"
+          className="pointer-events-none absolute top-1/2 right-1.5 z-10 -translate-y-1/2 bg-muted/80 text-muted-foreground opacity-0 transition-opacity group-hover/next-step:pointer-events-auto group-hover/next-step:opacity-100 group-focus-within/next-step:pointer-events-auto group-focus-within/next-step:opacity-100 hover:bg-muted hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100"
           disabled={!props.complete}
           aria-label={copyLabel}
           onClick={handleCopy}

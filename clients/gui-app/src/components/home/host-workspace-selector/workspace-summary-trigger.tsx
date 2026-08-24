@@ -133,7 +133,9 @@ export function WorkspaceSummaryTrigger(
           side="bottom"
           align="start"
           collisionPadding={12}
-          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3"
+          // Same desktop-scrolls-here / phone-scrolls-the-list split as the
+          // editable panel in `WorkspaceFolderSummaryControl` - see the note there.
+          className="w-[min(92vw,42rem)] max-w-[var(--radix-popover-content-available-width)] max-h-[min(var(--radix-popover-content-available-height),32rem)] gap-0 overflow-y-auto p-3 max-md:overflow-hidden"
           data-testid="workspace-readonly-folders-popover"
           onOpenAutoFocus={(event) => event.preventDefault()}
         >

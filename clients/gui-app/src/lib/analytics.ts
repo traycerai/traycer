@@ -1,4 +1,5 @@
 import posthog, { type CaptureResult, type PostHogConfig } from "posthog-js";
+import { isMobileApp } from "@/lib/mobile-app";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -71,6 +72,7 @@ export type AnalyticsSettingsSection =
   | "general"
   | "host"
   | "keybindings"
+  | "link-phone"
   | "notifications"
   | "providers"
   | "shell"
@@ -1027,6 +1029,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     general: true,
     host: true,
     keybindings: true,
+    "link-phone": true,
     notifications: true,
     providers: true,
     shell: true,
@@ -2021,8 +2024,12 @@ function safeAppGlobals(
     (appVersion !== null &&
       (typeof appVersion !== "string" ||
         !/^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(appVersion))) ||
+    typeof properties.app_surface !== "string" ||
+    !new Set(["desktop", "mobile"]).has(properties.app_surface) ||
     typeof properties.platform !== "string" ||
-    !new Set(["linux", "macos", "other", "windows"]).has(properties.platform) ||
+    !new Set(["android", "ios", "linux", "macos", "other", "windows"]).has(
+      properties.platform,
+    ) ||
     typeof properties.release_channel !== "string" ||
     !new Set(["development", "other", "production"]).has(
       properties.release_channel,
@@ -2032,6 +2039,7 @@ function safeAppGlobals(
   }
   return {
     app: "gui-app",
+    app_surface: String(properties.app_surface),
     app_version: appVersion,
     platform: String(properties.platform),
     release_channel: String(properties.release_channel),
@@ -2101,9 +2109,17 @@ export function sanitizePostHogCaptureResult(
   if (result === null) return null;
   const rawProperties: Record<string, unknown> = { ...result.properties };
   if (result.event === "$identify") {
+    // The identity events carry the same app globals as declared events -
+    // "which surface emitted this" holds for a sign-in exactly as it does
+    // for a click, and the globals allowlist bounds what passes.
     const identity = safeIngestionProperties(rawProperties, true);
-    if (identity === null) return null;
-    const sanitized = captureResult("$identify", identity, result.timestamp);
+    const identifyGlobals = safeAppGlobals(rawProperties);
+    if (identity === null || identifyGlobals === null) return null;
+    const sanitized = captureResult(
+      "$identify",
+      { ...identity, ...identifyGlobals },
+      result.timestamp,
+    );
     const personProperties = safePersonProperties(
       stagedPersonProperties(result, rawProperties),
     );
@@ -2113,12 +2129,19 @@ export function sanitizePostHogCaptureResult(
   }
   if (result.event === "$set") {
     const identity = safeIngestionProperties(rawProperties, false);
+    const setGlobals = safeAppGlobals(rawProperties);
     const personProperties = safePersonProperties(
       stagedPersonProperties(result, rawProperties),
     );
-    if (identity === null || personProperties === null) return null;
+    if (identity === null || setGlobals === null || personProperties === null) {
+      return null;
+    }
     return {
-      ...captureResult("$set", identity, result.timestamp),
+      ...captureResult(
+        "$set",
+        { ...identity, ...setGlobals },
+        result.timestamp,
+      ),
       $set: personProperties,
     };
   }
@@ -2354,7 +2377,24 @@ export function trackedSettingSetter<Value>(
   };
 }
 
-function analyticsPlatform(): "linux" | "macos" | "other" | "windows" {
+/**
+ * Which product shell is emitting events. A phone-narrow desktop window is
+ * still `desktop`: this is the install target, not the viewport.
+ */
+export function analyticsAppSurface(): "desktop" | "mobile" {
+  return isMobileApp() ? "mobile" : "desktop";
+}
+
+export function analyticsPlatform():
+  "android" | "ios" | "linux" | "macos" | "other" | "windows" {
+  if (isMobileApp()) {
+    // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
+    // WebViews, which the desktop branches below would misfile as other or
+    // linux; the user agent names the OS directly.
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return "ios";
+    if (/android/i.test(navigator.userAgent)) return "android";
+    return "other";
+  }
   const platform = navigator.platform.toLowerCase();
   if (platform.includes("mac")) return "macos";
   if (platform.includes("win")) return "windows";
@@ -2407,6 +2447,7 @@ export class Analytics {
     this.guarded(() =>
       posthog.register({
         app: "gui-app",
+        app_surface: analyticsAppSurface(),
         app_version: import.meta.env.VITE_APP_VERSION ?? null,
         platform: analyticsPlatform(),
         release_channel: analyticsReleaseChannel(),

@@ -336,6 +336,8 @@ function mountFallbackOverview(options: {
         rpcCheckCalls.count += 1;
         return {
           outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
           manifest: updateCheckManifest(RPC_CHECK_VERSION),
         };
       },
@@ -357,6 +359,8 @@ function mountFallbackOverview(options: {
     maintenanceUpdateCheck: vi.fn(() =>
       Promise.resolve({
         outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
         manifest: updateCheckManifest(BRIDGE_CHECK_VERSION),
       }),
     ),

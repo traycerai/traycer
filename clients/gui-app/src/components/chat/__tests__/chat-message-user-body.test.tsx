@@ -294,10 +294,145 @@ describe("<UserMessageBody /> agent messages", () => {
     );
 
     const actionChip = screen.getByLabelText("Copy message").parentElement;
+    // The group-scoped focus reveal is fine-pointer-only (the coarse-pointer
+    // "…" menu trigger lives inside the same group and must not summon the
+    // chip when Radix restores focus to it); the chip's own focus-within
+    // reveal stays unscoped for hardware-keyboard access on any device.
     expect(actionChip?.className).toContain(
-      "group-focus-within/user-message:opacity-100",
+      "pointer-fine:group-focus-within/user-message:opacity-100",
     );
     expect(actionChip?.className).toContain("focus-within:opacity-100");
+  });
+
+  it("mounts the touch actions menu trigger gated to coarse pointers", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Message actions" });
+    // Rest state wears the same bg-muted surface as the ghost open state, so
+    // the trigger reads as a button before it is tapped.
+    expect(trigger.className).toContain("bg-muted");
+    const wrapper = trigger.parentElement;
+    expect(wrapper?.className).toContain("hidden");
+    expect(wrapper?.className).toContain("pointer-coarse:flex");
+    // Resting state: the menu itself mounts nothing until opened.
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+
+  it("routes touch menu Edit and Delete to the chip's own handlers", () => {
+    const onEdit = vi.fn();
+    const onDeleteRequest = vi.fn();
+    render(
+      <UserMessageBody
+        actions={displayUserActions({ onEdit, onDeleteRequest })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+
+    screen.getByRole("menuitem", { name: "Copy" });
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete" });
+    expect(deleteItem.getAttribute("data-variant")).toBe("destructive");
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Edit" }), {
+      key: "Enter",
+    });
+    expect(onEdit).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Delete" }), {
+      key: "Enter",
+    });
+    expect(onDeleteRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps only Copy in the touch menu while message actions are gated off", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+
+    screen.getByRole("menuitem", { name: "Copy" });
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("hands the corner to the delete confirm chip while it is open", () => {
+    render(
+      <UserMessageBody
+        actions={{
+          ...displayUserActions({
+            onEdit: () => undefined,
+            onDeleteRequest: () => undefined,
+          }),
+          confirmingDelete: true,
+        }}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Message actions" }),
+    ).toBeNull();
+    screen.getByRole("button", { name: "Confirm delete" });
+    screen.getByRole("button", { name: "Cancel delete" });
+  });
+
+  it("copies the same rich clipboard payload from the touch menu Copy item", async () => {
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("merged fallback"),
+              structuredContent: STRUCTURED_USER_CONTENT,
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: "Message actions" }),
+        { button: 0 },
+      );
+      fireEvent.keyDown(screen.getByRole("menuitem", { name: "Copy" }), {
+        key: "Enter",
+      });
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const html = await payload["text/html"].text();
+      expect(parseComposerClipboardHtml(html)).toEqual(STRUCTURED_USER_CONTENT);
+      expect(clipboard.writeText).not.toHaveBeenCalled();
+    } finally {
+      clipboard.restore();
+    }
   });
 
   it("toggles a Show more affordance only when the prompt overflows", () => {
@@ -1071,6 +1206,22 @@ function imageAttachment(name: string) {
     dataUrl: "data:image/png;base64,aW1hZ2U=",
     name,
     size: 128,
+  };
+}
+
+function displayUserActions(handlers: {
+  readonly onEdit: () => void;
+  readonly onDeleteRequest: () => void;
+}): ChatMessageUserActions {
+  return {
+    type: "user",
+    enabled: true,
+    confirmingDelete: false,
+    editing: null,
+    onEdit: handlers.onEdit,
+    onDeleteRequest: handlers.onDeleteRequest,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
   };
 }
 

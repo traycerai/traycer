@@ -8,8 +8,10 @@ import {
   DEFAULT_WORKTREE_BRANCH_PREFIX,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 import { pickFriendlyBranchSuffix } from "@/lib/worktree/random-friendly-name";
+import { cn } from "@/lib/utils";
 
 const RESET_TOOLTIP = `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`;
 // Mirrors the agent-selection-guide editor's debounce-autosave convention
@@ -185,20 +187,41 @@ export function WorktreeBranchPrefixSection(): ReactNode {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-      <div className="flex flex-wrap items-center gap-3.5 px-3.5 py-2.5">
-        <div className="min-w-0 flex-1">
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-3.5 px-3.5 py-2.5",
+          SETTINGS_ROW_STACK.container,
+        )}
+      >
+        <div className={cn("min-w-0 flex-1", SETTINGS_ROW_STACK.label)}>
           <div className="flex items-center gap-2">
             <span className="text-ui-sm font-medium text-foreground">
               Default branch prefix
             </span>
           </div>
-          <p className="mt-0.5 truncate text-ui-xs text-muted-foreground">
+          {/* One line beside the input from `md` up; below it the row is a
+              stack and the sentence is free to use as many lines as it needs.
+              Scoped as `md:truncate` rather than an override of `truncate`,
+              so which rule wins never depends on utility source order. */}
+          <p className="mt-0.5 text-ui-xs text-muted-foreground md:truncate">
             New branches start like{" "}
             <span className="font-medium text-foreground">{previewBranch}</span>{" "}
             unless a repository sets its own prefix in Environment
           </p>
         </div>
-        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">
+        {/* Below `md` this cluster has wrapped onto a line of its own, so it
+            spans that line and the input flexes into it rather than keeping
+            its desktop width with dead space beside it.
+
+            Source order is the only order, at every width. The reset slot
+            leads, so the field is inset by the width the slot reserves - that
+            reservation is what stops the input jumping when the button appears
+            mid-edit, and it is a fixed, quiet inset rather than a gap that
+            opens and closes under the caret. Reordering the two below `md`
+            would close the inset and break focus order instead: the slot holds
+            a labelled button, so the eye would reach the field first while the
+            keyboard and a screen reader still reached Reset first. */}
+        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5 max-md:w-full">
           <div className="flex size-7 shrink-0 items-center justify-center">
             {showReset ? (
               <TooltipWrapper
@@ -239,7 +262,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             aria-invalid={error !== null}
             aria-describedby={error !== null ? errorId : undefined}
             placeholder="traycer/"
-            className="h-8 w-[min(45vw,11rem)] font-mono text-ui-sm"
+            className="h-8 w-[min(45vw,11rem)] font-mono text-ui-sm max-md:min-w-0 max-md:flex-1"
             onChange={(event) => {
               const next = event.target.value;
               draftRef.current = next;

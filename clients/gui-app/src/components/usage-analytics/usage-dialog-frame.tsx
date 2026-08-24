@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
  * `max-[28rem]:h-[94dvh]`; the chat dialog keeps its shorter fixed height.
  */
 export const USAGE_DIALOG_SHEET_CLASSES =
-  "max-[28rem]:top-auto max-[28rem]:bottom-0 max-[28rem]:left-0 max-[28rem]:translate-x-0 max-[28rem]:translate-y-0 max-[28rem]:w-screen max-[28rem]:max-w-none max-[28rem]:rounded-b-none";
+  "max-[28rem]:top-auto max-[28rem]:bottom-0 max-[28rem]:left-0 max-[28rem]:translate-x-0 max-[28rem]:translate-y-0 max-[28rem]:w-safe-dvw max-[28rem]:max-w-none max-[28rem]:rounded-b-none";
 
 export interface UsageDialogFrameProps {
   readonly title: ReactNode;
@@ -77,8 +77,7 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
           // an expanded turn drilldown scrolls its last rows under the
           // indicator. Additive on top of the content's own padding, and
           // exactly `0` wherever the inset is.
-          props.footer === null &&
-            "max-[28rem]:pb-[env(safe-area-inset-bottom)]",
+          props.footer === null && "max-[28rem]:pb-safe-bottom",
         )}
         data-testid="usage-dialog-body"
       >
@@ -87,7 +86,7 @@ export function UsageDialogFrame(props: UsageDialogFrameProps): ReactNode {
       {props.footer === null ? null : (
         // The band fill is the primitive's own default - restating it here
         // would just be a second copy to keep in sync.
-        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t px-4 py-3 max-[28rem]:rounded-b-none max-[28rem]:pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+        <DialogFooter className="-mx-4 -mb-4 mt-0 border-t px-4 py-3 max-[28rem]:rounded-b-none max-[28rem]:pb-safe-bottom-gutter">
           {props.footer}
         </DialogFooter>
       )}

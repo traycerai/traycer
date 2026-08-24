@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProviderList } from "@/components/providers/provider-list";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
@@ -43,6 +44,7 @@ import {
 } from "@/components/settings/host-scope/use-host-scope";
 import type { HostRpcRegistry } from "@/lib/host";
 import { HostRuntimeContext } from "@/lib/host/runtime";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
@@ -78,6 +80,7 @@ import {
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
+import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
   providerTabInputs,
@@ -359,12 +362,36 @@ function ProvidersSettingsPanelInner({
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
 }) {
+  const isMobile = useIsMobileViewport();
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
-      fillHeight
-      bodyClassName="max-h-[min(85vh,52rem)]"
+      // The blurb is desktop-only, and its absence is what puts the global
+      // status control on the TITLE's line. The shell's header is a wrapping
+      // row of [title + description] and [action]; the description's flex base
+      // size is its max-content width, which on a phone exceeds the row on its
+      // own, so the action wraps to a line of its own and spends a whole row of
+      // the shortest viewport restating what the panel's contents already show.
+      description={
+        isMobile
+          ? undefined
+          : "Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
+      }
+      // Desktop only, and this is the whole mobile scroll model. `fillHeight`
+      // stretches the card to the settings scroll container and lets the ACTIVE
+      // PANE own an internal scroll, which needs `min-h-0` at every level
+      // between the two so each one may shrink past its content and hand the
+      // overflow down. That chain assumes the card is reliably BOUNDED: its
+      // levels have given up the automatic floor that would otherwise keep them
+      // as tall as their contents, so they follow whatever height arrives from
+      // above - including a height that arrives wrong.
+      //
+      // A phone has one scroll container already - the settings surface - so it
+      // needs no second one. Without `fillHeight` the card is sized by its
+      // contents, the panes below keep `min-height: auto`, and the surface
+      // scrolls the lot. That drops the bounded-ancestor contract entirely
+      // rather than relying on every level above holding up its end of it.
+      fillHeight={!isMobile}
       // No host readout here — the sidebar states the scoped host one row
       // above and repeating it was the same fact printed twice.
       //
@@ -463,8 +490,15 @@ function ProvidersScopedContent({
 }): ReactNode {
   const query = useProvidersList({ enabled: true, subscribed: true });
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1">
+    // `h-full` / `min-h-0` from `md` up only. They are the two halves of the
+    // inner-scroll model: `h-full` hands the card's height down, and `min-h-0`
+    // lets the levels below shrink past their content so the pane can scroll
+    // instead of the page. Both only mean anything against a bounded card, and
+    // together they make this subtree follow the height it is given rather than
+    // its own contents. Below `md` there is no such card, so neither is claimed
+    // and the content sizes itself.
+    <div className="flex flex-col md:h-full md:min-h-0">
+      <div className="flex-1 md:min-h-0">
         <ProvidersPanelBody
           query={query}
           hostId={hostId}
@@ -667,19 +701,32 @@ function ProvidersRailLayout({
   };
 
   return (
-    // Fill the panel body (the shell stretches it to the settings scroll
-    // container and caps it via `bodyClassName` max-height), so switching
-    // providers never resizes the box and the detail pane - not the outer
-    // overlay - owns the scroll. Height follows the viewport: on shorter
-    // screens it shrinks to fit the modal instead of overflowing it.
-    <div className="flex h-full min-h-0">
+    // From `md` up, fill the panel body (the shell stretches it to the settings
+    // scroll container), so switching providers never resizes the box and the
+    // detail pane - not the outer overlay - owns the scroll. Height follows the
+    // viewport: on shorter screens it shrinks to fit the modal instead of
+    // overflowing it. Below `md` the card is content-sized and the settings
+    // surface scrolls, so there is no height to fill and none is claimed.
+    // Below md the rail column collapses into a full-width provider select
+    // stacked above the detail pane. The select lists `orderedProviders`, not
+    // the rail's filtered `visibleProviders` - the rail's search/filter is a
+    // pointer affordance that goes with it, so it must never narrow what a
+    // phone can reach.
+    <div className="flex flex-col md:h-full md:min-h-0 md:flex-row">
+      <div className="shrink-0 border-b border-border/60 p-2 md:hidden">
+        <ProvidersMobileSelect
+          providers={orderedProviders}
+          activeId={active.providerId}
+          onSelect={onSelectProvider}
+        />
+      </div>
       {/* The search row is a pinned SIBLING of the scroll box rather than the
           first child of a scrolling column - the same shape the tab rail uses
           below, and for the same reason: scrolling the list must never carry
           the control that filters it out of reach. */}
       <nav
         aria-label="Providers"
-        className="flex w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60"
+        className="hidden w-[clamp(10rem,22vw,14rem)] shrink-0 flex-col border-r border-border/60 md:flex"
       >
         <ProviderRailControls
           view={railView}
@@ -710,13 +757,13 @@ function ProvidersRailLayout({
           )}
         </div>
       </nav>
-      {/* The detail COLUMN no longer scrolls - the active tab's body does (see
-          `ProviderDetail`), so the provider header and tab rail stay pinned.
-          Horizontal padding lives here rather than on each row so the rail's
-          `border-b` keeps exactly the width it had when this element owned the
-          scroll; the tab body cancels it with `-mx-5 px-5` to put its scrollbar
-          on the pane edge instead of 5 units inside it. */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-5 pt-5">
+      {/* From `md` up the detail COLUMN does not scroll - the active tab's body
+          does (see `ProviderDetail`), so the provider header and section rail
+          stay pinned. Horizontal padding lives here rather than on each row so
+          the rail's `border-b` keeps exactly the width it had when this element
+          owned the scroll; the tab body cancels it with `-mx-5 px-5` to put its
+          scrollbar on the pane edge instead of 5 units inside it. */}
+      <div className="flex min-w-0 flex-1 flex-col px-5 pt-5 md:min-h-0">
         <ProviderDetail
           key={`${hostId}:${active.providerId}`}
           state={active}
@@ -730,6 +777,47 @@ function ProvidersRailLayout({
         />
       </div>
     </div>
+  );
+}
+
+function ProvidersMobileSelect(props: {
+  readonly providers: readonly ProviderCliState[];
+  readonly activeId: ProviderId;
+  readonly onSelect: (providerId: ProviderId) => void;
+}): ReactNode {
+  return (
+    <Select
+      value={props.activeId}
+      onValueChange={(value) => {
+        // Resolve through the provider list instead of asserting the select's
+        // string value back into the ProviderId union.
+        const match = props.providers.find((p) => p.providerId === value);
+        if (match !== undefined) props.onSelect(match.providerId);
+      }}
+    >
+      <SelectTrigger aria-label="Provider" className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {/* The same `HarnessIcon` the desktop rail draws through
+            `ProviderList`, so the two presentations of the provider list mark a
+            provider the same way. `SelectItem` wraps its children in Radix's
+            `ItemText`, which portals the SELECTED item into the trigger - so
+            the icon rides the closed state too, from this one place. */}
+        {props.providers.map((provider) => (
+          <SelectItem key={provider.providerId} value={provider.providerId}>
+            <span className="flex min-w-0 items-center gap-2">
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(provider.providerId)}
+              />
+              <span className="min-w-0 truncate">
+                {PROVIDER_DISPLAY_NAMES[provider.providerId]}
+              </span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -964,8 +1052,13 @@ function ProviderDetail({
   // explicit prop since it's also reused by the picker's tab-scoped flow.
   const hostClient = useHostClient();
   const switchId = useId();
+  // Layout question ("is the window narrow?"), so the viewport signal - the
+  // rail is a pointer affordance, and a narrow desktop window wants the phone
+  // presentation for the same reason a phone does.
+  const isMobile = useIsMobileViewport();
   // The API-key draft outlives the `account` tab body that renders it. Radix
-  // unmounts an inactive `TabsContent`, so holding this inside the section
+  // keeps every pane's div in the DOM but unmounts an inactive pane's BODY,
+  // so holding this inside the section
   // would blank a pasted key on any tab switch. Held HERE for the same reason
   // `selectedProfileId` is below: `ProvidersRailLayout` keys `<ProviderDetail>`
   // by provider, so a provider switch still discards the draft - a key typed
@@ -1036,11 +1129,19 @@ function ProviderDetail({
   };
 
   return (
-    // Three rows: provider header, tab rail, tab body - and only the last one
-    // scrolls. `min-h-0` repeats down every level because a flex item's default
-    // `min-height: auto` refuses to shrink below its content, which would push
-    // the overflow back up to the column and un-pin the two rows above.
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
+    // Three rows: provider header, section rail, section body. From `md` up
+    // only the last one scrolls, and `min-h-0` repeats down every level to
+    // allow it: a flex item's default `min-height: auto` refuses to shrink
+    // below its content, which would push the overflow back up to the column
+    // and un-pin the two rows above.
+    //
+    // Below `md` that default is the SAFETY, not the obstacle - it is what
+    // guarantees each level is at least as tall as its content, so the body
+    // renders whole and the settings surface scrolls it. Hence `md:` on every
+    // `min-h-0` from here down: a phone has no bounded card to distribute, and
+    // a subtree that has given up its own floor can only be as right as the
+    // height handed to it. Keeping the floor makes that moot.
+    <div className="flex flex-1 flex-col gap-4 md:min-h-0">
       <div className="flex shrink-0 items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1093,7 +1194,7 @@ function ProviderDetail({
       </div>
       <div
         className={cn(
-          "flex min-h-0 flex-1 flex-col transition-opacity",
+          "flex flex-1 flex-col transition-opacity md:min-h-0",
           detailPaneInert ? "pointer-events-none opacity-50" : "",
         )}
         {...(detailPaneInert ? { inert: true } : {})}
@@ -1109,46 +1210,98 @@ function ProviderDetail({
           value={activeTab}
           onValueChange={(value) => {
             const next = tabs.find((tab) => tab === value);
-            if (next !== undefined) onActiveTabChange(next);
+            if (next === undefined) return;
+            onActiveTabChange(next);
           }}
           // `gap-0`, with the rail-to-body spacing moved INSIDE the scroll box
           // as `pt-4`. With a gap here the scroll box would start 4 units below
           // the rail's rule, so content vanished in mid-air above itself; owned
           // by the body, the clip edge and the rule are the same line.
-          className="flex min-h-0 flex-1 flex-col gap-0"
+          className="flex flex-1 flex-col gap-0 md:min-h-0"
         >
-          {/* Line (underline) tabs, not the filled default. Seven unrelated
-              panes is NAVIGATION, and a filled track reads as a segmented
-              control - which is for re-presenting one dataset, and tops out
-              around four options. The old bar also cancelled the primitive's
-              `w-fit` with `w-full` while keeping content-width triggers, so
-              the filled slab spanned the pane and every unused pixel piled up
-              on the right as dead space. Full width is kept here for the
-              BORDER (a rail spanning the pane), while the track itself is
-              transparent, so there is nothing left to look empty. */}
-          <TabsList
-            variant="line"
-            className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
-          >
-            {tabs.map((tab) => (
-              <TabsTrigger key={tab} value={tab} className="flex-none px-3">
-                {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          {/* Two presentations of ONE selection, off the same `tabs` list and
+              the same labels. The pointer-width rail is the line bar; below
+              `md` it is a dropdown, because the bar's `flex-wrap` is what a
+              phone gets - two ragged rows of the pane's fourth chrome row.
 
-          {/* The scroll owner. Radix mounts only the ACTIVE content, so there
-              is exactly one scroll box at a time and switching tabs starts it
-              at the top - which is what you want when the panes are unrelated.
-              Pinning the rail this way (a sibling row outside the scroll box)
-              rather than with `position: sticky` is what avoids the background
-              problem: nothing ever passes UNDER the rail, so it needs no opaque
-              fill over the pane's translucent `bg-card/40`. */}
+              The branch is presentation only. The desktop arm's triggers write
+              the `Tabs` value directly; the phone arm cannot (a select item is
+              not a tab trigger) and calls `onActiveTabChange` instead, which is
+              the same prop this component's `onValueChange` above calls. Either
+              way `Tabs` stays controlled from one place, so the bodies below
+              and the one-mounted-pane invariant are untouched by the swap. */}
+          {isMobile ? (
+            <ProviderSectionSelect
+              tabs={tabs}
+              activeTab={activeTab}
+              onSelect={onActiveTabChange}
+              labelFor={(tab) =>
+                providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)
+              }
+            />
+          ) : (
+            /* Line (underline) tabs, not the filled default. Seven unrelated
+               panes is NAVIGATION, and a filled track reads as a segmented
+               control - which is for re-presenting one dataset, and tops out
+               around four options. The old bar also cancelled the primitive's
+               `w-fit` with `w-full` while keeping content-width triggers, so
+               the filled slab spanned the pane and every unused pixel piled up
+               on the right as dead space. Full width is kept here for the
+               BORDER (a rail spanning the pane), while the track itself is
+               transparent, so there is nothing left to look empty. */
+            <TabsList
+              variant="line"
+              className="h-auto w-full max-w-full shrink-0 flex-wrap justify-start rounded-none border-b border-border/60 px-0 pb-1.5"
+            >
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab} value={tab} className="flex-none px-3">
+                  {providerTabLabel(tab, PROVIDER_TAB_LABELS, state.providerId)}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          )}
+
+          {/* From `md` up, the scroll owner. Radix keeps every pane's div in
+              the DOM but hides all except the active one and mounts only its
+              body, so there is exactly one live scroll box at a time and
+              switching sections starts it at the top - which is what you want
+              when the panes are unrelated. Pinning the rail this way (a sibling
+              row outside the scroll box) rather than with `position: sticky` is
+              what avoids the background problem: nothing ever passes UNDER the
+              rail, so it needs no opaque fill over the pane's translucent
+              `bg-card/40`.
+
+              Below `md` it owns no scroll and claims no height. A phone already
+              scrolls the settings surface, and a pane that scrolls inside a
+              page that also scrolls is two gestures competing for one flick -
+              so the body simply grows and the surface carries it. The rail
+              scrolls away with the content instead of staying pinned, which is
+              the cost of that, and the reason the rail is one row tall. */}
           {tabs.map((tab) => (
             <TabsContent
               key={tab}
               value={tab}
-              className="-mx-5 mt-0 min-h-0 overflow-y-auto px-5 pt-4 pb-5"
+              // Radix names a pane after the TRIGGER that selects it
+              // (`aria-labelledby={triggerId}`), which on a phone names an
+              // element that does not exist - the dropdown replaces the whole
+              // `TabsList`, triggers included. So the phone arm labels the pane
+              // by its section instead, and drops the reference that would
+              // otherwise dangle. Caller props spread AFTER Radix's own in
+              // `Tabs.Content`, so both keys land.
+              //
+              // Spread CONDITIONALLY, because on the desktop arm the trigger is
+              // real and Radix's wiring is the better one.
+              {...(isMobile
+                ? {
+                    "aria-labelledby": undefined,
+                    "aria-label": providerTabLabel(
+                      tab,
+                      PROVIDER_TAB_LABELS,
+                      state.providerId,
+                    ),
+                  }
+                : {})}
+              className="-mx-5 mt-0 px-5 pt-4 pb-5 md:min-h-0 md:overflow-y-auto"
             >
               <ProviderTabBody
                 tab={tab}

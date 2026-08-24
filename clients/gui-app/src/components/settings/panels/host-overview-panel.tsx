@@ -583,6 +583,10 @@ export function HostOverviewPanel(props: {
   const updates = useHostOverviewUpdates({
     client,
     hostName: displayName,
+    // Identifies whose filter the RC override belongs to. `HostScopeGate` can
+    // swap the scoped host under a mounted subtree, and an override carried
+    // across that swap would apply one machine's decision to another.
+    hostId: scope.hostId,
     installedVersion: view.hostVersion,
     platformKey: host?.platform ?? null,
     // The check reads on its own now, so this gate is load-bearing rather than

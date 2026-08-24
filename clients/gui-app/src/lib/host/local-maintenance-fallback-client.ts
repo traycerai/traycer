@@ -15,8 +15,8 @@ import type {
 import {
   type HostDoctorResponse,
   type HostGetInstallationInfoResponse,
-  type HostUpdateCheckRequest,
-  type HostUpdateCheckResponse,
+  type HostUpdateCheckRequestV11,
+  type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
   type HostUpdateInstallResponse,
 } from "@traycer/protocol/host/maintenance/index";
@@ -206,8 +206,8 @@ export function localWsDoctorResponse(
  */
 export interface MaintenanceFallbackServeMap {
   readonly "host.update.check": (
-    params: HostUpdateCheckRequest,
-  ) => Promise<HostUpdateCheckResponse>;
+    params: HostUpdateCheckRequestV11,
+  ) => Promise<HostUpdateCheckResponseV11>;
   readonly "host.update.install": (
     params: HostUpdateInstallRequest,
   ) => Promise<HostUpdateInstallResponse>;
@@ -314,14 +314,14 @@ function serveFallbackRequest<Method extends keyof HostRpcRegistry & string>(
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const request: unknown = params;
   const answer = ((): Promise<
-    | HostUpdateCheckResponse
+    | HostUpdateCheckResponseV11
     | HostUpdateInstallResponse
     | HostDoctorResponse
     | HostGetInstallationInfoResponse
   > => {
     switch (method) {
       case "host.update.check":
-        return serve[method](request as HostUpdateCheckRequest);
+        return serve[method](request as HostUpdateCheckRequestV11);
       case "host.update.install":
         return serve[method](request as HostUpdateInstallRequest);
       case "host.doctor":

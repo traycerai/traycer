@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
@@ -33,8 +34,16 @@ export type SettingsSidebarMode =
       readonly onSelect: (section: SettingsSectionId) => void;
     };
 
+/**
+ * "rail" is the desktop two-pane nav column; "mobile-list" is the same
+ * sections rendered as a full-width drill-down list (the `/settings` index on
+ * phones).
+ */
+export type SettingsSidebarVariant = "rail" | "mobile-list";
+
 export interface SettingsSidebarProps {
   readonly mode: SettingsSidebarMode;
+  readonly variant: SettingsSidebarVariant;
 }
 
 /**
@@ -63,7 +72,14 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // them work for whichever host the picker names, so a dimmed row would now be
   // discouraging a click that lands on a working page.
   return (
-    <aside className="flex w-[clamp(13rem,20vw,17rem)] shrink-0 flex-col gap-1 overflow-y-auto border-r border-border/60 bg-background p-4">
+    <aside
+      className={cn(
+        "flex shrink-0 flex-col gap-1 overflow-y-auto bg-background p-4",
+        props.variant === "rail"
+          ? "w-[clamp(13rem,20vw,17rem)] border-r border-border/60"
+          : "w-full",
+      )}
+    >
       {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
         <Fragment key={group.id}>
           {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
@@ -88,6 +104,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
                   section={section}
                   index={index}
                   mode={props.mode}
+                  variant={props.variant}
                 />
               ) : null,
             )}
@@ -197,15 +214,18 @@ interface SettingsSidebarItemProps {
   section: SettingsSection;
   index: number;
   mode: SettingsSidebarMode;
+  variant: SettingsSidebarVariant;
 }
 
 function SettingsSidebarItem(props: SettingsSidebarItemProps) {
-  const { section, index, mode } = props;
+  const { section, index, mode, variant } = props;
   const badgeModifier = useSettingsLeaderModifierForIndex(index);
   const Icon = section.icon;
   const digit = singleDigitLeaderDigitFor(index);
-  const baseClass =
-    "inline-flex items-center gap-3 rounded-md px-3 py-2 text-ui-sm transition-colors";
+  const baseClass = cn(
+    "inline-flex items-center gap-3 rounded-md px-3 text-ui-sm transition-colors",
+    variant === "mobile-list" ? "py-3" : "py-2",
+  );
   const badge = (
     <span className="flex min-w-5 justify-end">
       <AnimatePresence initial={false}>
@@ -253,7 +273,13 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
     );
   }
   return (
-    <SettingsSidebarRouteItem section={section} label={label} badge={badge} />
+    <SettingsSidebarRouteItem
+      section={section}
+      label={label}
+      badge={badge}
+      baseClass={baseClass}
+      variant={variant}
+    />
   );
 }
 
@@ -261,8 +287,10 @@ function SettingsSidebarRouteItem(props: {
   readonly section: SettingsSection;
   readonly label: ReactNode;
   readonly badge: ReactNode;
+  readonly baseClass: string;
+  readonly variant: SettingsSidebarVariant;
 }) {
-  const { section, label, badge } = props;
+  const { section, label, badge, baseClass, variant } = props;
   const Icon = section.icon;
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const active = isSectionPathname(pathname, section.id);
@@ -278,7 +306,7 @@ function SettingsSidebarRouteItem(props: {
         });
       }}
       className={cn(
-        "inline-flex items-center gap-3 rounded-md px-3 py-2 text-ui-sm transition-colors",
+        baseClass,
         active
           ? "bg-accent text-accent-foreground"
           : "text-foreground/70 hover:bg-accent/60 hover:text-accent-foreground",
@@ -287,6 +315,9 @@ function SettingsSidebarRouteItem(props: {
       <Icon className="size-4 shrink-0" />
       {label}
       {badge}
+      {variant === "mobile-list" ? (
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground/60" />
+      ) : null}
     </Link>
   );
 }

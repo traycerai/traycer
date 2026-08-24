@@ -1,10 +1,11 @@
-import { RefreshCw } from "lucide-react";
 import { useCallback, type ReactNode } from "react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { cn } from "@/lib/utils";
 import { TeamsAccess, PeopleWithAccess } from "./access-lists";
 import { InviteCard } from "./invite-card";
 import { MyAgentsSharingSection } from "./my-agents-section";
@@ -13,7 +14,6 @@ import {
   type SharingPanelController,
   type SharingRefreshProps,
 } from "./use-controller";
-import { cn } from "@/lib/utils";
 
 const SHARING_REFRESH_TIMEOUT_MS = 10_000;
 
@@ -115,9 +115,9 @@ function SharingPanelHeader(props: SharingRefreshProps) {
           aria-label="Refresh collaborators"
           data-testid="epic-sharing-refresh-button"
         >
-          <RefreshCw
-            className={cn("size-4", refresh.refreshing && "animate-spin")}
-            data-testid={
+          <RefreshIcon
+            refreshing={refresh.refreshing}
+            testId={
               refresh.refreshing ? "epic-sharing-refresh-spinner" : undefined
             }
           />

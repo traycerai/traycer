@@ -50,7 +50,9 @@ vi.mock("@/hooks/auth/use-registered-hosts-query", () => ({
 
 function buildRouter(initialPath: string) {
   const rootRoute = createRootRoute({
-    component: () => <SettingsSidebar mode={{ kind: "route" }} />,
+    component: () => (
+      <SettingsSidebar mode={{ kind: "route" }} variant="rail" />
+    ),
   });
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,

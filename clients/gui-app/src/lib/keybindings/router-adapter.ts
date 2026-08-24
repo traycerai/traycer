@@ -17,6 +17,7 @@ import {
   goForward as goForwardAction,
 } from "@/lib/commands/actions";
 import { getHistoryController } from "@/lib/persistent-history";
+import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { LANDING_ROUTE } from "@/lib/routes";
 import {
   existingEpicTabIntent,
@@ -133,7 +134,7 @@ export function routerAdapterFor(
     // History-navigation availability + boundary state off the live router's
     // controller brand. The palette source reads these through `ctx.router`
     // (it mounts above `<RouterProvider>`, where TanStack router context is null).
-    isHistoryNavAvailable: () => getHistoryController(router.history) !== null,
+    isHistoryNavAvailable: () => historyNavChromeAvailable(router.history),
     canGoBack: () => {
       const controller = getHistoryController(router.history);
       return controller !== null && controller.canGoBack();
