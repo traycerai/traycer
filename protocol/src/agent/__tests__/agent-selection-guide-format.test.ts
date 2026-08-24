@@ -10,6 +10,7 @@ import {
 
 const GLOBAL_PATH = "/Users/me/.traycer/agent-selection-guide.md";
 const APP_DIR = "/Users/me/repos/app";
+const LIB_DIR = "/Users/me/repos/lib";
 
 describe("formatAgentSelectionGuideResponse", () => {
   it("returns the message when not found", () => {
@@ -31,25 +32,56 @@ describe("formatAgentSelectionGuideResponse", () => {
     );
   });
 
-  it("ignores legacy workspace sources from older hosts and renders only global", () => {
+  it("layers a workspace guide over global, ordered by priority", () => {
     const text = formatAgentSelectionGuideResponse(
       found([
+        globalSource("global body", 1),
         workspaceSource(APP_DIR, "app body", 2),
+      ]),
+    );
+    expect(text).toContain("take precedence and override global");
+    expect(text).not.toContain("Multiple workspaces provide");
+    expect(text.indexOf(`## Workspace instructions — ${APP_DIR}`)).toBeLessThan(
+      text.indexOf("## Global instructions"),
+    );
+    expect(text).toContain("app body");
+    expect(text).toContain("global body");
+  });
+
+  it("adds workspace selection guidance for multiple workspaces", () => {
+    const text = formatAgentSelectionGuideResponse(
+      found([
+        workspaceSource(APP_DIR, "app body", 3),
+        workspaceSource(LIB_DIR, "lib body", 2),
         globalSource("global body", 1),
       ]),
     );
-    expect(text).toBe(
-      `Agent selection instructions from ${GLOBAL_PATH}:\n\nglobal body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+    expect(text).toContain(
+      "Multiple workspaces provide their own instructions",
     );
-    expect(text).not.toContain("app body");
+    expect(text).toContain(`## Workspace instructions — ${APP_DIR}`);
+    expect(text).toContain(`## Workspace instructions — ${LIB_DIR}`);
+    expect(text).toContain("## Global instructions");
   });
 
-  it("reports no guide when an older host sends only workspace sources", () => {
+  it("renders workspace-only guides without global precedence framing", () => {
+    const text = formatAgentSelectionGuideResponse(
+      found([
+        workspaceSource(APP_DIR, "app body", 2),
+        workspaceSource(LIB_DIR, "lib body", 1),
+      ]),
+    );
+    expect(text).toContain("Each workspace's instructions apply");
+    expect(text).not.toContain("override global");
+    expect(text).not.toContain("## Global");
+  });
+
+  it("renders a lone workspace guide as plain attributed content", () => {
     const text = formatAgentSelectionGuideResponse(
       found([workspaceSource(APP_DIR, "app body", 2)]),
     );
     expect(text).toBe(
-      `No agent selection guide found.\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
+      `Agent selection instructions from ${APP_DIR}/.traycer/agent-selection-guide.md:\n\napp body\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`,
     );
   });
 
@@ -61,6 +93,17 @@ describe("formatAgentSelectionGuideResponse", () => {
     expect(text).toContain("Use `full_access` unless");
     expect(text).toContain("explicitly instructs you");
     expect(text).toContain("never infer a more restrictive permission mode");
+  });
+
+  it("appends the permission invariant after layered guides", () => {
+    const text = formatAgentSelectionGuideResponse(
+      found([
+        workspaceSource(APP_DIR, "app body", 2),
+        globalSource("global body", 1),
+      ]),
+    );
+
+    expect(text.endsWith(A2A_PERMISSION_MODE_INSTRUCTION)).toBe(true);
   });
 });
 
