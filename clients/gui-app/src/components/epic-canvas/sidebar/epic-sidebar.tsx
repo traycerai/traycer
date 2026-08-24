@@ -171,6 +171,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   Archive,
+  CopyMinus,
   Download,
   FolderOpen,
   ListChecks,
@@ -2038,6 +2039,7 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
             epicId={props.epicId}
             tabId={props.tabId}
             collapsed={props.collapsed}
+            onCollapseAll={collapseAll}
           />
         </>
       )}
@@ -2046,7 +2048,6 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
         tabId={props.tabId}
         collapsed={props.collapsed}
         canArchive={canArchive}
-        onCollapseAll={collapseAll}
       />
     </div>
   );
@@ -2137,6 +2138,7 @@ function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
@@ -2166,6 +2168,10 @@ function ChatHeaderMoreMenu(props: {
           Search agents
         </DropdownMenuItem>
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}
@@ -2183,6 +2189,7 @@ function ChatHeaderMoreMenu(props: {
 function ArtifactHeaderMoreMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
@@ -2218,6 +2225,10 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}
@@ -2259,6 +2270,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
           <ArtifactHeaderMoreMenu
             tabId={props.tabId}
             collapsed={props.collapsed}
+            onCollapseAll={collapseAll}
           />
         </>
       )}
@@ -2266,7 +2278,6 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
         epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
-        onCollapseAll={collapseAll}
         onMarkAllRead={markAllRead}
         markAllReadDisabled={unreadArtifacts.length === 0}
       />

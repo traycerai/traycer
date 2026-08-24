@@ -11,7 +11,6 @@ import {
   ArrowUpNarrowWide,
   ChevronLeft,
   ChevronRight,
-  CopyMinus,
   ListFilter,
   RotateCcw,
 } from "lucide-react";
@@ -546,7 +545,6 @@ export function ChatFilterMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
   readonly canArchive: boolean;
-  readonly onCollapseAll: () => void;
 }) {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
@@ -667,21 +665,19 @@ export function ChatFilterMenu(props: {
             >
               <ChatDetailContent detail="ownership" {...detailProps} />
             </ViewDetailEntry>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={props.onCollapseAll}>
-              <CopyMinus className="size-4" />
-              Collapse all
-            </DropdownMenuItem>
             {active ? (
-              <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault();
-                  resetChatView(epicId);
-                }}
-              >
-                <RotateCcw className="size-4" />
-                Reset view
-              </DropdownMenuItem>
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    resetChatView(epicId);
+                  }}
+                >
+                  <RotateCcw className="size-4" />
+                  Reset view
+                </DropdownMenuItem>
+              </>
             ) : null}
           </>
         )}
@@ -806,7 +802,6 @@ export function ArtifactFilterMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
-  readonly onCollapseAll: () => void;
   readonly onMarkAllRead: () => void;
   readonly markAllReadDisabled: boolean;
 }) {
@@ -932,10 +927,6 @@ export function ArtifactFilterMenu(props: {
               <ArtifactDetailContent detail="read" {...detailProps} />
             </ViewDetailEntry>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={props.onCollapseAll}>
-              <CopyMinus className="size-4" />
-              Collapse all
-            </DropdownMenuItem>
             <DropdownMenuItem
               disabled={props.markAllReadDisabled}
               onSelect={props.onMarkAllRead}

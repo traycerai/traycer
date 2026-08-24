@@ -266,32 +266,13 @@ vi.mock("@/components/epic-canvas/add-node-options", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-filter-menu", () => ({
-  ChatFilterMenu: (props: { readonly onCollapseAll: () => void }) => (
-    <>
-      <button type="button">Chat filter</button>
-      <button
-        type="button"
-        data-testid="epic-sidebar-collapse-all-chats"
-        onClick={props.onCollapseAll}
-      >
-        Collapse all agents
-      </button>
-    </>
-  ),
+  ChatFilterMenu: () => <button type="button">Chat filter</button>,
   ArtifactFilterMenu: (props: {
-    readonly onCollapseAll: () => void;
     readonly onMarkAllRead: () => void;
     readonly markAllReadDisabled: boolean;
   }) => (
     <>
       <button type="button">Artifact filter</button>
-      <button
-        type="button"
-        data-testid="epic-sidebar-collapse-all-artifacts"
-        onClick={props.onCollapseAll}
-      >
-        Collapse all artifacts
-      </button>
       <button
         type="button"
         disabled={props.markAllReadDisabled}
@@ -1815,6 +1796,7 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByRole("button", { name: "Add agent" }).matches(":disabled"),
     ).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
   });
 
   it("keeps collapsed artifact header entry points available", () => {
@@ -1838,6 +1820,7 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByRole("button", { name: "Add artifact" }).matches(":disabled"),
     ).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
   });
 
   it("hides artifact selection when there are no artifacts to select", () => {
