@@ -167,9 +167,6 @@ describe("<TabSwitcherSheet />", () => {
     renderSheet(true, () => {});
     const active = screen.getByRole("tab", { name: "Chats" });
     expect(active.getAttribute("data-state")).toBe("active");
-    // The base `data-active:bg-*` fill is neutralised, so the active line tab
-    // never paints a solid fill behind the label.
-    expect(active.className).toContain("data-active:bg-transparent");
     // The visible active indicator is a collision-free `::before` underline. The
     // trigger's single `::after` is claimed by the mobile touch hit-slop, so
     // ui/tabs' `after:bg-foreground` indicator legitimately stays in the class
@@ -178,7 +175,11 @@ describe("<TabSwitcherSheet />", () => {
     // mechanism.
     expect(active.className).toContain("after:bg-foreground");
     expect(active.className).toContain("before:bg-foreground");
-    expect(active.className).toContain("data-active:before:opacity-100");
+    // That the underline actually fires, and that the base fill is neutralised
+    // rather than merely competed with, both hang on the bar spelling its
+    // active-state modifier the way ui/tabs spells its own. Restating that
+    // spelling here would only re-assert what the bar's own source says, so
+    // `switcher-category-tabs.test.tsx` derives it from the primitive instead.
   });
 
   it("forces the mobile touch hit-slop ::after transparent so a merged indicator can't box the tab", () => {
