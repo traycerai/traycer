@@ -90,6 +90,11 @@ function RemoteFolderPickerBody(): ReactNode {
   // null = not edited yet; the field then shows the host home once known.
   const [rawInput, setRawInput] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // A highlighted row is only an Add target after the user actually moved to
+  // it with the arrow keys. The initial highlight remains presentational.
+  const [keyboardAimedPath, setKeyboardAimedPath] = useState<string | null>(
+    null,
+  );
   // The host's home, learned from the root (null-path) response; anchors `~`.
   const [homePath, setHomePath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -159,12 +164,18 @@ function RemoteFolderPickerBody(): ReactNode {
   );
   const upPath = readUpPath(data, parsed);
   // Row 0 is the ".." row whenever there is somewhere to go up to.
-  const rowCount = (upPath !== null ? 1 : 0) + filteredEntries.length;
+  const entryRowOffset = upPath !== null ? 1 : 0;
+  const rowCount = entryRowOffset + filteredEntries.length;
   const clampedIndex = Math.min(selectedIndex, Math.max(rowCount - 1, 0));
+  const selectedEntry = readDirectoryEntryAtRow(
+    filteredEntries,
+    clampedIndex - entryRowOffset,
+  );
 
   const setPath = (path: string): void => {
     setRawInput(path);
     setSelectedIndex(0);
+    setKeyboardAimedPath(null);
   };
 
   const enterEntry = (entry: WorkspaceBrowseFolderEntry): void => {
@@ -175,7 +186,15 @@ function RemoteFolderPickerBody(): ReactNode {
     if (upPath !== null) setPath(withTrailingSeparator(upPath));
   };
 
-  const addTarget = readAddTarget(rawInput, effectiveHome, data);
+  // Keep the aimed path coupled to the row still highlighted. If a live
+  // listing changes underneath the picker, a stale path must not silently win.
+  const aimedAddTarget = readKeyboardAimedAddTarget(
+    rawInput,
+    selectedEntry,
+    keyboardAimedPath,
+  );
+  const addTarget =
+    aimedAddTarget ?? readAddTarget(rawInput, effectiveHome, data);
 
   const addCurrent = (): void => {
     if (addTarget === null) return;
@@ -187,8 +206,7 @@ function RemoteFolderPickerBody(): ReactNode {
       goUp();
       return;
     }
-    const entry = filteredEntries.at(clampedIndex - (upPath !== null ? 1 : 0));
-    if (entry !== undefined) enterEntry(entry);
+    if (selectedEntry !== undefined) enterEntry(selectedEntry);
   };
 
   const moveSelection = (delta: number): void => {
@@ -197,6 +215,14 @@ function RemoteFolderPickerBody(): ReactNode {
       Math.max(rowCount - 1, 0),
     );
     setSelectedIndex(next);
+    setKeyboardAimedPath((currentAimedPath) => {
+      if (next === clampedIndex) return currentAimedPath;
+      if (rawInput !== null) return null;
+      return (
+        readDirectoryEntryAtRow(filteredEntries, next - entryRowOffset)?.path ??
+        null
+      );
+    });
     const option = document.getElementById(pickerOptionId(next));
     if (option !== null && typeof option.scrollIntoView === "function") {
       option.scrollIntoView({ block: "nearest" });
@@ -237,6 +263,7 @@ function RemoteFolderPickerBody(): ReactNode {
           onChange={(event) => {
             setRawInput(event.target.value);
             setSelectedIndex(0);
+            setKeyboardAimedPath(null);
           }}
           onKeyDown={(event) => {
             handlePickerFieldKeys(event, {
@@ -601,11 +628,31 @@ function pickerOptionId(index: number): string {
   return `remote-folder-picker-option-${String(index)}`;
 }
 
+function readDirectoryEntryAtRow(
+  entries: ReadonlyArray<WorkspaceBrowseFolderEntry>,
+  entryIndex: number,
+): WorkspaceBrowseFolderEntry | undefined {
+  if (entryIndex < 0) return undefined;
+  return entries.at(entryIndex);
+}
+
+function readKeyboardAimedAddTarget(
+  rawInput: string | null,
+  selectedEntry: WorkspaceBrowseFolderEntry | undefined,
+  keyboardAimedPath: string | null,
+): string | null {
+  if (rawInput !== null || selectedEntry?.path !== keyboardAimedPath) {
+    return null;
+  }
+  return keyboardAimedPath;
+}
+
 /**
  * Keyboard model on the path field (the dialog auto-focuses it): arrows move
  * the row selection, Enter opens the selected row, cmd/ctrl+Enter adds the
- * current path. Backspace needs no handler - deleting characters past a `/`
- * IS up-navigation, because the field is the source of truth.
+ * deliberately aimed directory or the authoritative field path. Backspace
+ * needs no handler - deleting characters past a `/` IS up-navigation, because
+ * an edited field remains the source of truth.
  */
 function handlePickerFieldKeys(
   event: KeyboardEvent<HTMLInputElement>,
@@ -864,10 +911,11 @@ function filterEntries(
 }
 
 /**
- * What Add picks: exactly what the field shows (with `~` expanded and any
- * trailing `/` dropped), whether or not that folder was ever listed -
- * selecting a folder needs no read. An unedited field picks the home the
- * field displays; a field the user explicitly cleared picks nothing.
+ * What the field contributes to Add: exactly what it shows (with `~` expanded
+ * and any trailing `/` dropped), whether or not that folder was ever listed.
+ * An unedited field contributes the home it displays, while a field the user
+ * explicitly cleared contributes nothing. The component may supersede this
+ * fallback with a directory the user deliberately aimed at using arrow keys.
  */
 function readAddTarget(
   rawInput: string | null,
