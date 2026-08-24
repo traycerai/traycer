@@ -57,13 +57,14 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 
-function terminalWorkspaceLeaf(
-  ctx: CommandContext,
-  target: { readonly hostId: string; readonly cwd: string },
-  label: string,
-  hostClient: HostClient<HostRpcRegistry>,
-  status: WorktreeFolderRowBadge | null,
-): CommandItem {
+function terminalWorkspaceLeaf(props: {
+  readonly ctx: CommandContext;
+  readonly target: { readonly hostId: string; readonly cwd: string };
+  readonly label: string;
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly status: WorktreeFolderRowBadge | null;
+}): CommandItem {
+  const { ctx, target, label, hostClient, status } = props;
   // Cmdk can invoke a selected row twice before its view rerenders. Keep this
   // synchronous per-leaf latch so one workspace selection creates one terminal.
   let hasLaunched = false;
@@ -183,13 +184,13 @@ function terminalWorkspaceLeaves(
     (row) => !isBrowsable(row) && !isWorkspaceResolvePending(row),
   );
   const leaves = selectableRows.map((row) =>
-    terminalWorkspaceLeaf(
+    terminalWorkspaceLeaf({
       ctx,
-      { hostId: row.hostId, cwd: row.runningDir },
-      row.runningDir,
+      target: { hostId: row.hostId, cwd: row.runningDir },
+      label: row.runningDir,
       hostClient,
-      worktreeFolderRowBadge(row),
-    ),
+      status: worktreeFolderRowBadge(row),
+    }),
   );
   const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
   const disabledHints = disabledRows.map(terminalWorkspaceDisabledHint);
@@ -208,13 +209,13 @@ function terminalWorkspaceLeaves(
     workspace.folderlessCwd !== null
   ) {
     return [
-      terminalWorkspaceLeaf(
+      terminalWorkspaceLeaf({
         ctx,
-        { hostId, cwd: workspace.folderlessCwd },
-        workspace.folderlessCwd,
+        target: { hostId, cwd: workspace.folderlessCwd },
+        label: workspace.folderlessCwd,
         hostClient,
-        null,
-      ),
+        status: null,
+      }),
     ];
   }
   if (rowsWithoutResolvedMissing.length === 0) {

@@ -274,13 +274,13 @@ export function SetupCardSegment(props: {
     active: isActive,
   };
 
-  const title = headerTitle(
-    aggregate.state,
+  const title = headerTitle({
+    state: aggregate.state,
     multi,
     total,
-    isActive,
+    active: isActive,
     hasProvisionFailure,
-  );
+  });
   const provisionFailureDetail =
     workspaces.find(isProvisionFailure)?.errorMessage ?? null;
   const secondary = multi
@@ -444,6 +444,10 @@ function WorkspaceSetupDetail(
     active,
   } = props;
   const provisionFailed = isProvisionFailure(entry);
+  const creationState = creationStepState(entry, provisionFailed);
+  const setupState = setupStepState(entry, provisionFailed);
+  const setupActive =
+    !provisionFailed && entry.state !== "creating" && active;
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
@@ -485,33 +489,13 @@ function WorkspaceSetupDetail(
         <li className="flex items-center gap-2">
           {/* Spins while `git worktree add` runs (state "creating"); flips to a
               done check once the add finishes and the rest proceeds. */}
-          <StatusIcon
-            state={
-              provisionFailed
-                ? "failed"
-                : entry.state === "creating"
-                  ? "creating"
-                  : "ready"
-            }
-            active={active}
-          />
+          <StatusIcon state={creationState} active={active} />
           <span className="text-foreground/85">Creating worktree</span>
         </li>
         <li className="flex items-center gap-2">
           {/* Pending (static dot) until the worktree exists and the setup
               script starts; then reflects the live setup state. */}
-          <StatusIcon
-            state={
-              provisionFailed
-                ? "setting-up"
-                : entry.state === "creating"
-                  ? "setting-up"
-                  : entry.state
-            }
-            active={
-              provisionFailed || entry.state === "creating" ? false : active
-            }
-          />
+          <StatusIcon state={setupState} active={setupActive} />
           <span
             className={cn(
               "text-foreground/85",
@@ -558,13 +542,31 @@ function WorkspaceSetupDetail(
   );
 }
 
-function headerTitle(
-  state: SetupWorkspaceState,
-  multi: boolean,
-  total: number,
-  active: boolean,
-  hasProvisionFailure: boolean,
-): string {
+function creationStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed) return "failed";
+  if (entry.state === "creating") return "creating";
+  return "ready";
+}
+
+function setupStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed || entry.state === "creating") return "setting-up";
+  return entry.state;
+}
+
+function headerTitle(props: {
+  readonly state: SetupWorkspaceState;
+  readonly multi: boolean;
+  readonly total: number;
+  readonly active: boolean;
+  readonly hasProvisionFailure: boolean;
+}): string {
+  const { state, multi, total, active, hasProvisionFailure } = props;
   if (state === "failed" && hasProvisionFailure) {
     return "Worktree creation failed";
   }
