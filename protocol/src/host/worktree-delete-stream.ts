@@ -33,6 +33,8 @@
  * ⇒ today's refuse-on-busy) and optional `holders` on `failed`. Degrade: a
  * 1.0 host's open schema strips `stopOwners` and its `failed` frame has
  * only `reason`; an old client that negotiated 1.0 never sees `holders`.
+ * Malformed `holders` on a 1.1 `failed` frame are sanitized to absent so
+ * the terminal `reason` still arrives.
  * - `pong`     - heartbeat response.
  *
  * Client frames:
@@ -41,7 +43,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { worktreeBusyHoldersSchema } from "@traycer/protocol/framework/worktree-busy-holders";
+import { worktreeBusyHoldersWireFieldSchema } from "@traycer/protocol/framework/worktree-busy-holders";
 import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-schemas";
 
 export const worktreeDeleteByPathOpenRequestSchema = z.object({
@@ -155,7 +157,7 @@ export const worktreeDeleteByPathServerFrameSchemaV11 = z.discriminatedUnion(
     z.object({
       kind: z.literal("failed"),
       reason: z.string(),
-      holders: worktreeBusyHoldersSchema.optional(),
+      holders: worktreeBusyHoldersWireFieldSchema,
       hasBinaryPayload: z.literal(false),
     }),
     z.object({

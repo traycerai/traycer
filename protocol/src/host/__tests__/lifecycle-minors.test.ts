@@ -280,6 +280,23 @@ describe("worktree.deleteByPath@1.1 stopOwners + failed holders", () => {
     }
   });
 
+  it("1.1 failed frame with malformed holders keeps kind and reason", () => {
+    const parsed = worktreeDeleteByPathServerFrameSchemaV11.safeParse({
+      kind: "failed",
+      reason: "in use",
+      holders: [{ not: "a holder" }],
+      hasBinaryPayload: false,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.kind).toBe("failed");
+      if (parsed.data.kind === "failed") {
+        expect(parsed.data.reason).toBe("in use");
+        expect(parsed.data.holders).toBeUndefined();
+      }
+    }
+  });
+
   it("1.0 failed frame strips holders (old-client degrade)", () => {
     const parsed = worktreeDeleteByPathServerFrameSchema.parse({
       kind: "failed",
