@@ -135,7 +135,8 @@ export class HostRpcError extends Error {
     this.requestId = details.requestId;
     this.method = details.method;
     this.fatalDetails = details.fatalDetails;
-    this.holders = details.holders ?? null;
+    this.holders =
+      details.code === "WORKTREE_BUSY" ? (details.holders ?? null) : null;
   }
 
   static fromErrorDetails(
@@ -149,14 +150,14 @@ export class HostRpcError extends Error {
       requestId,
       method,
       fatalDetails: null,
-      holders: parseWorktreeBusyHolders(error.holders),
+      holders: holdersForBusyCode(error.code, error.holders),
     });
   }
 
   /**
    * Build from a decoded wire error envelope (`code` is an open string).
-   * Unknown codes collapse to `RPC_ERROR`; `holders` survive when they
-   * match the protocol schema.
+   * Unknown codes collapse to `RPC_ERROR`. `holders` survive only on
+   * `WORKTREE_BUSY` when they match the protocol schema.
    */
   static fromWireEnvelope(
     error: {
@@ -173,14 +174,18 @@ export class HostRpcError extends Error {
       requestId,
       method,
       fatalDetails: null,
-      holders: parseWorktreeBusyHolders(error.holders),
+      holders: holdersForBusyCode(error.code, error.holders),
     });
   }
 }
 
-function parseWorktreeBusyHolders(
+function holdersForBusyCode(
+  code: string,
   holders: unknown,
 ): readonly WorktreeBusyHolder[] | null {
+  if (code !== "WORKTREE_BUSY") {
+    return null;
+  }
   if (holders === undefined || holders === null) {
     return null;
   }

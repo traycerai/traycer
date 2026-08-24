@@ -3256,6 +3256,82 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
     },
     WAIT.timeout,
   );
+
+  it(
+    "rejects a WORKTREE_BUSY mux error with malformed holders promptly, keeping code/message",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryError = {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: [{ not: "a holder" }],
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, undefined)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).not.toBeInstanceOf(HostTransportFailureError);
+        expect(error).toMatchObject({
+          code: "WORKTREE_BUSY",
+          message: "in use",
+        });
+        expect((error as HostRpcError).holders).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    WAIT.timeout,
+  );
+
+  it(
+    "still accepts a non-busy mux error whose holders field is malformed",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+      relay.unaryError = {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: [{ not: "a holder" }],
+      };
+      const lease = new MutableBearerLease("token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: statusRegistry,
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const error: unknown = await session
+          .sendUnary("host.status", {}, null, undefined)
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).not.toBeInstanceOf(HostTransportFailureError);
+        expect(error).toMatchObject({
+          code: "RPC_ERROR",
+          message: "resolver failed",
+        });
+        expect((error as HostRpcError).holders).toBeNull();
+      } finally {
+        session.close();
+      }
+    },
+    WAIT.timeout,
+  );
 });
 
 describe("RemoteSession pending-unary FATAL rejection (S3)", () => {

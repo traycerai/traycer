@@ -100,6 +100,34 @@ describe("HostRpcError holders", () => {
     expect(error.holders).toEqual(worktreeBusyHolders);
   });
 
+  it("fromErrorDetails ignores a valid holder list on a non-busy code", () => {
+    const error = HostRpcError.fromErrorDetails(
+      {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: worktreeBusyHolders,
+      },
+      "req-4",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("RPC_ERROR");
+    expect(error.holders).toBeNull();
+  });
+
+  it("fromWireEnvelope ignores a valid holder list on a non-busy code", () => {
+    const error = HostRpcError.fromWireEnvelope(
+      {
+        code: "RPC_ERROR",
+        message: "resolver failed",
+        holders: worktreeBusyHolders,
+      },
+      "req-5",
+      "worktree.delete",
+    );
+    expect(error.code).toBe("RPC_ERROR");
+    expect(error.holders).toBeNull();
+  });
+
   it("fromWireEnvelope drops a malformed holders payload rather than throwing", () => {
     const error = HostRpcError.fromWireEnvelope(
       {

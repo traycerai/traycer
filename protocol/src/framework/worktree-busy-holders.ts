@@ -50,6 +50,14 @@ export const worktreeBusyHoldersSchema = z.array(worktreeBusyHolderSchema);
 export type WorktreeBusyHolders = z.infer<typeof worktreeBusyHoldersSchema>;
 
 /**
+ * Envelope-seam parse of `holders`. A valid list is typed; anything else
+ * (absent, null, malformed) becomes `undefined` so adding this optional
+ * field can never reject an envelope that parsed before the minor.
+ */
+export const worktreeBusyHoldersWireFieldSchema =
+  worktreeBusyHoldersSchema.optional().catch(undefined);
+
+/**
  * `WORKTREE_BUSY` envelope a current client parses when it wants the typed
  * inventory. `holders` omitted = old host; the prose `message` still names
  * the refusal.

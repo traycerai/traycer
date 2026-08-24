@@ -16,6 +16,7 @@ import {
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHolderSchema,
 } from "@traycer/protocol/framework/index";
+import { unaryResponsePayloadSchema } from "@traycer/protocol/host-transport/mux";
 import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   terminalSubscribeOpenRequestSchema,
@@ -76,6 +77,67 @@ describe("WORKTREE_BUSY typed holders", () => {
       holders: [holder],
     });
     expect(parsed.holders).toEqual([holder]);
+  });
+
+  it("sanitizes malformed holders on the WS and mux error envelopes", () => {
+    const malformed = [{ not: "a holder" }];
+    const wsBusy = hostResponseErrorSchema.safeParse({
+      code: "WORKTREE_BUSY",
+      message: "in use",
+      holders: malformed,
+    });
+    expect(wsBusy.success).toBe(true);
+    if (wsBusy.success) {
+      expect(wsBusy.data.code).toBe("WORKTREE_BUSY");
+      expect(wsBusy.data.message).toBe("in use");
+      expect(wsBusy.data.holders).toBeUndefined();
+    }
+
+    const wsOther = hostResponseErrorSchema.safeParse({
+      code: "SOME_OTHER_ERROR",
+      message: "resolver failed",
+      holders: malformed,
+    });
+    expect(wsOther.success).toBe(true);
+    if (wsOther.success) {
+      expect(wsOther.data.code).toBe("SOME_OTHER_ERROR");
+      expect(wsOther.data.message).toBe("resolver failed");
+      expect(wsOther.data.holders).toBeUndefined();
+    }
+
+    const muxBusy = unaryResponsePayloadSchema.safeParse({
+      requestId: "req-1",
+      method: "worktree.delete",
+      result: null,
+      error: {
+        code: "WORKTREE_BUSY",
+        message: "in use",
+        holders: malformed,
+      },
+    });
+    expect(muxBusy.success).toBe(true);
+    if (muxBusy.success) {
+      expect(muxBusy.data.error?.code).toBe("WORKTREE_BUSY");
+      expect(muxBusy.data.error?.message).toBe("in use");
+      expect(muxBusy.data.error?.holders).toBeUndefined();
+    }
+
+    const muxOther = unaryResponsePayloadSchema.safeParse({
+      requestId: "req-2",
+      method: "host.status",
+      result: null,
+      error: {
+        code: "SOME_OTHER_ERROR",
+        message: "resolver failed",
+        holders: malformed,
+      },
+    });
+    expect(muxOther.success).toBe(true);
+    if (muxOther.success) {
+      expect(muxOther.data.error?.code).toBe("SOME_OTHER_ERROR");
+      expect(muxOther.data.error?.message).toBe("resolver failed");
+      expect(muxOther.data.error?.holders).toBeUndefined();
+    }
   });
 
   it("legacy {code,message} parser strips holders (old-client degrade)", () => {

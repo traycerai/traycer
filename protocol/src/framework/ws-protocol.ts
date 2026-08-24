@@ -7,7 +7,7 @@ import {
   type ClientHandshakeIdentity,
 } from "@traycer/protocol/framework/client-identity";
 import {
-  worktreeBusyHoldersSchema,
+  worktreeBusyHoldersWireFieldSchema,
   type WorktreeBusyHolder,
 } from "./worktree-busy-holders";
 
@@ -398,9 +398,10 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
-  // Typed `WORKTREE_BUSY` inventory. Optional on every error; older hosts
-  // omit it and older clients that still parse `{ code, message }` strip it.
-  holders: worktreeBusyHoldersSchema.optional(),
+  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
+  // absent rather than rejecting the envelope — adding this optional
+  // field must never fail a `{ code, message }` that parsed before it.
+  holders: worktreeBusyHoldersWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

@@ -10,7 +10,7 @@ import {
 } from "../framework/ws-protocol";
 import type { SchemaVersion } from "../framework/versioned-rpc-types";
 import {
-  worktreeBusyHoldersSchema,
+  worktreeBusyHoldersWireFieldSchema,
   type WorktreeBusyHolder,
 } from "../framework/worktree-busy-holders";
 import {
@@ -410,7 +410,7 @@ export const unaryResponsePayloadSchema: z.ZodType<UnaryResponsePayload> =
       .object({
         code: z.string(),
         message: z.string(),
-        holders: worktreeBusyHoldersSchema.optional(),
+        holders: worktreeBusyHoldersWireFieldSchema,
       })
       .nullable(),
   });

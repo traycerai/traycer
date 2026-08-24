@@ -2763,6 +2763,100 @@ describe("WsRpcClient", () => {
     });
   });
 
+  it("rejects a WORKTREE_BUSY envelope with malformed holders promptly, keeping code/message", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-busy-malformed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireRawMessage(
+      JSON.stringify({
+        kind: "response",
+        requestId: "req-busy-malformed",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "WORKTREE_BUSY",
+          message: "in use",
+          holders: [{ not: "a holder" }],
+        },
+      }),
+    );
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        !(error instanceof HostTransportFailureError) &&
+        error.code === "WORKTREE_BUSY" &&
+        error.message === "in use" &&
+        error.holders === null &&
+        !error.message.includes("Malformed host frame")
+      );
+    });
+  });
+
+  it("still accepts a non-busy error envelope whose holders field is malformed", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      requestId: "req-other-malformed",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.request("host.echo", { message: "x" });
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 0 }),
+    );
+    await flush();
+
+    sockets[0].socket.fireRawMessage(
+      JSON.stringify({
+        kind: "response",
+        requestId: "req-other-malformed",
+        method: "host.echo",
+        schemaVersion: { major: 1, minor: 0 },
+        result: null,
+        error: {
+          code: "RPC_ERROR",
+          message: "resolver failed",
+          holders: [{ not: "a holder" }],
+        },
+      }),
+    );
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        !(error instanceof HostTransportFailureError) &&
+        error.code === "RPC_ERROR" &&
+        error.message === "resolver failed" &&
+        error.holders === null &&
+        !error.message.includes("Malformed host frame")
+      );
+    });
+  });
+
   it("falls back to a floor method when an optional method is absent", async () => {
     const fallbackV10 = defineRpcContract({
       method: "host.syntheticFallback",

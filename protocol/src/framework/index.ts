@@ -68,6 +68,7 @@ export {
   worktreeBusyHolderActivitySchema,
   worktreeBusyHolderSchema,
   worktreeBusyHoldersSchema,
+  worktreeBusyHoldersWireFieldSchema,
   worktreeBusyOwnerKindSchema,
   worktreeBusyOwnerRefSchema,
 } from "./worktree-busy-holders";
