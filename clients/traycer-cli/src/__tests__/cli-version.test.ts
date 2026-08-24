@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Command } from "commander";
+import { CURRENT_CLIENT_COMPATIBILITY_EPOCH } from "@traycer/protocol/framework/index";
+import { CLI_CLIENT_IDENTITY } from "../cli-version";
 import {
   LOCAL_CLI_VERSION,
   buildProgram,
@@ -190,5 +192,28 @@ describe("buildProgramWithAgentRoles() command registration", () => {
       "relinquish",
     ]);
     expect(agent?.helpInformation()).toContain("role");
+  });
+});
+
+describe("CLI_CLIENT_IDENTITY", () => {
+  it("declares the cli kind, the shared reviewed epoch, and the resolved version", () => {
+    expect(CLI_CLIENT_IDENTITY.kind).toBe("cli");
+    // Read from the protocol package rather than restated here: a second copy
+    // of this number is how one sender starts claiming a generation the
+    // others do not.
+    expect(CLI_CLIENT_IDENTITY.compatibilityEpoch).toBe(
+      CURRENT_CLIENT_COMPATIBILITY_EPOCH,
+    );
+    expect(CLI_CLIENT_IDENTITY.appVersion).toBe(resolveCliVersion(process.env));
+  });
+
+  it("does NOT derive its epoch from its version", () => {
+    // The two answer different questions: a backport carries a low SemVer and
+    // a current epoch, and a version bump that changes no architectural
+    // guarantee must not move the epoch. Under vitest the version resolves to
+    // `0.0.0-local`, whose major is 0 - an epoch derived from it would be
+    // `invalid-epoch` to every host.
+    expect(CLI_CLIENT_IDENTITY.appVersion).toBe(LOCAL_CLI_VERSION);
+    expect(CLI_CLIENT_IDENTITY.compatibilityEpoch).toBeGreaterThan(0);
   });
 });

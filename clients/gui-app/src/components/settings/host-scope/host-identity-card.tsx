@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import { describeHostBusy } from "@/components/host/host-restart-copy";
 import {
   HostGlyph,
   HostPresenceDot,
@@ -71,10 +73,14 @@ export function HostIdentityCard(props: {
    */
   readonly nameInput: ReactNode | null;
   /**
-   * How many sessions the HOST says are open (`host.status`), or `null` when it
-   * has not answered — which is not the same as zero and must not render as it.
+   * What the HOST says is working (`host.status@1.2`'s breakdown + total, or
+   * the @1.1 count alone). `busySessionCount`/`busyBreakdown` of `null` mean
+   * the host did not say — which is not the same as zero and must not render
+   * as it. Live tone follows `busy`, never a viewer/tile count.
    */
-  readonly sessionCount: number | null;
+  readonly busy: boolean;
+  readonly busySessionCount: number | null;
+  readonly busyBreakdown: HostBusyBreakdown | null;
   /**
    * The card's action cluster, or `null` for a surface with nothing to offer.
    *
@@ -210,7 +216,11 @@ export function HostIdentityCard(props: {
                 {facts.join(" · ")}
               </span>
             )}
-            <ActiveSessionsChip count={props.sessionCount} />
+            <HostBusyChip
+              busy={props.busy}
+              busySessionCount={props.busySessionCount}
+              busyBreakdown={props.busyBreakdown}
+            />
           </div>
         </div>
       </div>
@@ -220,7 +230,7 @@ export function HostIdentityCard(props: {
 }
 
 /**
- * Open sessions, as a state rather than a clause.
+ * What is working on this host, as a state rather than a clause.
  *
  * This is what is left of the `via relay.dev.traycer.ai · 1 active session`
  * meta row. The route half is deliberately gone — a relay origin is not
@@ -228,15 +238,25 @@ export function HostIdentityCard(props: {
  * band out of the one fact that IS actionable: whether work is running on this
  * host right now, which decides whether Restart is safe to press.
  *
- * `null` renders nothing. A host that has not answered `host.status` has not
- * told us it is idle, and "No sessions" is a claim.
+ * Copy comes from {@link describeHostBusy}. A null label renders nothing: a
+ * host that has not answered `host.status` has not told us it is idle, and
+ * "Idle" is a claim. Live (emerald, pulsing) only when `busy` — an idle
+ * shell must not light the chip. Fill is an alpha of the foreground, never
+ * `bg-muted`: this chip sits on a card, and muted collapses into the card
+ * on most preset darks.
  */
-function ActiveSessionsChip(props: {
-  readonly count: number | null;
+function HostBusyChip(props: {
+  readonly busy: boolean;
+  readonly busySessionCount: number | null;
+  readonly busyBreakdown: HostBusyBreakdown | null;
 }): ReactNode {
-  const { count } = props;
-  if (count === null) return null;
-  const live = count > 0;
+  const copy = describeHostBusy({
+    breakdown: props.busyBreakdown,
+    busySessionCount: props.busySessionCount,
+    busy: props.busy,
+  });
+  if (copy.label === null) return null;
+  const live = props.busy;
   return (
     <span
       className={cn(
@@ -246,16 +266,15 @@ function ActiveSessionsChip(props: {
           : "border-border/60 bg-foreground/5 text-muted-foreground",
       )}
       data-testid="host-active-sessions"
-      data-count={count}
+      data-count={props.busySessionCount ?? ""}
+      data-live={live ? "true" : "false"}
     >
       <HostPresenceDot
         tone={live ? "live" : "idle"}
         animate={live}
         className={undefined}
       />
-      {live
-        ? `${count} active session${count === 1 ? "" : "s"}`
-        : "No active sessions"}
+      {copy.label}
     </span>
   );
 }

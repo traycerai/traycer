@@ -94,6 +94,7 @@ const PRESENTATION: DefaultHostReadinessPresentation = {
     hostStatus: {
       busy: false,
       busySessionCount: 0,
+      busyBreakdown: null,
       hostVersion: "1.0.0",
     },
   },

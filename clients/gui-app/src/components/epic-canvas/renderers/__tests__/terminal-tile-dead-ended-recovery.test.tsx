@@ -1,13 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { create } from "zustand";
+import type { TerminalSessionExitReason } from "@traycer/protocol/host/terminal/unary-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { MEASURE_GRID_TIMEOUT_MS } from "@/hooks/agent/use-terminal-tile-bootstrap";
@@ -15,6 +10,16 @@ import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+
+// `terminal-tile.tsx` drives automatic recovery off a handle that can no
+// longer address its PTY: `if (status === "lost" || status === "reaped")
+// onSessionLost()`. Both statuses now follow the SAME bounded-recovery
+// overlay path (`resolveTerminalOverlayState` - see its own test file) - a
+// mounted "reaped" handle is no longer a definitive dead end that renders a
+// standalone "sessionLost" Close affordance, so this file no longer pins
+// that (formerly this file's whole purpose, hence the rename from
+// `terminal-tile-session-lost-overlay-close`). It now only pins the
+// recovery-callback contract shared with `tui-agent-tile-dead-ended-recovery`.
 
 const testState = vi.hoisted(() => ({
   canMutate: true,
@@ -27,17 +32,22 @@ const testState = vi.hoisted(() => ({
     basis: "directory" as const,
     unavailability: null as string | null,
   },
+  onSessionLost: vi.fn(),
 }));
 
-const reapedHandle = {
+// A handle whose lifecycle status starts healthy and is flipped in-test, to
+// pin the `onSessionLost` recovery effect's status contract.
+const recoveryHandle = {
   scope: { kind: "epic" as const, epicId: "epic-1" },
   sessionId: "terminal-1",
   dispose: () => undefined,
   store: create(() => ({
-    status: "reaped",
-    connectionStatus: "closed" as const,
-    exitCode: null,
-    exitReason: null,
+    // Not `as const`: the tests below mutate `status` post-mount, which a
+    // single-literal-narrowed type would reject at the `setState` call site.
+    status: "running",
+    connectionStatus: "open" as const,
+    exitCode: null as number | null,
+    exitReason: null as TerminalSessionExitReason | null,
     effectiveCols: 80,
     effectiveRows: 24,
     lastOutputPreview: null,
@@ -71,7 +81,7 @@ vi.mock("@/hooks/terminal/use-terminal-session-recovery", () => ({
     recoveryExhausted: true,
     onManualReconnect: () => undefined,
     onSessionHealthy: () => undefined,
-    onSessionLost: () => undefined,
+    onSessionLost: testState.onSessionLost,
   }),
 }));
 
@@ -104,7 +114,7 @@ vi.mock(
     return {
       ...actual,
       useTerminalSessionHandle: (args: { readonly enabled: boolean }) =>
-        args.enabled ? reapedHandle : null,
+        args.enabled ? recoveryHandle : null,
     };
   },
 );
@@ -249,13 +259,20 @@ function openHostTerminalFixture(): {
   return { viewTabId, paneId: pane.id, node };
 }
 
-describe("<TerminalTile /> sessionLost overlay Close", () => {
+describe("<TerminalTile /> automatic recovery on a dead-ended handle", () => {
   beforeEach(() => {
     cleanup();
     vi.useFakeTimers();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    recoveryHandle.store.setState({
+      status: "running",
+      connectionStatus: "open",
+      exitCode: null,
+      exitReason: null,
+    });
     testState.canMutate = true;
     testState.closeMutateAsync.mockReset();
+    testState.onSessionLost.mockReset();
     testState.reachability = {
       status: "reachable",
       hostLabel: "Host A",
@@ -271,12 +288,11 @@ describe("<TerminalTile /> sessionLost overlay Close", () => {
   });
 
   it.each([
-    { name: "fresh authority", canMutate: true },
-    { name: "stale/unreachable authority", canMutate: false },
+    { name: "reaped", status: "reaped" as const },
+    { name: "lost", status: "lost" as const },
   ])(
-    "closes the local tile without lifetime RPC when authority is $name",
-    ({ canMutate }) => {
-      testState.canMutate = canMutate;
+    "drives the recovery callback once the handle status becomes $name",
+    ({ status }) => {
       const fixture = openHostTerminalFixture();
 
       render(
@@ -294,18 +310,13 @@ describe("<TerminalTile /> sessionLost overlay Close", () => {
         vi.advanceTimersByTime(MEASURE_GRID_TIMEOUT_MS);
       });
 
-      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      expect(testState.onSessionLost).not.toHaveBeenCalled();
 
-      expect(testState.navigateNested).toHaveBeenCalledWith(
-        EPIC_ID,
-        fixture.viewTabId,
-        expect.any(Function),
-      );
-      const canvas =
-        useEpicCanvasStore.getState().canvasByTabId[fixture.viewTabId];
-      if (canvas === undefined) throw new Error("expected view tab canvas");
-      expect(canvas.tilesByInstanceId[fixture.node.instanceId]).toBeUndefined();
-      expect(testState.closeMutateAsync).not.toHaveBeenCalled();
+      act(() => {
+        recoveryHandle.store.setState({ status });
+      });
+
+      expect(testState.onSessionLost).toHaveBeenCalledTimes(1);
     },
   );
 });

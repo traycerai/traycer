@@ -25,8 +25,10 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   DesktopAppUpdateCheckIntent,
+  DesktopAppUpdateChannelChange,
   DesktopAppUpdateSnapshot,
   DesktopAppUpdatesBridge,
+  DesktopCompatRecoveryPlan,
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
   DesktopSupportBridge,
@@ -1070,6 +1072,7 @@ describe("<DesktopDialogHost />", () => {
       currentVersion: "1.0.0",
       allowPrerelease: false,
       latestVersion: null,
+      latestCompatibilityEpoch: null,
       downloadProgress: null,
       installBlockedReason: null,
       installGuidance: null,
@@ -1089,8 +1092,17 @@ describe("<DesktopDialogHost />", () => {
       ): Promise<DesktopAppUpdateSnapshot> {
         return Promise.resolve(IDLE);
       }
-      setAllowPrerelease(_allow: boolean): Promise<DesktopAppUpdateSnapshot> {
-        return Promise.resolve(IDLE);
+      setAllowPrerelease(
+        _allow: boolean,
+      ): Promise<DesktopAppUpdateChannelChange> {
+        return Promise.resolve({ outcome: "changed", snapshot: IDLE });
+      }
+      resolveCompatRecovery(): Promise<DesktopCompatRecoveryPlan> {
+        return Promise.resolve({
+          route: "manual",
+          rcCandidateVersion: null,
+          stagedVersion: null,
+        });
       }
       downloadUpdate(): Promise<DesktopAppUpdateSnapshot> {
         return Promise.resolve(IDLE);

@@ -34,6 +34,25 @@ export interface HostVersionEntry {
   readonly yanked: boolean;
   readonly deprecationReason: string | null;
   readonly requiredCliVersion: string | null;
+  /**
+   * The client-compatibility EPOCH this host build baked, or `null` when it
+   * baked none.
+   *
+   * PURELY DESCRIPTIVE HERE. Nothing on the client reads it to decide anything:
+   * the floor is enforced by the host itself at connection time, from its own
+   * bytes, and a client that tried to pre-empt that would be second-guessing a
+   * decision it does not own. It is recorded so RELEASE TOOLING can answer the
+   * one question nothing else can - "which floors are currently active in the
+   * field" - before letting a client build become the candidate an updater
+   * resolves.
+   *
+   * ABSENT MEANS NO FLOOR, and absence is the common case: every entry
+   * published before this field existed lacks it. That is why it parses as
+   * nullable rather than required - making it required would reject the entire
+   * existing manifest, and this parser is shipped in clients that must keep
+   * reading manifests written both before and after this change.
+   */
+  readonly minimumEpoch: number | null;
   readonly platforms: Readonly<Record<string, HostPlatformAsset>>;
 }
 

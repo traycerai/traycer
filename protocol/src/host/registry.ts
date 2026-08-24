@@ -200,12 +200,16 @@ import {
 import {
   hostStatusV10,
   hostStatusV11,
+  hostStatusV12,
   hostStatusUpgradeV10ToV11,
+  hostStatusUpgradeV11ToV12,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
+  hostRestartUpgradeV11ToV12,
   hostRestartV10,
   hostRestartV11,
+  hostRestartV12,
 } from "@traycer/protocol/host/restart/contracts";
 import {
   hostIdentityGetV10,
@@ -3751,7 +3755,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -3760,6 +3764,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostStatusV11,
           upgradeFromPreviousVersion: hostStatusUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostStatusV12,
+          upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -3771,7 +3779,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     // it with a racy activity read.
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostRestartV10,
@@ -3780,6 +3788,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: hostRestartV11,
           upgradeFromPreviousVersion: hostRestartUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostRestartV12,
+          upgradeFromPreviousVersion: hostRestartUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

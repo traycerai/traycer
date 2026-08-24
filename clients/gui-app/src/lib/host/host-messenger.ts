@@ -24,6 +24,7 @@ import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/
 import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
 import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { GUI_CLIENT_IDENTITY } from "@/lib/host/client-identity";
 import {
   HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
   WsRpcClient,
@@ -121,6 +122,7 @@ export function buildRawHostMessengerForTarget<
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: params.requestId,
       evidence: transportEvidenceRelay,
+      clientIdentity: GUI_CLIENT_IDENTITY,
     });
     if (remoteTransport === null) return null;
     return {
@@ -143,6 +145,7 @@ export function buildRawHostMessengerForTarget<
       // 30s). This window keeps the socket open long enough for the host's
       // no-dispatch attestation when the client's timer wins that race.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+      clientIdentity: GUI_CLIENT_IDENTITY,
     }),
     remoteTransport: null,
   };
@@ -279,6 +282,7 @@ class RuntimeHostMessenger<
       evidence: transportEvidenceRelay,
       // Same post-`openAck` attestation grace as the standalone builder above.
       hostAttestationWindowMs: HOST_POST_OPEN_ATTESTATION_WINDOW_MS,
+      clientIdentity: GUI_CLIENT_IDENTITY,
     });
   }
 

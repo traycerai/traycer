@@ -42,21 +42,29 @@ describe("resolveTerminalOverlayState", () => {
     ).toBe("lost");
   });
 
-  it("returns 'sessionLost' for a definitively-reaped session regardless of the recovery budget (T13)", () => {
+  it("returns 'recovering' for a 'reaped' session before auto-recovery is exhausted, same as 'lost'", () => {
+    // "Reaped" is definitive for THIS handle (the host confirmed via
+    // TERMINAL_NOT_FOUND), but not for the durable terminal identity - the
+    // host may already have restored it under the same logical id - so it
+    // follows the same bounded recovery path as "lost" rather than an
+    // immediate dead end.
     expect(
       resolveTerminalOverlayState({
         status: "reaped",
         connectionStatus: "closed",
         recoveryExhausted: false,
       }),
-    ).toBe("sessionLost");
+    ).toBe("recovering");
+  });
+
+  it("returns 'lost' (manual-retry prompt) once auto-recovery is exhausted for a 'reaped' session, same as 'lost'", () => {
     expect(
       resolveTerminalOverlayState({
         status: "reaped",
         connectionStatus: "closed",
         recoveryExhausted: true,
       }),
-    ).toBe("sessionLost");
+    ).toBe("lost");
   });
 
   it("returns null while still creating, even mid-reconnect", () => {

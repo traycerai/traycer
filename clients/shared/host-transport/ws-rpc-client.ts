@@ -37,7 +37,10 @@ import type {
 import {
   checkCompatibility,
   hostFrameSchema,
+  toClientHandshakeIdentity,
   RPC_REQUEST_TIMEOUT_FATAL_CODE,
+  type ClientHandshakeIdentity,
+  type FirstPartyClientIdentity,
   type ClientFrame,
   type ConnectionManifest,
   type HostFrame,
@@ -175,6 +178,21 @@ export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
    * something the transport contract should encode.
    */
   readonly hostAttestationWindowMs: number;
+  /**
+   * WHO THIS CLIENT IS, sent on every `open` frame this transport writes.
+   *
+   * REQUIRED, not optional, and that is the whole safety property: a current
+   * first-party build must not be able to ship a connection that forgot to
+   * identify itself, because the host reads an absent identity as legacy
+   * epoch 1 and will terminally refuse it once a floor is active. A default
+   * here would let a new composition root silently produce that outcome; the
+   * compiler refuses instead.
+   *
+   * It is a PROCESS CONSTANT (kind, epoch, and build version are all fixed
+   * for the life of the process - updating the app restarts it), which is why
+   * it is a construction dependency rather than something resolved per call.
+   */
+  readonly clientIdentity: FirstPartyClientIdentity;
 }
 
 /**
@@ -254,6 +272,12 @@ export class WsRpcClient<
   private readonly hostAttestationWindowMs: number;
   private readonly evidence: TransportEvidenceReporter;
   private readonly liveness: LocalHostLiveness;
+  /**
+   * Serialized ONCE at construction, not per request: every member is a
+   * process constant, so re-projecting it on each of this transport's
+   * per-request sockets would allocate an identical object per RPC.
+   */
+  private readonly clientIdentity: ClientHandshakeIdentity;
 
   constructor(options: WsRpcClientOptions<Registry>) {
     this.registry = options.registry;
@@ -264,6 +288,7 @@ export class WsRpcClient<
     this.hostAttestationWindowMs = options.hostAttestationWindowMs;
     this.evidence = options.evidence;
     this.liveness = new LocalHostLiveness(options.evidence);
+    this.clientIdentity = toClientHandshakeIdentity(options.clientIdentity);
   }
 
   async request<Method extends keyof Registry & string>(
@@ -333,6 +358,7 @@ export class WsRpcClient<
         token,
         manifest: clientManifest.manifest,
         optionalManifest: clientManifest.optionalManifest,
+        clientIdentity: this.clientIdentity,
       });
 
       // Handshake stays on the transport default even when the caller
