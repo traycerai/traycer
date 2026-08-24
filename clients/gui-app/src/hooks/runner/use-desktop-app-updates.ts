@@ -13,6 +13,7 @@ const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -155,6 +156,12 @@ function sameSnapshot(
     left.currentVersion === right.currentVersion &&
     left.allowPrerelease === right.allowPrerelease &&
     left.latestVersion === right.latestVersion &&
+    // Compared alongside the version it describes. A candidate can keep its
+    // version while its epoch moves - a re-stamped feed document, or the
+    // `update-downloaded` re-read disagreeing with `update-available` - and
+    // dropping that as a duplicate would leave the blocking recovery surface
+    // routing from a generation the updater no longer reports.
+    left.latestCompatibilityEpoch === right.latestCompatibilityEpoch &&
     left.downloadProgress === right.downloadProgress &&
     left.installBlockedReason === right.installBlockedReason &&
     sameInstallGuidance(left.installGuidance, right.installGuidance) &&

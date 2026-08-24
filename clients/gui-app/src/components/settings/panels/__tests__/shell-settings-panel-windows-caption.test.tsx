@@ -96,16 +96,14 @@ function renderPanel(path: string): void {
   );
 }
 
-const WSL_CAPTION = /Agents won't see tools installed in WSL/;
+const WSL_CAPTION = /WSL applies to terminal tabs only/;
 
 describe("<ShellSettingsPanel /> WSL agent caption", () => {
   it("shows the one-line caption for wsl.exe, with the remedy in a hover card", async () => {
     renderPanel("C:\\Windows\\System32\\wsl.exe");
     expect(await screen.findByText(WSL_CAPTION)).toBeTruthy();
     // The remedy prose stays out of the inline caption - hover card only.
-    expect(
-      screen.queryByText(/run a Traycer host in your WSL distro/),
-    ).toBeNull();
+    expect(screen.queryByText(/does not move the Traycer host/)).toBeNull();
   });
 
   it("exposes the WSL remedy as a keyboard-focusable docs link", async () => {
@@ -113,9 +111,9 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
     await screen.findByText(WSL_CAPTION);
     // The hover card is pointer-only; the docs link must ALSO exist in the
     // sequential tab order - the caption's Info glyph is a real anchor.
-    const link = screen.getByRole("link", { name: /agents inside WSL/i });
+    const link = screen.getByRole("link", { name: /install Traycer in WSL/i });
     expect(link.getAttribute("href")).toBe(
-      "https://docs.traycer.ai/settings/shell#using-wsl",
+      "https://docs.traycer.ai/install#windows-via-wsl",
     );
   });
 
@@ -123,7 +121,7 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
     renderPanel("C:\\Windows\\System32\\cmd.exe");
     await screen.findByText("Startup flags for cmd.exe");
     expect(
-      screen.queryByRole("link", { name: /agents inside WSL/i }),
+      screen.queryByRole("link", { name: /install Traycer in WSL/i }),
     ).toBeNull();
   });
 

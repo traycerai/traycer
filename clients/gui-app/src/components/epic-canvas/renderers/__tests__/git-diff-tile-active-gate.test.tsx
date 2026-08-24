@@ -78,6 +78,7 @@ vi.mock("@/hooks/git/use-git-refresh-worktree-status", () => ({
 
 import { GitDiffTile } from "../git-diff-tile";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 /**
  * A stream session that just tracks whether it has been closed. Unlike the
@@ -116,6 +117,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

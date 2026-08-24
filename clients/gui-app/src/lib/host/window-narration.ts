@@ -2,6 +2,7 @@ import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
 import {
   describeVersionSkew,
   type VersionSkewCopy,
@@ -70,6 +71,29 @@ export type WindowNarrationVariant =
        */
       readonly isTargetHost: boolean;
       readonly detail: SelectionIncompatibility;
+    }
+  | {
+      /**
+       * THIS APP is the outdated leg, and the host said so in structured
+       * terms: it refused the connection at its client-compatibility EPOCH
+       * gate.
+       *
+       * A separate variant from `update-host` rather than a flag on it,
+       * because every action question has the opposite answer. `update-host`
+       * offers to re-install the host; here the host is the NEWER leg by
+       * construction, so that action can only fail. The remedy is the app
+       * updater, and nothing about the host is worth showing.
+       *
+       * It is also distinct from the generic `client-outdated` skew
+       * `hostUpdateSkew` can infer from version strings. That inference is a
+       * guess from two SemVers with no shared ordering; this is the host
+       * NAMING what it needs and what to install, which is why it takes
+       * precedence over the inference wherever both could apply.
+       */
+      readonly kind: "update-client";
+      readonly hostId: string;
+      readonly isTargetHost: boolean;
+      readonly requirement: ClientCompatibilityRequirement;
     };
 
 export type WindowNarrationState =
@@ -186,12 +210,7 @@ export function deriveNoHostVariant(
 ): WindowNarrationVariant {
   const target = findLease(leases, targetHostId);
   if (target !== null && target.dead?.reason === "incompatible") {
-    return {
-      kind: "update-host",
-      hostId: target.hostId,
-      isTargetHost: true,
-      detail: target.dead.detail,
-    };
+    return incompatibleVariant(target.hostId, target.dead.detail, true);
   }
   const allPlanRestricted =
     leases.length > 0 &&
@@ -201,18 +220,40 @@ export function deriveNoHostVariant(
   }
   for (const lease of leases) {
     if (lease.dead?.reason === "incompatible") {
-      return {
-        kind: "update-host",
-        hostId: lease.hostId,
-        // Arm 3: the target is unusable for some other reason and THIS is
-        // merely the recoverable incompatible one. A different machine from
-        // the one this window's lifecycle affordances act on.
-        isTargetHost: false,
-        detail: lease.dead.detail,
-      };
+      // Arm 3: the target is unusable for some other reason and THIS is
+      // merely the recoverable incompatible one. A different machine from
+      // the one this window's lifecycle affordances act on.
+      return incompatibleVariant(lease.hostId, lease.dead.detail, false);
     }
   }
   return { kind: "offline" };
+}
+
+/**
+ * Which of the two incompatibility variants a dead lease is.
+ *
+ * The structured epoch requirement WINS whenever the host supplied one, and
+ * the precedence is not a preference: it is the difference between the host
+ * saying "your app is too old, install X" and this app guessing which leg is
+ * behind by comparing two version strings that have no shared ordering. The
+ * guess is what the generic arm still does, correctly, for every
+ * incompatibility a host cannot describe - a method-manifest disagreement, or
+ * any host predating the epoch gate.
+ */
+function incompatibleVariant(
+  hostId: string,
+  detail: SelectionIncompatibility,
+  isTargetHost: boolean,
+): WindowNarrationVariant {
+  if (detail.clientCompatibility !== null) {
+    return {
+      kind: "update-client",
+      hostId,
+      isTargetHost,
+      requirement: detail.clientCompatibility,
+    };
+  }
+  return { kind: "update-host", hostId, isTargetHost, detail };
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   type WorktreeCleanupOutcome,
 } from "@/lib/epics/run-worktree-cleanup";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -119,6 +120,7 @@ function legacyCallbacksFor(path: string): WorktreeDeleteStreamCallbacks {
 function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
   return () => ({
     wsStreamClient: new WsStreamClient<HostStreamRpcRegistry>({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

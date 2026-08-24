@@ -62,6 +62,7 @@ function createEntry(version: string): HostVersionEntry {
     yanked: false,
     deprecationReason: null,
     requiredCliVersion: null,
+    minimumEpoch: null,
     platforms: {
       "darwin-arm64": AVAILABLE_ASSET,
     },
@@ -86,6 +87,7 @@ describe("buildHostAvailableListing", () => {
     const floored = {
       ...createEntry("1.2.0"),
       requiredCliVersion: "10.0.0",
+      minimumEpoch: null,
     };
     const manifest: HostVersionsManifest = {
       schemaVersion: 1,
@@ -270,6 +272,7 @@ describe("buildHostAvailableCommand's real data envelope against desktop's parse
           yanked: false,
           deprecationReason: null,
           requiredCliVersion: null,
+          minimumEpoch: null,
           platforms: {
             "linux-x64": AVAILABLE_ASSET,
           },
@@ -323,6 +326,7 @@ function createMultiPlatformManifest(
         yanked: false,
         deprecationReason: null,
         requiredCliVersion: null,
+        minimumEpoch: null,
         platforms,
       },
     ],

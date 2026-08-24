@@ -267,6 +267,7 @@ import {
   useAgentActivityStore,
 } from "@/stores/agent-activity-store";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 function NotificationsSessionProvider(props: {
   readonly children: ReactNode;
@@ -347,6 +348,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
@@ -1409,6 +1411,7 @@ describe("<NotificationsSessionProvider />", () => {
   it("keeps retained v1 rows while a rebuilt client's capability is pending offline", async () => {
     const queryClient = new QueryClient();
     const streamClient = new WsStreamClient({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

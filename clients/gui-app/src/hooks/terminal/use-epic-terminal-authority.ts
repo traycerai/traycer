@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
-import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ImportLegacyPlainTerminalRequest,
+  PlainTerminalProjection,
+  PlainTerminalScope,
+} from "@traycer/protocol/host/terminal/plain-schemas";
 import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
 import {
   isHostEpicTerminalRef,
@@ -23,6 +27,43 @@ import {
 
 const CANVAS_TERMINAL_STORE_VERSION = 1;
 const migrationCoordinator = new PlainTerminalMigrationCoordinator();
+
+type LegacyMigrationEvidence = Pick<
+  ImportLegacyPlainTerminalRequest,
+  "terminalId" | "hostId" | "cwd" | "name" | "titleSource"
+>;
+
+/**
+ * The evidence one import is made from, with an identity that changes only
+ * when that evidence does. The import effect is keyed on this value and on
+ * the capability STATUS - never on the `capability` or `node` objects. The
+ * authority hook rebuilds `capability` every render and a canvas write may
+ * rebuild the tile ref, so an effect keyed on either re-fired on every
+ * re-render; a failed import re-renders (error state, mutation state), which
+ * re-fired the import, which failed again: one `importLegacy` RPC and one
+ * toast per round trip until the tile unmounted. `null` means there is
+ * nothing to import (not a legacy ref, or import-exempt).
+ */
+function useLegacyMigrationEvidence(
+  node: EpicTerminalRef,
+): LegacyMigrationEvidence | null {
+  const legacyEvidence =
+    isLegacyEpicTerminalRef(node) && !isImportExemptEpicTerminalRef(node)
+      ? legacyEpicTerminalEvidence(node)
+      : null;
+  const terminalId = node.id;
+  const hostId = node.hostId;
+  const cwd = legacyEvidence?.cwd ?? null;
+  const name = legacyEvidence?.name ?? null;
+  const titleSource = legacyEvidence?.titleSource ?? null;
+  return useMemo(
+    () =>
+      cwd === null || name === null || titleSource === null
+        ? null
+        : { terminalId, hostId, cwd, name, titleSource },
+    [cwd, hostId, name, terminalId, titleSource],
+  );
+}
 
 function resolveEpicTerminalCapability(
   isUnsupported: boolean,
@@ -58,10 +99,11 @@ export function useEpicTerminalAuthority(args: {
   readonly epicId: string;
   readonly node: EpicTerminalRef;
 }): EpicTerminalAuthorityController {
-  const authority = useTabPlainTerminalAuthority({
-    kind: "epic",
-    epicId: args.epicId,
-  });
+  const scope = useMemo<PlainTerminalScope>(
+    () => ({ kind: "epic", epicId: args.epicId }),
+    [args.epicId],
+  );
+  const authority = useTabPlainTerminalAuthority(scope);
   const mutations = useTabPlainTerminalMutations(authority);
   const importLegacyMutateAsync = mutations.importLegacy.mutateAsync;
   const adoptProjection = useEpicCanvasStore(
@@ -69,7 +111,7 @@ export function useEpicTerminalAuthority(args: {
   );
   const [attempt, setAttempt] = useState(0);
   const [migrationError, setMigrationError] = useState<Error | null>(null);
-  const capability = authority.capability;
+  const capabilityStatus = authority.capability.status;
   const isUnsupported = isUnsupportedEpicTerminalRef(args.node);
   const isLegacy = isLegacyEpicTerminalRef(args.node);
   const isCanonical = isHostEpicTerminalRef(args.node);
@@ -80,31 +122,27 @@ export function useEpicTerminalAuthority(args: {
   const migrationPending =
     isLegacy &&
     !importExempt &&
-    capability.status === "capable" &&
+    capabilityStatus === "capable" &&
     authority.canMutate &&
     !mutations.importLegacy.isError;
+  const evidence = useLegacyMigrationEvidence(args.node);
 
   useEffect(() => {
-    if (!isLegacy || importExempt) return;
-    const evidence = legacyEpicTerminalEvidence(args.node);
+    if (evidence === null) return;
     let disposed = false;
     void migrationCoordinator
       .migrate(
         {
           hostId: authority.hostId,
-          scope: authority.scope,
-          capability,
+          scope,
+          capability: { status: capabilityStatus },
           canMutate: authority.canMutate,
           importLegacy: importLegacyMutateAsync,
         },
         {
           read: () => ({
-            terminalId: args.node.id,
-            hostId: args.node.hostId,
-            scope: authority.scope,
-            cwd: evidence.cwd,
-            name: evidence.name,
-            titleSource: evidence.titleSource,
+            ...evidence,
+            scope,
             sourceStoreVersion: CANVAS_TERMINAL_STORE_VERSION,
           }),
           adoptCanonical: (response) => {
@@ -117,7 +155,15 @@ export function useEpicTerminalAuthority(args: {
         // earlier failure, so the tile does not keep rendering a resolved
         // error until the user presses Retry. A `preserved` outcome made no
         // attempt, so it leaves the previous error standing.
-        if (disposed || outcome.status === "preserved") return;
+        //
+        // Deliberately NOT gated on `disposed`: adoption rewrites the canvas
+        // ref to host authority, which empties the evidence and runs this
+        // effect's cleanup BEFORE this continuation - so a success that
+        // checked `disposed` would leave a prior failure on screen until the
+        // user pressed Retry (which then has nothing left to import). A
+        // superseding run shares this outcome through the coordinator's
+        // in-flight dedup, and a setState after unmount is a no-op.
+        if (outcome.status === "preserved") return;
         setMigrationError(null);
       })
       .catch((error: unknown) => {
@@ -133,15 +179,13 @@ export function useEpicTerminalAuthority(args: {
     };
   }, [
     adoptProjection,
-    args.node,
     attempt,
     authority.canMutate,
-    capability,
     authority.hostId,
-    authority.scope,
-    importExempt,
-    isLegacy,
+    capabilityStatus,
+    evidence,
     importLegacyMutateAsync,
+    scope,
   ]);
 
   const retryMigration = () => {
@@ -160,7 +204,7 @@ export function useEpicTerminalAuthority(args: {
     capability: resolveEpicTerminalCapability(
       isUnsupported,
       importExempt,
-      capability.status,
+      capabilityStatus,
     ),
     projection,
     viewModel,

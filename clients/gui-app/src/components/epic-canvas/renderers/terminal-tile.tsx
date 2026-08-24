@@ -799,12 +799,13 @@ function TerminalLive(props: TerminalLiveProps) {
   });
 
   const { onSessionLost, onSessionHealthy } = props.recovery;
-  // Drive automatic recovery off the lifecycle status. "lost" is the dead-end a
-  // dropped+reaped session lands in; the owner force-releases and remounts the
-  // bootstrap to respawn it. "running" means a live session, which refills the
+  // Drive automatic recovery off a handle that can no longer address its PTY.
+  // `reaped` is definitive for this handle, not for the durable terminal: the
+  // host may already have recreated that logical id. The owner force-releases
+  // and remounts the bootstrap to reattach or respawn it. "running" refills the
   // auto-recovery budget.
   useEffect(() => {
-    if (status === "lost") onSessionLost();
+    if (status === "lost" || status === "reaped") onSessionLost();
   }, [status, onSessionLost]);
   useEffect(() => {
     if (status === "running") onSessionHealthy();
@@ -947,7 +948,6 @@ function TerminalLive(props: TerminalLiveProps) {
           <TerminalConnectionOverlay
             state={overlayState}
             onReconnect={props.recovery.onManualReconnect}
-            onClose={props.onClose}
             testId={`terminal-connection-overlay-${props.tileId}`}
           />
         ) : null}

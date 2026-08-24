@@ -44,6 +44,7 @@ import { GIT_DIRTY_SUBMODULE_POLL_LANE } from "@/lib/host-rpc-policy/host-method
 import { createAppQueryClient } from "@/lib/query-client";
 import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const streamState = vi.hoisted(() => ({
   client: null as MockWsStreamClient | null,
@@ -76,6 +77,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

@@ -75,6 +75,7 @@ describe("deriveHostHealth — the two actionable local states", () => {
             code: "HOST_INCOMPATIBLE",
             hostVersion: "1.0.0",
             minSupportedVersion: "2.0.0",
+            clientCompatibility: null,
           },
         },
       },
