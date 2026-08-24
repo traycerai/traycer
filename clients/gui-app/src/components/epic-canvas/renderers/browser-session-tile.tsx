@@ -25,7 +25,6 @@ export interface BrowserSessionTileProps {
 }
 
 function resolveSwapState(args: {
-  readonly tabStatus: BrowserSessionInfo["tabs"][number]["status"] | undefined;
   readonly migrationRuntime:
     NonNullable<BrowserSessionInfo["migration"]>["runtime"] | undefined;
   readonly bindingRegistrationId: string | null;
@@ -33,11 +32,10 @@ function resolveSwapState(args: {
   readonly castMigrated: boolean;
 }): { readonly renderHeadless: boolean; readonly holdReason: string | null } {
   const renderHeadless =
-    args.tabStatus !== "dormant" &&
-    (args.migrationRuntime === "headless" ||
-      args.bindingRegistrationId === null ||
-      (args.castMigrated &&
-        args.bindingRegistrationId === args.terminalBindingRegistrationId));
+    args.migrationRuntime === "headless" ||
+    args.bindingRegistrationId === null ||
+    (args.castMigrated &&
+      args.bindingRegistrationId === args.terminalBindingRegistrationId);
   if (!renderHeadless) return { renderHeadless, holdReason: null };
   return {
     renderHeadless,
@@ -50,7 +48,6 @@ function resolveSwapState(args: {
 
 function useBrowserSessionSwap(input: {
   readonly session: BrowserSessionInfo | undefined;
-  readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly bindingRegistrationId: string | null;
   readonly sessionId: string;
   readonly tabId: string;
@@ -93,7 +90,6 @@ function useBrowserSessionSwap(input: {
   }, [castMigrated, input.session?.migration]);
 
   const { renderHeadless, holdReason } = resolveSwapState({
-    tabStatus: input.tab?.status,
     migrationRuntime: input.session?.migration?.runtime,
     bindingRegistrationId: input.bindingRegistrationId,
     terminalBindingRegistrationId,
@@ -163,7 +159,7 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  if (props.renderHeadless) {
+  if (props.renderHeadless || props.binding === null) {
     const peek: BrowserPeekTileRef = {
       id: props.node.id,
       instanceId: props.node.instanceId,
@@ -184,14 +180,6 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
         paneId={props.paneId}
         onMigrated={props.onMigrated}
       />
-    );
-  }
-
-  if (props.binding === null) {
-    return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-ui-sm text-muted-foreground">
-        Waiting for the native browser tab.
-      </div>
     );
   }
 
@@ -247,7 +235,6 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
   const { renderHeadless, castGeneration, onMigrated } =
     useBrowserSessionSwap({
       session,
-      tab,
       bindingRegistrationId: binding?.registrationId ?? null,
       sessionId: props.node.sessionId,
       tabId: props.node.tabId,

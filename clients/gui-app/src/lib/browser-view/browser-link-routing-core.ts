@@ -158,10 +158,10 @@ function openHttpUrlInCanvasBrowser(
   if (targetPane === null) return false;
   const activeBrowser = browserTileForLinkTarget(canvas, targetPane.id);
   if (activeBrowser !== null) {
-    store.updateBrowserTileUrlInTab(
+    store.updateBrowserTileDocumentInTab(
       source.viewTabId,
       activeBrowser.instanceId,
-      url,
+      { url, name: browserTileNameForUrl(url) },
     );
     return true;
   }

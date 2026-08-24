@@ -4312,6 +4312,28 @@ describe("BrowserViewManager native tab lifecycle", () => {
     ]);
   });
 
+  it("reads the live document URL when handing off a native tab", async () => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(ready);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await view.webContents.loadURL("https://www.thecapitalgrille.com/");
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    expect(harness.electronTabHandoffNotifications[0]?.capturedUrl).toBe(
+      "https://www.thecapitalgrille.com/",
+    );
+  });
+
   it("excludes an unaccepted sibling from session handoff", async () => {
     const harness = createHarness();
     const accepted = await harness.manager.ensureTab("window-1", {

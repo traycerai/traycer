@@ -1481,20 +1481,24 @@ export function renameArtifact(
   );
 }
 
-export function updateBrowserTileUrl(
+export function updateBrowserTileDocument(
   state: EpicCanvasState,
   tileInstanceId: string,
-  url: string,
+  document: Pick<BrowserTileRef, "name" | "url">,
 ): EpicCanvasState {
   const ref = state.tilesByInstanceId[tileInstanceId];
-  if (ref === undefined || !isBrowserTileRef(ref) || ref.url === url) {
+  if (
+    ref === undefined ||
+    !isBrowserTileRef(ref) ||
+    (ref.url === document.url && ref.name === document.name)
+  ) {
     return state;
   }
   return {
     ...state,
     tilesByInstanceId: {
       ...state.tilesByInstanceId,
-      [tileInstanceId]: { ...ref, url },
+      [tileInstanceId]: { ...ref, ...document },
     },
   };
 }

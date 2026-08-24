@@ -3703,23 +3703,30 @@ export class BrowserViewManager {
       sibling.handedOff = true;
       sibling.pendingHandoffCapture = aggregationPromise;
     }
+    const capturedUrl = this.readHandoffUrl(entry);
+    const capturedSiblings = siblings.map((sibling) => ({
+      entry: sibling,
+      url: this.readHandoffUrl(sibling),
+    }));
     try {
       const capturedStorageState = await this.captureHandoffStorageState(
         entry,
         reason,
+        capturedUrl,
       );
       const siblingTabs = await Promise.all(
-        siblings.map(async (sibling) => {
+        capturedSiblings.map(async ({ entry: sibling, url }) => {
           if (sibling.identity.kind !== "native") {
             throw new Error("Native handoff selected an unmanaged sibling.");
           }
           return {
             tabId: sibling.identity.key.tabId,
             registrationId: sibling.identity.registrationId,
-            url: sibling.currentUrl,
+            url,
             capturedStorageState: await this.captureHandoffStorageState(
               sibling,
               sibling.status === "dead" ? "crash-no-capture" : reason,
+              url,
             ),
           };
         }),
@@ -3727,7 +3734,7 @@ export class BrowserViewManager {
       this.notifyElectronTabHandoff(identity.lifecycleOwnerWindowId, {
         ...identity.key,
         registrationId: identity.registrationId,
-        capturedUrl: entry.currentUrl,
+        capturedUrl,
         capturedStorageState,
         siblingTabs,
         reason,
@@ -3748,6 +3755,7 @@ export class BrowserViewManager {
   private async captureHandoffStorageState(
     entry: BrowserViewEntry,
     reason: BrowserViewElectronTabHandoffChange["reason"],
+    capturedUrl: string,
   ): Promise<unknown> {
     // A crashed renderer cannot safely run `executeJavaScript` for
     // localStorage, and its webContents state is not trustworthy - honor
@@ -3755,16 +3763,27 @@ export class BrowserViewManager {
     if (reason === "crash-no-capture") return null;
     try {
       const result = await this.captureStorageStateFromBrowser(
-        { origin: entry.currentUrl },
+        { origin: capturedUrl },
         entry.view.webContents,
       );
       return result.storageState;
     } catch {
-      // `entry.currentUrl` is not http(s) (e.g. a fresh "about:blank" tile
+      // `capturedUrl` is not http(s) (e.g. a fresh "about:blank" tile
       // never navigated), or the capture raced the teardown it precedes.
       // Still hand the session off at its URL, just without carried
       // storage, rather than dropping the whole handoff over this.
       return null;
+    }
+  }
+
+  private readHandoffUrl(entry: BrowserViewEntry): string {
+    const webContents = this.readLiveWebContents(entry);
+    if (webContents === null) return entry.currentUrl;
+    try {
+      const url = webContents.getURL();
+      return url.length > 0 ? url : entry.currentUrl;
+    } catch {
+      return entry.currentUrl;
     }
   }
 

@@ -86,7 +86,7 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
-  updateBrowserTileUrl,
+  updateBrowserTileDocument,
   updateBrowserTileViewportPreset,
   updateCommGraphTileView,
   updateGitDiffTileView,
@@ -527,10 +527,10 @@ export interface EpicCanvasStore {
     tileId: string,
     view: GitDiffTileViewState,
   ) => void;
-  updateBrowserTileUrlInTab: (
+  updateBrowserTileDocumentInTab: (
     tabId: string,
     tileInstanceId: string,
-    url: string,
+    document: Pick<BrowserTileRef, "name" | "url">,
   ) => void;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
@@ -2014,10 +2014,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        updateBrowserTileUrlInTab: (tabId, tileInstanceId, url) => {
+        updateBrowserTileDocumentInTab: (
+          tabId,
+          tileInstanceId,
+          document,
+        ) => {
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
-              updateBrowserTileUrl(canvas, tileInstanceId, url),
+              updateBrowserTileDocument(canvas, tileInstanceId, document),
             ),
           );
         },

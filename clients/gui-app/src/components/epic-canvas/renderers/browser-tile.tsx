@@ -23,6 +23,7 @@ import {
   resolveDesktopBrowserViewBridge,
 } from "@/lib/browser-view/desktop-browser-view";
 import {
+  browserTileNameForUrl,
   normalizeBrowserAddressInput,
   openFreshBrowserTileFromBrowserPage,
 } from "@/lib/browser-view/browser-link-routing-core";
@@ -116,8 +117,8 @@ export function BrowserTile(props: BrowserTileProps) {
   const [certificateProceeding, setCertificateProceeding] = useState(false);
   const [sensitiveActionPrompt, setSensitiveActionPrompt] =
     useState<BrowserTileSensitiveActionPrompt | null>(null);
-  const updateBrowserTileUrl = useEpicCanvasStore(
-    (state) => state.updateBrowserTileUrlInTab,
+  const updateBrowserTileDocument = useEpicCanvasStore(
+    (state) => state.updateBrowserTileDocumentInTab,
   );
   const updateBrowserTileViewportPreset = useEpicCanvasStore(
     (state) => state.updateBrowserTileViewportPresetInTab,
@@ -191,16 +192,16 @@ export function BrowserTile(props: BrowserTileProps) {
       // Loading and dead frames retain the last committed URL while a new
       // navigation is pending. Persisting those stale URLs would send the
       // native view back to the previous page through the upsert effect.
-      if (
-        change.status === "ready" &&
-        change.url.length > 0 &&
-        change.url !== props.node.url
-      ) {
-        updateBrowserTileUrl(
-          props.viewTabId,
-          props.node.instanceId,
-          change.url,
-        );
+      if (change.status === "ready" && change.url.length > 0) {
+        const name =
+          change.title.trim().length > 0
+            ? change.title
+            : browserTileNameForUrl(change.url);
+        if (change.url === props.node.url && name === props.node.name) return;
+        updateBrowserTileDocument(props.viewTabId, props.node.instanceId, {
+          url: change.url,
+          name,
+        });
       }
     });
     return () => {
@@ -209,10 +210,11 @@ export function BrowserTile(props: BrowserTileProps) {
   }, [
     browserView,
     props.node.instanceId,
+    props.node.name,
     props.node.url,
     props.viewTabId,
     tileKey,
-    updateBrowserTileUrl,
+    updateBrowserTileDocument,
   ]);
 
   useEffect(() => {
@@ -394,7 +396,10 @@ export function BrowserTile(props: BrowserTileProps) {
     setBrowserStatusReason(null);
     setCertificateError(null);
     setCertificateProceeding(false);
-    updateBrowserTileUrl(props.viewTabId, props.node.instanceId, nextUrl);
+    updateBrowserTileDocument(props.viewTabId, props.node.instanceId, {
+      url: nextUrl,
+      name: browserTileNameForUrl(nextUrl),
+    });
   };
 
   const reload = (): void => {

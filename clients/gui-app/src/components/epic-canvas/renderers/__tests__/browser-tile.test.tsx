@@ -62,7 +62,7 @@ const bridgeHarness = vi.hoisted<{
   current: DesktopBrowserViewBridge | null;
 }>(() => ({ current: null }));
 
-const updateBrowserTileUrlMock = vi.hoisted(() => ({
+const updateBrowserTileDocumentMock = vi.hoisted(() => ({
   fn: vi.fn(),
 }));
 
@@ -112,13 +112,13 @@ vi.mock(
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: (
     selector: (state: {
-      readonly updateBrowserTileUrlInTab: typeof updateBrowserTileUrlMock.fn;
+      readonly updateBrowserTileDocumentInTab: typeof updateBrowserTileDocumentMock.fn;
       readonly updateBrowserTileViewportPresetInTab: typeof updateBrowserTileViewportPresetMock.fn;
       readonly canvasByTabId: Record<string, unknown>;
     }) => unknown,
   ) =>
     selector({
-      updateBrowserTileUrlInTab: updateBrowserTileUrlMock.fn,
+      updateBrowserTileDocumentInTab: updateBrowserTileDocumentMock.fn,
       updateBrowserTileViewportPresetInTab:
         updateBrowserTileViewportPresetMock.fn,
       canvasByTabId: {
@@ -634,7 +634,7 @@ function readRegisteredAdapter(ref: {
 describe("<BrowserTile /> cookie crypto banner", () => {
   beforeEach(() => {
     bridgeHarness.current = null;
-    updateBrowserTileUrlMock.fn.mockReset();
+    updateBrowserTileDocumentMock.fn.mockReset();
     updateBrowserTileViewportPresetMock.fn.mockReset();
     openFreshBrowserTileMock.fn.mockReset();
     useSettingsStore.setState({ inAppBrowserBetaEnabled: false });
@@ -898,14 +898,14 @@ describe("<BrowserTile /> cookie crypto banner", () => {
     }
     fireEvent.submit(addressForm);
 
-    expect(updateBrowserTileUrlMock.fn).toHaveBeenCalledWith(
+    expect(updateBrowserTileDocumentMock.fn).toHaveBeenCalledWith(
       "view-tab-1",
       NODE.instanceId,
-      nextNode.url,
+      { url: nextNode.url, name: "next.example" },
     );
 
     rerender(renderTile(nextNode));
-    updateBrowserTileUrlMock.fn.mockClear();
+    updateBrowserTileDocumentMock.fn.mockClear();
 
     act(() => {
       bridge.emitStatus({
@@ -920,7 +920,7 @@ describe("<BrowserTile /> cookie crypto banner", () => {
       });
     });
 
-    expect(updateBrowserTileUrlMock.fn).not.toHaveBeenCalled();
+    expect(updateBrowserTileDocumentMock.fn).not.toHaveBeenCalled();
 
     act(() => {
       bridge.emitStatus({
@@ -935,10 +935,38 @@ describe("<BrowserTile /> cookie crypto banner", () => {
       });
     });
 
-    expect(updateBrowserTileUrlMock.fn).toHaveBeenCalledWith(
+    expect(updateBrowserTileDocumentMock.fn).toHaveBeenCalledWith(
       "view-tab-1",
       NODE.instanceId,
-      "https://redirect.example/",
+      {
+        url: "https://redirect.example/",
+        name: "Redirected page",
+      },
+    );
+  });
+
+  it("persists a title-only document update", () => {
+    const bridge = new FakeBrowserViewBridge(REAL_STATE);
+    bridgeHarness.current = bridge;
+    renderBrowserTile(null, NODE);
+
+    act(() => {
+      bridge.emitStatus({
+        ...tileKey(),
+        url: NODE.url,
+        title: "Example Domain",
+        status: "ready",
+        reason: null,
+        canGoBack: false,
+        canGoForward: false,
+        zoomPercent: 100,
+      });
+    });
+
+    expect(updateBrowserTileDocumentMock.fn).toHaveBeenCalledWith(
+      "view-tab-1",
+      NODE.instanceId,
+      { url: NODE.url, name: "Example Domain" },
     );
   });
 

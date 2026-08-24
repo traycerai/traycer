@@ -25,7 +25,7 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
-  updateBrowserTileUrl,
+  updateBrowserTileDocument,
   updateBrowserTileViewportPreset,
   updateGitDiffTileView,
 } from "@/stores/epics/canvas/actions";
@@ -1091,7 +1091,7 @@ describe("cloneEpicCanvasState", () => {
     expectCanvasInvariants(cloned);
   });
 
-  it("updates browser tile URL by instance id without changing page-session identity", () => {
+  it("updates browser document metadata without changing page-session identity", () => {
     const browser: BrowserTileRef = {
       id: "browser-session-source",
       instanceId: "inst-browser-source",
@@ -1102,24 +1102,23 @@ describe("cloneEpicCanvasState", () => {
       viewportPreset: "desktop",
     };
     const state = openPinned(createEmptyCanvas(), browser);
-    const updated = updateBrowserTileUrl(
-      state,
-      browser.instanceId,
-      "https://example.com/next",
-    );
+    const updated = updateBrowserTileDocument(state, browser.instanceId, {
+      url: "https://example.com/next",
+      name: "Next page",
+    });
     const ref = updated.tilesByInstanceId[browser.instanceId];
 
     expect(ref).toMatchObject({
       id: browser.id,
       instanceId: browser.instanceId,
       url: "https://example.com/next",
+      name: "Next page",
     });
     expect(
-      updateBrowserTileUrl(
-        updated,
-        browser.instanceId,
-        "https://example.com/next",
-      ),
+      updateBrowserTileDocument(updated, browser.instanceId, {
+        url: "https://example.com/next",
+        name: "Next page",
+      }),
     ).toBe(updated);
     expectCanvasInvariants(updated);
   });

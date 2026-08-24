@@ -166,16 +166,15 @@ describe("BrowserSessionTile lifecycle projection", () => {
     expect(screen.queryByTestId("managed-electron-tab")).toBeNull();
   });
 
-  it("waits for host acceptance instead of activating or fabricating a dormant tab", () => {
+  it("opens the headless projection so a dormant tab can activate", () => {
     harness.items = [session("dormant", "dormant")];
 
     renderTile();
 
-    expect(
-      screen.getByText("Waiting for the native browser tab."),
-    ).toBeTruthy();
     expect(screen.queryByTestId("managed-electron-tab")).toBeNull();
-    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
+    expect(screen.getByTestId("headless-browser-tab").dataset.tab).toBe(
+      "tab-1",
+    );
   });
 
   it("closes a pointer only after a previously visible tab disappears from live state", async () => {
