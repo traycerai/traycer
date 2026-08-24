@@ -64,6 +64,23 @@ describe("formatAgentSelectionGuideResponse", () => {
     expect(text).toContain("## Global instructions");
   });
 
+  it("states precedence when nested workspace guides both apply", () => {
+    const nestedWorkspace = `${APP_DIR}/packages/web`;
+    const text = formatAgentSelectionGuideResponse(
+      found([
+        workspaceSource(APP_DIR, "app body", 2),
+        workspaceSource(nestedWorkspace, "web body", 3),
+        globalSource("global body", 1),
+      ]),
+    );
+
+    expect(text).toContain("the most specific workspace");
+    expect(text).toContain("highest-priority workspace shown first");
+    expect(
+      text.indexOf(`## Workspace instructions — ${nestedWorkspace} (`),
+    ).toBeLessThan(text.indexOf(`## Workspace instructions — ${APP_DIR} (`));
+  });
+
   it("renders workspace-only guides without global precedence framing", () => {
     const text = formatAgentSelectionGuideResponse(
       found([
