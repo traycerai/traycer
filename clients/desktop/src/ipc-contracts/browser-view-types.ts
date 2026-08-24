@@ -8,19 +8,52 @@ export interface BrowserViewTileUpsert extends BrowserViewTileKey {
   readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
-export interface BrowserViewDurableTabRegistration extends BrowserViewTileKey {
+/** Stable identity of an Electron-owned browser guest. Presentation is separate. */
+export interface BrowserViewNativeTabKey {
+  readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
 }
 
-export interface BrowserViewBackgroundTabCreate extends BrowserViewDurableTabRegistration {
-  readonly url: string;
-  readonly seedStorageState?: unknown;
+/** Exact authority for one live Electron-owned browser guest incarnation. */
+export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey {
+  readonly registrationId: string;
 }
 
-export interface BrowserViewBackgroundThrottlingChange extends BrowserViewTileKey {
-  readonly enabled: boolean;
+export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
+  readonly requestedUrl: string;
+  readonly seedStorageState: unknown | null;
 }
+
+export type BrowserViewProvisionedTab = BrowserViewNativeTabCapability;
+
+export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
+  readonly bindingId: string;
+  readonly surface: BrowserViewTileKey;
+  readonly visible: boolean;
+}
+
+export interface BrowserViewDetachSurface extends BrowserViewNativeTabCapability {
+  readonly bindingId: string;
+}
+
+export type BrowserViewReleaseTab = BrowserViewNativeTabCapability;
+
+export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
+  readonly action:
+    | { readonly kind: "navigate"; readonly url: string }
+    | { readonly kind: "reload" }
+    | { readonly kind: "goBack" }
+    | { readonly kind: "goForward" }
+    | {
+        readonly kind: "setViewportPreset";
+        readonly viewportPreset: BrowserViewViewportPresetId;
+      }
+    | { readonly kind: "zoomIn" }
+    | { readonly kind: "zoomOut" }
+    | { readonly kind: "resetZoom" }
+    | { readonly kind: "openDevTools" };
+};
 
 export interface BrowserViewBounds {
   readonly x: number;
@@ -45,6 +78,16 @@ export type BrowserViewStatus = "loading" | "ready" | "dead";
 export interface BrowserViewStatusChange extends BrowserViewTileKey {
   readonly url: string;
   readonly title: string;
+  readonly status: BrowserViewStatus;
+  readonly reason: string | null;
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+  readonly zoomPercent: number;
+}
+
+export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCapability {
+  readonly url: string;
+  readonly title: string | null;
   readonly status: BrowserViewStatus;
   readonly reason: string | null;
   readonly canGoBack: boolean;
@@ -230,12 +273,11 @@ export type BrowserViewControlActionResult =
   | { readonly status: "cancelled"; readonly reason: string }
   | { readonly status: "denied"; readonly reason: string };
 
-// Ticket 03's typed CDP bridge for the agent's own tile. IPC itself is not
-// versioned (only the host<->renderer protocol leg is - see
+// IPC itself is not versioned (only the host<->renderer protocol leg is - see
 // `browser.sessions@1.3` in `@traycer/protocol`), but the shape here still
 // mirrors that wire contract one-for-one: one command kind per enumerated CDP
 // method, no generic `method: string, params: unknown` passthrough.
-export type AgentBrowserViewCdpCommand =
+export type BrowserViewCdpCommand =
   | {
       readonly kind: "cdpNavigate";
       readonly url: string;
@@ -325,25 +367,32 @@ export type AgentBrowserViewCdpCommand =
       readonly depth: number | null;
     };
 
-export interface AgentBrowserViewCdpDispatch extends BrowserViewTileKey {
+export interface BrowserViewCdpDispatch extends BrowserViewTileKey {
   readonly sessionId: string | null;
-  readonly command: AgentBrowserViewCdpCommand;
+  readonly command: BrowserViewCdpCommand;
 }
 
-export interface AgentBrowserViewCdpFrameInfo {
+export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
+  /** Flattened child-target session; unrelated to the browser sessionId. */
+  readonly cdpSessionId: string | null;
+  readonly command: BrowserViewCdpCommand;
+}
+
+export interface BrowserViewCdpFrameInfo {
   readonly frameId: string;
   readonly parentFrameId: string | null;
   readonly url: string;
   readonly securityOrigin: string | null;
 }
 
-export interface AgentBrowserViewCdpErrorInfo {
-  readonly kind: "not_attached" | "tile_not_found" | "cdp_error";
+export interface BrowserViewCdpErrorInfo {
+  readonly kind:
+    "not_attached" | "tile_not_found" | "tab_not_found" | "cdp_error";
   readonly message: string;
   readonly code: number | null;
 }
 
-export type AgentBrowserViewCdpResult =
+export type BrowserViewCdpResult =
   | {
       readonly kind: "cdpNavigate";
       readonly ok: true;
@@ -359,7 +408,7 @@ export type AgentBrowserViewCdpResult =
   | {
       readonly kind: "cdpGetFrameTree";
       readonly ok: true;
-      readonly frames: readonly AgentBrowserViewCdpFrameInfo[];
+      readonly frames: readonly BrowserViewCdpFrameInfo[];
     }
   | {
       readonly kind: "cdpCreateIsolatedWorld";
@@ -400,23 +449,27 @@ export type AgentBrowserViewCdpResult =
       readonly nodesJson: unknown;
     }
   | {
-      readonly kind: AgentBrowserViewCdpCommand["kind"];
+      readonly kind: BrowserViewCdpCommand["kind"];
       readonly ok: false;
-      readonly error: AgentBrowserViewCdpErrorInfo;
+      readonly error: BrowserViewCdpErrorInfo;
     };
 
-export interface AgentBrowserViewCdpSessionEndedChange extends BrowserViewTileKey {
+export interface BrowserViewCdpSessionEndedChange extends BrowserViewTileKey {
+  readonly reason: string;
+}
+
+export interface BrowserViewNativeTabCdpSessionEndedChange extends BrowserViewNativeTabCapability {
   readonly reason: string;
 }
 
 /**
  * Push notification (electron-main -> renderer -> host), not a response to a
- * specific request - mirrors `AgentBrowserViewCdpSessionEndedChange`'s shape.
+ * specific request - mirrors `BrowserViewCdpSessionEndedChange`'s shape.
  * Fired whenever CDP's own `Target.attachedToTarget` fires on the tile's
  * root session, so the host can discover a flattened child (OOPIF/worker)
  * session id to address further dispatches at.
  */
-export interface AgentBrowserViewCdpTargetAttachedChange extends BrowserViewTileKey {
+export interface BrowserViewCdpTargetAttachedChange extends BrowserViewTileKey {
   readonly sessionId: string;
   readonly targetId: string;
   readonly targetType: string;
@@ -424,33 +477,26 @@ export interface AgentBrowserViewCdpTargetAttachedChange extends BrowserViewTile
   readonly waitingForDebugger: boolean;
 }
 
-/**
- * Ticket 02 (multi-tab handoff): the session's other live tiles, captured
- * best-effort at the same moment as the triggering tile, so one
- * `AgentBrowserViewTileHandoffChange` hands off the whole session instead of
- * racing one push per tile against the runtime flip. `tabId` is the durable
- * tab id the tile already registered under - siblings are recreated at their
- * existing tabId, never minted fresh.
- */
-export interface BrowserViewTileHandoffSiblingTab {
+export interface BrowserViewNativeTabCdpTargetAttachedChange extends BrowserViewNativeTabCapability {
+  readonly cdpSessionId: string;
+  readonly targetId: string;
+  readonly targetType: string;
+  readonly url: string;
+  readonly waitingForDebugger: boolean;
+}
+
+export interface BrowserViewElectronTabHandoffSibling {
   readonly tabId: string;
+  readonly registrationId: string;
   readonly url: string;
   readonly capturedStorageState: unknown;
 }
 
-/**
- * Ticket 12 / ticket 10's design. Push notification (electron-main ->
- * renderer -> host), fired once just before a tile dies, for any teardown
- * reason. `capturedStorageState` stays `unknown` on this leg too - same
- * "protocol does not structurally type it" convention as
- * `BrowserViewStorageStateCaptureResult.storageState` above - the host
- * validates it at its own boundary.
- */
-export interface AgentBrowserViewTileHandoffChange extends BrowserViewTileKey {
+export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
   readonly capturedUrl: string;
   readonly capturedStorageState: unknown;
-  readonly siblingTabs: readonly BrowserViewTileHandoffSiblingTab[];
-  readonly reason: "gui-quit" | "tile-released" | "crash-no-capture";
+  readonly siblingTabs: readonly BrowserViewElectronTabHandoffSibling[];
+  readonly reason: "gui-quit" | "tab-released" | "crash-no-capture";
 }
 
 export type BrowserViewStorageStateApplyResult =

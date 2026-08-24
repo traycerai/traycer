@@ -10,17 +10,14 @@ import {
   registerBrowserContextAttachmentHandler,
   requestBrowserContextAttachment,
 } from "../browser-context-attachments";
-import {
-  handleElectronBrowserTabFrame,
-  registerElectronBrowserTab,
-  resetElectronBrowserTabStoreForTests,
-} from "../electron-browser-tab-store";
 import type {
   BrowserViewCapturePageResult,
   BrowserViewConsoleEntry,
   BrowserViewNetworkEntry,
   BrowserViewTileKey,
 } from "../desktop-browser-view";
+import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 const TILE: BrowserViewTileKey = {
   viewTabId: "view-tab",
@@ -270,7 +267,7 @@ describe("browser debug context attachment (ticket 22)", () => {
 
 describe("browserContextAttachmentToWire (ticket 01)", () => {
   afterEach(() => {
-    resetElectronBrowserTabStoreForTests();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   it("emits tabId from the tile key, not the retired tileInstanceId wire field", () => {
@@ -291,40 +288,19 @@ describe("browserContextAttachmentToWire (ticket 01)", () => {
     expect(wire).not.toHaveProperty("handle");
   });
 
-  it("prefers the host-minted durable tab id once the tile is registered", () => {
-    const dispose = { dispose: () => {} };
-    registerElectronBrowserTab({
-      epicId: "epic-1",
-      hostId: "host-1",
-      chatId: "chat-1",
-      registrationId: "reg-durable",
-      sessionId: "session-durable",
-      initialUrl: "http://localhost:3000/page",
-      title: null,
-      tileKey: TILE,
-      onRegistered: null,
-      bridge: {
-        registerDurableTab: () => Promise.resolve(),
-        releaseDurableTab: () => Promise.resolve(),
-        dispatchCdp: () =>
-          Promise.resolve({
-            kind: "cdpGetFrameTree",
-            ok: true,
-            frames: [],
-          }),
-        onStatusChange: () => dispose,
-        onCdpSessionEnded: () => dispose,
-        onCdpTargetAttached: () => dispose,
-        onTileHandoff: () => dispose,
+  it("reads the host-minted tab id from its BrowserSessionTileRef", () => {
+    useEpicCanvasStore.setState({
+      canvasByTabId: {
+        [TILE.viewTabId]: createSingleTileCanvas({
+          id: "browser-session:session-durable:durable-tab-1",
+          instanceId: TILE.tileInstanceId,
+          type: "browser-session",
+          name: "Durable tab",
+          hostId: "host-1",
+          sessionId: "session-durable",
+          tabId: "durable-tab-1",
+        }),
       },
-    });
-    handleElectronBrowserTabFrame({
-      kind: "electronTabRegistered",
-      hasBinaryPayload: false,
-      requestId: "req-durable",
-      registrationId: "reg-durable",
-      sessionId: "session-durable",
-      tabId: "durable-tab-1",
     });
 
     const payload = createBrowserScreenshotAttachment({

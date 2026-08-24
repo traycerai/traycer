@@ -109,6 +109,7 @@ vi.mock("@/lib/browser-view/desktop-browser-view", () => ({
     applyStorageState: applyStorageStateMock.fn,
     captureStorageState: captureStorageStateMock.fn,
   }),
+  resolveDesktopElectronTabLifecycleBridge: () => null,
   canCapturePrimaryProfile: () => false,
 }));
 

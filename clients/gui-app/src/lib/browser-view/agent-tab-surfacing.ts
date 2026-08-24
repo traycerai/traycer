@@ -5,14 +5,9 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   isAgentBrowserTileRef,
   isBrowserSessionTileRef,
-  type AgentBrowserTileRef,
   type EpicCanvasState,
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
-import {
-  DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-  makeAgentBrowserTileRef,
-} from "@/stores/epics/canvas/tile-schema/agent-browser-tile";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { browserTileNameForUrl } from "./browser-link-routing-core";
 import { convertBrowserTabToPip, getPipSnapshot } from "./pip-store";
@@ -23,10 +18,9 @@ import {
 
 /**
  * What the GUI does when the agent opens a browser tab (REPL `openTab`).
- * The host pushes either a foreground `createElectronTab` frame (electron
- * runtime, routed to the window that owns the source tab's route) or — for
- * headless-runtime sessions — nothing but `sessionUpdated` broadcasts; this
- * module is the single disposition authority for both shapes.
+ * The host pushes either a targeted `createElectronTab` transaction for an
+ * Electron runtime or only `sessionUpdated` broadcasts for a headless
+ * runtime. This module is the single presentation authority for both shapes.
  */
 type AgentTabSurfacableAction = "float" | "tile" | "suppress";
 
@@ -42,9 +36,8 @@ export interface AgentTabDisposition {
 
 /**
  * Pure decision table. Contract:
- * - `off` always suppresses visual surfacing; the caller still has to keep
- *   the agent's open working (hidden view + ack) on electron foreground
- *   creates.
+ * - `off` suppresses presentation only. Electron tab creation and its ready
+ *   acknowledgement remain part of the host-owned lifecycle transaction.
  * - `pip` floats the tab unless the user converted a PiP manually (never
  *   stomp explicit user intent) or the epic surface is hidden (a floating
  *   overlay nobody can see arms nothing); both fall back to suppression.
@@ -216,40 +209,34 @@ function placeTileGroupedBySession(args: {
 }
 
 /**
- * Split-mode placement for an AGENT-opened electron tab. Groups by session:
- * a pane already hosting that session's tile receives the new tab (focused),
- * otherwise the tile splits in to the right of the anchor pane — the pane
- * that hosts the source tab the agent derived from. Returns the placed tile
- * ref so the caller can bind pending-create request keys to its `id`.
+ * Split-mode placement for a host-owned Electron tab. The canvas stores only
+ * the durable host/session/tab pointer; native incarnation and surfaces remain
+ * renderer lifecycle state. Same-session tabs group in one pane.
  */
 export function placeAgentElectronTile(request: {
-  readonly viewTabId: string;
-  readonly anchorPaneId: string;
+  readonly epicId: string;
   readonly hostId: string;
   readonly sessionId: string;
+  readonly tabId: string;
   readonly url: string;
-  readonly runtime: "primary" | "isolated";
-}): AgentBrowserTileRef | null {
+}): boolean {
+  const viewTabId = firstViewTabIdForEpic(request.epicId);
+  if (viewTabId === null) return false;
   const store = useEpicCanvasStore.getState();
-  const canvas = store.canvasByTabId[request.viewTabId];
-  if (canvas === undefined || canvas.root === null) return null;
-  const tile = makeAgentBrowserTileRef({
-    name: browserTileNameForUrl(request.url),
-    hostId: request.hostId,
-    url: request.url,
-    sessionId: request.sessionId,
-    viewportPreset: DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-    runtime: request.runtime,
-  });
+  const canvas = store.canvasByTabId[viewTabId];
+  if (canvas === undefined || canvas.root === null) return false;
   return placeTileGroupedBySession({
-    viewTabId: request.viewTabId,
+    viewTabId,
     canvas,
-    tile,
+    tile: makeBrowserSessionTileRef({
+      name: browserTileNameForUrl(request.url),
+      hostId: request.hostId,
+      sessionId: request.sessionId,
+      tabId: request.tabId,
+    }),
     sessionId: request.sessionId,
-    anchorPaneId: request.anchorPaneId,
-  })
-    ? tile
-    : null;
+    anchorPaneId: null,
+  });
 }
 
 /**
@@ -295,6 +282,20 @@ export function placeHeadlessAgentSessionTile(input: {
  * listing re-seeds the map instead of resurrecting old tabs.
  */
 const seenTabIdsBySession = new Map<string, Set<string>>();
+const targetedElectronTabIdsBySession = new Map<string, Set<string>>();
+
+/** Prevents lifecycle broadcasts from duplicating targeted create presentation. */
+export function rememberElectronTabCreate(
+  sessionId: string,
+  tabId: string,
+): void {
+  const existing = targetedElectronTabIdsBySession.get(sessionId);
+  if (existing !== undefined) {
+    existing.add(tabId);
+    return;
+  }
+  targetedElectronTabIdsBySession.set(sessionId, new Set([tabId]));
+}
 
 /**
  * Feed every `browser.sessions` lifecycle frame through here. Returns the
@@ -317,6 +318,9 @@ export function collectNewAgentTabsFromSessionFrame(
   for (const tab of session.tabs) {
     if (seen.has(tab.tabId)) continue;
     seen.add(tab.tabId);
+    if (targetedElectronTabIdsBySession.get(session.sessionId)?.has(tab.tabId)) {
+      continue;
+    }
     if (!agentSession) continue;
     fresh.push({ tabId: tab.tabId, url: tab.url });
   }
@@ -325,14 +329,15 @@ export function collectNewAgentTabsFromSessionFrame(
 
 export function forgetSeenAgentTabsForSession(sessionId: string): void {
   seenTabIdsBySession.delete(sessionId);
+  targetedElectronTabIdsBySession.delete(sessionId);
 }
 
 /**
  * Attribution on the wire: REPL-created sessions carry
  * `createdBy.agentRunId`; a tab opened INTO another session only accrues
  * `drivenBy` after the agent acts, so at creation time the session-level
- * signal is all there is (foreground electron creates don't need it — that
- * frame only originates from the agent).
+ * signal is all there is (targeted Electron creates do not need it because
+ * that frame only originates from the agent).
  */
 function isAgentCreatedSession(session: BrowserSessionInfo): boolean {
   return (
@@ -343,8 +348,9 @@ function isAgentCreatedSession(session: BrowserSessionInfo): boolean {
 
 /**
  * Full pipeline for headless-origin tabs arriving via lifecycle frames:
- * diff → attribute → dispose per current settings. Electron foreground
- * creates bypass this (targeted frame delivery through the tab store).
+ * diff → attribute → present per current settings. Targeted Electron creates
+ * bypass this because their stream-scoped coordinator presents them after
+ * host acceptance.
  */
 export function surfaceAgentTabsFromSessionFrame(
   session: BrowserSessionInfo,
@@ -381,4 +387,5 @@ export function surfaceAgentTabsFromSessionFrame(
 /** Test hook: clear the seen-tab seeds between suites. */
 export function resetAgentTabSurfacingForTests(): void {
   seenTabIdsBySession.clear();
+  targetedElectronTabIdsBySession.clear();
 }

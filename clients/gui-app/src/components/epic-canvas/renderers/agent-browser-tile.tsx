@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
@@ -14,42 +13,29 @@ import {
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import {
-  isolatedTileChromeCapabilitiesFromSurface,
-  PRIMARY_TILE_CHROME_CAPABILITIES,
-} from "@/components/epic-canvas/renderers/tile-controller";
+import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
-import { useElectronTileChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
-import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
 import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/browser-overlay-coordinator";
-import { selectSiblingChatIdForBrowserTile } from "@/lib/browser-view/browser-tile-chat-routing";
-import {
-  probeAgentBrowserViewOptionalSurface,
-  resolveDesktopAgentBrowserViewBridge,
-  type AgentBrowserViewTileKey,
-  type DesktopAgentBrowserViewBridge,
-} from "@/lib/browser-view/desktop-agent-browser-view";
 import {
   resolveDesktopBrowserViewBridge,
+  resolveDesktopElectronTabLifecycleBridge,
   type BrowserViewStatus,
-  type DesktopBrowserViewBridge,
+  type BrowserViewTileKey,
 } from "@/lib/browser-view/desktop-browser-view";
-import {
-  registerElectronBrowserTab,
-  updateElectronBrowserTabView,
-} from "@/lib/browser-view/electron-browser-tab-store";
-import { openFreshElectronTileFromBrowserPage } from "@/lib/browser-view/browser-link-routing-core";
+import type {
+  ElectronTabBinding,
+  ElectronTabSurfaceLease,
+} from "@/lib/browser-view/electron-tabs";
+import { openFreshBrowserTileFromBrowserPage } from "@/lib/browser-view/browser-link-routing-core";
 import { useBrowserTileControlState } from "@/lib/browser-view/browser-tile-control-store";
 import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
-import { appLogger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { AgentBrowserTileRef } from "@/stores/epics/canvas/types";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
 
 /**
@@ -60,75 +46,59 @@ import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
  */
 const AGENT_BROWSER_UNREACHABLE_TIMEOUT_MS = 12_000;
 
-const UNAVAILABLE_ISOLATED_CHROME_SURFACE = {
-  goBack: false,
-  goForward: false,
-  reloadTile: false,
-  zoomIn: false,
-  zoomOut: false,
-  resetZoom: false,
-  setViewportPreset: false,
-  openDevTools: false,
-  findInPage: false,
-  stopFindInPage: false,
-  onFindChange: false,
-} as const;
+export interface ElectronTabSurfaceNode {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly name: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly url: string;
+  readonly viewportPreset: string;
+}
 
-export interface AgentBrowserTileProps {
-  readonly node: AgentBrowserTileRef;
+export interface ElectronTabSurfaceProps {
+  readonly node: ElectronTabSurfaceNode;
+  readonly binding: ElectronTabBinding;
   readonly viewTabId: string;
   readonly paneId: string;
-  readonly requestedTabId?: string | null;
-  readonly onActivatedHeadless?: ((tabId: string) => void) | null;
-  readonly activateBeforeNativeView?: boolean;
-  readonly usePrimaryProfileRuntime?: boolean;
 }
 
 /**
  * Electron tile used for agent-created pages and native session tabs.
- * Primary-profile session tiles keep the full PRIMARY bridge so chrome
- * is capability-gated, not creator-gated. Isolated-partition tiles stay
- * on the agent bridge until that surface grows the same chrome invokes.
+ * Host-owned Electron tabs always use the primary browser partition.
  */
-export function AgentBrowserTile(props: AgentBrowserTileProps) {
-  const hostId = useTabHostId();
+export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
+  const hostId = props.binding.hostId;
   const runnerHost = useRunnerHost();
   const visible = useTileBodyVisible();
-  const paneFocused = usePaneFocused();
-  const usePrimaryProfileRuntime = resolvePrimaryProfileRuntime(
-    props.usePrimaryProfileRuntime,
-    props.node.runtime,
+  const browserView = useMemo(
+    () => resolveDesktopBrowserViewBridge(runnerHost),
+    [runnerHost],
   );
-  const { primaryBridge, browserView } = useAgentTileBridges(
-    runnerHost,
-    usePrimaryProfileRuntime,
+  const electronTabLifecycle = useMemo(
+    () => resolveDesktopElectronTabLifecycleBridge(runnerHost),
+    [runnerHost],
   );
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<BrowserViewStatus>("loading");
   const [statusReason, setStatusReason] = useState<string | null>(null);
   const [statusUrl, setStatusUrl] = useState("");
-  const [attemptedNavigation, setAttemptedNavigation] =
-    useState<AttemptedNavigation | null>(null);
   const attemptedNavigationRef = useRef<AttemptedNavigation | null>(null);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [durableTabId, setDurableTabId] = useState<string | null>(null);
+  const [surfaceReady, setSurfaceReady] = useState(false);
+  const [surfaceError, setSurfaceError] = useState<string | null>(null);
+  const surfaceLeaseRef = useRef<ElectronTabSurfaceLease | null>(null);
   useRegisterVisibleBrowserTile({
     hostId,
     sessionId: props.node.sessionId,
-    tabId: durableTabId ?? props.requestedTabId ?? null,
+    tabId: props.binding.tabId,
     visible,
   });
   const [unreachable, setUnreachable] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const browserSessions = useMaybeBrowserSessionsContext();
-  const registrationChatId = useEpicCanvasStore((state) =>
-    selectSiblingChatIdForBrowserTile(
-      state.canvasByTabId[props.viewTabId] ?? null,
-      props.node.instanceId,
-    ),
-  );
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
   );
@@ -136,7 +106,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     (item) => item.sessionId === props.node.sessionId,
   );
   const annotationTab = annotationSession?.tabs.find(
-    (item) => item.tabId === (durableTabId ?? props.requestedTabId),
+    (item) => item.tabId === props.binding.tabId,
   );
   const annotationDriverChatId = annotationTab?.drivenBy.at(-1)?.chatId ?? null;
   const controlState = useBrowserTileControlState(props.node.instanceId);
@@ -146,7 +116,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     controlState.pending?.chatId ??
     null;
 
-  const tileKey = useMemo<AgentBrowserViewTileKey>(
+  const tileKey = useMemo<BrowserViewTileKey>(
     () => ({
       viewTabId: props.viewTabId,
       paneId: props.paneId,
@@ -156,9 +126,21 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     }),
     [props.viewTabId, props.paneId, props.node.instanceId, props.node.id],
   );
+  const bindingId = useMemo(
+    () =>
+      ["canvas", props.viewTabId, props.paneId, props.node.instanceId].join(
+        "\u001f",
+      ),
+    [props.paneId, props.node.instanceId, props.viewTabId],
+  );
 
   const { status: effectiveStatus, reason: effectiveStatusReason } =
-    effectiveAgentTileStatus(browserView, status, statusReason);
+    effectiveAgentTileStatus(
+      browserView !== null && electronTabLifecycle !== null,
+      surfaceError,
+      status,
+      statusReason,
+    );
 
   // The host reports only loading/ready/dead - no typed timeout, so a session
   // that never activates sits in "loading" forever with nothing to tell the
@@ -189,143 +171,72 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
   );
   const retry = useCallback(() => {
     setUnreachable(false);
+    setSurfaceError(null);
+    setStatus("loading");
     setRetryNonce((current) => current + 1);
   }, []);
 
   useEffect(() => {
-    if (browserView === null) return;
-    return () => {
-      void browserView.releaseTile(tileKey).catch(ignoreAgentBrowserViewError);
-    };
-  }, [browserView, tileKey]);
-
-  useEffect(() => {
-    if (browserView === null || epicId === null) return;
-    registerElectronBrowserTab({
-      epicId,
-      hostId,
-      chatId: registrationChatId,
-      registrationId: props.node.id,
-      sessionId: props.node.sessionId,
-      requestedTabId: props.requestedTabId ?? null,
-      initialUrl: props.node.url,
-      title: props.node.name,
-      tileKey,
-      bridge: browserView,
-      onRegistered: setDurableTabId,
-      onActivatedHeadless: props.onActivatedHeadless,
-      background: usePrimaryProfileRuntime,
-    });
-  }, [
-    browserView,
-    epicId,
-    hostId,
-    props.node.id,
-    props.node.name,
-    props.node.sessionId,
-    props.node.url,
-    props.requestedTabId,
-    props.onActivatedHeadless,
-    usePrimaryProfileRuntime,
-    registrationChatId,
-    tileKey,
-  ]);
-
-  useEffect(() => {
-    if (browserView === null || epicId === null) return;
-    updateElectronBrowserTabView({
-      sessionId: props.node.sessionId,
-      registrationId: props.node.id,
-      visible,
-      focused: paneFocused,
-    });
-  }, [
-    browserView,
-    epicId,
-    paneFocused,
-    props.node.id,
-    props.node.sessionId,
-    visible,
-  ]);
-
-  useEffect(() => {
-    if (browserView === null || epicId === null) return;
-    return () => {
-      updateElectronBrowserTabView({
-        sessionId: props.node.sessionId,
-        registrationId: props.node.id,
-        visible: false,
-        focused: false,
-      });
-    };
-  }, [browserView, epicId, props.node.id, props.node.sessionId]);
-
-  useEffect(() => {
-    if (browserView === null) return;
-    const subscription = browserView.onStatusChange((change) => {
-      if (!isChangeForTile(change, tileKey)) return;
-      const current = attemptedNavigationRef.current;
-      if (!isStaleSettleBeforeEcho(current, change.status)) {
-        setStatus(change.status);
-        setStatusReason(change.reason);
-        setStatusUrl(change.url);
-        setCanGoBack(change.canGoBack);
-        setCanGoForward(change.canGoForward);
-        setZoomPercent(change.zoomPercent);
-      }
-      const next = nextAttemptedNavigationAfterStatus(current, change.status);
-      attemptedNavigationRef.current = next;
-      setAttemptedNavigation(next);
-    });
+    if (electronTabLifecycle === null) return;
+    const subscription = electronTabLifecycle.onNativeTabStatusChange(
+      (change) => {
+        if (
+          change.hostId !== props.binding.hostId ||
+          change.sessionId !== props.binding.sessionId ||
+          change.tabId !== props.binding.tabId
+        ) {
+          return;
+        }
+        const current = attemptedNavigationRef.current;
+        if (!isStaleSettleBeforeEcho(current, change.status)) {
+          setStatus(change.status);
+          setStatusReason(change.reason);
+          setStatusUrl(change.url);
+          setCanGoBack(change.canGoBack);
+          setCanGoForward(change.canGoForward);
+          setZoomPercent(change.zoomPercent);
+        }
+        const next = nextAttemptedNavigationAfterStatus(current, change.status);
+        attemptedNavigationRef.current = next;
+      },
+    );
     return () => {
       subscription.dispose();
     };
-  }, [browserView, tileKey]);
+  }, [
+    electronTabLifecycle,
+    props.binding.hostId,
+    props.binding.sessionId,
+    props.binding.tabId,
+  ]);
 
   useEffect(() => {
     if (browserView === null) return;
     const subscription = browserView.onOpenTileRequest((change) => {
       if (!isChangeForTile(change, tileKey)) return;
-      if (durableTabId === null) {
-        appLogger.warn(
-          "[agent-browser] popup dropped before durable tab registration",
-          { url: change.url },
-        );
-        return;
-      }
-      openFreshElectronTileFromBrowserPage({
+      openFreshBrowserTileFromBrowserPage({
         viewTabId: props.viewTabId,
         paneId: props.paneId,
         hostId: props.node.hostId,
-        sessionId: props.node.sessionId,
         url: change.url,
-        runtime: usePrimaryProfileRuntime ? "primary" : "isolated",
       });
     });
     return () => {
       subscription.dispose();
     };
-  }, [
-    browserView,
-    durableTabId,
-    props.node.hostId,
-    props.node.sessionId,
-    props.paneId,
-    props.viewTabId,
-    tileKey,
-    usePrimaryProfileRuntime,
-  ]);
+  }, [browserView, props.node.hostId, props.paneId, props.viewTabId, tileKey]);
 
+  const attachedBrowserView = surfaceReady ? browserView : null;
   useBrowserViewBoundsBridge({
-    browserView,
+    browserView: attachedBrowserView,
     surfaceRef,
     tileKey,
     visible,
   });
   const snapshot = useBrowserViewSnapshot(tileKey);
-  const cookieCryptoState = useBrowserCookieCryptoState(primaryBridge);
+  const cookieCryptoState = useBrowserCookieCryptoState(browserView);
   const annotation = useBrowserAnnotationSession({
-    browserView: primaryBridge,
+    browserView,
     tileKey,
     status: effectiveStatus,
     epicId: epicId ?? "",
@@ -336,10 +247,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
   const persistViewportPreset = useEpicCanvasStore(
     (state) => state.updateBrowserTileViewportPresetInTab,
   );
-  const chromeCapabilities = useAgentTileChromeCapabilities(
-    runnerHost,
-    usePrimaryProfileRuntime,
-  );
+  const chromeCapabilities = PRIMARY_TILE_CHROME_CAPABILITIES;
   const latchAttemptedUrl = useCallback((url: string) => {
     const current = attemptedNavigationRef.current;
     // Same URL as the in-flight attempt: keep echoSeen. The manager
@@ -348,13 +256,12 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     if (current !== null && current.url === url) return;
     const next: AttemptedNavigation = { url, echoSeen: false };
     attemptedNavigationRef.current = next;
-    setAttemptedNavigation(next);
   }, []);
-  const chrome = useElectronTileChrome({
-    chromeView: browserView,
+  const chrome = useElectronTabChrome({
+    control: props.binding.control,
+    surfaceServices: attachedBrowserView,
     tileKey,
     initialUrl: props.node.url,
-    visible,
     capabilities: chromeCapabilities,
     annotation,
     cookieCryptoState,
@@ -368,35 +275,63 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     initialViewportPreset: readAgentViewportPreset(props.node.viewportPreset),
     onAttemptedUrl: latchAttemptedUrl,
   });
-  const lifecycleUrl =
-    attemptedNavigation?.url ??
-    (statusUrl.length > 0 ? statusUrl : props.node.url);
+  useEffect(() => {
+    let active = true;
+    setSurfaceReady(false);
+    setSurfaceError(null);
+    void props.binding
+      .bindSurface({
+        bindingId,
+        surface: tileKey,
+        visible: false,
+      })
+      .then((lease) => {
+        if (!active) {
+          void lease.detach();
+          return;
+        }
+        surfaceLeaseRef.current = lease;
+        setSurfaceReady(true);
+      })
+      .catch((cause: unknown) => {
+        if (!active) return;
+        setSurfaceError(
+          cause instanceof Error
+            ? cause.message
+            : "The native browser surface could not be attached.",
+        );
+      });
+    return () => {
+      active = false;
+      const lease = surfaceLeaseRef.current;
+      surfaceLeaseRef.current = null;
+      if (lease !== null) void lease.detach();
+    };
+  }, [
+    bindingId,
+    props.binding.bindSurface,
+    props.binding.registrationId,
+    retryNonce,
+    tileKey,
+  ]);
 
   useEffect(() => {
-    if (
-      browserView === null ||
-      (props.activateBeforeNativeView === true && durableTabId === null)
-    ) {
-      return;
-    }
-    void browserView
-      .upsertTile({
-        ...tileKey,
-        url: lifecycleUrl,
+    const lease = surfaceLeaseRef.current;
+    if (lease === null || !surfaceReady) return;
+    void lease
+      .update({
+        surface: tileKey,
         visible,
-        viewportPreset: chrome.viewportPreset,
       })
-      .catch(ignoreAgentBrowserViewError);
-  }, [
-    browserView,
-    durableTabId,
-    props.activateBeforeNativeView,
-    tileKey,
-    lifecycleUrl,
-    visible,
-    retryNonce,
-    chrome.viewportPreset,
-  ]);
+      .catch((cause: unknown) => {
+        setSurfaceReady(false);
+        setSurfaceError(
+          cause instanceof Error
+            ? cause.message
+            : "The native browser surface could not be updated.",
+        );
+      });
+  }, [surfaceReady, tileKey, visible]);
 
   return (
     <div
@@ -405,7 +340,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
     >
       {chrome.controller !== null ? (
         <BrowserTileFindAdapterBridge
-          browserView={browserView}
+          browserView={attachedBrowserView}
           tileKey={tileKey}
         />
       ) : null}
@@ -413,14 +348,14 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
         <BrowserTileToolbar
           controller={chrome.controller}
           pictureInPicture={{
-            disabled: epicId === null || durableTabId === null,
+            disabled: epicId === null,
             convert: () => {
-              if (epicId === null || durableTabId === null) return;
+              if (epicId === null) return;
               convertBrowserTabToPip({
                 epicId,
-                hostId,
-                sessionId: props.node.sessionId,
-                tabId: durableTabId,
+                hostId: props.binding.hostId,
+                sessionId: props.binding.sessionId,
+                tabId: props.binding.tabId,
                 origin: "manual",
                 onReady: closeCanvasTile,
                 onError: (message) => toast.error(message),
@@ -451,7 +386,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
           }
           aria-busy={effectiveStatus === "loading" && !effectiveUnreachable}
         >
-          <AgentBrowserTileStatus
+          <ElectronTabSurfaceStatus
             status={effectiveStatus}
             reason={effectiveStatusReason}
             unreachable={effectiveUnreachable}
@@ -475,7 +410,7 @@ export function AgentBrowserTile(props: AgentBrowserTileProps) {
   );
 }
 
-interface AgentBrowserTileStatusProps {
+interface ElectronTabSurfaceStatusProps {
   readonly status: BrowserViewStatus;
   readonly reason: string | null;
   readonly unreachable: boolean;
@@ -489,14 +424,14 @@ interface AgentBrowserTileStatusProps {
  * user can actually tell apart: still connecting (spinner), gave up waiting
  * (Retry/Close), or the native view is unavailable in this environment.
  */
-function AgentBrowserTileStatus(props: AgentBrowserTileStatusProps) {
+function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
   if (props.status === "dead") {
     return (
       <>
         <div className="text-ui-base font-medium">
           Agent browser unavailable
         </div>
-        <AgentBrowserTileReason reason={props.reason} hostId={props.hostId} />
+        <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
       </>
     );
   }
@@ -506,7 +441,7 @@ function AgentBrowserTileStatus(props: AgentBrowserTileStatusProps) {
         <div className="text-ui-base font-medium">
           This session&apos;s host isn&apos;t responding
         </div>
-        <AgentBrowserTileReason reason={props.reason} hostId={props.hostId} />
+        <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
         <div className="flex flex-wrap justify-center gap-2">
           <Button
             type="button"
@@ -538,12 +473,12 @@ function AgentBrowserTileStatus(props: AgentBrowserTileStatusProps) {
       <div className="text-ui-base font-medium">
         Reconnecting to this session
       </div>
-      <AgentBrowserTileReason reason={props.reason} hostId={props.hostId} />
+      <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
     </>
   );
 }
 
-function AgentBrowserTileReason(props: {
+function ElectronTabSurfaceReason(props: {
   readonly reason: string | null;
   readonly hostId: string;
 }) {
@@ -568,64 +503,17 @@ function AgentBrowserTileReason(props: {
 }
 
 /** Canvas node id is the Electron tile key's pageSessionId, not host sessionId. */
-function resolvePrimaryProfileRuntime(
-  requested: boolean | undefined,
-  nodeRuntime: AgentBrowserTileRef["runtime"],
-): boolean {
-  return requested === true || nodeRuntime === "primary";
-}
-
 function effectiveAgentTileStatus(
-  browserView: DesktopBrowserViewBridge | DesktopAgentBrowserViewBridge | null,
+  nativeAvailable: boolean,
+  surfaceError: string | null,
   status: BrowserViewStatus,
   statusReason: string | null,
 ): { readonly status: BrowserViewStatus; readonly reason: string | null } {
-  if (browserView === null) {
+  if (!nativeAvailable) {
     return { status: "dead", reason: "Native browser views are unavailable." };
   }
+  if (surfaceError !== null) return { status: "dead", reason: surfaceError };
   return { status, reason: statusReason };
-}
-
-function useAgentTileBridges(
-  runnerHost: IRunnerHost,
-  usePrimaryProfileRuntime: boolean,
-): {
-  readonly primaryBridge: DesktopBrowserViewBridge | null;
-  readonly browserView:
-    DesktopBrowserViewBridge | DesktopAgentBrowserViewBridge | null;
-} {
-  const primaryBridge = useMemo(
-    () =>
-      usePrimaryProfileRuntime
-        ? resolveDesktopBrowserViewBridge(runnerHost)
-        : null,
-    [runnerHost, usePrimaryProfileRuntime],
-  );
-  const agentBridge = useMemo(
-    () =>
-      usePrimaryProfileRuntime
-        ? null
-        : resolveDesktopAgentBrowserViewBridge(runnerHost),
-    [runnerHost, usePrimaryProfileRuntime],
-  );
-  return { primaryBridge, browserView: primaryBridge ?? agentBridge };
-}
-
-function useAgentTileChromeCapabilities(
-  runnerHost: IRunnerHost,
-  usePrimaryProfileRuntime: boolean,
-) {
-  const isolatedSurface = useMemo(
-    () =>
-      usePrimaryProfileRuntime
-        ? null
-        : probeAgentBrowserViewOptionalSurface(runnerHost),
-    [runnerHost, usePrimaryProfileRuntime],
-  );
-  if (usePrimaryProfileRuntime) return PRIMARY_TILE_CHROME_CAPABILITIES;
-  return isolatedTileChromeCapabilitiesFromSurface(
-    isolatedSurface ?? UNAVAILABLE_ISOLATED_CHROME_SURFACE,
-  );
 }
 
 function pageSessionIdForAgentTile(nodeId: string): string {
@@ -658,7 +546,7 @@ interface AttemptedNavigation {
  * later `ready` then clears the latch. A `ready` that arrives before
  * that echo is a stale settle from a previous attempt - ignore it
  * (newest submit wins; do not let it replace the latch or feed
- * lifecycleUrl).
+ * the toolbar state).
  *
  * A submit whose URL equals the active latch is a no-op (echoSeen
  * stays). That matches the manager skipping navigate when
@@ -703,11 +591,9 @@ function isStaleSettleBeforeEcho(
   return current !== null && status === "ready" && !current.echoSeen;
 }
 
-function ignoreAgentBrowserViewError(_error: unknown): void {}
-
 function isChangeForTile(
-  change: AgentBrowserViewTileKey,
-  key: AgentBrowserViewTileKey,
+  change: BrowserViewTileKey,
+  key: BrowserViewTileKey,
 ): boolean {
   return (
     change.viewTabId === key.viewTabId &&

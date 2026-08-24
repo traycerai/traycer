@@ -15,20 +15,22 @@ import {
   type ManagedContentView,
 } from "../browser-view-manager";
 import type {
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
+  BrowserViewCdpSessionEndedChange,
+  BrowserViewCdpTargetAttachedChange,
+  BrowserViewElectronTabHandoffChange,
   BrowserViewCertificateErrorChange,
   BrowserViewDebugSnapshotChange,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
+  BrowserViewNativeTabCdpSessionEndedChange,
+  BrowserViewNativeTabCdpTargetAttachedChange,
+  BrowserViewNativeTabStatusChange,
   BrowserViewControlRevokedChange,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
   BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCapture,
   BrowserViewStorageStateCaptureResult,
   BrowserViewTileKey,
   BrowserViewTileUpsert,
@@ -73,7 +75,10 @@ class FakeDebugger implements BrowserViewDebugger {
   readonly passwordSelectors = new Set<string>();
   private readonly events = new EventEmitter();
 
-  constructor(private readonly lifecycle: string[]) {}
+  constructor(
+    private readonly lifecycle: string[],
+    private readonly requireLoadedTargetForPageCommands: boolean,
+  ) {}
 
   isAttached(): boolean {
     return this.attached;
@@ -99,6 +104,13 @@ class FakeDebugger implements BrowserViewDebugger {
       return new Promise((resolve) => {
         this.commandResolvers.push(resolve);
       });
+    }
+    if (
+      this.requireLoadedTargetForPageCommands &&
+      method === "Page.addScriptToEvaluateOnNewDocument" &&
+      !this.lifecycle.includes("loadURL")
+    ) {
+      return Promise.reject(new Error("Page target is not ready"));
     }
     if (method === "Runtime.evaluate") {
       return Promise.resolve(this.evaluateRuntime(commandParams));
@@ -182,7 +194,7 @@ class FakeDebugger implements BrowserViewDebugger {
 
 class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   readonly lifecycle: string[] = [];
-  readonly debugger = new FakeDebugger(this.lifecycle);
+  readonly debugger: FakeDebugger;
   readonly navigationHistory = {
     canGoBack: () => this.canGoBackValue,
     canGoForward: () => this.canGoForwardValue,
@@ -251,8 +263,13 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
   constructor(
     readonly id: number,
     private readonly readVisible: () => boolean,
+    requireLoadedTargetForPageCommands: boolean,
   ) {
     super();
+    this.debugger = new FakeDebugger(
+      this.lifecycle,
+      requireLoadedTargetForPageCommands,
+    );
   }
 
   beginFrameSubscription(
@@ -265,10 +282,8 @@ class FakeWebContents extends EventEmitter implements BrowserViewWebContents {
     this.frameSubscriptionEnds += 1;
   }
 
-  emitCompositorFrame(image?: BrowserViewCapturedImage): void {
-    const frame =
-      image ??
-      this.buildCaptureImage();
+  emitCompositorFrame(image: BrowserViewCapturedImage | undefined): void {
+    const frame = image ?? this.buildCaptureImage();
     this.frameSubscriptions.forEach((callback) => {
       callback(frame);
     });
@@ -441,8 +456,15 @@ class FakeBrowserView implements ManagedBrowserView {
   }> = [];
   readonly visibleStates: boolean[] = [];
 
-  constructor(webContentsId: number) {
-    this.webContents = new FakeWebContents(webContentsId, () => this.visible);
+  constructor(
+    webContentsId: number,
+    requireLoadedTargetForPageCommands: boolean,
+  ) {
+    this.webContents = new FakeWebContents(
+      webContentsId,
+      () => this.visible,
+      requireLoadedTargetForPageCommands,
+    );
   }
 
   setBounds(bounds: {
@@ -584,20 +606,28 @@ interface Harness {
   readonly windows: Map<string, FakeWindow>;
   readonly views: FakeBrowserView[];
   readonly statuses: BrowserViewStatusChange[];
+  readonly statusWindowIds: string[];
+  readonly nativeTabStatuses: BrowserViewNativeTabStatusChange[];
+  readonly nativeTabStatusWindowIds: string[];
   readonly finds: BrowserViewFindChange[];
   readonly downloads: BrowserViewDownloadChange[];
   readonly certificateErrors: BrowserViewCertificateErrorChange[];
   readonly openTileRequests: BrowserViewOpenTileRequest[];
   readonly debugSnapshots: BrowserViewDebugSnapshotChange[];
   readonly controlRevocations: BrowserViewControlRevokedChange[];
-  readonly cdpSessionEndedNotifications: AgentBrowserViewCdpSessionEndedChange[];
-  readonly cdpTargetAttachedNotifications: AgentBrowserViewCdpTargetAttachedChange[];
-  readonly tileHandoffNotifications: AgentBrowserViewTileHandoffChange[];
+  readonly cdpSessionEndedNotifications: BrowserViewCdpSessionEndedChange[];
+  readonly cdpTargetAttachedNotifications: BrowserViewCdpTargetAttachedChange[];
+  readonly nativeTabCdpSessionEndedNotifications: BrowserViewNativeTabCdpSessionEndedChange[];
+  readonly nativeTabCdpSessionEndedWindowIds: string[];
+  readonly nativeTabCdpTargetAttachedNotifications: BrowserViewNativeTabCdpTargetAttachedChange[];
+  readonly nativeTabCdpTargetAttachedWindowIds: string[];
+  readonly electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[];
+  readonly electronTabHandoffWindowIds: string[];
   readonly snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
   readonly annotationAttached: BrowserAnnotationAttachedIpcEvent[];
   readonly storageStateApplications: BrowserViewStorageStateApply[];
-  readonly storageStateCaptures: BrowserViewStorageStateCapture[];
+  readonly storageStateCaptures: Array<{ readonly origin: string }>;
   readonly primaryProfileCaptureSourceOrigins: string[][];
   readonly registeredPopupWebContents: BrowserViewPopupWebContents[];
   emitDownload(change: BrowserSessionDownloadChange): void;
@@ -607,9 +637,10 @@ interface Harness {
 
 type HarnessOptions = {
   readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
-  readonly electronCreateDelayMs?: number;
+  readonly notifyElectronTabHandoff?: BrowserViewManagerOptions["notifyElectronTabHandoff"];
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
+  readonly requireLoadedTargetForPageCommands?: boolean;
 };
 
 const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageState"] =
@@ -636,22 +667,32 @@ function createHarnessWithOptions(
   ]);
   const views: FakeBrowserView[] = [];
   const statuses: BrowserViewStatusChange[] = [];
+  const statusWindowIds: string[] = [];
+  const nativeTabStatuses: BrowserViewNativeTabStatusChange[] = [];
+  const nativeTabStatusWindowIds: string[] = [];
   const finds: BrowserViewFindChange[] = [];
   const downloads: BrowserViewDownloadChange[] = [];
   const certificateErrors: BrowserViewCertificateErrorChange[] = [];
   const openTileRequests: BrowserViewOpenTileRequest[] = [];
   const debugSnapshots: BrowserViewDebugSnapshotChange[] = [];
   const controlRevocations: BrowserViewControlRevokedChange[] = [];
-  const cdpSessionEndedNotifications: AgentBrowserViewCdpSessionEndedChange[] =
+  const cdpSessionEndedNotifications: BrowserViewCdpSessionEndedChange[] = [];
+  const cdpTargetAttachedNotifications: BrowserViewCdpTargetAttachedChange[] =
     [];
-  const cdpTargetAttachedNotifications: AgentBrowserViewCdpTargetAttachedChange[] =
+  const nativeTabCdpSessionEndedNotifications: BrowserViewNativeTabCdpSessionEndedChange[] =
     [];
-  const tileHandoffNotifications: AgentBrowserViewTileHandoffChange[] = [];
+  const nativeTabCdpSessionEndedWindowIds: string[] = [];
+  const nativeTabCdpTargetAttachedNotifications: BrowserViewNativeTabCdpTargetAttachedChange[] =
+    [];
+  const nativeTabCdpTargetAttachedWindowIds: string[] = [];
+  const electronTabHandoffNotifications: BrowserViewElectronTabHandoffChange[] =
+    [];
+  const electronTabHandoffWindowIds: string[] = [];
   const snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
   const annotationAttached: BrowserAnnotationAttachedIpcEvent[] = [];
   const storageStateApplications: BrowserViewStorageStateApply[] = [];
-  const storageStateCaptures: BrowserViewStorageStateCapture[] = [];
+  const storageStateCaptures: Array<{ readonly origin: string }> = [];
   const primaryProfileCaptureSourceOrigins: string[][] = [];
   const registeredPopupWebContents: BrowserViewPopupWebContents[] = [];
   const windowListeners = new Set<() => void>();
@@ -664,7 +705,10 @@ function createHarnessWithOptions(
   let nextWebContentsId = 1;
   const options: BrowserViewManagerOptions = {
     createView: () => {
-      const view = new FakeBrowserView(nextWebContentsId);
+      const view = new FakeBrowserView(
+        nextWebContentsId,
+        harnessOptions?.requireLoadedTargetForPageCommands ?? false,
+      );
       nextWebContentsId += 1;
       views.push(view);
       return view;
@@ -697,8 +741,13 @@ function createHarnessWithOptions(
         certificateListeners.delete(listener);
       };
     },
-    notifyStatus: (_windowId, change) => {
+    notifyStatus: (windowId, change) => {
+      statusWindowIds.push(windowId);
       statuses.push(change);
+    },
+    notifyNativeTabStatus: (windowId, change) => {
+      nativeTabStatusWindowIds.push(windowId);
+      nativeTabStatuses.push(change);
     },
     notifyFind: (_windowId, change) => {
       finds.push(change);
@@ -727,8 +776,18 @@ function createHarnessWithOptions(
     notifyCdpTargetAttached: (_windowId, change) => {
       cdpTargetAttachedNotifications.push(change);
     },
-    notifyTileHandoff: (_windowId, change) => {
-      tileHandoffNotifications.push(change);
+    notifyNativeTabCdpSessionEnded: (windowId, change) => {
+      nativeTabCdpSessionEndedWindowIds.push(windowId);
+      nativeTabCdpSessionEndedNotifications.push(change);
+    },
+    notifyNativeTabCdpTargetAttached: (windowId, change) => {
+      nativeTabCdpTargetAttachedWindowIds.push(windowId);
+      nativeTabCdpTargetAttachedNotifications.push(change);
+    },
+    notifyElectronTabHandoff: (windowId, change) => {
+      harnessOptions?.notifyElectronTabHandoff?.(windowId, change);
+      electronTabHandoffWindowIds.push(windowId);
+      electronTabHandoffNotifications.push(change);
     },
     notifyAnnotationEvent: (_windowId, change) => {
       annotationEvents.push(change);
@@ -780,9 +839,8 @@ function createHarnessWithOptions(
         origin,
         localStorage: [{ name: "k", value: origin }],
       }),
-    releaseGraceMs: 10,
-    electronCreateDelayMs: harnessOptions?.electronCreateDelayMs ?? 0,
-    boundsStreamLogIntervalMs: harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
+    boundsStreamLogIntervalMs:
+      harnessOptions?.boundsStreamLogIntervalMs ?? 1000,
     hostPlatform: harnessOptions?.hostPlatform ?? "darwin",
   };
   return {
@@ -790,6 +848,9 @@ function createHarnessWithOptions(
     windows,
     views,
     statuses,
+    statusWindowIds,
+    nativeTabStatuses,
+    nativeTabStatusWindowIds,
     finds,
     downloads,
     certificateErrors,
@@ -798,7 +859,12 @@ function createHarnessWithOptions(
     controlRevocations,
     cdpSessionEndedNotifications,
     cdpTargetAttachedNotifications,
-    tileHandoffNotifications,
+    nativeTabCdpSessionEndedNotifications,
+    nativeTabCdpSessionEndedWindowIds,
+    nativeTabCdpTargetAttachedNotifications,
+    nativeTabCdpTargetAttachedWindowIds,
+    electronTabHandoffNotifications,
+    electronTabHandoffWindowIds,
     snapshotInvalidations,
     annotationEvents,
     annotationAttached,
@@ -818,7 +884,7 @@ function createHarnessWithOptions(
   };
 }
 
-/** Ticket 12: flush the async closeEntry → pushTileHandoff → capture chain. */
+/** Flush the async closeEntry → electron-tab handoff → capture chain. */
 async function flushCloseEntry(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -893,7 +959,7 @@ describe("BrowserViewManager", () => {
     // No grace-period destruction: tile close is unbind only.
     vi.advanceTimersByTime(60_000);
     expect(view.webContents.closeCalls).toBe(0);
-    expect(harness.tileHandoffNotifications).toEqual([]);
+    expect(harness.electronTabHandoffNotifications).toEqual([]);
   });
 
   it("rebinds the same WebContents when a released tile is reopened (ticket 05)", () => {
@@ -1138,491 +1204,6 @@ describe("BrowserViewManager", () => {
       "window-1",
       upsert(BASE_KEY, "http://localhost:3000", false),
     );
-    expect(view.visible).toBe(false);
-  });
-
-  it("commit-event-fires-BEFORE-listener-attaches -> readiness still resolves", async () => {
-    const harness = createHarness();
-    const backgroundKey: BrowserViewTileKey = {
-      viewTabId: "background-before-listener",
-      paneId: "background-before-listener",
-      tileInstanceId: "background-before-listener-tile",
-      pageSessionId: "background-before-listener-page",
-    };
-    const loadURL = vi
-      .spyOn(FakeWebContents.prototype, "loadURL")
-      .mockImplementation(function (this: FakeWebContents, url) {
-        this.lifecycle.push("loadURL");
-        this.loadUrls.push(url);
-        if (url === "about:blank") return Promise.resolve(null);
-        this.emit("did-frame-navigate", {}, url, 200, "OK", true);
-        return new Promise<unknown>(() => {});
-      });
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...backgroundKey,
-      sessionId: "session-background-before-listener",
-      tabId: "tab-background-before-listener",
-      url: "https://example.com/background-before-listener",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-    const outcomePromise = Promise.race([
-      creation.then(() => "ready" as const),
-      new Promise<"timed-out">((resolve) => {
-        setTimeout(() => resolve("timed-out"), 100);
-      }),
-    ]);
-    await vi.advanceTimersByTimeAsync(100);
-    const outcome = await outcomePromise;
-    if (outcome === "timed-out") {
-      view.webContents.emit(
-        "did-frame-navigate",
-        {},
-        "https://example.com/background-before-listener",
-        200,
-        "OK",
-        true,
-      );
-      await creation;
-    }
-    loadURL.mockRestore();
-    expect(outcome).toBe("ready");
-  });
-
-  it("commit-after-attach -> readiness still resolves", async () => {
-    const harness = createHarness();
-    const backgroundKey: BrowserViewTileKey = {
-      viewTabId: "background",
-      paneId: "background",
-      tileInstanceId: "background-tile",
-      pageSessionId: "background-page",
-    };
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...backgroundKey,
-      sessionId: "session-background",
-      tabId: "tab-background",
-      url: "https://example.com/background",
-      seedStorageState: {
-        cookies: [],
-        origins: [
-          {
-            origin: "https://example.com",
-            localStorage: [{ name: "token", value: "carried" }],
-          },
-        ],
-      },
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    vi.spyOn(view.webContents, "loadURL").mockImplementation((url) => {
-      view.webContents.lifecycle.push("loadURL");
-      view.webContents.loadUrls.push(url);
-      return new Promise<unknown>(() => {});
-    });
-
-    let settled = false;
-    void creation.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
-    expect(view.visible).toBe(false);
-    await vi.waitFor(() => {
-      expect(view.webContents.loadUrls).toEqual([
-        "about:blank",
-        "https://example.com/background",
-      ]);
-    });
-
-    view.webContents.emit(
-      "did-frame-navigate",
-      {},
-      "https://example.com/background",
-      200,
-      "OK",
-      true,
-    );
-    const outcomePromise = Promise.race([
-      creation.then(() => "ready" as const),
-      new Promise<"timed-out">((resolve) => {
-        setTimeout(() => resolve("timed-out"), 100);
-      }),
-    ]);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(await outcomePromise).toBe("ready");
-    expect(settled).toBe(true);
-    expect(view.webContents.debugger.attached).toBe(true);
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
-    expect(view.webContents.debugger.commands).toContainEqual({
-      method: "Page.addScriptToEvaluateOnNewDocument",
-      params: { source: expect.stringContaining('"token"') },
-      sessionId: undefined,
-    });
-    expect(view.webContents.debugger.commands).toContainEqual({
-      method: "Page.removeScriptToEvaluateOnNewDocument",
-      params: { identifier: "seed-script-1" },
-      sessionId: undefined,
-    });
-    expect(harness.views).toHaveLength(1);
-    expect(harness.manager.snapshotForTests()[0]).toMatchObject({
-      parentWindowId: null,
-      visible: false,
-      status: "ready",
-      requestedUrl: "https://example.com/background",
-    });
-    const hiddenCdp = await harness.manager.dispatchCdp("window-1", {
-      ...backgroundKey,
-      sessionId: null,
-      command: { kind: "cdpGetFrameTree" },
-    });
-    expect(hiddenCdp.ok).toBe(true);
-
-    const openedKey: BrowserViewTileKey = {
-      ...backgroundKey,
-      viewTabId: "view-tab-opened",
-      paneId: "pane-opened",
-      tileInstanceId: "tile-opened",
-    };
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(openedKey, "https://example.com/background", true),
-    );
-    harness.manager.updateBounds("window-1", {
-      ...openedKey,
-      bounds: { x: 0, y: 0, width: 500, height: 300 },
-    });
-    expect(harness.views).toHaveLength(1);
-    expect(harness.views[0]).toBe(view);
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([
-      view,
-    ]);
-    expect(view.visible).toBe(true);
-
-    harness.manager.releaseTile("window-1", openedKey);
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
-    expect(view.visible).toBe(false);
-    expect(view.webContents.closeCalls).toBe(0);
-
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(openedKey, "https://example.com/background", true),
-    );
-    expect(harness.views).toHaveLength(1);
-    expect(harness.views[0]).toBe(view);
-    expect(view.webContents.closeCalls).toBe(0);
-    expect(view.webContents.loadUrls).toEqual([
-      "about:blank",
-      "https://example.com/background",
-    ]);
-
-    const cdp = await harness.manager.dispatchCdp("window-1", {
-      ...openedKey,
-      sessionId: null,
-      command: { kind: "cdpGetFrameTree" },
-    });
-    expect(cdp.ok).toBe(true);
-  });
-
-  it("unbound-readiness probe does not wait for paint or rAF", async () => {
-    const harness = createHarness();
-    const backgroundKey: BrowserViewTileKey = {
-      viewTabId: "unbound-readiness",
-      paneId: "unbound-readiness",
-      tileInstanceId: "unbound-readiness-tile",
-      pageSessionId: "unbound-readiness-page",
-    };
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...backgroundKey,
-      sessionId: "session-unbound-readiness",
-      tabId: "tab-unbound-readiness",
-      url: "https://example.com/unbound-readiness",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
-    view.webContents.emit("did-finish-load");
-    const outcomePromise = Promise.race([
-      creation.then(() => "ready" as const),
-      new Promise<"timed-out">((resolve) => {
-        setTimeout(() => resolve("timed-out"), 100);
-      }),
-    ]);
-    await vi.advanceTimersByTimeAsync(100);
-    const outcome = await outcomePromise;
-
-    expect(outcome).toBe("ready");
-    expect(harness.windows.get("window-1")?.contentView.children).toEqual([]);
-    expect(
-      view.webContents.executedJavaScript.some((script) =>
-        /requestAnimationFrame|(?:^|[^\w])paint(?:[^\w]|$)/i.test(script),
-      ),
-    ).toBe(false);
-  });
-
-  it("registers a background entry before delayed create readiness settles", async () => {
-    const harness = createHarnessWithOptions({ electronCreateDelayMs: 6_000 });
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-delayed-background",
-      tabId: "tab-source",
-      url: "https://example.com/delayed-background",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    let settled = false;
-    void creation.then(() => {
-      settled = true;
-    });
-    view.webContents.emit("did-finish-load");
-    await Promise.resolve();
-
-    expect(harness.manager.snapshotForTests()).toHaveLength(1);
-    expect(settled).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(5_999);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await creation;
-    expect(settled).toBe(true);
-  });
-
-  it("installs localStorage only at create before the first background load", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-background-seeded",
-      tabId: "tab-background-seeded",
-      url: "https://example.com/background",
-      seedStorageState: {
-        cookies: [],
-        origins: [
-          {
-            origin: "https://example.com",
-            localStorage: [{ name: "token", value: "carried" }],
-          },
-        ],
-      },
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    view.webContents.emit("did-finish-load");
-    await creation;
-
-    expect(view.webContents.lifecycle).toEqual([
-      "loadURL",
-      "Page.addScriptToEvaluateOnNewDocument",
-      "loadURL",
-      "Page.removeScriptToEvaluateOnNewDocument",
-    ]);
-    expect(view.webContents.loadUrls).toEqual([
-      "about:blank",
-      "https://example.com/background",
-    ]);
-    expect(view.webContents.debugger.commands).toContainEqual({
-      method: "Page.addScriptToEvaluateOnNewDocument",
-      params: { source: expect.stringContaining('"token"') },
-      sessionId: undefined,
-    });
-    expect(view.webContents.debugger.commands).toContainEqual({
-      method: "Page.removeScriptToEvaluateOnNewDocument",
-      params: { identifier: "seed-script-1" },
-      sessionId: undefined,
-    });
-    expect(harness.storageStateApplications).toEqual([]);
-  });
-
-  it("does not publish the prime about:blank URL when requested navigation fails before commit", async () => {
-    const harness = createHarness();
-    const requestedUrl = "https://example.com/prime-failure";
-    const seedError = new Error("seed install failed");
-    const loadURL = vi
-      .spyOn(FakeWebContents.prototype, "loadURL")
-      .mockImplementation(function (this: FakeWebContents, url) {
-        this.lifecycle.push("loadURL");
-        this.loadUrls.push(url);
-        if (url === "about:blank") {
-          this.emit("did-frame-navigate", {}, "about:blank", 200, "OK", true);
-        }
-        return Promise.resolve(null);
-      });
-    const sendCommand = vi
-      .spyOn(FakeDebugger.prototype, "sendCommand")
-      .mockImplementation((method) => {
-        if (method === "Page.addScriptToEvaluateOnNewDocument") {
-          return Promise.reject(seedError);
-        }
-        return Promise.resolve(null);
-      });
-
-    try {
-      const creation = harness.manager.createBackgroundTab("window-1", {
-        ...BASE_KEY,
-        sessionId: "session-prime-failure",
-        tabId: "tab-prime-failure",
-        url: requestedUrl,
-        seedStorageState: {
-          cookies: [],
-          origins: [
-            {
-              origin: "https://example.com",
-              localStorage: [{ name: "token", value: "carried" }],
-            },
-          ],
-        },
-      });
-      const view = harness.views[0];
-      if (view === undefined) throw new Error("expected background view");
-      await expect(creation).rejects.toThrow("seed install failed");
-      expect(view.webContents.loadUrls).toEqual(["about:blank"]);
-      expect(view.webContents.clearNavigationHistoryCalls).toBe(1);
-      expect(harness.statuses.map((status) => status.url)).not.toContain(
-        "about:blank",
-      );
-      expect(harness.manager.snapshotForTests()).toEqual([]);
-    } finally {
-      loadURL.mockRestore();
-      sendCommand.mockRestore();
-    }
-  });
-
-  it("rejects a duplicate background runtime key without overwriting the first view", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-duplicate-runtime",
-      tabId: "tab-duplicate-runtime",
-      url: "https://example.com/duplicate-runtime",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-    await Promise.resolve();
-
-    await expect(
-      harness.manager.createBackgroundTab("window-1", {
-        ...BASE_KEY,
-        tileInstanceId: "tile-duplicate-runtime-second",
-        pageSessionId: "page-duplicate-runtime-second",
-        sessionId: "session-duplicate-runtime",
-        tabId: "tab-duplicate-runtime",
-        url: "https://example.com/duplicate-runtime-second",
-      }),
-    ).rejects.toThrow(
-      "Browser runtime tab session-duplicate-runtime/tab-duplicate-runtime already exists.",
-    );
-    expect(harness.views).toHaveLength(1);
-    expect(harness.manager.snapshotForTests()).toHaveLength(1);
-
-    view.webContents.emit("did-finish-load");
-    await creation;
-  });
-
-  it("load-failure -> rejects", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-background-load-failure",
-      tabId: "tab-background-load-failure",
-      url: "http://127.0.0.1:65535/",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    await expect(creation).rejects.toThrow("ERR_CONNECTION_REFUSED");
-    expect(view.webContents.closeCalls).toBe(1);
-    expect(harness.manager.snapshotForTests()).toEqual([]);
-  });
-
-  it("sets background throttling off while driven and restores it when idle", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-background-throttle",
-      tabId: "tab-background-throttle",
-      url: "https://example.com/background",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-
-    harness.manager.setBackgroundThrottling("window-1", {
-      ...BASE_KEY,
-      enabled: false,
-    });
-    harness.manager.setBackgroundThrottling("window-1", {
-      ...BASE_KEY,
-      enabled: true,
-    });
-
-    expect(view.webContents.backgroundThrottlingStates).toEqual([false, true]);
-    view.webContents.emit("did-finish-load");
-    await creation;
-  });
-
-  it("captures a never-shown background tab offscreen and restores it after PiP", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-pip-hidden",
-      tabId: "tab-pip-hidden",
-      url: "https://example.com/hidden",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-    view.webContents.emit(
-      "did-frame-navigate",
-      {},
-      "https://example.com/hidden",
-      200,
-      "OK",
-      true,
-    );
-    await creation;
-
-    const window = harness.windows.get("window-1");
-    if (window === undefined) throw new Error("expected window");
-    expect(window.contentView.children).toEqual([]);
-    expect(view.bounds).toEqual([]);
-
-    const frames: PipCaptureIpcPayload[] = [];
-    const started = await harness.manager.startPipCapture(
-      "window-1",
-      {
-        tileKey: BASE_KEY,
-        maxWidth: 320,
-        maxHeight: 180,
-        quality: 70,
-      },
-      (payload) => {
-        frames.push(payload);
-      },
-    );
-
-    expect(started).toBe(true);
-    expect(window.contentView.children).toEqual([view]);
-    expect(view.bounds.at(-1)).toEqual({
-      x: -320,
-      y: -180,
-      width: 320,
-      height: 180,
-    });
-    expect(view.visible).toBe(true);
-    expect(view.webContents.backgroundThrottlingStates.at(-1)).toBe(false);
-    await vi.waitFor(() => {
-      expect(view.webContents.lifecycle).toContain("capturePage");
-      expect(frames[1]?.frame.kind).toBe("frame");
-    });
-    expect(frames[0]?.frame.kind).toBe("started");
-    harness.manager.stopPipCapture();
-    expect(view.bounds.at(-1)).toEqual({
-      x: 0,
-      y: 0,
-      width: 320,
-      height: 180,
-    });
     expect(view.visible).toBe(false);
   });
 
@@ -2350,7 +1931,7 @@ describe("BrowserViewManager", () => {
     const view = harness.views[0];
     // Visibility pass attached the feed; a compositor frame warms the slot.
     expect(view.webContents.frameSubscriptions).toHaveLength(1);
-    view.webContents.emitCompositorFrame();
+    view.webContents.emitCompositorFrame(undefined);
 
     const result = await harness.manager.occludeForOverlay("window-1", {
       overlayId: "palette",
@@ -2369,7 +1950,12 @@ describe("BrowserViewManager", () => {
     // Two-phase park (flicker fix): the view stays at REAL geometry until
     // the renderer acknowledges the painted replacement frame.
     expect(view.visible).toBe(true);
-    expect(view.bounds.at(-1)).toMatchObject({ x: 0, y: 0, width: 500, height: 300 });
+    expect(view.bounds.at(-1)).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 500,
+      height: 300,
+    });
 
     harness.manager.paintAckOverlay("palette");
 
@@ -2388,7 +1974,7 @@ describe("BrowserViewManager", () => {
       bounds: { x: 0, y: 0, width: 500, height: 300 },
     });
     const view = harness.views[0];
-    view.webContents.emitCompositorFrame();
+    view.webContents.emitCompositorFrame(undefined);
     vi.advanceTimersByTime(400);
 
     const result = await harness.manager.occludeForOverlay("window-1", {
@@ -2414,7 +2000,7 @@ describe("BrowserViewManager", () => {
       bounds: { x: 0, y: 0, width: 500, height: 300 },
     });
     const view = harness.views[0];
-    view.webContents.emitCompositorFrame();
+    view.webContents.emitCompositorFrame(undefined);
     const result = await harness.manager.occludeForOverlay("window-1", {
       overlayId: "palette",
       tiles: [BASE_KEY],
@@ -2442,7 +2028,8 @@ describe("BrowserViewManager", () => {
     });
   });
 
-  it("release restores the parked view to its real geometry (BT-202)", async () => {    const harness = createHarness();
+  it("release restores the parked view to its real geometry (BT-202)", async () => {
+    const harness = createHarness();
     harness.manager.upsertTile(
       "window-1",
       upsert(BASE_KEY, "http://localhost:3000", true),
@@ -2452,7 +2039,7 @@ describe("BrowserViewManager", () => {
       bounds: { x: 0, y: 0, width: 500, height: 300 },
     });
     const view = harness.views[0];
-    view.webContents.emitCompositorFrame();
+    view.webContents.emitCompositorFrame(undefined);
     await harness.manager.occludeForOverlay("window-1", {
       overlayId: "palette",
       tiles: [BASE_KEY],
@@ -2591,9 +2178,9 @@ describe("BrowserViewManager", () => {
     );
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(harness.windows.get("window-1")?.webContents.sentInputEvents).toEqual(
-      [{ type: "keyDown", keyCode: "K", modifiers: ["meta"] }],
-    );
+    expect(
+      harness.windows.get("window-1")?.webContents.sentInputEvents,
+    ).toEqual([{ type: "keyDown", keyCode: "K", modifiers: ["meta"] }]);
   });
 
   it("lets unreserved keystrokes through to the guest untouched (BT-302)", async () => {
@@ -2676,9 +2263,9 @@ describe("BrowserViewManager", () => {
     );
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
-    expect(harness.windows.get("window-1")?.webContents.sentInputEvents).toEqual(
-      [{ type: "keyDown", keyCode: "K", modifiers: ["control"] }],
-    );
+    expect(
+      harness.windows.get("window-1")?.webContents.sentInputEvents,
+    ).toEqual([{ type: "keyDown", keyCode: "K", modifiers: ["control"] }]);
   });
 
   function makeHiddenGuestsFixture(): {
@@ -2987,7 +2574,7 @@ describe("BrowserViewManager", () => {
 
     // Tile unbind is not a close: failed loads must not destroy the entry.
     expect(view.webContents.closeCalls).toBe(0);
-    expect(harness.tileHandoffNotifications).toEqual([]);
+    expect(harness.electronTabHandoffNotifications).toEqual([]);
   });
 
   it("runs in-page find and forwards native match updates", () => {
@@ -4002,381 +3589,6 @@ describe("BrowserViewManager CDP dispatch", () => {
 // Ticket 12: closeEntry re-entrancy + handoff reason mapping
 // -------------------------------------------------------------------------
 
-describe("BrowserViewManager closeEntry re-entrancy and handoff reason mapping (ticket 12)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function upsertLiveTile(harness: Harness): FakeBrowserView {
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "http://localhost:3000", true),
-    );
-    harness.manager.updateBounds("window-1", {
-      ...BASE_KEY,
-      bounds: { x: 0, y: 0, width: 500, height: 300 },
-    });
-    const view = harness.views[0];
-    if (view === undefined) {
-      throw new Error("expected a view after upsert");
-    }
-    return view;
-  }
-
-  it("window destruction only unbinds durable entries; it does not hand off or close them (ticket 05)", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-    const window = harness.windows.get("window-1");
-    if (window === undefined) throw new Error("missing window-1");
-    window.destroyed = true;
-
-    harness.emitWindowChange();
-    harness.emitWindowChange();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toEqual([]);
-    expect(view.webContents.closeCalls).toBe(0);
-    expect(view.visible).toBe(false);
-  });
-
-  it("releaseTile does not hand off; dispose still destroys the durable entry once (ticket 05)", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-
-    harness.manager.releaseTile("window-1", BASE_KEY);
-    expect(harness.tileHandoffNotifications).toEqual([]);
-    expect(view.webContents.closeCalls).toBe(0);
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-    expect(harness.tileHandoffNotifications[0]?.reason).toBe("gui-quit");
-    expect(view.webContents.closeCalls).toBe(1);
-  });
-
-  it("maps dispose teardown to reason gui-quit", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toEqual([
-      expect.objectContaining({
-        ...BASE_KEY,
-        siblingTabs: [],
-        reason: "gui-quit",
-      }),
-    ]);
-    expect(view.webContents.closeCalls).toBe(1);
-  });
-
-  it("drains registered live entries and skips tiles mid-activation", async () => {
-    const harness = createHarness();
-    const liveKey = {
-      ...BASE_KEY,
-      tileInstanceId: "tile-live",
-      pageSessionId: "page-live",
-    };
-    const activatingKey = {
-      ...BASE_KEY,
-      tileInstanceId: "tile-activating",
-      pageSessionId: "page-activating",
-    };
-
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(liveKey, "https://app.example/live", true),
-    );
-    harness.manager.registerDurableTab("window-1", {
-      ...liveKey,
-      sessionId: "session-live",
-      tabId: "tab-live",
-    });
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(activatingKey, "https://app.example/activating", true),
-    );
-
-    await harness.manager.drainBrowserHandoffs();
-
-    expect(harness.tileHandoffNotifications).toEqual([
-      expect.objectContaining({
-        ...liveKey,
-        capturedUrl: "https://app.example/live",
-        capturedStorageState: { cookies: [], origins: [] },
-        reason: "gui-quit",
-      }),
-    ]);
-    expect(harness.storageStateCaptures).toHaveLength(1);
-  });
-
-  it("skips dead entries and prevents a drained entry from being pushed by dispose", async () => {
-    const harness = createHarness();
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "https://app.example/live", true),
-    );
-    harness.manager.registerDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-live",
-      tabId: "tab-live",
-    });
-    const liveView = harness.views[0];
-    if (liveView === undefined) throw new Error("missing live view");
-
-    await harness.manager.drainBrowserHandoffs();
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-
-    const deadKey = {
-      ...BASE_KEY,
-      tileInstanceId: "tile-dead",
-      pageSessionId: "page-dead",
-    };
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(deadKey, "https://app.example/dead", true),
-    );
-    harness.manager.registerDurableTab("window-1", {
-      ...deadKey,
-      sessionId: "session-dead",
-      tabId: "tab-dead",
-    });
-    const deadView = harness.views[1];
-    if (deadView === undefined) throw new Error("missing dead view");
-    deadView.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-    await flushCloseEntry();
-    expect(harness.tileHandoffNotifications).toHaveLength(2);
-    expect(harness.tileHandoffNotifications.at(-1)?.reason).toBe(
-      "crash-no-capture",
-    );
-
-    await harness.manager.drainBrowserHandoffs();
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(2);
-    expect(liveView.webContents.closeCalls).toBe(1);
-  });
-
-  it("aggregates every live durable tab into one handoff during group dispose", async () => {
-    const harness = createHarness();
-    const tabs = [
-      {
-        key: BASE_KEY,
-        url: "https://app.example/primary",
-        tabId: "tab-primary",
-      },
-      {
-        key: {
-          ...BASE_KEY,
-          viewTabId: "view-tab-2",
-          paneId: "pane-2",
-          tileInstanceId: "tile-2",
-          pageSessionId: "page-2",
-        },
-        url: "https://app.example/sibling-a",
-        tabId: "tab-sibling-a",
-      },
-      {
-        key: {
-          ...BASE_KEY,
-          viewTabId: "view-tab-3",
-          paneId: "pane-3",
-          tileInstanceId: "tile-3",
-          pageSessionId: "page-3",
-        },
-        url: "https://app.example/sibling-b",
-        tabId: "tab-sibling-b",
-      },
-    ] as const;
-
-    for (const tab of tabs) {
-      harness.manager.upsertTile("window-1", upsert(tab.key, tab.url, true));
-      harness.manager.registerDurableTab("window-1", {
-        ...tab.key,
-        sessionId: "session-multi-tab",
-        tabId: tab.tabId,
-      });
-    }
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-    expect(harness.tileHandoffNotifications[0]).toEqual({
-      ...tabs[0].key,
-      capturedUrl: tabs[0].url,
-      capturedStorageState: { cookies: [], origins: [] },
-      siblingTabs: [
-        {
-          tabId: tabs[1].tabId,
-          url: tabs[1].url,
-          capturedStorageState: { cookies: [], origins: [] },
-        },
-        {
-          tabId: tabs[2].tabId,
-          url: tabs[2].url,
-          capturedStorageState: { cookies: [], origins: [] },
-        },
-      ],
-      reason: "gui-quit",
-    });
-    expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
-      1, 1, 1,
-    ]);
-  });
-
-  it("waits for a delayed sibling capture before closing its WebContents", async () => {
-    const captureResolvers: Array<() => void> = [];
-    const captureCalls: Array<{
-      readonly webContentsId: number;
-      readonly destroyed: boolean;
-    }> = [];
-    const harness = createHarnessWithOptions({
-      captureStorageState: (_input, webContents) => {
-        captureCalls.push({
-          webContentsId: webContents.id,
-          destroyed: webContents.isDestroyed(),
-        });
-        return new Promise<BrowserViewStorageStateCaptureResult>((resolve) => {
-          captureResolvers.push(() => {
-            resolve({
-              storageState: { cookies: [], origins: [] },
-              cookieCount: 0,
-              cookieDomains: [],
-              localStorageCount: 0,
-              localStorageAvailable: true,
-              localStorageReason: null,
-            });
-          });
-        });
-      },
-    });
-    const siblingKey: BrowserViewTileKey = {
-      ...BASE_KEY,
-      viewTabId: "view-tab-2",
-      paneId: "pane-2",
-      tileInstanceId: "tile-2",
-      pageSessionId: "page-2",
-    };
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "https://app.example/primary", true),
-    );
-    harness.manager.registerDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-delayed-handoff",
-      tabId: "tab-primary",
-    });
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(siblingKey, "https://app.example/sibling", true),
-    );
-    harness.manager.registerDurableTab("window-1", {
-      ...siblingKey,
-      sessionId: "session-delayed-handoff",
-      tabId: "tab-sibling",
-    });
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(captureCalls).toHaveLength(1);
-    expect(captureCalls[0]).toEqual({
-      webContentsId: harness.views[0]?.webContents.id,
-      destroyed: false,
-    });
-    expect(harness.views[1]?.webContents.closeCalls).toBe(0);
-    const releasePrimary = captureResolvers[0];
-    if (releasePrimary === undefined)
-      throw new Error("primary capture missing");
-    releasePrimary();
-    await flushCloseEntry();
-
-    expect(captureCalls).toHaveLength(2);
-    expect(captureCalls[1]).toEqual({
-      webContentsId: harness.views[1]?.webContents.id,
-      destroyed: false,
-    });
-    // This is the regression guard: the sibling is already claimed and its
-    // own closeEntry is running, but it must remain live until aggregation
-    // captures it.
-    expect(harness.views[1]?.webContents.closeCalls).toBe(0);
-
-    const releaseSibling = captureResolvers[1];
-    if (releaseSibling === undefined)
-      throw new Error("sibling capture missing");
-    releaseSibling();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-    expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
-      1, 1,
-    ]);
-  });
-
-  it("crash closes with crash-no-capture and skips storage capture (ticket 05)", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-    const capturesBefore = harness.storageStateCaptures.length;
-    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-    expect(harness.statuses.at(-1)).toMatchObject({ status: "dead" });
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-    expect(harness.tileHandoffNotifications[0]).toMatchObject({
-      ...BASE_KEY,
-      reason: "crash-no-capture",
-      capturedStorageState: null,
-    });
-    expect(harness.storageStateCaptures.length).toBe(capturesBefore);
-    expect(view.webContents.closeCalls).toBe(1);
-  });
-
-  it("crash then dispose overrides reason to crash-no-capture regardless of gui-quit path", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-
-    harness.manager.dispose();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toHaveLength(1);
-    expect(harness.tileHandoffNotifications[0]).toMatchObject({
-      ...BASE_KEY,
-      reason: "crash-no-capture",
-      capturedStorageState: null,
-    });
-    expect(view.webContents.closeCalls).toBe(1);
-  });
-
-  it("crash then destroyed-window reconcile also reports crash-no-capture", async () => {
-    const harness = createHarness();
-    const view = upsertLiveTile(harness);
-    view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
-    const window = harness.windows.get("window-1");
-    if (window === undefined) throw new Error("missing window-1");
-    window.destroyed = true;
-
-    harness.emitWindowChange();
-    await flushCloseEntry();
-
-    expect(harness.tileHandoffNotifications).toEqual([
-      expect.objectContaining({
-        reason: "crash-no-capture",
-        capturedStorageState: null,
-      }),
-    ]);
-    expect(view.webContents.closeCalls).toBe(1);
-  });
-});
-
 describe("BrowserViewManager primary profile capture (ticket 06)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -4428,139 +3640,815 @@ describe("BrowserViewManager primary profile capture (ticket 06)", () => {
   });
 });
 
-describe("BrowserViewManager durable runtime registration (ticket 05)", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+describe("BrowserViewManager native tab lifecycle", () => {
+  it("provisions CDP before acceptance and starts navigation only after acceptance", async () => {
+    const harness = createHarnessWithOptions({
+      requireLoadedTargetForPageCommands: true,
+    });
+    const provisioned = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/target",
+      seedStorageState: {
+        cookies: [],
+        origins: [
+          {
+            origin: "https://example.com",
+            localStorage: [{ name: "token", value: "carried" }],
+          },
+        ],
+      },
+    });
+
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    expect(view.webContents.loadUrls).toEqual(["about:blank"]);
+    expect(view.webContents.lifecycle).toEqual([
+      "loadURL",
+      "Page.addScriptToEvaluateOnNewDocument",
+      "Page.enable",
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Target.setAutoAttach",
+    ]);
+
+    await harness.manager.acceptTab(provisioned);
+
+    expect(view.webContents.loadUrls).toEqual([
+      "about:blank",
+      "https://example.com/target",
+    ]);
+    expect(view.webContents.lifecycle).toEqual([
+      "loadURL",
+      "Page.addScriptToEvaluateOnNewDocument",
+      "Page.enable",
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Target.setAutoAttach",
+      "loadURL",
+      "Page.removeScriptToEvaluateOnNewDocument",
+    ]);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("registerDurableTab rekeys the runtime entry so rebind finds the same WebContents after release", () => {
+  it("does not report a native tab provisioned until its tab-keyed CDP route is enabled", async () => {
     const harness = createHarness();
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "http://localhost:3000", true),
-    );
-    harness.manager.updateBounds("window-1", {
-      ...BASE_KEY,
-      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    const ensure = harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
     });
     const view = harness.views[0];
-    if (view === undefined) throw new Error("expected view");
+    if (view === undefined) throw new Error("expected native guest");
+    view.webContents.debugger.deferCommands = true;
 
-    harness.manager.registerDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-durable",
-      tabId: "tab-durable-1",
+    let settled = false;
+    void ensure.finally(() => {
+      settled = true;
     });
+    await flushCloseEntry();
 
-    harness.manager.releaseTile("window-1", BASE_KEY);
-    expect(view.webContents.closeCalls).toBe(0);
-    expect(view.visible).toBe(false);
+    expect(settled).toBe(false);
+    expect(
+      view.webContents.debugger.commands.map(({ method }) => method),
+    ).toEqual([
+      "Page.enable",
+      "Runtime.enable",
+      "Log.enable",
+      "Network.enable",
+      "DOM.enable",
+      "Target.setAutoAttach",
+    ]);
 
-    // Same pageSessionId transfers the durable entry after host mint.
-    const reboundKey: BrowserViewTileKey = {
-      ...BASE_KEY,
-      tileInstanceId: "tile-rebound",
-    };
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(reboundKey, "http://localhost:3000", true),
+    for (const resolve of view.webContents.debugger.commandResolvers.splice(
+      0,
+    )) {
+      resolve(null);
+    }
+    await expect(ensure).resolves.toMatchObject({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    });
+  });
+
+  it("stamps every unsolicited native lifecycle event with the exact incarnation", async () => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    view.webContents.emit(
+      "did-navigate",
+      {},
+      "https://example.com/next",
+      200,
+      "OK",
     );
-    harness.manager.updateBounds("window-1", {
-      ...reboundKey,
-      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    view.webContents.debugger.emitMessage(
+      "Target.attachedToTarget",
+      {
+        sessionId: "child-session",
+        targetInfo: {
+          targetId: "child-target",
+          type: "iframe",
+          url: "https://example.com/frame",
+        },
+        waitingForDebugger: false,
+      },
+      undefined,
+    );
+    view.webContents.debugger.emitDetach("target closed");
+
+    expect(harness.nativeTabStatuses.at(-1)).toMatchObject({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: ready.registrationId,
+    });
+    expect(harness.nativeTabCdpTargetAttachedNotifications).toEqual([
+      expect.objectContaining({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: ready.registrationId,
+        cdpSessionId: "child-session",
+      }),
+    ]);
+    expect(harness.nativeTabCdpSessionEndedNotifications).toEqual([
+      expect.objectContaining({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: ready.registrationId,
+        reason: "target closed",
+      }),
+    ]);
+  });
+
+  it("controls an unbound tab through its native identity", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+    view.webContents.canGoBackValue = true;
+    view.webContents.canGoForwardValue = true;
+
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        action: { kind: "navigate", url: "https://example.com/next" },
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(true);
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "goBack" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "goForward" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "setViewportPreset", viewportPreset: "mobile" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "zoomIn" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "zoomOut" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "resetZoom" },
+    });
+    await harness.manager.controlElectronTab("window-1", {
+      ...nativeKey,
+      registrationId: ready.registrationId,
+      action: { kind: "openDevTools" },
     });
 
-    expect(harness.views).toHaveLength(1);
-    expect(view.webContents.closeCalls).toBe(0);
-    expect(view.visible).toBe(true);
+    expect(view.webContents.loadUrls).toEqual([
+      "about:blank",
+      "https://example.com/",
+      "https://example.com/next",
+    ]);
+    expect(view.webContents.reloadCalls).toBe(1);
+    expect(view.webContents.goBackCalls).toBe(1);
+    expect(view.webContents.goForwardCalls).toBe(1);
+    expect(view.webContents.zoomFactor).toBe(1);
+    expect(view.webContents.openDevToolsCalls).toHaveLength(1);
+
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        tabId: "missing-tab",
+        registrationId: ready.registrationId,
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("rejects stale native capabilities before any post-ready mutation", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    const surface = {
+      ...BASE_KEY,
+      tileInstanceId: "native-tile",
+    };
+
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: "stale-registration",
+        bindingId: "binding-1",
+        surface,
+        visible: true,
+      }),
+    ).toBe(false);
+    expect(harness.windows.get("window-1")?.contentView.children).not.toContain(
+      view,
+    );
+
+    await expect(
+      harness.manager.controlElectronTab("window-1", {
+        ...nativeKey,
+        registrationId: "stale-registration",
+        action: { kind: "reload" },
+      }),
+    ).resolves.toBe(false);
+    expect(view.webContents.reloadCalls).toBe(0);
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...nativeKey,
+          registrationId: "stale-registration",
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(false);
+    expect(view.webContents.lifecycle).not.toContain("capturePage");
+
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+        surface,
+        visible: true,
+      }),
+    ).toBe(true);
     expect(harness.windows.get("window-1")?.contentView.children).toContain(
       view,
     );
-  });
-
-  it("releaseDurableTab destroys WebContents without a tile handoff", async () => {
-    const harness = createHarness();
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "http://localhost:3000", false),
-    );
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected view");
-
-    harness.manager.registerDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-release",
-      tabId: "tab-release",
-    });
-    await harness.manager.releaseDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-release",
-      tabId: "tab-release",
-    });
-
-    expect(view.webContents.closeCalls).toBe(1);
-    expect(harness.tileHandoffNotifications).toEqual([]);
-    expect(harness.manager.snapshotForTests()).toEqual([]);
-  });
-
-  it("releaseDurableTab closes a background entry when the failure tab id differs from its runtime id", async () => {
-    const harness = createHarness();
-    const creation = harness.manager.createBackgroundTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-headless-loss",
-      tabId: "tab-source",
-      url: "https://example.com/headless-loss",
-    });
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected background view");
-    view.webContents.emit("did-finish-load");
-    await creation;
-
-    harness.manager.registerDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-headless-loss",
-      tabId: "tab-minted",
-    });
-    await harness.manager.releaseDurableTab("window-1", {
-      ...BASE_KEY,
-      sessionId: "session-headless-loss",
-      tabId: "tab-failure-source",
-    });
-
-    expect(view.webContents.closeCalls).toBe(1);
-    expect(harness.manager.snapshotForTests()).toEqual([]);
-  });
-
-  it("target=_blank open requests still surface so same-session popup tabs can register", () => {
-    const harness = createHarness();
-    harness.manager.upsertTile(
-      "window-1",
-      upsert(BASE_KEY, "https://app.test/root", true),
-    );
-    const view = harness.views[0];
-    if (view === undefined) throw new Error("expected view");
-    const handler = view.webContents.windowOpenHandler;
-    if (handler === null) throw new Error("window open handler missing");
-
-    const result = handler({
-      url: "https://app.test/popup",
-      frameName: "_blank",
-      features: "",
-      disposition: "foreground-tab",
-    });
-
-    expect(result).toEqual({ action: "deny" });
-    expect(harness.openTileRequests).toEqual([
-      expect.objectContaining({
-        ...BASE_KEY,
-        url: "https://app.test/popup",
-        disposition: "foreground-tab",
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...nativeKey,
+        registrationId: "stale-registration",
+        bindingId: "binding-1",
       }),
+    ).toBe(false);
+    expect(harness.windows.get("window-1")?.contentView.children).toContain(
+      view,
+    );
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps lifecycle ownership stable when presentation moves windows", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ensureInput = {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", ensureInput);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(ready);
+
+    // An idempotent ensure from another renderer must not transfer lifecycle
+    // ownership. Only presentation is allowed to move between windows.
+    await harness.manager.ensureTab("window-2", ensureInput);
+    harness.statusWindowIds.length = 0;
+    harness.nativeTabStatusWindowIds.length = 0;
+
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...nativeKey,
+        registrationId: ready.registrationId,
+        bindingId: "binding-2",
+        surface: {
+          ...BASE_KEY,
+          tileInstanceId: "native-tile-window-2",
+        },
+        visible: true,
+      }),
+    ).toBe(true);
+    expect(harness.statusWindowIds.at(-1)).toBe("window-2");
+    expect(harness.nativeTabStatusWindowIds.at(-1)).toBe("window-1");
+
+    view.webContents.debugger.emitMessage(
+      "Target.attachedToTarget",
+      {
+        sessionId: "child-session",
+        targetInfo: {
+          targetId: "child-target",
+          type: "iframe",
+          url: "https://example.com/frame",
+        },
+        waitingForDebugger: false,
+      },
+      undefined,
+    );
+    expect(harness.nativeTabCdpTargetAttachedWindowIds).toEqual(["window-1"]);
+    view.webContents.debugger.emitDetach("target closed");
+    expect(harness.nativeTabCdpSessionEndedWindowIds).toEqual(["window-1"]);
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+    expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
+  });
+
+  it("owns one guest per native identity across concurrent ensure, surface moves, and exact release", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ensureInput = {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    };
+
+    const firstEnsure = harness.manager.ensureTab("window-1", ensureInput);
+    const replayedEnsure = harness.manager.ensureTab("window-1", ensureInput);
+
+    expect(harness.views).toHaveLength(1);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    view.webContents.title = "Example Domain";
+    view.webContents.emit(
+      "did-navigate",
+      {},
+      "https://example.com/",
+      200,
+      "OK",
+    );
+
+    const [firstReady, replayedReady] = await Promise.all([
+      firstEnsure,
+      replayedEnsure,
     ]);
+    expect(replayedReady).toEqual(firstReady);
+    expect(firstReady).toMatchObject({
+      ...nativeKey,
+    });
+    expect(firstReady.registrationId).not.toBe("");
+    await harness.manager.acceptTab(firstReady);
+
+    expect(
+      harness.manager.attachSurface("window-1", {
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+        bindingId: "binding-1",
+        surface: BASE_KEY,
+        visible: true,
+      }),
+    ).toBe(true);
+    harness.manager.updateBounds("window-1", {
+      ...BASE_KEY,
+      bounds: { x: 0, y: 0, width: 500, height: 300 },
+    });
+    expect(harness.windows.get("window-1")?.contentView.children).toContain(
+      view,
+    );
+
+    const movedSurface = {
+      ...BASE_KEY,
+      tileInstanceId: "tile-2",
+    };
+    expect(
+      harness.manager.attachSurface("window-2", {
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+        bindingId: "binding-2",
+        surface: movedSurface,
+        visible: true,
+      }),
+    ).toBe(true);
+    expect(harness.views).toHaveLength(1);
+    expect(harness.windows.get("window-1")?.contentView.children).not.toContain(
+      view,
+    );
+    expect(harness.windows.get("window-2")?.contentView.children).toContain(
+      view,
+    );
+    expect(
+      harness.windows
+        .get("window-1")
+        ?.webContents.listenerCount("did-start-navigation"),
+    ).toBe(1);
+    expect(
+      harness.windows
+        .get("window-2")
+        ?.webContents.listenerCount("did-start-navigation"),
+    ).toBe(1);
+
+    expect(
+      harness.manager.detachSurface("window-1", {
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+        bindingId: "binding-1",
+      }),
+    ).toBe(false);
+    expect(harness.windows.get("window-2")?.contentView.children).toContain(
+      view,
+    );
+
+    await expect(
+      harness.manager.dispatchCdp("window-2", {
+        ...movedSurface,
+        sessionId: null,
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({
+      kind: "cdpGetFrameTree",
+      ok: false,
+      error: { kind: "tile_not_found" },
+    });
+
+    expect(
+      harness.manager.detachSurface("window-2", {
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+        bindingId: "binding-2",
+      }),
+    ).toBe(true);
+    expect(harness.windows.get("window-2")?.contentView.children).not.toContain(
+      view,
+    );
+    expect(view.webContents.closeCalls).toBe(0);
+
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: "stale-registration",
+        cdpSessionId: null,
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({
+      kind: "cdpGetFrameTree",
+      ok: false,
+      error: { kind: "tab_not_found" },
+    });
+    await expect(
+      harness.manager.dispatchElectronTabCdp({
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+        cdpSessionId: null,
+        command: { kind: "cdpGetFrameTree" },
+      }),
+    ).resolves.toMatchObject({ kind: "cdpGetFrameTree", ok: true });
+
+    await expect(
+      harness.manager.releaseTab({
+        ...nativeKey,
+        registrationId: "stale-registration",
+      }),
+    ).resolves.toBe(false);
+    expect(view.webContents.closeCalls).toBe(0);
+
+    await expect(
+      harness.manager.releaseTab({
+        ...nativeKey,
+        registrationId: firstReady.registrationId,
+      }),
+    ).resolves.toBe(true);
+    expect(view.webContents.closeCalls).toBe(1);
+    expect(
+      harness.windows
+        .get("window-1")
+        ?.webContents.listenerCount("did-start-navigation"),
+    ).toBe(0);
+    expect(
+      harness.windows
+        .get("window-2")
+        ?.webContents.listenerCount("did-start-navigation"),
+    ).toBe(0);
+  });
+
+  it("serializes ensure behind an in-flight close for the same native identity", async () => {
+    const capture =
+      Promise.withResolvers<BrowserViewStorageStateCaptureResult>();
+    const harness = createHarnessWithOptions({
+      captureStorageState: () => capture.promise,
+    });
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    };
+    const ready = await harness.manager.ensureTab("window-1", input);
+    await harness.manager.acceptTab(ready);
+    const firstView = harness.views[0];
+    if (firstView === undefined) throw new Error("expected native guest");
+
+    const handoff = harness.manager.drainBrowserHandoffs();
+    await flushCloseEntry();
+    const firstRelease = harness.manager.releaseTab({
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+      registrationId: ready.registrationId,
+    });
+    const duplicateRelease = harness.manager.releaseTab({
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+      registrationId: ready.registrationId,
+    });
+    const replacement = harness.manager.ensureTab("window-1", input);
+
+    expect(harness.views).toHaveLength(1);
+    expect(firstView.webContents.closeCalls).toBe(0);
+
+    capture.resolve({
+      storageState: { cookies: [], origins: [] },
+      cookieCount: 0,
+      cookieDomains: [],
+      localStorageCount: 0,
+      localStorageAvailable: true,
+      localStorageReason: null,
+    });
+    await expect(
+      Promise.all([handoff, firstRelease, duplicateRelease]),
+    ).resolves.toEqual([undefined, true, true]);
+    await expect(replacement).resolves.toMatchObject({
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+    });
+    expect(firstView.webContents.closeCalls).toBe(1);
+    expect(harness.views).toHaveLength(2);
+  });
+
+  it("finishes native teardown when handoff delivery throws", async () => {
+    const harness = createHarnessWithOptions({
+      notifyElectronTabHandoff: () => {
+        throw new Error("renderer unavailable");
+      },
+    });
+    const provisioned = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(provisioned);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    expect(view.webContents.closeCalls).toBe(1);
+  });
+
+  it("hands off a detached native tab by exact identity and incarnation", async () => {
+    const harness = createHarness();
+    const ready = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(ready);
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    expect(harness.electronTabHandoffNotifications).toEqual([
+      {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: ready.registrationId,
+        capturedUrl: "https://example.com/",
+        capturedStorageState: { cookies: [], origins: [] },
+        siblingTabs: [],
+        reason: "gui-quit",
+      },
+    ]);
+  });
+
+  it("excludes an unaccepted sibling from session handoff", async () => {
+    const harness = createHarness();
+    const accepted = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "accepted-tab",
+      requestedUrl: "https://example.com/accepted",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(accepted);
+    await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "provisional-tab",
+      requestedUrl: "https://example.com/provisional",
+      seedStorageState: null,
+    });
+
+    harness.manager.dispose();
+    await flushCloseEntry();
+
+    expect(harness.electronTabHandoffNotifications).toHaveLength(1);
+    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
+      tabId: "accepted-tab",
+      siblingTabs: [],
+    });
+    expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
+      1, 1,
+    ]);
+  });
+
+  it("closes provisional guests but retains accepted guests when their renderer crashes", async () => {
+    const harness = createHarness();
+    await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "provisional-tab",
+      requestedUrl: "https://example.com/provisional",
+      seedStorageState: null,
+    });
+    const accepted = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "accepted-tab",
+      requestedUrl: "https://example.com/accepted",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(accepted);
+
+    harness.windows
+      .get("window-1")
+      ?.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    await flushCloseEntry();
+
+    expect(harness.views.map((view) => view.webContents.closeCalls)).toEqual([
+      1, 0,
+    ]);
+  });
+
+  it("does not start PiP without a live compositor window", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await expect(
+      harness.manager.startPipCapture(
+        "missing-window",
+        {
+          ...nativeKey,
+          registrationId: ready.registrationId,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(false);
+    expect(view.visible).toBe(false);
+    expect(view.bounds).toEqual([]);
+  });
+
+  it("holds and releases the compositor lease for an unbound PiP tab", async () => {
+    const harness = createHarness();
+    const nativeKey = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+    } as const;
+    const ready = await harness.manager.ensureTab("window-1", {
+      ...nativeKey,
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    });
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...nativeKey,
+          registrationId: ready.registrationId,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+    expect(harness.windows.get("window-1")?.contentView.children).toContain(
+      view,
+    );
+    expect(view.visible).toBe(true);
+
+    harness.emitWindowChange();
+
+    expect(harness.windows.get("window-1")?.contentView.children).toContain(
+      view,
+    );
+    expect(view.visible).toBe(true);
+
+    harness.manager.stopPipCapture();
+
+    expect(harness.windows.get("window-1")?.contentView.children).not.toContain(
+      view,
+    );
+    expect(view.visible).toBe(false);
   });
 });
 
@@ -5057,11 +4945,6 @@ describe("BrowserViewManager annotation session", () => {
     await flush();
 
     expect(harness.annotationAttached).toHaveLength(1);
-    expect(
-      annotationEventTypes(harness).some(
-        (event) => event.type === "attachRequested",
-      ),
-    ).toBe(false);
     const attached = harness.annotationAttached[0];
     expect(attached?.targetChatId).toBe(TARGET_CHAT_ID);
     expect(attached?.payload.annotationId.startsWith("ann-")).toBe(true);
@@ -5085,11 +4968,6 @@ describe("BrowserViewManager annotation session", () => {
     await flush();
 
     expect(harness.annotationAttached).toEqual([]);
-    expect(
-      annotationEventTypes(harness).some(
-        (event) => event.type === "attachRequested",
-      ),
-    ).toBe(false);
 
     harness.manager.cancelAnnotation("window-1", BASE_KEY);
     expect(annotationEventTypes(harness)).toEqual([{ type: "cancelled" }]);

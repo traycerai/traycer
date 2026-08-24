@@ -6,7 +6,8 @@ import type {
   BrowserViewTileKey,
 } from "@/lib/browser-view/desktop-browser-view";
 import type { BrowserContextAttachmentWire } from "@traycer/protocol/host/agent/gui/subscribe";
-import { findElectronBrowserTabIdForTile } from "./electron-browser-tab-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 export type BrowserContextAttachmentKind =
   | "browser-console-entry"
@@ -458,9 +459,9 @@ function originFromUrl(url: string): string {
 }
 
 /**
- * The wire carries the host-minted durable tab id once registration has
- * settled. A just-created tile can still race registration, so it retains the
- * old tile-id fallback rather than blocking the user's whole chat send.
+ * Managed browser identity is read from the BrowserSessionTileRef itself.
+ * Native surface bindings never become a second identity directory. Ordinary
+ * user-owned browser tiles retain their canvas instance id on this legacy wire.
  */
 export function browserContextAttachmentToWire(
   payload: BrowserContextAttachmentPayload,
@@ -470,8 +471,14 @@ export function browserContextAttachmentToWire(
     origin: payload.source.origin,
     pageUrl: payload.source.pageUrl,
     composerText: payload.composerText,
-    tabId:
-      findElectronBrowserTabIdForTile(payload.source.tile) ??
-      payload.source.tile.tileInstanceId,
+    tabId: browserContextTabId(payload.source.tile),
   };
+}
+
+function browserContextTabId(tile: BrowserViewTileKey): string {
+  const canvas = useEpicCanvasStore.getState().canvasByTabId[tile.viewTabId];
+  const source = canvas?.tilesByInstanceId[tile.tileInstanceId];
+  return source !== undefined && isBrowserSessionTileRef(source)
+    ? source.tabId
+    : tile.tileInstanceId;
 }

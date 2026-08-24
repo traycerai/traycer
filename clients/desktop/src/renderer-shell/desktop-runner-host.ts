@@ -114,45 +114,6 @@ import type {
   DesktopAppUpdateSnapshot,
 } from "../ipc-contracts/app-update-types";
 import type {
-  BrowserCookieCryptoState,
-  BrowserLabsStateUpdate,
-  BrowserPrimaryProfileCaptureResult,
-  BrowserViewBackgroundTabCreate,
-  BrowserViewBackgroundThrottlingChange,
-  BrowserViewBoundsUpdate,
-  BrowserViewCapturePageResult,
-  BrowserViewCertificateErrorChange,
-  BrowserViewCertificateTrust,
-  BrowserViewDebugSnapshotChange,
-  BrowserViewDownloadCancel,
-  BrowserViewDownloadChange,
-  BrowserViewDurableTabRegistration,
-  BrowserViewFindChange,
-  BrowserViewFindRequest,
-  BrowserViewFindStop,
-  BrowserViewOpenTileRequest,
-  BrowserViewOverlayOcclusion,
-  BrowserViewOverlayOcclusionResult,
-  BrowserViewOverlayRelease,
-  BrowserViewOverlayReleaseResult,
-  BrowserViewSnapshotInvalidatedChange,
-  BrowserViewStatusChange,
-  BrowserViewStorageStateApply,
-  BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCapture,
-  BrowserViewStorageStateCaptureResult,
-  BrowserViewTileKey,
-  BrowserViewTileUpsert,
-  BrowserViewViewportPresetChange,
-} from "../ipc-contracts/browser-view-types";
-import type {
-  BrowserAnnotationAttachedIpcEvent,
-  BrowserAnnotationSessionIpcEvent,
-  BrowserAnnotationAttachResultInput,
-  BrowserAnnotationSetTargetChatLabelInput,
-  BrowserAnnotationStartResult,
-} from "../ipc-contracts/browser-annotation-types";
-import type {
   GlobalShortcutId,
   GlobalShortcutIntent,
   GlobalShortcutsSnapshot,
@@ -177,7 +138,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
-import type { AgentBrowserViewBridgeSurface } from "../electron-preload/agent-browser-view-bridge";
+import type { BrowserViewBridgeSurface } from "../electron-preload/browser-view-bridge";
 import type { PipCaptureBridgeSurface } from "../electron-preload/pip-capture-bridge";
 
 /**
@@ -287,7 +248,6 @@ export interface DesktopPreloadBridge {
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
   browserView: DesktopBrowserViewBridge;
-  agentBrowserView: AgentBrowserViewBridgeSurface["agentBrowserView"];
   pipCapture: PipCaptureBridgeSurface["pipCapture"];
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
@@ -519,100 +479,8 @@ export interface DesktopZoomBridge {
   };
 }
 
-export interface DesktopBrowserViewBridge {
-  upsertTile(input: BrowserViewTileUpsert): Promise<void>;
-  createBackgroundTab?(
-    input: BrowserViewBackgroundTabCreate,
-  ): Promise<void>;
-  registerDurableTab(input: BrowserViewDurableTabRegistration): Promise<void>;
-  releaseDurableTab?(
-    input: BrowserViewDurableTabRegistration,
-  ): Promise<void>;
-  setBackgroundThrottling?(
-    input: BrowserViewBackgroundThrottlingChange,
-  ): Promise<void>;
-  updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-  setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
-  releaseTile(input: BrowserViewTileKey): Promise<void>;
-  reloadTile(input: BrowserViewTileKey): Promise<void>;
-  goBack(input: BrowserViewTileKey): Promise<void>;
-  goForward(input: BrowserViewTileKey): Promise<void>;
-  findInPage(input: BrowserViewFindRequest): Promise<void>;
-  stopFindInPage(input: BrowserViewFindStop): Promise<void>;
-  cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
-  trustCertificate(input: BrowserViewCertificateTrust): Promise<void>;
-  zoomIn(input: BrowserViewTileKey): Promise<void>;
-  zoomOut(input: BrowserViewTileKey): Promise<void>;
-  resetZoom(input: BrowserViewTileKey): Promise<void>;
-  capturePage(input: BrowserViewTileKey): Promise<BrowserViewCapturePageResult>;
-  getDebugSnapshot(
-    input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshotChange>;
-  clearDebugEvents(input: BrowserViewTileKey): Promise<void>;
-  startAnnotation(
-    input: BrowserViewTileKey,
-  ): Promise<BrowserAnnotationStartResult>;
-  cancelAnnotation(input: BrowserViewTileKey): Promise<void>;
-  setAnnotationTargetChatLabel(
-    input: BrowserAnnotationSetTargetChatLabelInput,
-  ): Promise<void>;
-  reportAnnotationAttachResult(
-    input: BrowserAnnotationAttachResultInput,
-  ): Promise<void>;
-  openDevTools(input: BrowserViewTileKey): Promise<void>;
-  occludeForOverlay(
-    input: BrowserViewOverlayOcclusion,
-  ): Promise<BrowserViewOverlayOcclusionResult>;
-  releaseOverlay(
-    input: BrowserViewOverlayRelease,
-  ): Promise<BrowserViewOverlayReleaseResult>;
-  getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
-  setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
-  applyStorageState(
-    input: BrowserViewStorageStateApply,
-  ): Promise<BrowserViewStorageStateApplyResult>;
-  captureStorageState(
-    input: BrowserViewStorageStateCapture,
-  ): Promise<BrowserViewStorageStateCaptureResult>;
-  capturePrimaryProfile?: () => Promise<BrowserPrimaryProfileCaptureResult>;
-  onStatusChange(handler: (change: BrowserViewStatusChange) => void): {
-    dispose: () => void;
-  };
-  onFindChange(handler: (change: BrowserViewFindChange) => void): {
-    dispose: () => void;
-  };
-  onDownloadChange(handler: (change: BrowserViewDownloadChange) => void): {
-    dispose: () => void;
-  };
-  onCertificateError(
-    handler: (change: BrowserViewCertificateErrorChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onOpenTileRequest(handler: (change: BrowserViewOpenTileRequest) => void): {
-    dispose: () => void;
-  };
-  onSnapshotInvalidated(
-    handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onDebugSnapshotChange(
-    handler: (change: BrowserViewDebugSnapshotChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onAnnotationEvent(
-    handler: (change: BrowserAnnotationSessionIpcEvent) => void,
-  ): {
-    dispose: () => void;
-  };
-  onAnnotationAttached(
-    handler: (change: BrowserAnnotationAttachedIpcEvent) => void,
-  ): {
-    dispose: () => void;
-  };
-}
+/** The renderer consumes exactly the bridge shape exposed by preload. */
+export type DesktopBrowserViewBridge = BrowserViewBridgeSurface["browserView"];
 
 export interface DesktopTraycerCliBridge {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
@@ -778,7 +646,6 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
   readonly browserView: DesktopBrowserViewBridge;
-  readonly agentBrowserView: AgentBrowserViewBridgeSurface["agentBrowserView"];
   readonly pipCapture: PipCaptureBridgeSurface["pipCapture"];
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
@@ -808,7 +675,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
-    this.agentBrowserView = options.bridge.agentBrowserView;
     this.pipCapture = options.bridge.pipCapture;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so

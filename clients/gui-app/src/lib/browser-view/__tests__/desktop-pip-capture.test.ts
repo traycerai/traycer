@@ -1,14 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewTileKey } from "@/lib/browser-view/desktop-browser-view";
-import { resolveDesktopPipCaptureBridge } from "@/lib/browser-view/desktop-pip-capture";
-
-const TILE_KEY: BrowserViewTileKey = {
-  viewTabId: "view-tab-1",
-  paneId: "pane-1",
-  tileInstanceId: "tile-1",
-  pageSessionId: "page-1",
-};
+import {
+  resolveDesktopPipCaptureBridge,
+  type DesktopPipCaptureStartInput,
+} from "@/lib/browser-view/desktop-pip-capture";
 
 describe("resolveDesktopPipCaptureBridge", () => {
   it("returns null when pipCapture is missing", () => {
@@ -17,27 +12,20 @@ describe("resolveDesktopPipCaptureBridge", () => {
   });
 
   it("returns a working bridge when start, stop, and onFrame are present", async () => {
-    const startCalls: Array<{
-      readonly tileKey: BrowserViewTileKey;
-      readonly maxWidth: number;
-      readonly maxHeight: number;
-      readonly quality: number;
-    }> = [];
+    const startCalls: DesktopPipCaptureStartInput[] = [];
     let stopCalls = 0;
     let disposed = false;
     const subscribed: Array<
-      (frame: BrowserScreencastServerFrame, jpegBytes: Uint8Array | null) => void
+      (
+        frame: BrowserScreencastServerFrame,
+        jpegBytes: Uint8Array | null,
+      ) => void
     > = [];
 
     const host: object = {
       pipCapture: {
-        start(
-          tileKey: BrowserViewTileKey,
-          maxWidth: number,
-          maxHeight: number,
-          quality: number,
-        ): void {
-          startCalls.push({ tileKey, maxWidth, maxHeight, quality });
+        start(input: DesktopPipCaptureStartInput): void {
+          startCalls.push(input);
         },
         stop(): void {
           stopCalls += 1;
@@ -63,10 +51,21 @@ describe("resolveDesktopPipCaptureBridge", () => {
       throw new Error("expected a pipCapture bridge");
     }
 
-    await bridge.start(TILE_KEY, 320, 180, 70);
+    await bridge.start({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      maxWidth: 320,
+      maxHeight: 180,
+      quality: 70,
+    });
     expect(startCalls).toEqual([
       {
-        tileKey: TILE_KEY,
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
         maxWidth: 320,
         maxHeight: 180,
         quality: 70,

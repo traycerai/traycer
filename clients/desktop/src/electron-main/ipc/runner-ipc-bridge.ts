@@ -85,7 +85,6 @@ import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
-import { registerAgentBrowserViewIpc } from "./agent-browser-view-ipc";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
@@ -560,9 +559,9 @@ export class RunnerIpcBridge {
     registerAppUpdateIpc(this);
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
-    this.browserViewManagers.push(registerBrowserViewIpc(this));
-    this.browserViewManagers.push(registerAgentBrowserViewIpc(this));
-    registerPipCaptureIpc(this, this.browserViewManagers);
+    const primaryBrowserViewManager = registerBrowserViewIpc(this);
+    this.browserViewManagers.push(primaryBrowserViewManager);
+    registerPipCaptureIpc(this, primaryBrowserViewManager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
@@ -805,9 +804,7 @@ export class RunnerIpcBridge {
 
   async drainBrowserHandoffs(): Promise<void> {
     await Promise.all(
-      this.browserViewManagers.map((manager) =>
-        manager.drainBrowserHandoffs(),
-      ),
+      this.browserViewManagers.map((manager) => manager.drainBrowserHandoffs()),
     );
     await Promise.all(
       this.windowRegistry.records().map(

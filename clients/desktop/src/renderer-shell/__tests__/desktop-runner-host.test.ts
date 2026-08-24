@@ -507,7 +507,24 @@ function buildFakeBridge(
     },
     browserView: {
       upsertTile: async () => undefined,
-      registerDurableTab: async () => undefined,
+      ensureTab: async (input) => ({
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+        registrationId: "registration-1",
+      }),
+      acceptTab: async () => undefined,
+      attachSurface: async () => undefined,
+      detachSurface: async () => undefined,
+      releaseTab: async () => true,
+      controlElectronTab: async () => undefined,
+      dispatchElectronTabCdp: async () => ({
+        kind: "cdpGetFrameTree" as const,
+        ok: true as const,
+        frames: [],
+      }),
+      setReservedChords: async () => undefined,
+      overlayPaintAck: async () => undefined,
       setViewportPreset: async () => undefined,
       updateBounds: async () => undefined,
       releaseTile: async () => undefined,
@@ -555,6 +572,11 @@ function buildFakeBridge(
         localStorageAvailable: true,
         localStorageReason: null,
       }),
+      capturePrimaryProfile: async () => ({
+        status: "captured" as const,
+        storageState: { cookies: [], origins: [] },
+        reason: null,
+      }),
       getCookieCryptoState: async () => ({
         mode: "real" as const,
         persistence: "persistent" as const,
@@ -564,6 +586,15 @@ function buildFakeBridge(
         mockKeychainEnabled: false,
       }),
       setLabsState: async () => undefined,
+      grantControl: async (input) => ({
+        status: "granted" as const,
+        controlId: input.controlId,
+      }),
+      revokeControl: async () => undefined,
+      executeControlAction: async () => ({
+        status: "completed" as const,
+        value: null,
+      }),
       onStatusChange: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
@@ -571,52 +602,25 @@ function buildFakeBridge(
       onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
       onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
       onDebugSnapshotChange: (_handler) => ({ dispose: () => undefined }),
+      onControlRevoked: (_handler) => ({ dispose: () => undefined }),
       onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),
       onAnnotationAttached: (_handler) => ({ dispose: () => undefined }),
-      reportAnnotationAttachResult: async () => undefined,
-    },
-    // Ticket 09 scenario-7: agent browser tile seam must be present on the
-    // preload bridge so DesktopRunnerHost can forward it without re-wrapping.
-    agentBrowserView: {
-      upsertTile: async () => undefined,
-      registerDurableTab: async () => undefined,
-      updateBounds: async () => undefined,
-      releaseTile: async () => undefined,
-      onStatusChange: (_handler) => ({ dispose: () => undefined }),
-      onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
-      onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
-      setViewportPreset: async () => undefined,
-      reloadTile: async () => undefined,
-      goBack: async () => undefined,
-      goForward: async () => undefined,
-      findInPage: async () => undefined,
-      stopFindInPage: async () => undefined,
-      cancelDownload: async () => undefined,
-      trustCertificate: async () => undefined,
-      zoomIn: async () => undefined,
-      zoomOut: async () => undefined,
-      resetZoom: async () => undefined,
-      openDevTools: async () => undefined,
-      onFindChange: (_handler) => ({ dispose: () => undefined }),
-      onDownloadChange: (_handler) => ({ dispose: () => undefined }),
-      onCertificateError: (_handler) => ({ dispose: () => undefined }),
-      occludeForOverlay: async () => ({ snapshots: [], restoredTiles: [] }),
-      releaseOverlay: async () => ({ restoredTiles: [] }),
       dispatchCdp: async () => ({
         kind: "cdpGetFrameTree" as const,
         ok: true as const,
-        frames: [
-          {
-            frameId: "frame-root",
-            parentFrameId: null,
-            url: "https://agent.example",
-            securityOrigin: "https://agent.example",
-          },
-        ],
+        frames: [],
       }),
+      onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
+      onNativeTabCdpSessionEnded: (_handler) => ({
+        dispose: () => undefined,
+      }),
+      onNativeTabCdpTargetAttached: (_handler) => ({
+        dispose: () => undefined,
+      }),
+      onElectronTabHandoff: (_handler) => ({ dispose: () => undefined }),
       onCdpSessionEnded: (_handler) => ({ dispose: () => undefined }),
       onCdpTargetAttached: (_handler) => ({ dispose: () => undefined }),
-      onTileHandoff: (_handler) => ({ dispose: () => undefined }),
+      reportAnnotationAttachResult: async () => undefined,
     },
     pipCapture: {
       start: async () => undefined,
@@ -1149,41 +1153,6 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       intent: { enabled: false, chord: null },
       effectiveChord: "mod+shift+space",
       status: "registered",
-    });
-  });
-
-  it("forwards agentBrowserView from the bridge - ticket 09 scenario-7 adapter seam", async () => {
-    const fake = buildFakeBridge(null);
-    const host = new DesktopRunnerHost({
-      bridge: fake.bridge,
-      signInUrl: "https://auth.example.invalid/sign-in",
-    });
-
-    // Production adapter must assign the exact preload property. A missing
-    // constructor line leaves this undefined; a re-wrap would break identity.
-    expect(host.agentBrowserView).toBe(fake.bridge.agentBrowserView);
-    expect(host.pipCapture).toBe(fake.bridge.pipCapture);
-
-    await expect(
-      host.agentBrowserView.dispatchCdp({
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        tileInstanceId: "tile-1",
-        pageSessionId: "page-1",
-        sessionId: null,
-        command: { kind: "cdpGetFrameTree" },
-      }),
-    ).resolves.toEqual({
-      kind: "cdpGetFrameTree",
-      ok: true,
-      frames: [
-        {
-          frameId: "frame-root",
-          parentFrameId: null,
-          url: "https://agent.example",
-          securityOrigin: "https://agent.example",
-        },
-      ],
     });
   });
 

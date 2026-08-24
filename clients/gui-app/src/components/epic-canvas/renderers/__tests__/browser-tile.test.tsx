@@ -45,17 +45,14 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
+  BrowserViewTileCdpDispatch,
+  BrowserViewTileCdpSessionEndedChange,
+  BrowserViewTileCdpTargetAttachedChange,
   BrowserViewTileKey,
   BrowserViewViewportPresetChange,
   DesktopBrowserViewBridge,
 } from "@/lib/browser-view/desktop-browser-view";
-import type {
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpResult,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
-} from "@/lib/browser-view/desktop-agent-browser-view";
+import type { BrowserCdpResult } from "@/lib/browser-view/browser-cdp-contract";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TILE_KIND_BROWSER } from "@/stores/epics/canvas/tile-kinds";
@@ -218,7 +215,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   readonly controlActionResults: BrowserViewControlActionResult[] = [];
   // Ticket 09: recorded rather than inert, because "did a CDP dispatch
   // actually reach this tile" is the question the borrowed-tile tests ask.
-  readonly cdpDispatchCalls: AgentBrowserViewCdpDispatch[] = [];
+  readonly cdpDispatchCalls: BrowserViewTileCdpDispatch[] = [];
   private readonly statusHandlers = new Set<
     (change: BrowserViewStatusChange) => void
   >();
@@ -238,22 +235,15 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     (change: BrowserViewControlRevokedChange) => void
   >();
   private readonly cdpSessionEndedHandlers = new Set<
-    (change: AgentBrowserViewCdpSessionEndedChange) => void
+    (change: BrowserViewTileCdpSessionEndedChange) => void
   >();
   private readonly cdpTargetAttachedHandlers = new Set<
-    (change: AgentBrowserViewCdpTargetAttachedChange) => void
-  >();
-  private readonly tileHandoffHandlers = new Set<
-    (change: AgentBrowserViewTileHandoffChange) => void
+    (change: BrowserViewTileCdpTargetAttachedChange) => void
   >();
 
   constructor(private readonly cryptoState: BrowserCookieCryptoState) {}
 
   upsertTile(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  registerDurableTab(): Promise<void> {
     return Promise.resolve();
   }
 
@@ -531,9 +521,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  dispatchCdp(
-    input: AgentBrowserViewCdpDispatch,
-  ): Promise<AgentBrowserViewCdpResult> {
+  dispatchCdp(input: BrowserViewTileCdpDispatch): Promise<BrowserCdpResult> {
     this.cdpDispatchCalls.push(input);
     return Promise.resolve({
       kind: "cdpGetFrameTree" as const,
@@ -543,7 +531,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   }
 
   onCdpSessionEnded(
-    handler: (change: AgentBrowserViewCdpSessionEndedChange) => void,
+    handler: (change: BrowserViewTileCdpSessionEndedChange) => void,
   ): {
     dispose: () => void;
   } {
@@ -556,7 +544,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   }
 
   onCdpTargetAttached(
-    handler: (change: AgentBrowserViewCdpTargetAttachedChange) => void,
+    handler: (change: BrowserViewTileCdpTargetAttachedChange) => void,
   ): {
     dispose: () => void;
   } {
@@ -568,18 +556,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     };
   }
 
-  onTileHandoff(handler: (change: AgentBrowserViewTileHandoffChange) => void): {
-    dispose: () => void;
-  } {
-    this.tileHandoffHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.tileHandoffHandlers.delete(handler);
-      },
-    };
-  }
-
-  emitCdpSessionEnded(change: AgentBrowserViewCdpSessionEndedChange): void {
+  emitCdpSessionEnded(change: BrowserViewTileCdpSessionEndedChange): void {
     this.cdpSessionEndedHandlers.forEach((handler) => handler(change));
   }
 

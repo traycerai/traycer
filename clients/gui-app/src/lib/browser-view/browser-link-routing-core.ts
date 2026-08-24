@@ -3,7 +3,6 @@ import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   isBrowserTileRef,
-  type AgentBrowserTileRef,
   type BrowserTileRef,
   type EpicCanvasState,
 } from "@/stores/epics/canvas/types";
@@ -12,10 +11,6 @@ import {
   DEFAULT_BROWSER_VIEWPORT_PRESET,
   makeBrowserTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
-import {
-  DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-  makeAgentBrowserTileRef,
-} from "@/stores/epics/canvas/tile-schema/agent-browser-tile";
 import {
   useSettingsStore,
   type BrowserLinkOpenMode,
@@ -110,40 +105,23 @@ export function browserTileNameForUrl(url: string): string {
   return DEFAULT_BROWSER_TILE_NAME;
 }
 
-export type ElectronTileOpenRuntime = "primary" | "isolated";
-
-export function openFreshElectronTileFromBrowserPage(request: {
-  readonly viewTabId: string;
-  readonly paneId: string;
-  readonly hostId: string;
-  readonly url: string;
-  readonly runtime: ElectronTileOpenRuntime;
-  readonly sessionId: string | null;
-}): BrowserTileRef | AgentBrowserTileRef | null {
+export function openFreshBrowserTileFromBrowserPage(
+  request: BrowserPageOpenTileRequest,
+): boolean {
   const store = useEpicCanvasStore.getState();
   const canvas = store.canvasByTabId[request.viewTabId];
-  if (canvas === undefined || canvas.root === null) return null;
+  if (canvas === undefined || canvas.root === null) return false;
   const targetPane = findPaneById(canvas.root, request.paneId);
-  if (targetPane === null) return null;
-  // Children opened from an agent session keep that session identity so
-  // pending-create keys match AgentBrowserTile registration
-  // (sessionId, node.id). User-tile children stay BrowserTileRef.
-  const tile =
-    request.sessionId === null
-      ? makeBrowserTileRef({
-          name: browserTileNameForUrl(request.url),
-          hostId: request.hostId,
-          url: request.url,
-          viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
-        })
-      : makeAgentBrowserTileRef({
-          name: browserTileNameForUrl(request.url),
-          hostId: request.hostId,
-          url: request.url,
-          sessionId: request.sessionId,
-          viewportPreset: DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-          runtime: request.runtime,
-        });
+  if (targetPane === null) return false;
+  // A page-initiated popup is a user-owned canvas browser. Host-owned tabs
+  // can only be born through createElectronTab; the renderer never invents
+  // session or tab identity from a native popup.
+  const tile = makeBrowserTileRef({
+    name: browserTileNameForUrl(request.url),
+    hostId: request.hostId,
+    url: request.url,
+    viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
+  });
   store.splitPaneWithNode(request.viewTabId, request.paneId, "right", tile);
   const nextCanvas =
     useEpicCanvasStore.getState().canvasByTabId[request.viewTabId];
@@ -151,44 +129,10 @@ export function openFreshElectronTileFromBrowserPage(request: {
     nextCanvas !== undefined &&
     nextCanvas.tilesByInstanceId[tile.instanceId] !== undefined
   ) {
-    return tile;
+    return true;
   }
   store.openTileInPane(request.viewTabId, request.paneId, tile);
-  return tile;
-}
-
-export function openFreshBrowserTileFromBrowserPage(
-  request: BrowserPageOpenTileRequest,
-): boolean {
-  return (
-    openFreshElectronTileFromBrowserPage({
-      viewTabId: request.viewTabId,
-      paneId: request.paneId,
-      hostId: request.hostId,
-      url: request.url,
-      runtime: "primary",
-      sessionId: null,
-    }) !== null
-  );
-}
-
-export function openFreshAgentBrowserTileFromBrowserPage(request: {
-  readonly viewTabId: string;
-  readonly paneId: string;
-  readonly hostId: string;
-  readonly sessionId: string;
-  readonly url: string;
-}): AgentBrowserTileRef | null {
-  const tile = openFreshElectronTileFromBrowserPage({
-    viewTabId: request.viewTabId,
-    paneId: request.paneId,
-    hostId: request.hostId,
-    url: request.url,
-    runtime: "isolated",
-    sessionId: request.sessionId,
-  });
-  if (tile === null || tile.type !== "agent-browser") return null;
-  return tile;
+  return true;
 }
 
 function browserLinkOpenModeForKind(

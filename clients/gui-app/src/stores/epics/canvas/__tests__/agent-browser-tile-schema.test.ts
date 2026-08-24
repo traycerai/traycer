@@ -3,12 +3,7 @@ import {
   parseTileRef,
   serializeTileRef,
 } from "@/stores/epics/canvas/tile-schema";
-import {
-  DEFAULT_AGENT_BROWSER_TILE_NAME,
-  DEFAULT_AGENT_BROWSER_TILE_URL,
-  agentBrowserTileSchema,
-  makeAgentBrowserTileRef,
-} from "@/stores/epics/canvas/tile-schema/agent-browser-tile";
+import { agentBrowserTileSchema } from "@/stores/epics/canvas/tile-schema/agent-browser-tile";
 import { TILE_KIND_AGENT_BROWSER } from "@/stores/epics/canvas/tile-kinds";
 import {
   isAgentBrowserTileRef,
@@ -18,43 +13,6 @@ import {
 } from "@/stores/epics/canvas/types";
 
 const HOST = "host-1";
-
-describe("makeAgentBrowserTileRef", () => {
-  it("mints agent-browser page-session ids independently from URL", () => {
-    const url = "https://example.com/app";
-    const first = makeAgentBrowserTileRef({
-      name: "Agent browser",
-      hostId: HOST,
-      url,
-      sessionId: null,
-      viewportPreset: "responsive",
-      runtime: "isolated",
-    });
-    const second = makeAgentBrowserTileRef({
-      name: "Agent browser",
-      hostId: HOST,
-      url,
-      sessionId: "shared-session",
-      viewportPreset: "responsive",
-      runtime: "isolated",
-    });
-
-    expect(first.type).toBe(TILE_KIND_AGENT_BROWSER);
-    expect(first.id).toMatch(/^agent-browser-/);
-    expect(second.id).toMatch(/^agent-browser-/);
-    expect(first.id).not.toBe(second.id);
-    expect(first.instanceId).not.toBe(second.instanceId);
-    expect(first.sessionId).toBe(first.id);
-    expect(second.sessionId).toBe("shared-session");
-    expect(first.url).toBe(url);
-    expect(first.viewportPreset).toBe("responsive");
-  });
-
-  it("exposes the ticket defaults for name and blank URL", () => {
-    expect(DEFAULT_AGENT_BROWSER_TILE_NAME).toBe("Agent browser");
-    expect(DEFAULT_AGENT_BROWSER_TILE_URL).toBe("about:blank");
-  });
-});
 
 describe("agentBrowserTileSchema / parseTileRef", () => {
   it("round-trips an agent browser ref", () => {

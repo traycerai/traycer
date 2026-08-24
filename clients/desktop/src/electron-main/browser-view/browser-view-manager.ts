@@ -1,17 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BrowserWindowConstructorOptions } from "electron";
 import type {
-  AgentBrowserViewCdpCommand,
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpErrorInfo,
-  AgentBrowserViewCdpFrameInfo,
-  AgentBrowserViewCdpResult,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
+  BrowserViewCdpCommand,
+  BrowserViewCdpDispatch,
+  BrowserViewCdpErrorInfo,
+  BrowserViewCdpFrameInfo,
+  BrowserViewCdpResult,
+  BrowserViewCdpSessionEndedChange,
+  BrowserViewCdpTargetAttachedChange,
   BrowserViewBounds,
-  BrowserViewBackgroundTabCreate,
-  BrowserViewBackgroundThrottlingChange,
+  BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
@@ -24,7 +22,9 @@ import type {
   BrowserViewDebugSnapshotChange,
   BrowserViewDebugSnapshotData,
   BrowserViewDownloadChange,
-  BrowserViewDurableTabRegistration,
+  BrowserViewDetachSurface,
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewEnsureTab,
   BrowserViewFindChange,
   BrowserViewFindRequest,
   BrowserViewFindStop,
@@ -38,6 +38,15 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatus,
   BrowserViewStatusChange,
+  BrowserViewNativeTabCdpSessionEndedChange,
+  BrowserViewNativeTabCdpTargetAttachedChange,
+  BrowserViewElectronTabControl,
+  BrowserViewNativeTabCapability,
+  BrowserViewNativeTabKey,
+  BrowserViewElectronTabHandoffChange,
+  BrowserViewNativeTabStatusChange,
+  BrowserViewProvisionedTab,
+  BrowserViewReleaseTab,
   BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
   BrowserViewStorageStateCapture,
@@ -55,7 +64,10 @@ import type {
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartResult,
 } from "../../ipc-contracts/browser-annotation-types";
-import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
+import type {
+  PipCaptureIpcPayload,
+  PipCaptureStartInput,
+} from "../../ipc-contracts/pip-capture-types";
 import type {
   BrowserPrimaryProfileOriginSnapshot,
   BrowserStorageCaptureWebContents,
@@ -80,6 +92,7 @@ import {
   TILE_FRAME_MAX_DIMENSION,
   TILE_FRAME_MIN_INTERVAL_MS,
   TILE_FRAME_STALE_AFTER_MS,
+  type TileFrameStats,
 } from "./tile-frame-cache";
 import { describeLogError, log } from "../app/logger";
 import { BrowserAnnotationSession } from "./browser-annotation-session";
@@ -96,8 +109,10 @@ export const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
 // the lane, so outcomes accumulate here and flush once per window.
 export const BOUNDS_STREAM_LOG_INTERVAL_MS = 1000;
 
-const encodeCapturedTileFrame =
-  defaultTileFrameEncoder(TILE_FRAME_JPEG_QUALITY, TILE_FRAME_MAX_DIMENSION);
+const encodeCapturedTileFrame = defaultTileFrameEncoder(
+  TILE_FRAME_JPEG_QUALITY,
+  TILE_FRAME_MAX_DIMENSION,
+);
 
 // BT-401: hidden-but-bound tiles keep a full Chromium guest alive; past this
 // cap the least-recently-visible guests are destroyed and later rebuilt from
@@ -105,10 +120,8 @@ const encodeCapturedTileFrame =
 export const HIDDEN_GUEST_EVICTION_CAP = 3;
 /** Deferred so a switch's hide→show pair settles before the sweep counts. */
 const EVICTION_SWEEP_DELAY_MS = 0;
-// Ticket 02 fixup: bounds how long a claimed sibling's `closeEntry` waits on
-// another tile's in-flight handoff capture before tearing down its own
-// `webContents` regardless - a hung capture must not block quit.
-const SIBLING_HANDOFF_CAPTURE_TIMEOUT_MS = 1500;
+// A hung state capture must not block native teardown or application quit.
+const HANDOFF_CAPTURE_TIMEOUT_MS = 1500;
 export const ANNOTATION_ATTACH_ACK_TIMEOUT_MS = 4000;
 
 type BrowserPrimaryProfileRecentOrigin = BrowserPrimaryProfileOriginSnapshot & {
@@ -118,7 +131,7 @@ interface PendingAnnotationAttachResult {
   readonly windowId: string;
   readonly keyId: string;
   readonly resolve: (delivered: boolean) => void;
-  readonly timer: ReturnType<typeof setTimeout>;
+  readonly timer: NodeJS.Timeout;
 }
 
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
@@ -190,7 +203,9 @@ export interface BrowserViewWebContents {
    * Electron signature also accepts an `onlyDirty` first argument; the
    * structural single-callback form is what the manager uses.
    */
-  beginFrameSubscription(callback: (image: BrowserViewCapturedImage) => void): void;
+  beginFrameSubscription(
+    callback: (image: BrowserViewCapturedImage) => void,
+  ): void;
   endFrameSubscription(): void;
   on(event: string, listener: (...args: unknown[]) => void): void;
   off(event: string, listener: (...args: unknown[]) => void): void;
@@ -323,6 +338,10 @@ export interface BrowserViewManagerOptions {
     windowId: string,
     change: BrowserViewStatusChange,
   ) => void;
+  readonly notifyNativeTabStatus: (
+    windowId: string,
+    change: BrowserViewNativeTabStatusChange,
+  ) => void;
   readonly notifyFind: (
     windowId: string,
     change: BrowserViewFindChange,
@@ -354,8 +373,8 @@ export interface BrowserViewManagerOptions {
   // Fired once, immediately, when a tile's CDP debugger detaches - causes
   // outside our control include the target being destroyed, a renderer
   // crash, or an explicit `Target.detachFromTarget`/`Debugger.detach`. This
-  // is the only consumer-facing signal that the agent's typed CDP bridge
-  // (ticket 03) must treat as ending its access to that tile rather than
+  // is the only consumer-facing signal that CDP consumers must treat as
+  // ending access to that tile rather than
   // silently discovering it on the next failed dispatch. Verified
   // 2026-07-28, live: opening DevTools does NOT cause this on Electron
   // 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
@@ -363,21 +382,27 @@ export interface BrowserViewManagerOptions {
   // trigger elsewhere.
   readonly notifyCdpSessionEnded: (
     windowId: string,
-    change: AgentBrowserViewCdpSessionEndedChange,
+    change: BrowserViewCdpSessionEndedChange,
   ) => void;
   // Fired whenever CDP's own `Target.attachedToTarget` fires on a tile's
   // root session, so the host can discover a flattened child (OOPIF/worker)
   // session id to address further dispatches at.
   readonly notifyCdpTargetAttached: (
     windowId: string,
-    change: AgentBrowserViewCdpTargetAttachedChange,
+    change: BrowserViewCdpTargetAttachedChange,
   ) => void;
-  // Ticket 12 / ticket 10's design. Fired once, just before a tile dies for
-  // any teardown reason, carrying captured `{url, storageState}` so the
-  // host can continue the session headless.
-  readonly notifyTileHandoff: (
+  readonly notifyNativeTabCdpSessionEnded: (
     windowId: string,
-    change: AgentBrowserViewTileHandoffChange,
+    change: BrowserViewNativeTabCdpSessionEndedChange,
+  ) => void;
+  readonly notifyNativeTabCdpTargetAttached: (
+    windowId: string,
+    change: BrowserViewNativeTabCdpTargetAttachedChange,
+  ) => void;
+  /** Captured native-session state sent before destructive GUI teardown. */
+  readonly notifyElectronTabHandoff: (
+    windowId: string,
+    change: BrowserViewElectronTabHandoffChange,
   ) => void;
   readonly notifyAnnotationEvent: (
     windowId: string,
@@ -394,7 +419,7 @@ export interface BrowserViewManagerOptions {
     input: BrowserViewStorageStateApply,
   ) => Promise<BrowserViewStorageStateApplyResult>;
   readonly captureStorageState: (
-    input: BrowserViewStorageStateCapture,
+    input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserViewStorageStateCaptureResult>;
   readonly capturePrimaryProfile: (
@@ -404,8 +429,6 @@ export interface BrowserViewManagerOptions {
     origin: string,
     webContents: BrowserStorageCaptureWebContents,
   ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>;
-  readonly releaseGraceMs: number;
-  readonly electronCreateDelayMs: number;
   /** Flush window for the aggregate `bounds_stream` perf log. */
   readonly boundsStreamLogIntervalMs: number;
   /** Platform used to resolve reserved chords (BT-301). */
@@ -428,7 +451,9 @@ export function scheduleBrowserViewDebugSnapshot(
 }
 
 interface BrowserViewEntry {
-  key: BrowserViewEntryKey;
+  surface: BrowserViewEntryKey | null;
+  surfaceBindingId: string | null;
+  readonly identity: BrowserViewGuestIdentity;
   readonly view: ManagedBrowserView;
   readonly listeners: BrowserViewListeners;
   parentWindowId: string | null;
@@ -475,9 +500,9 @@ interface BrowserViewEntry {
    */
   rendererResetPending: boolean;
   control: BrowserViewControlState | null;
-  runtimeSessionId: string;
-  runtimeTabId: string | null;
   internalNavigation: boolean;
+  /** Initial navigation retained behind the host's ownership acceptance. */
+  nativeActivation: BrowserViewNativeActivation | null;
   /**
    * Set once this entry has been claimed by a handoff, either as the primary
    * frame or a sibling, so quit-time drain and later teardown cannot push it
@@ -485,17 +510,33 @@ interface BrowserViewEntry {
    */
   handedOff: boolean;
   /**
-   * Ticket 02 fixup: set (synchronously, alongside `handedOff`) to the
-   * in-flight aggregation capture this entry was claimed by, if any.
-   * `dispose()`'s group teardown calls `closeEntry` on every tile with no
-   * `await` between them, so a claimed sibling's own `closeEntry` runs -
-   * and would otherwise close this entry's `webContents` - before the
-   * aggregator ever gets to `executeJavaScript` against it. `closeEntry`
-   * awaits this (bounded) before tearing down, so the capture sees a live
-   * page instead of racing it to death.
+   * Shared by sibling tabs captured in one handoff. Their independent close
+   * paths wait on it so they cannot destroy a guest while it is being read.
    */
   pendingHandoffCapture: Promise<void> | null;
+  /** One teardown shared by every close trigger for this guest. */
+  closePromise: Promise<void> | null;
 }
+
+interface BrowserViewNativeActivation {
+  seedScriptId: string | null;
+  promise: Promise<void> | null;
+}
+
+type BrowserViewGuestIdentity =
+  | {
+      readonly kind: "unmanaged";
+      readonly pageSessionId: string;
+    }
+  | {
+      readonly kind: "native";
+      readonly key: BrowserViewNativeTabKey;
+      readonly registrationId: string;
+      /** Renderer that established this guest and owns its lifecycle stream. */
+      readonly lifecycleOwnerWindowId: string;
+      /** One settlement shared by every idempotent ensure for this guest. */
+      readonly provisioned: Promise<BrowserViewProvisionedTab>;
+    };
 
 interface BrowserViewControlState {
   readonly controlId: string;
@@ -581,6 +622,10 @@ export class BrowserViewManager {
     windowId: string,
     change: BrowserViewStatusChange,
   ) => void;
+  private readonly notifyNativeTabStatus: (
+    windowId: string,
+    change: BrowserViewNativeTabStatusChange,
+  ) => void;
   private readonly notifyFind: (
     windowId: string,
     change: BrowserViewFindChange,
@@ -611,15 +656,23 @@ export class BrowserViewManager {
   ) => void;
   private readonly notifyCdpSessionEnded: (
     windowId: string,
-    change: AgentBrowserViewCdpSessionEndedChange,
+    change: BrowserViewCdpSessionEndedChange,
   ) => void;
   private readonly notifyCdpTargetAttached: (
     windowId: string,
-    change: AgentBrowserViewCdpTargetAttachedChange,
+    change: BrowserViewCdpTargetAttachedChange,
   ) => void;
-  private readonly notifyTileHandoff: (
+  private readonly notifyNativeTabCdpSessionEnded: (
     windowId: string,
-    change: AgentBrowserViewTileHandoffChange,
+    change: BrowserViewNativeTabCdpSessionEndedChange,
+  ) => void;
+  private readonly notifyNativeTabCdpTargetAttached: (
+    windowId: string,
+    change: BrowserViewNativeTabCdpTargetAttachedChange,
+  ) => void;
+  private readonly notifyElectronTabHandoff: (
+    windowId: string,
+    change: BrowserViewElectronTabHandoffChange,
   ) => void;
   private readonly notifyAnnotationEvent: (
     windowId: string,
@@ -636,7 +689,7 @@ export class BrowserViewManager {
     input: BrowserViewStorageStateApply,
   ) => Promise<BrowserViewStorageStateApplyResult>;
   private readonly captureStorageStateFromBrowser: (
-    input: BrowserViewStorageStateCapture,
+    input: { readonly origin: string },
     webContents: ManagedBrowserView["webContents"],
   ) => Promise<BrowserViewStorageStateCaptureResult>;
   private readonly capturePrimaryProfileFromBrowser: (
@@ -649,9 +702,10 @@ export class BrowserViewManager {
   private readonly offWindowChange: () => void;
   private readonly offDownloadChange: () => void;
   private readonly offCertificateError: () => void;
-  private readonly electronCreateDelayMs: number;
+  /** Presentation-only index. Native lifecycle operations never route here. */
   private readonly entriesByKey = new Map<string, BrowserViewEntry>();
-  private readonly entriesByRuntimeKey = new Map<string, BrowserViewEntry>();
+  /** Authoritative guest registry; native keys are hostId/sessionId/tabId. */
+  private readonly entriesByGuestKey = new Map<string, BrowserViewEntry>();
   private readonly popupEntriesByWebContentsId = new Map<
     number,
     BrowserViewPopupEntry
@@ -682,11 +736,11 @@ export class BrowserViewManager {
   private pipCaptureEntry: BrowserViewEntry | null = null;
   private readonly boundsStreamLogIntervalMs: number;
   private readonly boundsStreamStats = createBoundsStreamStats();
-  private boundsStreamLogTimer: ReturnType<typeof setTimeout> | null = null;
+  private boundsStreamLogTimer: NodeJS.Timeout | null = null;
   private lastFrameCacheStatsSignature: string | null = null;
   private reservedChords: readonly ReservedChord[] = [];
   private readonly hostPlatform: HostPlatform;
-  private evictionSweepTimer: ReturnType<typeof setTimeout> | null = null;
+  private evictionSweepTimer: NodeJS.Timeout | null = null;
   private readonly evictedKeyIdsLog: string[] = [];
   /**
    * BT-202: per-tile rolling frame cache feeding overlay occlusion. Slots are
@@ -712,6 +766,7 @@ export class BrowserViewManager {
     this.createDevToolsWindow = options.createDevToolsWindow;
     this.registerPopupWebContents = options.registerPopupWebContents;
     this.notifyStatus = options.notifyStatus;
+    this.notifyNativeTabStatus = options.notifyNativeTabStatus;
     this.notifyFind = options.notifyFind;
     this.notifyDownload = options.notifyDownload;
     this.notifyCertificateError = options.notifyCertificateError;
@@ -721,7 +776,11 @@ export class BrowserViewManager {
     this.notifyControlRevoked = options.notifyControlRevoked;
     this.notifyCdpSessionEnded = options.notifyCdpSessionEnded;
     this.notifyCdpTargetAttached = options.notifyCdpTargetAttached;
-    this.notifyTileHandoff = options.notifyTileHandoff;
+    this.notifyNativeTabCdpSessionEnded =
+      options.notifyNativeTabCdpSessionEnded;
+    this.notifyNativeTabCdpTargetAttached =
+      options.notifyNativeTabCdpTargetAttached;
+    this.notifyElectronTabHandoff = options.notifyElectronTabHandoff;
     this.notifyAnnotationEvent = options.notifyAnnotationEvent;
     this.notifyAnnotationAttached = options.notifyAnnotationAttached;
     this.scheduleDebugSnapshot = options.scheduleDebugSnapshot;
@@ -730,7 +789,6 @@ export class BrowserViewManager {
     this.capturePrimaryProfileFromBrowser = options.capturePrimaryProfile;
     this.capturePrimaryProfileLocalStorageFromBrowser =
       options.capturePrimaryProfileLocalStorage;
-    this.electronCreateDelayMs = options.electronCreateDelayMs;
     this.boundsStreamLogIntervalMs = options.boundsStreamLogIntervalMs;
     this.hostPlatform = options.hostPlatform;
     this.offWindowChange = options.onWindowChange(() => {
@@ -747,11 +805,21 @@ export class BrowserViewManager {
   upsertTile(windowId: string, input: BrowserViewTileUpsert): void {
     const key = { ...input, windowId };
     const keyId = entryKeyId(key);
-    const existing =
-      this.entriesByKey.get(keyId) ?? this.findTransferableEntry(key);
+    const presentedEntry = this.entriesByKey.get(keyId);
+    if (presentedEntry?.identity.kind === "native") {
+      log.warn("[browser-view] unmanaged upsert rejected for native surface", {
+        keyId,
+        guestKey: guestEntryKey(presentedEntry),
+      });
+      return;
+    }
+    const existing = presentedEntry ?? this.findTransferableEntry(key);
     const entry =
       existing === null
-        ? this.createEntry(key, input.url, input.viewportPreset, true)
+        ? this.createEntry(key, input.url, input.viewportPreset, true, {
+            kind: "unmanaged",
+            pageSessionId: key.pageSessionId,
+          })
         : existing;
     log.info("[browser-view] upsert tile", {
       keyId,
@@ -760,7 +828,7 @@ export class BrowserViewManager {
       url: input.url,
     });
 
-    if (entryKeyId(entry.key) !== keyId) {
+    if (entry.surface === null || entryKeyId(entry.surface) !== keyId) {
       this.rekeyEntry(entry, key);
     } else {
       this.entriesByKey.set(keyId, entry);
@@ -784,222 +852,327 @@ export class BrowserViewManager {
     }
     this.attachToCurrentWindow(entry);
     this.applyEntryVisibility(entry);
+    this.queueDebugSnapshot(entry);
     // BT-401: every upsert can change the hidden set (a tab switch hides the
     // outgoing tile; a first open can land hidden). The sweep is coalesced,
     // so this is cheap.
     this.scheduleEvictionSweep();
   }
 
-  async createBackgroundTab(
+  ensureTab(
     windowId: string,
-    input: BrowserViewBackgroundTabCreate,
-  ): Promise<void> {
+    input: BrowserViewEnsureTab,
+  ): Promise<BrowserViewProvisionedTab> {
     const startedAt = Date.now();
-    log.info("[browser-view] background tab create stage", {
+    const guestKey = nativeGuestKey(input);
+    const existing = this.entriesByGuestKey.get(guestKey);
+    if (existing !== undefined) {
+      if (existing.identity.kind !== "native") {
+        throw new Error(`Native browser tab key collided with ${guestKey}.`);
+      }
+      if (existing.closePromise !== null) {
+        return existing.closePromise.then(() =>
+          this.ensureTab(windowId, input),
+        );
+      }
+      return existing.identity.provisioned.then(() =>
+        this.resolveNativeTabProvisioned(existing),
+      );
+    }
+
+    log.info("[browser-view] native tab ensure stage", {
       kind: "electron_tab_create",
       stage: "manager_started",
       outcome: "started",
+      hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
       durationMs: 0,
     });
-    const runtimeKey = [input.sessionId, input.tabId].join("\u001f");
-    if (this.entriesByRuntimeKey.has(runtimeKey)) {
-      throw new Error(
-        `Browser runtime tab ${input.sessionId}/${input.tabId} already exists.`,
-      );
+    const provisioning = Promise.withResolvers<BrowserViewProvisionedTab>();
+    const identity: BrowserViewGuestIdentity = {
+      kind: "native",
+      key: toNativeTabKey(input),
+      registrationId: randomUUID(),
+      lifecycleOwnerWindowId: windowId,
+      provisioned: provisioning.promise,
+    };
+    const ownerWindow = this.getWindow(windowId);
+    if (ownerWindow !== null) {
+      this.ensureHostWindowResetListener(windowId, ownerWindow);
     }
-    const key = { ...input, windowId };
-    const entry = this.createEntry(key, input.url, "responsive", false);
-    log.info("[browser-view] background tab create stage", {
+    const entry = this.createEntry(
+      null,
+      input.requestedUrl,
+      "responsive",
+      false,
+      identity,
+    );
+    log.info("[browser-view] native tab ensure stage", {
       kind: "electron_tab_create",
       stage: "entry_created",
       outcome: "ok",
+      hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
       durationMs: Date.now() - startedAt,
     });
-    this.entriesByRuntimeKey.delete(runtimeEntryKey(entry));
-    entry.runtimeSessionId = input.sessionId;
-    entry.runtimeTabId = input.tabId;
-    this.entriesByRuntimeKey.set(runtimeEntryKey(entry), entry);
+    void this.settleNativeTabInitialization(
+      entry,
+      input,
+      startedAt,
+      provisioning.resolve,
+      provisioning.reject,
+    );
+    return provisioning.promise;
+  }
+
+  private async settleNativeTabInitialization(
+    entry: BrowserViewEntry,
+    input: BrowserViewEnsureTab,
+    startedAt: number,
+    resolve: (provisioned: BrowserViewProvisionedTab) => void,
+    reject: (error: unknown) => void,
+  ): Promise<void> {
     try {
-      entry.internalNavigation = true;
-      try {
-        await entry.view.webContents.loadURL("about:blank");
-      } finally {
-        entry.view.webContents.navigationHistory?.clear();
-        entry.internalNavigation = false;
-      }
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "target_primed",
-        outcome: "ok",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: Date.now() - startedAt,
-      });
-      const seedScript = browserLocalStorageSeedScript(input.seedStorageState);
-      const debugSession = this.ensureDebugSession(entry);
-      const seedScriptId =
-        seedScript === null
-          ? null
-          : await debugSession.installScriptBeforeNavigation(seedScript);
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "seed_script_installed",
-        outcome: "ok",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: Date.now() - startedAt,
-      });
-      let resolveCommitted!: () => void;
-      const committed = new Promise<void>((resolve) => {
-        resolveCommitted = resolve;
-      });
-      const onCommitted = (source: string): void => {
-        const ready = entry.status === "ready";
-        log.info("[browser-view] background tab create stage", {
-          kind: "electron_tab_create",
-          stage: "commit_checked",
-          outcome: ready ? "ready" : "not-ready",
-          source,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          durationMs: Date.now() - startedAt,
-        });
-        if (ready) resolveCommitted();
-      };
-      const navigation = this.navigate(entry, input.url, true);
-      const onFrameNavigate = (): void => {
-        onCommitted("did-frame-navigate");
-      };
-      const onNavigate = (): void => {
-        onCommitted("did-navigate");
-      };
-      entry.view.webContents.on("did-frame-navigate", onFrameNavigate);
-      entry.view.webContents.on("did-navigate", onNavigate);
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "navigation_started",
-        outcome: "started",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: Date.now() - startedAt,
-      });
-      onCommitted("level-check");
-      try {
-        await Promise.race([navigation, committed]);
-        log.info("[browser-view] background tab create stage", {
-          kind: "electron_tab_create",
-          stage: "readiness_settled",
-          outcome: "ok",
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          durationMs: Date.now() - startedAt,
-        });
-      } finally {
-        entry.view.webContents.off("did-frame-navigate", onFrameNavigate);
-        entry.view.webContents.off("did-navigate", onNavigate);
-      }
-      if (seedScriptId !== null) {
-        await debugSession.removeScriptBeforeNavigation(seedScriptId);
-      }
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "seed_script_removed",
-        outcome: "ok",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: Date.now() - startedAt,
-      });
-      if (this.electronCreateDelayMs > 0) {
-        log.info("[browser-view] delaying background tab create ack", {
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          delayMs: this.electronCreateDelayMs,
-        });
-        await delay(this.electronCreateDelayMs);
-      }
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "manager_settled",
-        outcome: "ok",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: Date.now() - startedAt,
-      });
+      resolve(await this.initializeNativeTab(entry, input, startedAt));
     } catch (error) {
-      log.info("[browser-view] background tab create stage", {
+      log.info("[browser-view] native tab ensure stage", {
         kind: "electron_tab_create",
         stage: "manager_settled",
         outcome: "failed",
         cause: error instanceof Error ? error.name : typeof error,
+        hostId: input.hostId,
         sessionId: input.sessionId,
         tabId: input.tabId,
         durationMs: Date.now() - startedAt,
       });
-      await this.closeEntry(entry, null);
-      throw error;
+      try {
+        await this.closeEntry(entry, null);
+      } catch (cleanupError) {
+        log.warn("[browser-view] native tab cleanup failed", {
+          error: describeLogError(cleanupError),
+          hostId: input.hostId,
+          sessionId: input.sessionId,
+          tabId: input.tabId,
+        });
+      }
+      reject(error);
     }
   }
 
-  registerDurableTab(
-    windowId: string,
-    input: BrowserViewDurableTabRegistration,
-  ): void {
-    const key = { ...input, windowId };
-    const keyId = entryKeyId(key);
-    const entry =
-      this.entriesByKey.get(keyId) ?? this.findTransferableEntry(key);
-    if (entry === null) {
-      log.warn("[browser-view] register durable tab: no matching entry", {
-        keyId,
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-      });
-      return;
+  acceptTab(input: BrowserViewNativeTabCapability): Promise<void> {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null || entry.nativeActivation === null) {
+      return Promise.reject(
+        new Error("Electron browser tab is not provisioned."),
+      );
     }
-    const previousRuntimeKey = runtimeEntryKey(entry);
-    this.entriesByRuntimeKey.delete(previousRuntimeKey);
-    entry.runtimeSessionId = input.sessionId;
-    entry.runtimeTabId = input.tabId;
-    const nextRuntimeKey = runtimeEntryKey(entry);
-    this.entriesByRuntimeKey.set(nextRuntimeKey, entry);
-    log.info("[browser-view] register durable tab", {
-      keyId,
+    const existing = entry.nativeActivation.promise;
+    if (existing !== null) return existing;
+    const activation = this.activateNativeTab(entry);
+    entry.nativeActivation.promise = activation;
+    return activation;
+  }
+
+  attachSurface(windowId: string, input: BrowserViewAttachSurface): boolean {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null) return false;
+    const surface = { ...input.surface, windowId };
+    const occupant = this.entriesByKey.get(entryKeyId(surface));
+    if (occupant !== undefined && occupant !== entry) {
+      log.warn("[browser-view] native surface attachment rejected: occupied", {
+        guestKey: guestEntryKey(entry),
+        surfaceKeyId: entryKeyId(surface),
+      });
+      return false;
+    }
+    entry.surfaceBindingId = input.bindingId;
+    if (
+      entry.surface === null ||
+      entryKeyId(entry.surface) !== entryKeyId(surface)
+    ) {
+      this.rekeyEntry(entry, surface);
+    }
+    entry.desiredVisible = input.visible;
+    entry.rendererResetPending = false;
+    this.attachToCurrentWindow(entry);
+    this.emitStatus(entry);
+    this.queueDebugSnapshot(entry);
+    this.applyEntryVisibility(entry);
+    this.scheduleEvictionSweep();
+    return true;
+  }
+
+  detachSurface(windowId: string, input: BrowserViewDetachSurface): boolean {
+    const entry = this.findExactNativeEntry(input);
+    if (
+      entry === null ||
+      entry.surface === null ||
+      entry.surface.windowId !== windowId ||
+      entry.surfaceBindingId !== input.bindingId
+    ) {
+      return false;
+    }
+    this.detachEntrySurface(entry, "clear-geometry");
+    return true;
+  }
+
+  async releaseTab(input: BrowserViewReleaseTab): Promise<boolean> {
+    const entry = this.entriesByGuestKey.get(nativeGuestKey(input));
+    if (
+      entry?.identity.kind !== "native" ||
+      entry.identity.registrationId !== input.registrationId
+    ) {
+      return false;
+    }
+    await this.closeEntry(entry, null);
+    return true;
+  }
+
+  async controlElectronTab(
+    windowId: string,
+    input: BrowserViewElectronTabControl,
+  ): Promise<boolean> {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null) return false;
+    const action = input.action;
+    switch (action.kind) {
+      case "navigate":
+        await this.navigate(entry, action.url, true);
+        return this.isNativeTabAvailable(entry);
+      case "reload":
+        this.reloadEntry(entry);
+        return true;
+      case "goBack":
+        this.moveEntryInHistory(entry, "back");
+        return true;
+      case "goForward":
+        this.moveEntryInHistory(entry, "forward");
+        return true;
+      case "setViewportPreset":
+        this.setEntryViewportPreset(entry, action.viewportPreset);
+        return true;
+      case "zoomIn":
+        this.applyZoomStep(entry, 1);
+        return true;
+      case "zoomOut":
+        this.applyZoomStep(entry, -1);
+        return true;
+      case "resetZoom":
+        this.trySetEntryZoom(entry, 1);
+        return true;
+      case "openDevTools":
+        this.openEntryDevTools(entry, windowId);
+        return true;
+    }
+  }
+
+  private async initializeNativeTab(
+    entry: BrowserViewEntry,
+    input: BrowserViewEnsureTab,
+    startedAt: number,
+  ): Promise<BrowserViewProvisionedTab> {
+    if (entry.identity.kind !== "native") {
+      throw new Error("Cannot initialize an unmanaged browser guest.");
+    }
+    const seedScript = browserLocalStorageSeedScript(input.seedStorageState);
+    await this.activateNativeTabTarget(entry, input, startedAt);
+    const debugSession = this.ensureDebugSession(entry);
+    const seedScriptId =
+      seedScript === null
+        ? null
+        : await debugSession.installScriptBeforeNavigation(seedScript);
+    await debugSession.enableAfterCommit();
+    entry.nativeActivation = { seedScriptId, promise: null };
+    log.info("[browser-view] native tab ensure stage", {
+      kind: "electron_tab_create",
+      stage: "manager_settled",
+      outcome: "ok",
+      hostId: input.hostId,
       sessionId: input.sessionId,
       tabId: input.tabId,
-      previousRuntimeKey,
-      nextRuntimeKey,
-      rekeyed: previousRuntimeKey !== nextRuntimeKey,
+      durationMs: Date.now() - startedAt,
+    });
+    return this.resolveNativeTabProvisioned(entry);
+  }
+
+  private async activateNativeTab(entry: BrowserViewEntry): Promise<void> {
+    const activation = entry.nativeActivation;
+    if (entry.identity.kind !== "native" || activation === null) {
+      throw new Error("Cannot activate an unprovisioned browser guest.");
+    }
+    try {
+      await this.navigate(entry, entry.requestedUrl, true);
+    } finally {
+      if (activation.seedScriptId !== null) {
+        try {
+          await this.ensureDebugSession(entry).removeScriptBeforeNavigation(
+            activation.seedScriptId,
+          );
+        } catch (error) {
+          log.warn("[browser-view] failed to remove native tab seed script", {
+            error: describeLogError(error),
+            sessionId: entry.identity.key.sessionId,
+            tabId: entry.identity.key.tabId,
+          });
+        }
+        activation.seedScriptId = null;
+      }
+    }
+  }
+
+  private async activateNativeTabTarget(
+    entry: BrowserViewEntry,
+    input: BrowserViewEnsureTab,
+    startedAt: number,
+  ): Promise<void> {
+    // Electron allocates WebContentsView eagerly, but its Page CDP domain does
+    // not accept commands until the first document target has loaded. This
+    // internal navigation establishes that target before storage seeding; it
+    // is deliberately suppressed from browser-session state and history.
+    entry.internalNavigation = true;
+    try {
+      await entry.view.webContents.loadURL("about:blank");
+    } finally {
+      entry.view.webContents.navigationHistory?.clear();
+      entry.internalNavigation = false;
+    }
+    log.info("[browser-view] native tab ensure stage", {
+      kind: "electron_tab_create",
+      stage: "target_activated",
+      outcome: "ok",
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+      durationMs: Date.now() - startedAt,
     });
   }
 
-  async releaseDurableTab(
-    windowId: string,
-    input: BrowserViewDurableTabRegistration,
-  ): Promise<void> {
-    const entry =
-      this.entriesByKey.get(entryKeyId({ ...input, windowId })) ??
-      this.entriesByRuntimeKey.get(
-        [input.sessionId, input.tabId].join("\u001f"),
-      );
-    if (entry === undefined || entry.key.windowId !== windowId) return;
-    await this.closeEntry(entry, null);
+  private resolveNativeTabProvisioned(
+    entry: BrowserViewEntry,
+  ): BrowserViewProvisionedTab {
+    if (entry.identity.kind !== "native") {
+      throw new Error("Cannot provision an unmanaged browser guest.");
+    }
+    if (
+      !this.isNativeTabAvailable(entry) ||
+      !entry.view.webContents.debugger.isAttached()
+    ) {
+      throw new Error("Native browser tab CDP route is no longer available.");
+    }
+    return {
+      ...entry.identity.key,
+      registrationId: entry.identity.registrationId,
+    };
   }
 
-  setBackgroundThrottling(
-    windowId: string,
-    input: BrowserViewBackgroundThrottlingChange,
-  ): void {
-    const key = { ...input, windowId };
-    const entry =
-      this.entriesByKey.get(entryKeyId(key)) ??
-      this.findTransferableEntry(key);
-    // Unbound views have no compositor: timers/events stay unthrottled, but
-    // requestAnimationFrame needs the view bound to a window.
-    entry?.view.webContents.setBackgroundThrottling(input.enabled);
+  private isNativeTabAvailable(entry: BrowserViewEntry): boolean {
+    return (
+      this.isEntryCurrent(entry) &&
+      entry.status !== "dead" &&
+      !entry.view.webContents.isDestroyed()
+    );
   }
 
   applyStorageState(
@@ -1041,24 +1214,39 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserViewViewportPresetChange,
   ): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
-    entry.viewportPreset = input.viewportPreset;
-    this.applyEntryBounds(entry);
-    this.applyEntryVisibility(entry);
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
+    this.setEntryViewportPreset(entry, input.viewportPreset);
   }
 
   releaseTile(windowId: string, input: BrowserViewTileKey): void {
     const keyId = entryKeyId({ ...input, windowId });
-    // Tile close stops the frame feed even though the durable WebContents
-    // may live on unbound (ticket 05): no tile, no compositor contract.
-    this.tileFrames.detach(keyId);
     const entry = this.entriesByKey.get(keyId);
-    if (entry === undefined) {
-      return;
-    }
+    if (entry === undefined || entry.identity.kind !== "unmanaged") return;
+    this.detachEntrySurface(entry, "preserve-geometry");
+  }
+
+  private detachEntrySurface(
+    entry: BrowserViewEntry,
+    geometry: "clear-geometry" | "preserve-geometry",
+  ): void {
+    const surface = entry.surface;
+    if (surface === null) return;
+    const keyId = entryKeyId(surface);
+    this.cancelDebugSnapshot(entry);
+    this.tileFrames.detach(keyId);
     this.entriesByKey.delete(keyId);
     this.endAnnotationSession(entry, "tile-close");
+    for (const overlayId of entry.overlayOwnerIds) {
+      const keys = this.overlayEntryKeysByOwnerId.get(overlayId) ?? [];
+      this.overlayEntryKeysByOwnerId.set(
+        overlayId,
+        keys.filter((candidate) => candidate !== keyId),
+      );
+    }
+    entry.overlayOwnerIds = [];
+    entry.overlayAwaitingPaintAck = false;
+    entry.overlayParked = false;
     entry.desiredVisible = false;
     entry.view.setVisible(false);
     const window =
@@ -1069,11 +1257,23 @@ export class BrowserViewManager {
       window.contentView.removeChildView(entry.view);
     }
     entry.parentWindowId = null;
+    entry.surface = null;
+    entry.surfaceBindingId = null;
+    if (geometry === "clear-geometry") {
+      entry.bounds = null;
+      entry.lastAppliedBounds = null;
+    }
+    entry.rendererResetPending = false;
+    this.detachHostWindowResetListenerIfUnused(surface.windowId);
   }
 
   reloadTile(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
+    this.reloadEntry(entry);
+  }
+
+  private reloadEntry(entry: BrowserViewEntry): void {
     this.setStatus(entry, "loading", null);
     this.invalidateOverlaySnapshot(entry, "reload");
     entry.view.webContents.reload();
@@ -1081,51 +1281,47 @@ export class BrowserViewManager {
   }
 
   goBack(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
-    const navigationHistory = this.readNavigationHistory(entry);
-    if (navigationHistory === null) {
-      this.emitStatus(entry);
-      return;
-    }
-    const canGoBack = this.readCanGoBack(navigationHistory);
-    if (canGoBack !== true) {
-      this.emitStatus(entry);
-      return;
-    }
-    this.setStatus(entry, "loading", null);
-    this.invalidateOverlaySnapshot(entry, "go-back");
-    try {
-      navigationHistory.goBack();
-    } catch (err) {
-      log.warn("[browser-view] goBack failed", {
-        error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
-      });
-      this.emitStatus(entry);
-    }
-    this.applyEntryVisibility(entry);
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
+    this.moveEntryInHistory(entry, "back");
   }
 
   goForward(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
+    this.moveEntryInHistory(entry, "forward");
+  }
+
+  private moveEntryInHistory(
+    entry: BrowserViewEntry,
+    direction: "back" | "forward",
+  ): void {
     const navigationHistory = this.readNavigationHistory(entry);
     if (navigationHistory === null) {
       this.emitStatus(entry);
       return;
     }
-    const canGoForward = this.readCanGoForward(navigationHistory);
-    if (canGoForward !== true) {
+    const canMove =
+      direction === "back"
+        ? this.readCanGoBack(navigationHistory)
+        : this.readCanGoForward(navigationHistory);
+    if (canMove !== true) {
       this.emitStatus(entry);
       return;
     }
     this.setStatus(entry, "loading", null);
-    this.invalidateOverlaySnapshot(entry, "go-forward");
+    this.invalidateOverlaySnapshot(
+      entry,
+      direction === "back" ? "go-back" : "go-forward",
+    );
     try {
-      navigationHistory.goForward();
+      if (direction === "back") {
+        navigationHistory.goBack();
+      } else {
+        navigationHistory.goForward();
+      }
     } catch (err) {
-      log.warn("[browser-view] goForward failed", {
+      log.warn(`[browser-view] go ${direction} failed`, {
         error: describeLogError(err),
         webContentsId: entry.view.webContents.id,
       });
@@ -1216,20 +1412,20 @@ export class BrowserViewManager {
   }
 
   zoomIn(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
     this.applyZoomStep(entry, 1);
   }
 
   zoomOut(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
     this.applyZoomStep(entry, -1);
   }
 
   resetZoom(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
     this.trySetEntryZoom(entry, 1);
   }
 
@@ -1279,13 +1475,8 @@ export class BrowserViewManager {
       ),
     );
 
-    // Fix round 3: the renderer now broadcasts every occlusion to both the
-    // primary and agent managers, and each one silently no-ops the tiles it
-    // does not own (by design - see `occludeEntryForOverlay`). That is
-    // correct but otherwise invisible; log once per call when this manager
-    // matched none of the requested tiles, so "this manager isn't the one
-    // that owns this overlay's tiles" stays distinguishable in the log from
-    // an actual regression, without spamming per-tile.
+    // An overlay scan can race tile teardown. Log the all-missing case once
+    // per scan rather than once per tile.
     const matchedCount = nextKeyIds.filter((keyId) =>
       this.entriesByKey.has(keyId),
     ).length;
@@ -1318,23 +1509,20 @@ export class BrowserViewManager {
 
   async startPipCapture(
     windowId: string,
-    input: {
-      readonly tileKey: BrowserViewTileKey;
-      readonly maxWidth: number;
-      readonly maxHeight: number;
-      readonly quality: number;
-    },
+    input: PipCaptureStartInput,
     onFrame: (payload: PipCaptureIpcPayload) => void,
   ): Promise<boolean> {
-    const key = { ...input.tileKey, windowId };
-    const entry =
-      this.entriesByKey.get(entryKeyId(key)) ?? this.findTransferableEntry(key);
-    if (entry === null || entry === undefined) return false;
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null) return false;
     this.stopPipCapture();
-    this.prepareEntryForPipCapture(entry, {
-      width: input.maxWidth,
-      height: input.maxHeight,
-    });
+    if (
+      !this.prepareEntryForPipCapture(entry, windowId, {
+        width: input.maxWidth,
+        height: input.maxHeight,
+      })
+    ) {
+      return false;
+    }
     const session = this.ensureDebugSession(entry);
     this.pipCaptureEntry = entry;
     try {
@@ -1346,10 +1534,13 @@ export class BrowserViewManager {
       });
     } catch (err) {
       if (this.pipCaptureEntry === entry) this.pipCaptureEntry = null;
+      session.stopPipCapture();
+      this.restoreEntryAfterPipCapture(entry);
       throw err;
     }
     if (!session.isPipCapturing() && this.pipCaptureEntry === entry) {
       this.pipCaptureEntry = null;
+      this.restoreEntryAfterPipCapture(entry);
     }
     return session.isPipCapturing();
   }
@@ -1358,10 +1549,26 @@ export class BrowserViewManager {
     const entry = this.pipCaptureEntry;
     this.pipCaptureEntry = null;
     entry?.debugSession?.stopPipCapture();
-    if (entry !== null) {
+    if (entry !== null) this.restoreEntryAfterPipCapture(entry);
+  }
+
+  private restoreEntryAfterPipCapture(entry: BrowserViewEntry): void {
+    if (entry.surface !== null) {
       this.applyEntryBounds(entry);
       this.applyEntryVisibility(entry);
+      return;
     }
+    const window =
+      entry.parentWindowId === null
+        ? null
+        : this.getWindow(entry.parentWindowId);
+    if (window !== null && !window.isDestroyed()) {
+      window.contentView.removeChildView(entry.view);
+    }
+    entry.parentWindowId = null;
+    entry.bounds = null;
+    entry.lastAppliedBounds = null;
+    entry.view.setVisible(false);
   }
 
   async capturePage(
@@ -1372,11 +1579,12 @@ export class BrowserViewManager {
     if (entry === undefined) {
       throw new Error("Browser view tile is not available for capture");
     }
-    assertEntryCapturable(entry, this.getWindow(entry.key.windowId));
+    const surface = requireSurface(entry);
+    assertEntryCapturable(entry, this.getWindow(surface.windowId));
     const dataUrl = (await entry.view.webContents.capturePage()).toDataURL();
     const image = parseCapturedDataUrl(dataUrl);
     return {
-      ...toTileKey(entry.key),
+      ...toTileKey(surface),
       ...image,
       capturedAt: Date.now(),
     };
@@ -1395,7 +1603,7 @@ export class BrowserViewManager {
       };
     }
     return {
-      ...toTileKey(entry.key),
+      ...toTileKey(requireSurface(entry)),
       ...this.readDebugSnapshot(entry),
     };
   }
@@ -1433,17 +1641,25 @@ export class BrowserViewManager {
       return Promise.resolve({ ok: false, reason: "page-not-ready" });
     }
     this.endAnnotationSession(entry, "replaced");
+    const surface = requireSurface(entry);
+    const annotationIdentity =
+      entry.identity.kind === "native"
+        ? entry.identity.key
+        : {
+            sessionId: entry.identity.pageSessionId,
+            tabId: entry.identity.pageSessionId,
+          };
     const session = new BrowserAnnotationSession({
       webContents: entry.view.webContents,
       identity: {
-        tabId: entry.runtimeTabId ?? entry.key.pageSessionId,
-        sessionId: entry.runtimeSessionId,
+        tabId: annotationIdentity.tabId,
+        sessionId: annotationIdentity.sessionId,
       },
       onEvent: (event) => {
         if (entry.annotationSession !== session) return;
         if (event.type === "attachRequested") return;
-        this.notifyAnnotationEvent(entry.key.windowId, {
-          ...toTileKey(entry.key),
+        this.notifyAnnotationEvent(surface.windowId, {
+          ...toTileKey(surface),
           event,
         });
       },
@@ -1451,15 +1667,15 @@ export class BrowserViewManager {
         if (entry.annotationSession !== session) {
           return Promise.resolve(false);
         }
-        this.notifyAnnotationAttached(entry.key.windowId, {
-          ...toTileKey(entry.key),
+        this.notifyAnnotationAttached(surface.windowId, {
+          ...toTileKey(surface),
           targetChatId: result.targetChatId,
           payload: result.payload,
-          pngBytes: result.pngBytes,
+          pngBytes: new Uint8Array(result.pngBytes),
         });
         return this.waitForAnnotationAttachResult({
-          windowId: entry.key.windowId,
-          keyId: entryKeyId(entry.key),
+          windowId: surface.windowId,
+          keyId: entryKeyId(surface),
           annotationId: result.payload.annotationId,
         });
       },
@@ -1477,9 +1693,7 @@ export class BrowserViewManager {
     windowId: string,
     input: BrowserAnnotationAttachResultInput,
   ): void {
-    const pending = this.pendingAnnotationAttachResults.get(
-      input.annotationId,
-    );
+    const pending = this.pendingAnnotationAttachResults.get(input.annotationId);
     if (pending === undefined) return;
     if (pending.windowId !== windowId) return;
     this.finishAnnotationAttachResult(
@@ -1521,7 +1735,8 @@ export class BrowserViewManager {
   private failPendingAnnotationAttachResultsForEntry(
     entry: BrowserViewEntry,
   ): void {
-    const keyId = entryKeyId(entry.key);
+    if (entry.surface === null) return;
+    const keyId = entryKeyId(entry.surface);
     const annotationIds: string[] = [];
     for (const [annotationId, pending] of this.pendingAnnotationAttachResults) {
       if (pending.keyId === keyId) {
@@ -1540,8 +1755,12 @@ export class BrowserViewManager {
   }
 
   openDevTools(windowId: string, input: BrowserViewTileKey): void {
-    const entry = this.entriesByKey.get(entryKeyId({ ...input, windowId }));
-    if (entry === undefined) return;
+    const entry = this.findUnmanagedSurfaceEntry(windowId, input);
+    if (entry === null) return;
+    this.openEntryDevTools(entry, windowId);
+  }
+
+  private openEntryDevTools(entry: BrowserViewEntry, windowId: string): void {
     this.destroyDevToolsWindow(entry);
     const devToolsWindow = this.createDevToolsWindow(windowId);
     entry.devToolsWindow = devToolsWindow;
@@ -1644,17 +1863,19 @@ export class BrowserViewManager {
   }
 
   /**
-   * The typed CDP bridge for a registered Electron tab, whether currently
-   * bound to a tile or hidden. A detached debugger still fails fast rather
-   * than attempting a doomed `sendCommand`.
+   * Surface-keyed CDP exists only for unmanaged tiles explicitly borrowed
+   * by the host. Native tabs use `dispatchElectronTabCdp`; accepting their
+   * presentation key here would recreate the identity fallback this registry
+   * is designed to remove.
    */
   async dispatchCdp(
     windowId: string,
-    input: AgentBrowserViewCdpDispatch,
-  ): Promise<AgentBrowserViewCdpResult> {
+    input: BrowserViewCdpDispatch,
+  ): Promise<BrowserViewCdpResult> {
     const key = { ...input, windowId };
     const entry =
-      this.entriesByKey.get(entryKeyId(key)) ?? this.findTransferableEntry(key);
+      this.findUnmanagedSurfaceEntry(windowId, input) ??
+      this.findTransferableEntry(key);
     if (entry === null) {
       return {
         kind: input.command.kind,
@@ -1693,6 +1914,48 @@ export class BrowserViewManager {
     }
   }
 
+  async dispatchElectronTabCdp(
+    input: BrowserViewElectronTabCdpDispatch,
+  ): Promise<BrowserViewCdpResult> {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null) {
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: {
+          kind: "tab_not_found",
+          message: `Electron browser tab ${input.tabId} incarnation is not available.`,
+          code: null,
+        },
+      };
+    }
+    const browserDebugger = entry.view.webContents.debugger;
+    if (!browserDebugger.isAttached()) {
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: {
+          kind: "not_attached",
+          message: "Electron browser tab debugger is not attached.",
+          code: null,
+        },
+      };
+    }
+    try {
+      return await sendCdpCommand(
+        browserDebugger,
+        input.cdpSessionId ?? undefined,
+        input.command,
+      );
+    } catch (error) {
+      return {
+        kind: input.command.kind,
+        ok: false,
+        error: classifyCdpError(error),
+      };
+    }
+  }
+
   private endAnnotationSession(
     entry: BrowserViewEntry,
     reason: BrowserAnnotationEndReason,
@@ -1719,7 +1982,7 @@ export class BrowserViewManager {
       this.evictionSweepTimer = null;
     }
     this.tileFrames.detachAll();
-    for (const entry of Array.from(this.entriesByRuntimeKey.values())) {
+    for (const entry of Array.from(this.entriesByGuestKey.values())) {
       void this.closeEntry(entry, "gui-quit");
     }
     for (const popup of Array.from(this.popupEntriesByWebContentsId.values())) {
@@ -1739,14 +2002,16 @@ export class BrowserViewManager {
 
   async drainBrowserHandoffs(): Promise<void> {
     await Promise.all(
-      Array.from(this.entriesByRuntimeKey.values())
+      Array.from(this.entriesByGuestKey.values())
         .filter(
           (entry) =>
             entry.status !== "dead" &&
-            entry.runtimeTabId !== null &&
+            entry.identity.kind === "native" &&
+            entry.nativeActivation !== null &&
+            entry.nativeActivation.promise !== null &&
             !entry.handedOff,
         )
-        .map((entry) => this.pushTileHandoff(entry, "gui-quit")),
+        .map((entry) => this.pushElectronTabHandoff(entry, "gui-quit")),
     );
   }
 
@@ -1762,7 +2027,7 @@ export class BrowserViewManager {
     readonly overlaySnapshotStale: boolean;
   }> {
     return Array.from(this.entriesByKey.values()).map((entry) => ({
-      key: entry.key,
+      key: requireSurface(entry),
       webContentsId: entry.view.webContents.id,
       parentWindowId: entry.parentWindowId,
       visible: entry.desiredVisible,
@@ -1775,14 +2040,17 @@ export class BrowserViewManager {
   }
 
   private createEntry(
-    key: BrowserViewEntryKey,
+    surface: BrowserViewEntryKey | null,
     requestedUrl: string,
     viewportPreset: BrowserViewViewportPresetId,
     navigateNow: boolean,
+    identity: BrowserViewGuestIdentity,
   ): BrowserViewEntry {
     const view = this.createView();
     const entry: BrowserViewEntry = {
-      key,
+      surface,
+      surfaceBindingId: null,
+      identity,
       view,
       listeners: {
         beforeInputEvent: (...args) => {
@@ -1872,9 +2140,9 @@ export class BrowserViewManager {
       control: null,
       handedOff: false,
       pendingHandoffCapture: null,
-      runtimeSessionId: key.pageSessionId,
-      runtimeTabId: null,
+      closePromise: null,
       internalNavigation: false,
+      nativeActivation: null,
     };
     const webContents = view.webContents;
     webContents.setWindowOpenHandler((details) =>
@@ -1895,16 +2163,14 @@ export class BrowserViewManager {
     webContents.on("page-title-updated", entry.listeners.pageTitleUpdated);
     webContents.on("paint", entry.listeners.paint);
     webContents.on("render-process-gone", entry.listeners.renderProcessGone);
-    this.entriesByKey.set(entryKeyId(key), entry);
-    this.entriesByRuntimeKey.set(runtimeEntryKey(entry), entry);
+    if (surface !== null) {
+      this.entriesByKey.set(entryKeyId(surface), entry);
+    }
+    this.entriesByGuestKey.set(guestEntryKey(entry), entry);
     if (navigateNow) void this.navigate(entry, requestedUrl, false);
     log.info("[browser-view] view created", {
-      keyId: entryKeyId(key),
-      viewTabId: key.viewTabId,
-      paneId: key.paneId,
-      tileInstanceId: key.tileInstanceId,
-      pageSessionId: key.pageSessionId,
-      windowId: key.windowId,
+      guestKey: guestEntryKey(entry),
+      surfaceKeyId: surface === null ? null : entryKeyId(surface),
       viewportPreset,
       navigateNow,
     });
@@ -1914,23 +2180,43 @@ export class BrowserViewManager {
   private findTransferableEntry(
     key: BrowserViewEntryKey,
   ): BrowserViewEntry | null {
-    for (const entry of this.entriesByRuntimeKey.values()) {
-      if (entry.key.pageSessionId === key.pageSessionId) {
-        return entry;
-      }
-    }
-    return null;
+    return (
+      this.entriesByGuestKey.get(unmanagedGuestKey(key.pageSessionId)) ?? null
+    );
+  }
+
+  private findExactNativeEntry(
+    capability: BrowserViewNativeTabCapability,
+  ): BrowserViewEntry | null {
+    const entry = this.entriesByGuestKey.get(nativeGuestKey(capability));
+    if (entry?.identity.kind !== "native") return null;
+    if (entry.identity.registrationId !== capability.registrationId)
+      return null;
+    if (entry.closePromise !== null) return null;
+    return entry;
+  }
+
+  private findUnmanagedSurfaceEntry(
+    windowId: string,
+    key: BrowserViewTileKey,
+  ): BrowserViewEntry | null {
+    const entry = this.entriesByKey.get(entryKeyId({ ...key, windowId }));
+    return entry?.identity.kind === "unmanaged" ? entry : null;
   }
 
   private rekeyEntry(entry: BrowserViewEntry, key: BrowserViewEntryKey): void {
     this.cancelDebugSnapshot(entry);
-    const previousKeyId = entryKeyId(entry.key);
+    const previousSurface = entry.surface;
+    const previousKeyId =
+      previousSurface === null ? null : entryKeyId(previousSurface);
     const nextKeyId = entryKeyId(key);
     // The frame-cache slot is keyed by entry key; drop the stale slot so the
     // next visibility pass re-attaches under the new key (BT-202).
-    this.tileFrames.detach(previousKeyId);
-    this.entriesByKey.delete(previousKeyId);
-    entry.key = key;
+    if (previousKeyId !== null) {
+      this.tileFrames.detach(previousKeyId);
+      this.entriesByKey.delete(previousKeyId);
+    }
+    entry.surface = key;
     this.entriesByKey.set(nextKeyId, entry);
     for (const overlayId of entry.overlayOwnerIds) {
       const overlayKeyIds = this.overlayEntryKeysByOwnerId.get(overlayId);
@@ -1938,13 +2224,13 @@ export class BrowserViewManager {
       this.overlayEntryKeysByOwnerId.set(
         overlayId,
         overlayKeyIds.map((keyId) =>
-          keyId === previousKeyId ? nextKeyId : keyId,
+          previousKeyId !== null && keyId === previousKeyId ? nextKeyId : keyId,
         ),
       );
     }
-    this.attachToCurrentWindow(entry);
-    this.emitStatus(entry);
-    this.queueDebugSnapshot(entry);
+    if (previousSurface !== null && previousSurface.windowId !== key.windowId) {
+      this.detachHostWindowResetListenerIfUnused(previousSurface.windowId);
+    }
   }
 
   private async navigate(
@@ -2157,12 +2443,15 @@ export class BrowserViewManager {
   ): void {
     const keyCode = hostSendKeyCodeForToken(chord.key);
     if (keyCode === null) return;
-    const window = this.getWindow(entry.key.windowId);
+    const surface = entry.surface;
+    if (surface === null) return;
+    const window = this.getWindow(surface.windowId);
     const hostWebContents =
       window === null || window.isDestroyed() ? null : window.webContents;
     if (hostWebContents === null) return;
     const modifiers: string[] = [];
-    if (chord.mod) modifiers.push(this.hostPlatform === "darwin" ? "meta" : "control");
+    if (chord.mod)
+      modifiers.push(this.hostPlatform === "darwin" ? "meta" : "control");
     if (chord.ctrl) modifiers.push("control");
     if (chord.shift) modifiers.push("shift");
     if (chord.alt) modifiers.push("alt");
@@ -2195,12 +2484,14 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
     details: BrowserViewWindowOpenDetails,
   ): BrowserViewWindowOpenResult {
+    const surface = entry.surface;
+    if (surface === null) return { action: "deny" };
     // Decision #22: real popups keep opener, while target=_blank gets a tile.
     // Electron exposes featureless scripted window.open the same as _blank
     // tab opens, so the available guardrail is non-empty popup features.
     if (windowOpenShouldCreateTile(details)) {
-      this.notifyOpenTileRequest(entry.key.windowId, {
-        ...toTileKey(entry.key),
+      this.notifyOpenTileRequest(surface.windowId, {
+        ...toTileKey(surface),
         url: normalizeOpenedUrl(details.url, entry.currentUrl),
         disposition: details.disposition,
       });
@@ -2209,7 +2500,7 @@ export class BrowserViewManager {
     return {
       action: "allow",
       overrideBrowserWindowOptions: this.createPopupWindowOptions(
-        entry.key.windowId,
+        surface.windowId,
       ),
       outlivesOpener: false,
     };
@@ -2220,6 +2511,11 @@ export class BrowserViewManager {
     args: readonly unknown[],
   ): void {
     const window = readPopupWindow(args);
+    const surface = entry.surface;
+    if (surface === null) {
+      window?.close();
+      return;
+    }
     if (window === null) {
       log.warn("[browser-view] popup created without trackable window", {
         webContentsId: entry.view.webContents.id,
@@ -2227,10 +2523,10 @@ export class BrowserViewManager {
       return;
     }
     this.registerPopupWebContents(window.webContents);
-    const popupId = `${entry.key.tileInstanceId}:${window.webContents.id}`;
+    const popupId = `${surface.tileInstanceId}:${window.webContents.id}`;
     const popupEntry: BrowserViewPopupEntry = {
       popupId,
-      openerKey: entry.key,
+      openerKey: surface,
       window,
       listeners: {
         closed: () => {
@@ -2274,9 +2570,9 @@ export class BrowserViewManager {
 
   private handleDownloadChange(change: BrowserSessionDownloadChange): void {
     const entry = this.findEntryByWebContentsId(change.webContentsId);
-    if (entry !== null) {
-      this.notifyDownload(entry.key.windowId, {
-        ...toTileKey(entry.key),
+    if (entry !== null && entry.surface !== null) {
+      this.notifyDownload(entry.surface.windowId, {
+        ...toTileKey(entry.surface),
         downloadId: change.downloadId,
         url: change.url,
         filename: change.filename,
@@ -2304,9 +2600,9 @@ export class BrowserViewManager {
     change: BrowserSessionCertificateErrorChange,
   ): void {
     const entry = this.findEntryByWebContentsId(change.webContentsId);
-    if (entry !== null) {
+    if (entry !== null && entry.surface !== null) {
       const tileChange: BrowserViewCertificateErrorChange = {
-        ...toTileKey(entry.key),
+        ...toTileKey(entry.surface),
         certificateErrorId: change.certificateErrorId,
         url: change.url,
         hostname: change.hostname,
@@ -2316,7 +2612,7 @@ export class BrowserViewManager {
         issuer: change.issuer,
       };
       entry.certificateError = tileChange;
-      this.notifyCertificateError(entry.key.windowId, tileChange);
+      this.notifyCertificateError(entry.surface.windowId, tileChange);
       this.setStatus(entry, "dead", "Certificate error");
       this.applyEntryVisibility(entry);
       return;
@@ -2334,7 +2630,7 @@ export class BrowserViewManager {
   private findEntryByWebContentsId(
     webContentsId: number,
   ): BrowserViewEntry | null {
-    for (const entry of this.entriesByKey.values()) {
+    for (const entry of this.entriesByGuestKey.values()) {
       if (entry.view.webContents.id === webContentsId) return entry;
     }
     return null;
@@ -2391,7 +2687,7 @@ export class BrowserViewManager {
     // once img.decode() settles; only then do we move the view offscreen.
     currentEntry.overlayAwaitingPaintAck = true;
     return {
-      ...toTileKey(currentEntry.key),
+      ...toTileKey(requireSurface(currentEntry)),
       dataUrl,
       stale,
     };
@@ -2432,7 +2728,10 @@ export class BrowserViewManager {
       entry.view.setVisible(false);
       return;
     }
-    const effective = effectiveViewportBounds(entry.bounds, entry.viewportPreset);
+    const effective = effectiveViewportBounds(
+      entry.bounds,
+      entry.viewportPreset,
+    );
     if (effective.width <= 0 || effective.height <= 0) {
       entry.view.setVisible(false);
       return;
@@ -2471,12 +2770,17 @@ export class BrowserViewManager {
         entry.overlayAwaitingPaintAck = false;
         this.applyEntryBounds(entry);
         this.applyEntryVisibility(entry);
-        return [toTileKey(entry.key)];
+        return [toTileKey(requireSurface(entry))];
       });
   }
 
   private enableDebugAfterCommit(entry: BrowserViewEntry): void {
-    this.ensureDebugSession(entry).enableAfterCommit();
+    // Visible unmanaged tiles may keep working even if observability fails;
+    // native ensureTab explicitly awaits the same promise before announcing
+    // the host-owned route as ready.
+    void this.ensureDebugSession(entry)
+      .enableAfterCommit()
+      .catch(() => undefined);
   }
 
   private ensureDebugSession(entry: BrowserViewEntry): BrowserDebugSession {
@@ -2490,10 +2794,27 @@ export class BrowserViewManager {
         this.handleDebugSessionDetached(entry, reason);
       },
       onTargetAttached: (event) => {
-        this.notifyCdpTargetAttached(entry.key.windowId, {
-          ...toTileKey(entry.key),
-          ...event,
-        });
+        if (entry.identity.kind === "native") {
+          this.notifyNativeTabCdpTargetAttached(
+            entry.identity.lifecycleOwnerWindowId,
+            {
+              ...entry.identity.key,
+              registrationId: entry.identity.registrationId,
+              cdpSessionId: event.sessionId,
+              targetId: event.targetId,
+              targetType: event.targetType,
+              url: event.url,
+              waitingForDebugger: event.waitingForDebugger,
+            },
+          );
+          return;
+        }
+        if (entry.surface !== null) {
+          this.notifyCdpTargetAttached(entry.surface.windowId, {
+            ...toTileKey(entry.surface),
+            ...event,
+          });
+        }
       },
     });
     entry.debugSession = session;
@@ -2532,14 +2853,25 @@ export class BrowserViewManager {
       reason,
       webContentsId: entry.view.webContents.id,
     });
-    if (this.pipCaptureEntry === entry) this.pipCaptureEntry = null;
+    if (this.pipCaptureEntry === entry) this.stopPipCapture();
     if (entry.control !== null) {
       this.cancelControl(entry, `debugger detached: ${reason}`, null);
     }
-    this.notifyCdpSessionEnded(entry.key.windowId, {
-      ...toTileKey(entry.key),
-      reason,
-    });
+    if (entry.identity.kind === "native") {
+      this.notifyNativeTabCdpSessionEnded(
+        entry.identity.lifecycleOwnerWindowId,
+        {
+          ...entry.identity.key,
+          registrationId: entry.identity.registrationId,
+          reason,
+        },
+      );
+    } else if (entry.surface !== null) {
+      this.notifyCdpSessionEnded(entry.surface.windowId, {
+        ...toTileKey(entry.surface),
+        reason,
+      });
+    }
   }
 
   private readDebugSnapshot(
@@ -2554,7 +2886,8 @@ export class BrowserViewManager {
   }
 
   private queueDebugSnapshot(entry: BrowserViewEntry): void {
-    const keyId = entryKeyId(entry.key);
+    if (entry.surface === null) return;
+    const keyId = entryKeyId(entry.surface);
     if (this.pendingDebugSnapshotsByKey.has(keyId)) return;
     const task = this.scheduleDebugSnapshot(() => {
       this.pendingDebugSnapshotsByKey.delete(keyId);
@@ -2565,7 +2898,8 @@ export class BrowserViewManager {
   }
 
   private cancelDebugSnapshot(entry: BrowserViewEntry): void {
-    const keyId = entryKeyId(entry.key);
+    if (entry.surface === null) return;
+    const keyId = entryKeyId(entry.surface);
     const task = this.pendingDebugSnapshotsByKey.get(keyId);
     if (task === undefined) return;
     task.cancel();
@@ -2573,8 +2907,9 @@ export class BrowserViewManager {
   }
 
   private emitDebugSnapshotNow(entry: BrowserViewEntry): void {
-    this.notifyDebugSnapshot(entry.key.windowId, {
-      ...toTileKey(entry.key),
+    if (entry.surface === null) return;
+    this.notifyDebugSnapshot(entry.surface.windowId, {
+      ...toTileKey(entry.surface),
       ...this.readDebugSnapshot(entry),
     });
   }
@@ -2589,10 +2924,7 @@ export class BrowserViewManager {
     // Any move out of "ready" (reload/back/forward, cert error, renderer gone)
     // invalidates the isolated world the overlay runs in.
     if (status !== "ready") {
-      this.endAnnotationSession(
-        entry,
-        status === "dead" ? "crash" : "reload",
-      );
+      this.endAnnotationSession(entry, status === "dead" ? "crash" : "reload");
       this.cancelControl(entry, reason ?? "browser tile is not ready", null);
     }
     entry.status = status;
@@ -2608,11 +2940,7 @@ export class BrowserViewManager {
     if (navigationState === null) return;
     const zoomPercent = this.readZoomPercent(webContents);
     if (zoomPercent === null) return;
-    this.notifyStatus(entry.key.windowId, {
-      viewTabId: entry.key.viewTabId,
-      paneId: entry.key.paneId,
-      tileInstanceId: entry.key.tileInstanceId,
-      pageSessionId: entry.key.pageSessionId,
+    const status = {
       url: entry.currentUrl,
       title: entry.currentTitle,
       status: entry.status,
@@ -2620,11 +2948,25 @@ export class BrowserViewManager {
       canGoBack: navigationState.canGoBack,
       canGoForward: navigationState.canGoForward,
       zoomPercent,
-    });
+    };
+    if (entry.identity.kind === "native") {
+      this.notifyNativeTabStatus(entry.identity.lifecycleOwnerWindowId, {
+        ...entry.identity.key,
+        registrationId: entry.identity.registrationId,
+        ...status,
+        title: status.title === "" ? null : status.title,
+      });
+    }
+    if (entry.surface !== null) {
+      this.notifyStatus(entry.surface.windowId, {
+        ...toTileKey(entry.surface),
+        ...status,
+      });
+    }
   }
 
   private isEntryCurrent(entry: BrowserViewEntry): boolean {
-    return this.entriesByRuntimeKey.get(runtimeEntryKey(entry)) === entry;
+    return this.entriesByGuestKey.get(guestEntryKey(entry)) === entry;
   }
 
   private readLiveWebContents(
@@ -2696,8 +3038,9 @@ export class BrowserViewManager {
       readonly errorMessage: string | null;
     },
   ): void {
-    this.notifyFind(entry.key.windowId, {
-      ...toTileKey(entry.key),
+    if (entry.surface === null) return;
+    this.notifyFind(entry.surface.windowId, {
+      ...toTileKey(entry.surface),
       requestId: result.appRequestId,
       query: result.query,
       matchCase: result.matchCase,
@@ -2714,6 +3057,15 @@ export class BrowserViewManager {
     this.trySetEntryZoom(entry, nextZoomFactor(current, direction));
   }
 
+  private setEntryViewportPreset(
+    entry: BrowserViewEntry,
+    viewportPreset: BrowserViewViewportPresetId,
+  ): void {
+    entry.viewportPreset = viewportPreset;
+    this.applyEntryBounds(entry);
+    this.applyEntryVisibility(entry);
+  }
+
   private trySetEntryZoom(entry: BrowserViewEntry, factor: number): void {
     if (entry.annotationSession?.zoomLocked() === true) return;
     entry.view.webContents.setZoomFactor(factor);
@@ -2728,9 +3080,18 @@ export class BrowserViewManager {
    */
   private prepareEntryForPipCapture(
     entry: BrowserViewEntry,
+    windowId: string,
     size: { readonly width: number; readonly height: number },
-  ): void {
-    this.attachToCurrentWindow(entry);
+  ): boolean {
+    if (entry.surface === null) {
+      const window = this.getWindow(windowId);
+      if (window === null || window.isDestroyed()) return false;
+      window.contentView.addChildView(entry.view);
+      entry.parentWindowId = windowId;
+    } else {
+      this.attachToCurrentWindow(entry);
+    }
+    if (entry.parentWindowId === null) return false;
     const hasUsableBounds =
       entry.bounds !== null &&
       entry.bounds.width > 0 &&
@@ -2765,23 +3126,26 @@ export class BrowserViewManager {
       entry.view.setVisible(true);
     }
     log.info("[browser-view] pip capture prepared", {
-      keyId: entryKeyId(entry.key),
+      keyId: entry.surface === null ? null : entryKeyId(entry.surface),
       attached: entry.parentWindowId !== null,
       bounds: entry.bounds,
       captureOffscreen,
     });
+    return true;
   }
 
   private attachToCurrentWindow(entry: BrowserViewEntry): void {
-    const targetWindow = this.getWindow(entry.key.windowId);
+    const surface = entry.surface;
+    if (surface === null) return;
+    const targetWindow = this.getWindow(surface.windowId);
     if (targetWindow !== null) {
-      this.ensureHostWindowResetListener(entry.key.windowId, targetWindow);
+      this.ensureHostWindowResetListener(surface.windowId, targetWindow);
     }
     const currentWindow =
       entry.parentWindowId === null
         ? null
         : this.getWindow(entry.parentWindowId);
-    if (entry.parentWindowId === entry.key.windowId && targetWindow !== null) {
+    if (entry.parentWindowId === surface.windowId && targetWindow !== null) {
       return;
     }
     if (currentWindow !== null) {
@@ -2790,7 +3154,7 @@ export class BrowserViewManager {
     entry.parentWindowId = null;
     if (targetWindow === null || targetWindow.isDestroyed()) return;
     targetWindow.contentView.addChildView(entry.view);
-    entry.parentWindowId = entry.key.windowId;
+    entry.parentWindowId = surface.windowId;
   }
 
   /**
@@ -2831,8 +3195,11 @@ export class BrowserViewManager {
   }
 
   private detachHostWindowResetListenerIfUnused(windowId: string): void {
-    const stillUsed = Array.from(this.entriesByKey.values()).some(
-      (entry) => entry.key.windowId === windowId,
+    const stillUsed = Array.from(this.entriesByGuestKey.values()).some(
+      (entry) =>
+        entry.surface?.windowId === windowId ||
+        (entry.identity.kind === "native" &&
+          entry.identity.lifecycleOwnerWindowId === windowId),
     );
     if (stillUsed) return;
     const listeners = this.hostWindowResetListenersByWindowId.get(windowId);
@@ -2848,8 +3215,20 @@ export class BrowserViewManager {
     detail: string | null,
   ): void {
     let affectedCount = 0;
+    for (const entry of this.entriesByGuestKey.values()) {
+      if (
+        entry.identity.kind !== "native" ||
+        entry.identity.lifecycleOwnerWindowId !== windowId ||
+        (entry.nativeActivation !== null &&
+          entry.nativeActivation.promise !== null)
+      ) {
+        continue;
+      }
+      affectedCount += 1;
+      void this.closeEntry(entry, null);
+    }
     for (const entry of this.entriesByKey.values()) {
-      if (entry.key.windowId !== windowId) continue;
+      if (entry.surface?.windowId !== windowId) continue;
       if (entry.rendererResetPending) continue;
       entry.rendererResetPending = true;
       affectedCount += 1;
@@ -2938,7 +3317,7 @@ export class BrowserViewManager {
   }
 
   /** Forensics hook for tests and support bundles. */
-  frameCacheStats(): ReturnType<TileFrameCache["stats"]> {
+  frameCacheStats(): TileFrameStats {
     return this.tileFrames.stats();
   }
 
@@ -2957,7 +3336,7 @@ export class BrowserViewManager {
 
   private runEvictionSweep(): void {
     const hidden: BrowserViewEntry[] = [];
-    for (const entry of this.entriesByRuntimeKey.values()) {
+    for (const entry of this.entriesByGuestKey.values()) {
       if (entry.lastLoggedVisible === true) continue;
       if (entry.status === "dead") continue;
       if (this.isEntryEvictionExempt(entry)) continue;
@@ -2970,13 +3349,13 @@ export class BrowserViewManager {
     log.info("[browser-view] evicting hidden guests", {
       cap: HIDDEN_GUEST_EVICTION_CAP,
       hiddenCount: hidden.length,
-      evicting: victims.map((victim) => entryKeyId(victim.key)),
+      evicting: victims.map((victim) => guestEntryKey(victim)),
     });
     victims.forEach((victim) => {
       // BT-403 silent reload: the renderer keeps the tile's last known
       // title/favicon/URL from prior status events; the next upsert for this
       // key creates a fresh guest and shows its normal loading skeleton.
-      this.evictedKeyIdsLog.push(entryKeyId(victim.key));
+      this.evictedKeyIdsLog.push(guestEntryKey(victim));
       victim.status = "dead";
       victim.statusReason = "evicted-hidden";
       this.emitStatus(victim);
@@ -3015,6 +3394,7 @@ export class BrowserViewManager {
   }
 
   private isEntryEvictionExempt(entry: BrowserViewEntry): boolean {
+    if (entry.identity.kind === "native") return true;
     if (entry.overlayOwnerIds.length > 0) return true; // parked (BT-202)
     if (entry.control !== null) return true; // agent holds control grant
     if (entry.annotationSession !== null) return true;
@@ -3024,15 +3404,18 @@ export class BrowserViewManager {
   }
 
   private applyEntryVisibility(entry: BrowserViewEntry): void {
-    const window = this.getWindow(entry.key.windowId);
+    const surface = entry.surface;
+    if (surface === null) {
+      entry.lastLoggedVisible = false;
+      entry.view.setVisible(false);
+      return;
+    }
+    const window = this.getWindow(surface.windowId);
     // A tile parked under an active overlay (BT-202) keeps its
     // offscreen-visible posture so its compositor keeps feeding the frame
     // cache; visibility is recomputed when the last owner releases. A dead
     // tile must never stay parked-visible, so it falls through instead.
-    if (
-      entry.overlayOwnerIds.length > 0 &&
-      entry.status !== "dead"
-    ) {
+    if (entry.overlayOwnerIds.length > 0 && entry.status !== "dead") {
       return;
     }
     const hasUsableBounds =
@@ -3052,7 +3435,7 @@ export class BrowserViewManager {
     const wasVisible = entry.lastLoggedVisible;
     if (entry.lastLoggedVisible !== visible) {
       log.info("[browser-view] visibility changed", {
-        keyId: entryKeyId(entry.key),
+        keyId: entryKeyId(surface),
         visible,
         desiredVisible: entry.desiredVisible,
         overlayOwnerCount: entry.overlayOwnerIds.length,
@@ -3087,7 +3470,9 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
     window: BrowserViewWindow | null,
   ): void {
-    const keyId = entryKeyId(entry.key);
+    const surface = entry.surface;
+    if (surface === null) return;
+    const keyId = entryKeyId(surface);
     const feedLive =
       entry.desiredVisible &&
       !entry.rendererResetPending &&
@@ -3115,14 +3500,26 @@ export class BrowserViewManager {
   }
 
   private reconcileWindowVisibility(): void {
-    for (const entry of Array.from(this.entriesByRuntimeKey.values())) {
-      if (this.entriesByKey.get(entryKeyId(entry.key)) !== entry) {
+    for (const entry of Array.from(this.entriesByGuestKey.values())) {
+      const surface = entry.surface;
+      if (surface === null && this.pipCaptureEntry === entry) {
+        const captureWindow =
+          entry.parentWindowId === null
+            ? null
+            : this.getWindow(entry.parentWindowId);
+        if (captureWindow !== null && !captureWindow.isDestroyed()) continue;
+        this.stopPipCapture();
+      }
+      if (
+        surface === null ||
+        this.entriesByKey.get(entryKeyId(surface)) !== entry
+      ) {
         entry.desiredVisible = false;
         entry.parentWindowId = null;
         entry.view.setVisible(false);
         continue;
       }
-      const window = this.getWindow(entry.key.windowId);
+      const window = this.getWindow(surface.windowId);
       if (window === null || window.isDestroyed()) {
         entry.desiredVisible = false;
         entry.parentWindowId = null;
@@ -3136,31 +3533,30 @@ export class BrowserViewManager {
 
   private async closeEntry(
     entry: BrowserViewEntry,
-    handoffReason: AgentBrowserViewTileHandoffChange["reason"] | null,
+    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
   ): Promise<void> {
-    const keyId = entryKeyId(entry.key);
-    this.tileFrames.detach(keyId);
-    // Claim this entry synchronously, before the `await` below yields
-    // control: `closeEntry` is now async (the handoff capture needs a live
-    // `webContents`), and every one of its three call sites fires-and-
-    // forgets rather than awaiting, so a second teardown trigger racing the
-    // first (e.g. two window-change events) must not find this entry again
-    // via `entriesByKey` and process it a second time.
-    if (this.entriesByRuntimeKey.get(runtimeEntryKey(entry)) !== entry) {
-      log.info("[browser-view] view destroy skipped: already claimed", {
-        keyId,
-        handoffReason,
-      });
-      return;
-    }
+    if (entry.closePromise !== null) return entry.closePromise;
+    const closePromise = this.destroyEntry(entry, handoffReason);
+    entry.closePromise = closePromise;
+    return closePromise;
+  }
+
+  private async destroyEntry(
+    entry: BrowserViewEntry,
+    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
+  ): Promise<void> {
+    const surface = entry.surface;
+    const keyId = surface === null ? null : entryKeyId(surface);
+    if (keyId !== null) this.tileFrames.detach(keyId);
     log.info("[browser-view] view destroy started", {
       keyId,
       handoffReason,
       status: entry.status,
     });
-    this.entriesByKey.delete(keyId);
-    this.entriesByRuntimeKey.delete(runtimeEntryKey(entry));
-    this.detachHostWindowResetListenerIfUnused(entry.key.windowId);
+    if (keyId !== null) this.entriesByKey.delete(keyId);
+    if (surface !== null) {
+      this.detachHostWindowResetListenerIfUnused(surface.windowId);
+    }
     this.destroyDevToolsWindow(entry);
     this.cancelControl(entry, "browser tile closed", null);
     // Ticket 12 item 2: capture and push before anything below tears the
@@ -3170,22 +3566,31 @@ export class BrowserViewManager {
     // reason is overridden with "crash-no-capture" regardless of which of
     // the three teardown paths is processing it now, since a crashed
     // renderer cannot safely be captured from either way.
-    if (handoffReason !== null) {
-      await this.pushTileHandoff(
-        entry,
-        entry.status === "dead" ? "crash-no-capture" : handoffReason,
-      );
+    if (
+      handoffReason !== null &&
+      entry.identity.kind === "native" &&
+      entry.nativeActivation !== null &&
+      entry.nativeActivation.promise !== null
+    ) {
+      try {
+        await this.pushElectronTabHandoff(
+          entry,
+          entry.status === "dead" ? "crash-no-capture" : handoffReason,
+        );
+      } catch (error) {
+        log.warn("[browser-view] electron tab handoff failed during close", {
+          error: describeLogError(error),
+          guestKey: guestEntryKey(entry),
+          handoffReason,
+        });
+      }
     }
-    // Ticket 02 fixup: `pushTileHandoff` above returns immediately for a
-    // claimed sibling (its `handedOff` guard), so on its own this `await`
-    // does nothing to protect it from the teardown below - it is whichever
-    // OTHER tile's `pushTileHandoff` claimed this one that is still busy
-    // capturing it. Wait for that (bounded, so a hung capture cannot block
-    // quit) before closing `webContents` out from under it.
+    // A quit drain or a sibling's aggregate handoff can already be reading
+    // this guest. Keep the identity reserved until that capture settles.
     if (entry.pendingHandoffCapture !== null) {
       await Promise.race([
         entry.pendingHandoffCapture,
-        delay(SIBLING_HANDOFF_CAPTURE_TIMEOUT_MS),
+        delay(HANDOFF_CAPTURE_TIMEOUT_MS),
       ]);
     }
     const window =
@@ -3223,6 +3628,14 @@ export class BrowserViewManager {
     entry.debugSession = null;
     entry.view.setVisible(false);
     webContents.close();
+    if (this.entriesByGuestKey.get(guestEntryKey(entry)) === entry) {
+      this.entriesByGuestKey.delete(guestEntryKey(entry));
+    }
+    if (entry.identity.kind === "native") {
+      this.detachHostWindowResetListenerIfUnused(
+        entry.identity.lifecycleOwnerWindowId,
+      );
+    }
     log.info("[browser-view] view destroy requested", { keyId });
   }
 
@@ -3249,8 +3662,9 @@ export class BrowserViewManager {
     if (!entry.overlaySnapshotStale) {
       entry.overlaySnapshotStale = true;
     }
-    this.notifySnapshotInvalidated(entry.key.windowId, {
-      ...toTileKey(entry.key),
+    if (entry.surface === null) return;
+    this.notifySnapshotInvalidated(entry.surface.windowId, {
+      ...toTileKey(entry.surface),
       reason,
     });
   }
@@ -3260,48 +3674,31 @@ export class BrowserViewManager {
   }
 
   /**
-   * Ticket 12 / ticket 10's design, extended by ticket 02 for multi-tab
-   * sessions. Captures `{url, storageState}` and pushes it to the host just
-   * before a tile dies, for whatever `reason` the caller names. Best-effort
-   * by construction, same posture already accepted for `cdpSessionEnded`: a
-   * push that is delayed, dropped, or fails to capture storage still lets
-   * the host continue the session headless at `capturedUrl`, and
-   * `reclaimUnreachableTileSession`'s TTL path is the fallback if the push
-   * never arrives at all.
-   *
-   * Ticket 02: before capturing anything, this synchronously claims every
-   * OTHER still-live tile of the same session as a sibling and marks it
-   * `handedOff`, so one frame carries the whole session atomically. This
-   * must happen before the first `await` below: `dispose()`'s group
-   * teardown fires one `closeEntry` per tile back-to-back with no `await`
-   * between them, so a later iteration's own `pushTileHandoff` call must
-   * already see `handedOff` set by an earlier iteration rather than racing
-   * it to also claim the same siblings.
-   *
-   * Ticket 02 fixup: that same no-await teardown loop means a claimed
-   * sibling's own `closeEntry` (and the `webContents.close()` at the end of
-   * it) runs before this function ever reaches the sibling's capture below -
-   * `handedOff` alone stops it from pushing a duplicate frame, but does
-   * nothing to keep its `webContents` alive long enough to be captured. So
-   * this also hands each claimed sibling a shared `pendingHandoffCapture`
-   * promise, synchronously, in the same pass - `closeEntry` awaits it
-   * (bounded) before tearing down.
+   * Claims every still-live native tab in the same host session before the
+   * first await, then captures one atomic handoff. The shared promise keeps
+   * sibling close paths from destroying their guests during capture.
    */
-  private async pushTileHandoff(
+  private async pushElectronTabHandoff(
     entry: BrowserViewEntry,
-    reason: AgentBrowserViewTileHandoffChange["reason"],
+    reason: BrowserViewElectronTabHandoffChange["reason"],
   ): Promise<void> {
     if (entry.handedOff) return;
+    if (entry.identity.kind !== "native") return;
+    const identity = entry.identity;
     entry.handedOff = true;
-    const siblings = Array.from(this.entriesByRuntimeKey.values()).filter(
+    const siblings = Array.from(this.entriesByGuestKey.values()).filter(
       (candidate) =>
         candidate !== entry &&
-        candidate.runtimeTabId !== null &&
-        candidate.runtimeSessionId === entry.runtimeSessionId &&
+        candidate.identity.kind === "native" &&
+        candidate.identity.key.hostId === identity.key.hostId &&
+        candidate.identity.key.sessionId === identity.key.sessionId &&
+        candidate.nativeActivation !== null &&
+        candidate.nativeActivation.promise !== null &&
         !candidate.handedOff,
     );
     const { promise: aggregationPromise, resolve: resolveAggregation } =
       Promise.withResolvers<void>();
+    entry.pendingHandoffCapture = aggregationPromise;
     for (const sibling of siblings) {
       sibling.handedOff = true;
       sibling.pendingHandoffCapture = aggregationPromise;
@@ -3312,23 +3709,33 @@ export class BrowserViewManager {
         reason,
       );
       const siblingTabs = await Promise.all(
-        siblings.map(async (sibling) => ({
-          tabId: sibling.runtimeTabId ?? sibling.key.pageSessionId,
-          url: sibling.currentUrl,
-          capturedStorageState: await this.captureHandoffStorageState(
-            sibling,
-            sibling.status === "dead" ? "crash-no-capture" : reason,
-          ),
-        })),
+        siblings.map(async (sibling) => {
+          if (sibling.identity.kind !== "native") {
+            throw new Error("Native handoff selected an unmanaged sibling.");
+          }
+          return {
+            tabId: sibling.identity.key.tabId,
+            registrationId: sibling.identity.registrationId,
+            url: sibling.currentUrl,
+            capturedStorageState: await this.captureHandoffStorageState(
+              sibling,
+              sibling.status === "dead" ? "crash-no-capture" : reason,
+            ),
+          };
+        }),
       );
-      this.notifyTileHandoff(entry.key.windowId, {
-        ...toTileKey(entry.key),
+      this.notifyElectronTabHandoff(identity.lifecycleOwnerWindowId, {
+        ...identity.key,
+        registrationId: identity.registrationId,
         capturedUrl: entry.currentUrl,
         capturedStorageState,
         siblingTabs,
         reason,
       });
     } finally {
+      if (entry.pendingHandoffCapture === aggregationPromise) {
+        entry.pendingHandoffCapture = null;
+      }
       for (const sibling of siblings) {
         if (sibling.pendingHandoffCapture === aggregationPromise) {
           sibling.pendingHandoffCapture = null;
@@ -3340,7 +3747,7 @@ export class BrowserViewManager {
 
   private async captureHandoffStorageState(
     entry: BrowserViewEntry,
-    reason: AgentBrowserViewTileHandoffChange["reason"],
+    reason: BrowserViewElectronTabHandoffChange["reason"],
   ): Promise<unknown> {
     // A crashed renderer cannot safely run `executeJavaScript` for
     // localStorage, and its webContents state is not trustworthy - honor
@@ -3348,7 +3755,7 @@ export class BrowserViewManager {
     if (reason === "crash-no-capture") return null;
     try {
       const result = await this.captureStorageStateFromBrowser(
-        { ...toTileKey(entry.key), origin: entry.currentUrl },
+        { origin: entry.currentUrl },
         entry.view.webContents,
       );
       return result.storageState;
@@ -3371,13 +3778,14 @@ export class BrowserViewManager {
     if (controlId !== null && control.controlId !== controlId) return;
     control.generation += 1;
     entry.control = null;
-    this.notifyControlRevoked(entry.key.windowId, {
-      ...entry.key,
+    if (entry.surface === null) return;
+    this.notifyControlRevoked(entry.surface.windowId, {
+      ...entry.surface,
       controlId: control.controlId,
       reason,
     });
     log.info("[browser-view] visible tile control revoked", {
-      tileInstanceId: entry.key.tileInstanceId,
+      tileInstanceId: entry.surface.tileInstanceId,
       controlId: control.controlId,
       reason,
     });
@@ -3579,11 +3987,33 @@ function entryKeyId(key: BrowserViewEntryKey): string {
   );
 }
 
-function runtimeEntryKey(entry: BrowserViewEntry): string {
-  return [
-    entry.runtimeSessionId,
-    entry.runtimeTabId ?? entry.key.pageSessionId,
-  ].join("\u001f");
+function nativeGuestKey(key: BrowserViewNativeTabKey): string {
+  return ["native", key.hostId, key.sessionId, key.tabId].join("\u001f");
+}
+
+function unmanagedGuestKey(pageSessionId: string): string {
+  return ["unmanaged", pageSessionId].join("\u001f");
+}
+
+function guestEntryKey(entry: BrowserViewEntry): string {
+  return entry.identity.kind === "native"
+    ? nativeGuestKey(entry.identity.key)
+    : unmanagedGuestKey(entry.identity.pageSessionId);
+}
+
+function toNativeTabKey(key: BrowserViewNativeTabKey): BrowserViewNativeTabKey {
+  return {
+    hostId: key.hostId,
+    sessionId: key.sessionId,
+    tabId: key.tabId,
+  };
+}
+
+function requireSurface(entry: BrowserViewEntry): BrowserViewEntryKey {
+  if (entry.surface === null) {
+    throw new Error(`Browser guest ${guestEntryKey(entry)} has no surface.`);
+  }
+  return entry.surface;
 }
 
 function normalizeBounds(bounds: BrowserViewBounds): BrowserViewBounds {
@@ -3997,7 +4427,7 @@ function browserViewControlActionsEqual(
 }
 
 /**
- * Ticket 03's enumerated CDP dispatch. Each `AgentBrowserViewCdpCommand` kind
+ * Enumerated CDP dispatch. Each `BrowserViewCdpCommand` kind
  * maps to exactly one CDP method - deliberately not a generic
  * `sendCommand(method, params)` passthrough, so growth here always means
  * adding a case, never widening what a single case accepts.
@@ -4005,8 +4435,8 @@ function browserViewControlActionsEqual(
 async function sendCdpCommand(
   browserDebugger: BrowserViewDebugger,
   sessionId: string | undefined,
-  command: AgentBrowserViewCdpCommand,
-): Promise<AgentBrowserViewCdpResult> {
+  command: BrowserViewCdpCommand,
+): Promise<BrowserViewCdpResult> {
   switch (command.kind) {
     case "cdpNavigate": {
       const value = await browserDebugger.sendCommand(
@@ -4220,7 +4650,7 @@ async function sendCdpCommand(
     default: {
       const exhaustive: never = command;
       throw new Error(
-        `Unhandled agent CDP command: ${JSON.stringify(exhaustive)}`,
+        `Unhandled browser CDP command: ${JSON.stringify(exhaustive)}`,
       );
     }
   }
@@ -4229,7 +4659,7 @@ async function sendCdpCommand(
 function remoteObjectResult(
   kind: "cdpEvaluate" | "cdpCallFunctionOn",
   value: unknown,
-): AgentBrowserViewCdpResult {
+): BrowserViewCdpResult {
   const record = isRecord(value) ? value : {};
   const result = isRecord(record.result) ? record.result : null;
   const exceptionDetails = isRecord(record.exceptionDetails)
@@ -4275,17 +4705,17 @@ function describeException(exceptionDetails: Record<string, unknown>): string {
   return text;
 }
 
-function flattenFrameTree(value: unknown): AgentBrowserViewCdpFrameInfo[] {
+function flattenFrameTree(value: unknown): BrowserViewCdpFrameInfo[] {
   const root = isRecord(value) ? value : null;
   if (root === null) return [];
-  const out: AgentBrowserViewCdpFrameInfo[] = [];
+  const out: BrowserViewCdpFrameInfo[] = [];
   collectFrameTreeNode(root, out);
   return out;
 }
 
 function collectFrameTreeNode(
   node: Record<string, unknown>,
-  out: AgentBrowserViewCdpFrameInfo[],
+  out: BrowserViewCdpFrameInfo[],
 ): void {
   const frame = isRecord(node.frame) ? node.frame : null;
   if (frame !== null) {
@@ -4302,7 +4732,7 @@ function collectFrameTreeNode(
   }
 }
 
-function classifyCdpError(err: unknown): AgentBrowserViewCdpErrorInfo {
+function classifyCdpError(err: unknown): BrowserViewCdpErrorInfo {
   const message = err instanceof Error ? err.message : String(err);
   if (message.toLowerCase().includes("not attached")) {
     return { kind: "not_attached", message, code: null };

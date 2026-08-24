@@ -16,6 +16,12 @@ const CAPTURE_READY = {
   requestId: "req-ready-1",
 } as const;
 
+const ELECTRON_LIFECYCLE_READY = {
+  kind: "electronTabLifecycleReady",
+  hasBinaryPayload: false,
+  requestId: "req-electron-ready-1",
+} as const;
+
 const CAPTURED_RESPONSE = {
   kind: "primaryProfileCaptured",
   hasBinaryPayload: false,
@@ -57,6 +63,13 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     ).toBe(true);
   });
 
+  it("advertises Electron lifecycle readiness independently of profile capture", () => {
+    expect(
+      browserSessionsClientFrameSchema.safeParse(ELECTRON_LIFECYCLE_READY)
+        .success,
+    ).toBe(true);
+  });
+
   it("parses primaryProfileCaptured with required status enum", () => {
     expect(
       browserSessionsClientFrameSchema.safeParse(CAPTURED_RESPONSE).success,
@@ -82,9 +95,9 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
 
   it("rejects capturePrimaryProfile without requestId", () => {
     const { requestId: _requestId, ...withoutId } = CAPTURE_REQUEST;
-    expect(
-      browserSessionsServerFrameSchema.safeParse(withoutId).success,
-    ).toBe(false);
+    expect(browserSessionsServerFrameSchema.safeParse(withoutId).success).toBe(
+      false,
+    );
   });
 
   it("rejects primaryProfileCaptured without storageState field", () => {
@@ -104,6 +117,7 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     );
     expect(serverKinds).toContain("capturePrimaryProfile");
     expect(clientKinds).toContain("primaryProfileCaptureReady");
+    expect(clientKinds).toContain("electronTabLifecycleReady");
     expect(clientKinds).toContain("primaryProfileCaptured");
   });
 });

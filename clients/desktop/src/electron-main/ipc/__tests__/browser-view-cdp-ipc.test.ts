@@ -1,22 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  AgentBrowserViewCdpCommand,
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  BrowserViewBackgroundTabCreate,
+  BrowserViewCdpCommand,
+  BrowserViewCdpDispatch,
+  BrowserViewCdpSessionEndedChange,
+  BrowserViewCdpTargetAttachedChange,
+  BrowserViewElectronTabControl,
+  BrowserViewEnsureTab,
+  BrowserViewProvisionedTab,
 } from "../../../ipc-contracts/browser-view-types";
 import type { BrowserViewManagerOptions } from "../../browser-view/browser-view-manager";
 import { parseBrowserViewCdpCommand } from "../browser-view-cdp-payload";
 
 type DispatchCdpCall = {
   readonly windowId: string;
-  readonly input: AgentBrowserViewCdpDispatch;
+  readonly input: BrowserViewCdpDispatch;
 };
 
-type BackgroundTabCreateCall = {
+type EnsureTabCall = {
   readonly windowId: string;
-  readonly input: BrowserViewBackgroundTabCreate;
+  readonly input: BrowserViewEnsureTab;
+};
+
+type ControlElectronTabCall = {
+  readonly windowId: string;
+  readonly input: BrowserViewElectronTabControl;
 };
 
 type InvokeHandler = (
@@ -27,7 +34,8 @@ type InvokeHandler = (
 const captured = vi.hoisted(() => ({
   managerOptions: null as BrowserViewManagerOptions | null,
   dispatchCdpCalls: [] as DispatchCdpCall[],
-  backgroundTabCreates: [] as BackgroundTabCreateCall[],
+  ensuredTabs: [] as EnsureTabCall[],
+  controlledTabs: [] as ControlElectronTabCall[],
 }));
 
 vi.mock("electron", () => {
@@ -88,6 +96,7 @@ vi.mock("../../app/cert-trust", () => ({
 }));
 
 vi.mock("../../browser-view/browser-view-manager", () => ({
+  BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
     constructor(options: BrowserViewManagerOptions) {
       captured.managerOptions = options;
@@ -95,7 +104,7 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
 
     dispatchCdp(
       windowId: string,
-      input: AgentBrowserViewCdpDispatch,
+      input: BrowserViewCdpDispatch,
     ): Promise<{
       readonly kind: "cdpGetFrameTree";
       readonly ok: true;
@@ -109,12 +118,29 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
       });
     }
 
-    createBackgroundTab(
+    ensureTab(
       windowId: string,
-      input: BrowserViewBackgroundTabCreate,
-    ): Promise<void> {
-      captured.backgroundTabCreates.push({ windowId, input });
+      input: BrowserViewEnsureTab,
+    ): Promise<BrowserViewProvisionedTab> {
+      captured.ensuredTabs.push({ windowId, input });
+      return Promise.resolve({
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+        registrationId: "registration-1",
+      });
+    }
+
+    acceptTab(): Promise<void> {
       return Promise.resolve();
+    }
+
+    controlElectronTab(
+      windowId: string,
+      input: BrowserViewElectronTabControl,
+    ): Promise<boolean> {
+      captured.controlledTabs.push({ windowId, input });
+      return Promise.resolve(true);
     }
 
     dispose(): void {}
@@ -215,7 +241,7 @@ function findInvokeHandler(
 const VALID_COMMAND_PAYLOADS: ReadonlyArray<{
   readonly name: string;
   readonly payload: Record<string, unknown>;
-  readonly expected: AgentBrowserViewCdpCommand;
+  readonly expected: BrowserViewCdpCommand;
 }> = [
   {
     name: "cdpNavigate",
@@ -411,7 +437,8 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
   beforeEach(() => {
     captured.managerOptions = null;
     captured.dispatchCdpCalls = [];
-    captured.backgroundTabCreates = [];
+    captured.ensuredTabs = [];
+    captured.controlledTabs = [];
     vi.clearAllMocks();
   });
 
@@ -478,7 +505,7 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
       throw new Error("BrowserViewManager was not constructed");
     }
 
-    const sessionEnded: AgentBrowserViewCdpSessionEndedChange = {
+    const sessionEnded: BrowserViewCdpSessionEndedChange = {
       viewTabId: "view-tab-1",
       paneId: "pane-1",
       tileInstanceId: "browser-instance-1",
@@ -492,7 +519,7 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
       sessionEnded,
     );
 
-    const targetAttached: AgentBrowserViewCdpTargetAttachedChange = {
+    const targetAttached: BrowserViewCdpTargetAttachedChange = {
       viewTabId: "view-tab-1",
       paneId: "pane-1",
       tileInstanceId: "browser-instance-1",
@@ -510,21 +537,9 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
       targetAttached,
     );
 
-    // Discriminating: the agent-tile event channels must not be used here.
-    // A no-op notify would pass "no crash"; wrong-channel would still send.
-    expect(bridge.safeSendToWindow).not.toHaveBeenCalledWith(
-      expect.anything(),
-      RunnerHostEvent.agentBrowserViewCdpSessionEnded,
-      expect.anything(),
-    );
-    expect(bridge.safeSendToWindow).not.toHaveBeenCalledWith(
-      expect.anything(),
-      RunnerHostEvent.agentBrowserViewCdpTargetAttached,
-      expect.anything(),
-    );
   });
 
-  it("passes the background storage seed through the IPC parser", async () => {
+  it("passes the native tab storage seed through the IPC parser", async () => {
     const { registerBrowserViewIpc } = await import("../browser-view-ipc");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
@@ -533,7 +548,7 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
     registerBrowserViewIpc(bridge as never);
     const handler = findInvokeHandler(
       bridge,
-      RunnerHostInvoke.browserViewCreateBackgroundTab,
+      RunnerHostInvoke.browserViewEnsureTab,
     );
     const seedStorageState = {
       cookies: [],
@@ -545,26 +560,63 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
       ],
     };
 
-    await handler({}, {
-      viewTabId: "view-tab-1",
-      paneId: "pane-1",
-      tileInstanceId: "tile-1",
-      pageSessionId: "page-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      url: "https://example.com/background",
-      seedStorageState,
-    });
+    await handler(
+      {},
+      {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        requestedUrl: "https://example.com/background",
+        seedStorageState,
+      },
+    );
 
-    expect(captured.backgroundTabCreates).toEqual([
+    expect(captured.ensuredTabs).toEqual([
       {
         windowId: "window-1",
         input: expect.objectContaining({
+          hostId: "host-1",
           sessionId: "session-1",
           tabId: "tab-1",
-          url: "https://example.com/background",
+          requestedUrl: "https://example.com/background",
           seedStorageState,
         }),
+      },
+    ]);
+  });
+
+  it("parses native tab control without routing through a surface key", async () => {
+    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+
+    const bridge = makeBridge();
+    registerBrowserViewIpc(bridge as never);
+    const handler = findInvokeHandler(
+      bridge,
+      RunnerHostInvoke.browserViewControlElectronTab,
+    );
+    await handler(
+      {},
+      {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+        action: { kind: "navigate", url: "https://example.com/next" },
+      },
+    );
+
+    expect(captured.controlledTabs).toEqual([
+      {
+        windowId: "window-1",
+        input: {
+          hostId: "host-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+          registrationId: "registration-1",
+          action: { kind: "navigate", url: "https://example.com/next" },
+        },
       },
     ]);
   });

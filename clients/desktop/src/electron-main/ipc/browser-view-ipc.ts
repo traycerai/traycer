@@ -12,11 +12,18 @@ import {
   parseBrowserViewCdpCommand,
   readCdpNullableString,
 } from "./browser-view-cdp-payload";
+import {
+  parseBrowserViewAttachSurface,
+  parseBrowserViewDetachSurface,
+  parseBrowserViewElectronTabCdpDispatch,
+  parseBrowserViewElectronTabControl,
+  parseBrowserViewEnsureTab,
+  parseBrowserViewNativeTabCapability,
+  parseBrowserViewReleaseTab,
+} from "./browser-view-native-tab-payload";
 import type {
-  AgentBrowserViewCdpDispatch,
+  BrowserViewCdpDispatch,
   BrowserLabsStateUpdate,
-  BrowserViewBackgroundTabCreate,
-  BrowserViewBackgroundThrottlingChange,
   BrowserViewBounds,
   BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
@@ -24,7 +31,6 @@ import type {
   BrowserViewControlGrant,
   BrowserViewControlRevoke,
   BrowserViewDownloadCancel,
-  BrowserViewDurableTabRegistration,
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
@@ -36,7 +42,6 @@ import type {
   BrowserViewViewportPresetChange,
   BrowserViewViewportPresetId,
 } from "../../ipc-contracts/browser-view-types";
-import { config } from "../../config";
 import { setInAppBrowserBetaEnabledMarker } from "../app/browser-labs-state";
 import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
@@ -74,10 +79,6 @@ import type {
 } from "../../ipc-contracts/browser-annotation-types";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
-const BROWSER_VIEW_RELEASE_GRACE_MS = 500;
-const BROWSER_ELECTRON_CREATE_DELAY_ENV =
-  "TRAYCER_BROWSER_ELECTRON_CREATE_DELAY_MS";
-
 export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
 ): BrowserViewManager {
@@ -106,6 +107,13 @@ export function registerBrowserViewIpc(
       bridge.safeSendToWindow(
         windowId,
         RunnerHostEvent.browserViewStatusChange,
+        change,
+      );
+    },
+    notifyNativeTabStatus: (windowId, change) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewNativeTabStatusChange,
         change,
       );
     },
@@ -179,10 +187,24 @@ export function registerBrowserViewIpc(
         change,
       );
     },
-    notifyTileHandoff: (windowId, change) => {
+    notifyNativeTabCdpSessionEnded: (windowId, change) => {
       bridge.safeSendToWindow(
         windowId,
-        RunnerHostEvent.browserViewTileHandoff,
+        RunnerHostEvent.browserViewNativeTabCdpSessionEnded,
+        change,
+      );
+    },
+    notifyNativeTabCdpTargetAttached: (windowId, change) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewNativeTabCdpTargetAttached,
+        change,
+      );
+    },
+    notifyElectronTabHandoff: (windowId, change) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.browserViewElectronTabHandoff,
         change,
       );
     },
@@ -205,8 +227,6 @@ export function registerBrowserViewIpc(
     captureStorageState: captureBrowserViewStorageState,
     capturePrimaryProfile: captureBrowserPrimaryProfile,
     capturePrimaryProfileLocalStorage: captureBrowserOriginLocalStorage,
-    releaseGraceMs: BROWSER_VIEW_RELEASE_GRACE_MS,
-    electronCreateDelayMs: readElectronCreateDelayMs(),
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
@@ -226,74 +246,64 @@ export function registerBrowserViewIpc(
     manager.upsertTile(windowId, parseTileUpsert(payload));
   });
 
+  bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
+    manager.ensureTab(
+      readSenderWindowId(bridge, event),
+      parseBrowserViewEnsureTab(payload),
+    ),
+  );
+
+  bridge.handleInvoke(RunnerHostInvoke.browserViewAcceptTab, (_event, payload) =>
+    manager.acceptTab(parseBrowserViewNativeTabCapability(payload)),
+  );
+
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewCreateBackgroundTab,
-    async (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      const input = parseBackgroundTabCreate(payload);
-      const startedAt = Date.now();
-      log.info("[browser-view] background tab create stage", {
-        kind: "electron_tab_create",
-        stage: "ipc_received",
-        outcome: "started",
-        sessionId: input.sessionId,
-        tabId: input.tabId,
-        durationMs: 0,
-      });
-      try {
-        await manager.createBackgroundTab(windowId, input);
-        log.info("[browser-view] background tab create stage", {
-          kind: "electron_tab_create",
-          stage: "ipc_settled",
-          outcome: "ok",
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          durationMs: Date.now() - startedAt,
-        });
-      } catch (error) {
-        log.info("[browser-view] background tab create stage", {
-          kind: "electron_tab_create",
-          stage: "ipc_settled",
-          outcome: "failed",
-          cause: error instanceof Error ? error.name : typeof error,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          durationMs: Date.now() - startedAt,
-        });
-        throw error;
-      }
+    RunnerHostInvoke.browserViewAttachSurface,
+    (event, payload) => {
+      const attached = manager.attachSurface(
+        readSenderWindowId(bridge, event),
+        parseBrowserViewAttachSurface(payload),
+      );
+      if (!attached) throw new Error("Electron browser tab is not available.");
     },
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewRegisterDurableTab,
+    RunnerHostInvoke.browserViewDetachSurface,
     (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.registerDurableTab(
-        windowId,
-        parseDurableTabRegistration(payload),
+      manager.detachSurface(
+        readSenderWindowId(bridge, event),
+        parseBrowserViewDetachSurface(payload),
       );
     },
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewReleaseDurableTab,
-    async (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      await manager.releaseDurableTab(
-        windowId,
-        parseDurableTabRegistration(payload),
-      );
+    RunnerHostInvoke.browserViewReleaseTab,
+    (event, payload) => {
+      readSenderWindowId(bridge, event);
+      return manager.releaseTab(parseBrowserViewReleaseTab(payload));
     },
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewSetBackgroundThrottling,
+    RunnerHostInvoke.browserViewControlElectronTab,
+    async (event, payload) => {
+      const controlled = await manager.controlElectronTab(
+        readSenderWindowId(bridge, event),
+        parseBrowserViewElectronTabControl(payload),
+      );
+      if (!controlled)
+        throw new Error("Electron browser tab is not available.");
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewElectronTabCdpDispatch,
     (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.setBackgroundThrottling(
-        windowId,
-        parseBackgroundThrottlingChange(payload),
+      readSenderWindowId(bridge, event);
+      return manager.dispatchElectronTabCdp(
+        parseBrowserViewElectronTabCdpDispatch(payload),
       );
     },
   );
@@ -557,9 +567,9 @@ export function registerBrowserViewIpc(
     },
   );
 
-  // Host registration is the routing boundary: only a registered durable
-  // tab can cause browser.sessions to send a CDP frame for this tile. This
-  // IPC layer owns transport validation and debugger-detach failure only.
+  // Borrowed-surface CDP remains presentation-keyed by design. Host-owned
+  // Electron tabs use browserViewElectronTabCdpDispatch above and never
+  // fall back through this route.
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewCdpDispatch,
     (event, payload) => {
@@ -584,19 +594,6 @@ export function registerBrowserViewIpc(
     manager.dispose();
   });
   return manager;
-}
-
-function readElectronCreateDelayMs(): number {
-  if (config.environment !== "dev") return 0;
-  const value = process.env[BROWSER_ELECTRON_CREATE_DELAY_ENV];
-  if (value === undefined || value.trim().length === 0) return 0;
-  const parsed = Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error(
-      `${BROWSER_ELECTRON_CREATE_DELAY_ENV} must be a whole number of milliseconds >= 0`,
-    );
-  }
-  return parsed;
 }
 
 function createElectronBrowserView(): ManagedBrowserView {
@@ -685,7 +682,7 @@ function parseViewportPresetChange(
   };
 }
 
-function parseCdpDispatch(value: unknown): AgentBrowserViewCdpDispatch {
+function parseCdpDispatch(value: unknown): BrowserViewCdpDispatch {
   const record = assertRecord(value, "Browser view CDP dispatch payload");
   return {
     ...parseTileKey(record),
@@ -737,38 +734,6 @@ function parseAnnotationAttachResult(
   return {
     annotationId: readString(record.annotationId, "annotationId"),
     status,
-  };
-}
-
-function parseDurableTabRegistration(
-  value: unknown,
-): BrowserViewDurableTabRegistration {
-  const record = assertRecord(value, "Browser durable tab registration");
-  return {
-    ...parseTileKey(record),
-    sessionId: readString(record.sessionId, "sessionId"),
-    tabId: readString(record.tabId, "tabId"),
-  };
-}
-
-function parseBackgroundTabCreate(
-  value: unknown,
-): BrowserViewBackgroundTabCreate {
-  const record = assertRecord(value, "Browser background tab create payload");
-  return {
-    ...parseDurableTabRegistration(record),
-    url: readString(record.url, "url"),
-    seedStorageState: record.seedStorageState ?? null,
-  };
-}
-
-function parseBackgroundThrottlingChange(
-  value: unknown,
-): BrowserViewBackgroundThrottlingChange {
-  const record = assertRecord(value, "Browser background throttling payload");
-  return {
-    ...parseTileKey(record),
-    enabled: readBoolean(record.enabled, "enabled"),
   };
 }
 
@@ -924,7 +889,9 @@ function toBrowserViewWindow(value: unknown): BrowserViewWindow | null {
   }
   return {
     contentView,
-    webContents: toBrowserViewHostWebContents(Reflect.get(value, "webContents")),
+    webContents: toBrowserViewHostWebContents(
+      Reflect.get(value, "webContents"),
+    ),
     isDestroyed: () => Boolean(isDestroyed.call(value)),
     isVisible: () => Boolean(isVisible.call(value)),
     isMinimized: () =>
@@ -974,6 +941,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(value: unknown, field: string): string {
   if (typeof value === "string") return value;
   throw new Error(`Browser view ${field} must be a string`);
+}
+
+function readNonEmptyString(value: unknown, field: string): string {
+  if (typeof value === "string" && value.length > 0) return value;
+  throw new Error(`Browser view ${field} must be a non-empty string`);
 }
 
 function readBoolean(value: unknown, field: string): boolean {

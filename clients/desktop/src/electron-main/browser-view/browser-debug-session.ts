@@ -77,7 +77,7 @@ export class BrowserDebugSession {
     this.handleDebuggerDetach(args);
   };
   private enabled = false;
-  private enableStarted = false;
+  private enablePromise: Promise<void> | null = null;
   private attachedBySession = false;
   private disposed = false;
   private nextConsoleId = 1;
@@ -109,7 +109,9 @@ export class BrowserDebugSession {
       !("identifier" in result) ||
       typeof result.identifier !== "string"
     ) {
-      throw new Error("Browser seed script registration returned no identifier");
+      throw new Error(
+        "Browser seed script registration returned no identifier",
+      );
     }
     return result.identifier;
   }
@@ -123,9 +125,12 @@ export class BrowserDebugSession {
     );
   }
 
-  enableAfterCommit(): void {
-    if (this.disposed || this.enabled || this.enableStarted) return;
-    this.enableStarted = true;
+  enableAfterCommit(): Promise<void> {
+    if (this.disposed) {
+      return Promise.reject(new Error("Browser debug session is disposed"));
+    }
+    if (this.enabled) return Promise.resolve();
+    if (this.enablePromise !== null) return this.enablePromise;
     const browserDebugger = this.webContents.debugger;
     try {
       if (!browserDebugger.isAttached()) {
@@ -135,14 +140,14 @@ export class BrowserDebugSession {
       browserDebugger.on("message", this.messageListener);
       browserDebugger.on("detach", this.detachListener);
     } catch (err) {
-      this.enableStarted = false;
       log.warn("[browser-view] debugger attach failed", {
         error: describeLogError(err),
       });
-      return;
+      return Promise.reject(err);
     }
 
-    Promise.all([
+    let enablePromise!: Promise<void>;
+    enablePromise = Promise.all([
       sendDebuggerCommand(browserDebugger, "Page.enable", {}, undefined),
       sendDebuggerCommand(browserDebugger, "Runtime.enable", {}, undefined),
       sendDebuggerCommand(browserDebugger, "Log.enable", {}, undefined),
@@ -164,12 +169,20 @@ export class BrowserDebugSession {
       ),
     ])
       .then(() => {
-        if (this.disposed) return;
+        if (
+          this.disposed ||
+          this.enablePromise !== enablePromise ||
+          !browserDebugger.isAttached()
+        ) {
+          throw new Error("Browser debug session ended while enabling");
+        }
         this.enabled = true;
         this.onSnapshotChange();
       })
       .catch((err: unknown) => {
-        this.enableStarted = false;
+        if (this.enablePromise === enablePromise) {
+          this.enablePromise = null;
+        }
         browserDebugger.off("message", this.messageListener);
         browserDebugger.off("detach", this.detachListener);
         if (this.attachedBySession && browserDebugger.isAttached()) {
@@ -185,7 +198,10 @@ export class BrowserDebugSession {
         log.warn("[browser-view] debugger domain enable failed", {
           error: describeLogError(err),
         });
+        throw err;
       });
+    this.enablePromise = enablePromise;
+    return enablePromise;
   }
 
   startPipCapture(input: BrowserPipCaptureStartInput): Promise<void> {
@@ -237,6 +253,7 @@ export class BrowserDebugSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.enablePromise = null;
     this.teardownPipCapture(this.pipCapture === null ? "stop" : "stalled");
     const browserDebugger = this.webContents.debugger;
     browserDebugger.off("message", this.messageListener);
@@ -305,7 +322,7 @@ export class BrowserDebugSession {
     browserDebugger.off("message", this.messageListener);
     browserDebugger.off("detach", this.detachListener);
     this.enabled = false;
-    this.enableStarted = false;
+    this.enablePromise = null;
     this.attachedBySession = false;
     this.childSessionIds.clear();
     this.onDetached(reason ?? "Debugger detached");

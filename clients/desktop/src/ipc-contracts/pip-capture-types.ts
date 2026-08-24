@@ -1,4 +1,4 @@
-import type { BrowserViewTileKey } from "./browser-view-types";
+import type { BrowserViewNativeTabCapability } from "./browser-view-types";
 
 /**
  * Native-tab PiP capture frames. Shaped as the `started` / `frame` /
@@ -37,12 +37,9 @@ export interface PipCaptureStalledFrame {
 }
 
 export type PipCaptureServerFrame =
-  | PipCaptureStartedFrame
-  | PipCaptureVideoFrame
-  | PipCaptureStalledFrame;
+  PipCaptureStartedFrame | PipCaptureVideoFrame | PipCaptureStalledFrame;
 
-export interface PipCaptureStartInput {
-  readonly tileKey: BrowserViewTileKey;
+export interface PipCaptureStartInput extends BrowserViewNativeTabCapability {
   readonly maxWidth: number;
   readonly maxHeight: number;
   readonly quality: number;

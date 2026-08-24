@@ -2,10 +2,10 @@
  * `browser.sessions@1.0` and `browser.screencast@1.0` - browser V1 stream
  * contracts between the GUI and host-owned headless browser sessions.
  *
- * These are intentionally stream-only additions. Once shipped, both methods
- * stay on major 1 forever; future changes must be additive minors because the
- * stream transport has no cross-major bridge. Until then the whole browser
- * protocol is branch-only and extends in place at 1.0.
+ * These are intentionally stream-only additions. Until their first release,
+ * the browser contracts extend the 1.0 baseline in place. After release,
+ * additive changes use negotiated minors with version-gated emission;
+ * breaking semantics require a separately served major.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -136,7 +136,7 @@ export const browserSessionInfoSchema = z.object({
   migration: z
     .object({
       revision: z.number().int().nonnegative(),
-      runtime: z.enum(["headless", "electron-tile", "dormant"]),
+      runtime: z.enum(["headless", "electron", "dormant"]),
     })
     .optional(),
   tabs: z.array(browserTabInfoSchema),
@@ -201,7 +201,7 @@ export type BrowserVisibleTileAction = z.infer<
  * `epicId` authorizes session visibility and actions (settled decision 1).
  * `chatId` stays required because this stream is also the transport for
  * existing chat-routed actions
- * (`tileHandoff`, the visible-tile-control and borrowed-tile flows, the CDP
+ * (`electronTabHandoff`, the visible-tile-control and borrowed-tile flows, the CDP
  * bridge), whose responses must return to the originating chat dock. It is a
  * routing key only, never a session-authorization boundary.
  */
@@ -319,8 +319,9 @@ const browserSessionsServerFrameSchemaV12 = z.discriminatedUnion("kind", [
  * check outright, which makes it just as unusable for a method set expected
  * to keep growing. So every enumerated CDP method gets its own top-level
  * frame kind, request and result, rather than one dispatch frame carrying a
- * method name plus opaque (or nested-union) params - that is the only shape
- * this framework can grow additively.
+ * method name plus opaque params - that is the only method set this framework
+ * can grow additively. The closed `target` union below is identity, not an
+ * extensible method set.
  *
  * This is a versioning artifact for the agent's own credential-free browser,
  * not a security boundary - no policy is enforced through this bridge, and it
@@ -371,7 +372,12 @@ const browserSessionsServerFrameSchemaV12 = z.discriminatedUnion("kind", [
  *   outside this frame-diffing discipline, not folded into it.
  */
 export const browserCdpErrorSchema = z.object({
-  kind: z.enum(["not_attached", "tile_not_found", "cdp_error"]),
+  kind: z.enum([
+    "not_attached",
+    "tab_not_found",
+    "tile_not_found",
+    "cdp_error",
+  ]),
   message: z.string(),
   code: z.number().nullable(),
 });
@@ -385,17 +391,39 @@ export const browserCdpFrameInfoSchema = z.object({
 });
 export type BrowserCdpFrameInfo = z.infer<typeof browserCdpFrameInfoSchema>;
 
+export const browserCdpTargetSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("electron-tab"),
+      tabId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("borrowed-tile"),
+      tileInstanceId: z.string(),
+    })
+    .strict(),
+]);
+export type BrowserCdpTarget = z.infer<typeof browserCdpTargetSchema>;
+
 const cdpRequestFrameFields = {
   ...requestFrameFields,
-  tileInstanceId: z.string(),
+  target: browserCdpTargetSchema,
+  // Host resolves a durable Electron tabId to one exact native incarnation
+  // before dispatch. Borrowed tiles have no native incarnation and use null.
+  registrationId: z.string().nullable(),
   // Targets a specific Electron flattened CDP session (an attached OOPIF or
-  // worker session). `null` means the tile's own root session.
-  sessionId: z.string().nullable(),
+  // worker session). `null` means the target's root session.
+  cdpSessionId: z.string().nullable(),
 } as const;
 
 const cdpResultFrameFields = {
   ...requestFrameFields,
-  tileInstanceId: z.string(),
+  target: browserCdpTargetSchema,
+  // Echoes the request route so a delayed result cannot settle work issued to
+  // a replacement native guest that owns the same durable tabId.
+  registrationId: z.string().nullable(),
   ok: z.boolean(),
   error: browserCdpErrorSchema.nullable(),
 } as const;
@@ -565,15 +593,10 @@ const browserSessionsServerFrameSchemaV13 = z.discriminatedUnion("kind", [
  * never named, which is exactly the widening this ticket must not do: the
  * agent reaches the tile the user named and nothing else.
  *
- * KNOWN GAP, pre-existing and deliberately not addressed here: this stream
- * performs no per-minor frame projection - `browser-stream-resolver.ts`
- * always emits the newest server frames and always parses the newest client
- * schema - so a subscriber negotiated below 1.4 would receive `kind` values
- * its own schema has never heard of, which a zod `discriminatedUnion`
- * rejects outright rather than ignoring as an unknown extra field. That is
- * inherited from every browser minor since 1.1, not introduced by these
- * frames; registry-level schema additivity makes projection possible but is
- * not a substitute for it. Tracked separately, with its own owner.
+ * Once a post-release minor exists, `browser-stream-resolver.ts` must parse
+ * and emit against the negotiated minor. Unknown object fields are additive;
+ * unknown discriminated-union arms and enum values are not. Registry-level
+ * schema additivity never substitutes for per-connection emission gating.
  */
 export const browserBurstOutcomeSchema = z.enum([
   "finished",
@@ -583,52 +606,55 @@ export const browserBurstOutcomeSchema = z.enum([
 ]);
 export type BrowserBurstOutcome = z.infer<typeof browserBurstOutcomeSchema>;
 
+export const electronTabCreateReasonSchema = z.enum([
+  "session-bootstrap",
+  "agent-open",
+  "restore",
+]);
+export type ElectronTabCreateReason = z.infer<
+  typeof electronTabCreateReasonSchema
+>;
+
+export const electronTabCreateFailureCodeSchema = z.enum([
+  "identity_violation",
+  "native_unavailable",
+  "native_create_failed",
+]);
+export type ElectronTabCreateFailureCode = z.infer<
+  typeof electronTabCreateFailureCodeSchema
+>;
+
 export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
   ...browserSessionsServerFrameSchemaV13.def.options,
-  z.object({
-    kind: z.literal("electronTabRegistered"),
-    ...requestFrameFields,
-    registrationId: z.string(),
-    sessionId: z.string(),
-    tabId: z.string(),
-  }),
   z.object({
     kind: z.literal("createElectronTab"),
     ...requestFrameFields,
     sessionId: z.string(),
-    sourceTabId: z.string(),
-    url: z.string(),
-    /**
-     * Ticket 38 step 2: the host mints the durable tab id at create time
-     * and carries it here. Renderers thread it into their
-     * `registerElectronTab` echo as `requestedTabId`; hosts claim it on a
-     * null echo for back-compat and treat any other value as a typed
-     * identity violation.
-     */
-    tabId: z.string().optional(),
-    background: z.boolean().optional(),
-    epicId: z.string().optional(),
-    hostId: z.string().optional(),
-    seedStorageState: z.unknown().nullable().optional(),
+    tabId: z.string(),
+    // Navigation intent, not part of native provisioning readiness. Desktop
+    // starts it only after the host accepts the provisioned incarnation.
+    requestedUrl: z.string(),
+    reason: electronTabCreateReasonSchema,
+    seedStorageState: z.json().nullable(),
+  }),
+  z.object({
+    kind: z.literal("electronTabAccepted"),
+    ...requestFrameFields,
+    sessionId: z.string(),
+    tabId: z.string(),
+    registrationId: z.string(),
   }),
   z.object({
     kind: z.literal("releaseElectronTab"),
     ...requestFrameFields,
     sessionId: z.string(),
     tabId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("electronTabRegistrationFailed"),
-    ...requestFrameFields,
     registrationId: z.string(),
-    sessionId: z.string(),
-    tabId: z.string(),
-    code: z.literal("BROWSER_TAB_ACTIVATED_HEADLESS"),
   }),
   z.object({
-    // Shared-browser-runtime ticket 06. The Electron partition is the
-    // canonical primary-profile store, so a fresh headless primary context
-    // asks desktop for a point-in-time derived copy before it navigates.
+    // Refreshes the host's durable primary-profile snapshot after a committed
+    // Electron navigation. Headless activation reads that snapshot; it never
+    // opens a second, opportunistic renderer request path during placement.
     kind: z.literal("capturePrimaryProfile"),
     ...requestFrameFields,
   }),
@@ -808,7 +834,7 @@ const browserSessionsClientFrameSchemaV13 = z.discriminatedUnion("kind", [
     ...cdpResultFrameFields,
   }),
   z.object({
-    // The tile's CDP debugger can detach for reasons outside our control
+    // The addressed CDP debugger can detach for reasons outside our control
     // (target destroyed, renderer crash, explicit detach). The renderer
     // pushes this the moment `onDetached` fires so the host ends the
     // agent's access immediately instead of only discovering it lazily on
@@ -817,7 +843,10 @@ const browserSessionsClientFrameSchemaV13 = z.discriminatedUnion("kind", [
     // with the attached debugger there.
     kind: z.literal("cdpSessionEnded"),
     ...requestFrameFields,
-    tileInstanceId: z.string(),
+    target: browserCdpTargetSchema,
+    // Native lifecycle pushes must name the exact guest incarnation. Borrowed
+    // tiles have attachment identity in their target and therefore send null.
+    registrationId: z.string().nullable(),
     reason: z.string(),
   }),
   z.object({
@@ -828,14 +857,17 @@ const browserSessionsClientFrameSchemaV13 = z.discriminatedUnion("kind", [
     // Push notification, not a response to a specific request - mirrors
     // `cdpSessionEnded`'s shape (a fresh `requestId` per push, for envelope
     // consistency only, not request/response correlation). Fired whenever
-    // CDP's own `Target.attachedToTarget` fires on the tile's root session,
+    // CDP's own `Target.attachedToTarget` fires on the target's root session,
     // so the host can discover a flattened child (OOPIF/worker) session id
     // to address further dispatches at - this bridge's existing per-command
-    // `sessionId` field already carries them once known.
+    // `cdpSessionId` field already carries them once known.
     kind: z.literal("cdpTargetAttached"),
     ...requestFrameFields,
-    tileInstanceId: z.string(),
-    sessionId: z.string(),
+    target: browserCdpTargetSchema,
+    // See cdpSessionEnded above: durable tabId alone cannot distinguish a
+    // delayed event from a native guest that has already been replaced.
+    registrationId: z.string().nullable(),
+    cdpSessionId: z.string(),
     targetId: z.string(),
     targetType: z.string(),
     url: z.string(),
@@ -897,33 +929,36 @@ const browserSessionsClientFrameSchemaV14 = z.discriminatedUnion("kind", [
 export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
   ...browserSessionsClientFrameSchemaV14.def.options,
   z.object({
-    // Idempotent claim, not a create-only ack. With requestedTabId set this
-    // either acks an outstanding createElectronTab sent to this subscriber,
-    // re-binds the caller's own route, or — same owner scope only — claims a
-    // route whose owning connection is gone (renderer reload / dev-server
-    // restart) or wakes a dormant tab for on-demand restore. A route still
-    // owned by a live connection is rejected.
-    kind: z.literal("registerElectronTab"),
+    // One settlement for one host-minted birth. Receipt means only that the
+    // native guest exists, its durable identity is installed, and CDP can be
+    // routed through this subscriber. Navigation and presentation begin only
+    // after `electronTabAccepted` commits ownership.
+    kind: z.literal("electronTabProvisioned"),
     ...requestFrameFields,
-    registrationId: z.string(),
     sessionId: z.string(),
-    requestedTabId: z.string().nullable().optional(),
-    tileInstanceId: z.string(),
-    initialUrl: z.string(),
-    title: z.string().nullable(),
+    tabId: z.string(),
+    registrationId: z.string(),
   }),
   z.object({
-    kind: z.literal("electronTabCreated"),
+    kind: z.literal("electronTabCreateFailed"),
     ...requestFrameFields,
     sessionId: z.string(),
-    tabId: z.string().nullable(),
-    reason: z.string().nullable(),
+    tabId: z.string(),
+    code: electronTabCreateFailureCodeSchema,
+    message: z.string(),
   }),
   z.object({
     // One-shot capability readiness for ticket 06's canonical Electron
     // profile capture. This stays on the existing stream; it is not a
     // general capability-negotiation subsystem.
     kind: z.literal("primaryProfileCaptureReady"),
+    ...requestFrameFields,
+  }),
+  z.object({
+    // The subscriber has the complete native tab lifecycle and CDP seam.
+    // Deliberately separate from primaryProfileCaptureReady: storage capture
+    // alone cannot create, restore, or drive an Electron tab.
+    kind: z.literal("electronTabLifecycleReady"),
     ...requestFrameFields,
   }),
   z.object({
@@ -941,24 +976,22 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("primaryProfileCaptured"),
     ...requestFrameFields,
     // Same opaque Playwright storage-state convention as promote/lend and
-    // tileHandoff. The host validates the concrete cookies+origins shape.
+    // electronTabHandoff. The host validates the concrete cookies+origins shape.
     storageState: z.json().nullable(),
     status: z.enum(["captured", "unavailable", "failed"]),
     reason: z.string().nullable(),
   }),
   z.object({
-    // Ticket 12 / ticket 10's design. Desktop pushes this once, just before a
-    // tile dies, for ANY teardown reason - there is no signal distinguishing
+    // Desktop pushes this once, just before a durable Electron tab dies, for
+    // ANY teardown reason - there is no signal distinguishing
     // "the whole GUI quit" from "one subscriber detached" (see ticket 10's
-    // artifact), so the real trigger is "the tile is going away", which
-    // `closeEntry`'s three call sites and a renderer crash all are.
+    // artifact), so the real trigger is "the native incarnation is going
+    // away", which `closeEntry`'s three call sites and a renderer crash all
+    // are.
     //
-    // The host resolves `tileInstanceId` to a session via
-    // `getSessionIdForTile` (the same lookup every other CDP frame on this
-    // bridge uses) and seeds `capturedStorageState` into the fresh in-memory
-    // context before its first navigation. This single-origin live-page
-    // capture remains a tile-handoff mechanism; ticket 06's canonical-primary
-    // request is partition-wide and deliberately separate.
+    // Durable identity is carried directly. `registrationId` prevents a late
+    // teardown from an old native guest from handing off a replacement guest
+    // that already owns the same `tabId`.
     //
     // `capturedStorageState` is an opaque JSON blob (Playwright storageState
     // shape), same convention as `promoteState`/`lendStorage` above: the
@@ -969,25 +1002,28 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     // session off headless at `capturedUrl`, just without carried storage.
     //
     // Ticket 02 (multi-tab handoff): `siblingTabs` carries the session's
-    // OTHER live tiles (same session, everything but the triggering tile)
+    // OTHER live tabs (same session, everything but the triggering tab)
     // captured best-effort at the same moment, so one frame hands off the
-    // whole session atomically instead of racing one frame per tile against
+    // whole session atomically instead of racing one frame per tab against
     // the runtime flip. Each entry's `capturedStorageState` follows the same
     // opaque/nullable convention as the primary capture above. Empty for a
     // single-tab session, byte-identical to today.
-    kind: z.literal("tileHandoff"),
+    kind: z.literal("electronTabHandoff"),
     ...requestFrameFields,
-    tileInstanceId: z.string(),
+    sessionId: z.string(),
+    tabId: z.string(),
+    registrationId: z.string(),
     capturedUrl: z.string(),
     capturedStorageState: z.json().nullable(),
     siblingTabs: z.array(
       z.object({
         tabId: z.string(),
+        registrationId: z.string(),
         url: z.string(),
         capturedStorageState: z.json().nullable(),
       }),
     ),
-    reason: z.enum(["gui-quit", "tile-released", "crash-no-capture"]),
+    reason: z.enum(["gui-quit", "tab-released", "crash-no-capture"]),
   }),
 ]);
 export type BrowserSessionsClientFrame = z.infer<

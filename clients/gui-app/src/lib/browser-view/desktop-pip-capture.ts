@@ -1,6 +1,12 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
-import type { BrowserViewTileKey } from "./desktop-browser-view";
+import type { BrowserViewNativeTabCapability } from "./desktop-browser-view";
+
+export interface DesktopPipCaptureStartInput extends BrowserViewNativeTabCapability {
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly quality: number;
+}
 
 /**
  * Preload surface for native-tab PiP capture. Frames are the
@@ -12,12 +18,7 @@ import type { BrowserViewTileKey } from "./desktop-browser-view";
  * methods resolve to null from `resolveDesktopPipCaptureBridge`.
  */
 export interface DesktopPipCaptureBridge {
-  start(
-    tileKey: BrowserViewTileKey,
-    maxWidth: number,
-    maxHeight: number,
-    quality: number,
-  ): Promise<void>;
+  start(input: DesktopPipCaptureStartInput): Promise<void>;
   stop(): Promise<void>;
   onFrame(
     handler: (
@@ -44,10 +45,8 @@ export function resolveDesktopPipCaptureBridge(
     return null;
   }
   return {
-    start: (tileKey, maxWidth, maxHeight, quality) =>
-      Promise.resolve(
-        start.call(value, tileKey, maxWidth, maxHeight, quality),
-      ).then(() => undefined),
+    start: (input) =>
+      Promise.resolve(start.call(value, input)).then(() => undefined),
     stop: () => Promise.resolve(stop.call(value)).then(() => undefined),
     onFrame: (handler) => readDisposable(onFrame.call(value, handler)),
   };

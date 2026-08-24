@@ -341,7 +341,6 @@ function createFakeBridge(): FakeBridge {
     capturePageMock,
     getDebugSnapshotMock,
     upsertTile: vi.fn(() => Promise.resolve()),
-    registerDurableTab: vi.fn(() => Promise.resolve()),
     setViewportPreset: vi.fn(() => Promise.resolve()),
     updateBounds: vi.fn(() => Promise.resolve()),
     releaseTile: vi.fn(() => Promise.resolve()),
@@ -433,6 +432,5 @@ function createFakeBridge(): FakeBridge {
     ),
     onCdpSessionEnded: vi.fn(() => ({ dispose: () => undefined })),
     onCdpTargetAttached: vi.fn(() => ({ dispose: () => undefined })),
-    onTileHandoff: vi.fn(() => ({ dispose: () => undefined })),
   };
 }

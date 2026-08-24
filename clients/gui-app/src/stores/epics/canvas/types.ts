@@ -203,8 +203,8 @@ export interface BrowserSessionTileRef {
 }
 
 /**
- * The agent's own browser tab: a real `WebContentsView` in
- * `AGENT_BROWSER_VIEW_PARTITION`, never `persist:traycer-browser`.
+ * An agent-opened browser tab presented through the shared Electron tab
+ * lifecycle.
  * `id` is the page-session id used as the Electron tile key's
  * `pageSessionId`. `sessionId` is the host browser session. Do not
  * swap those when wiring chrome. `runtime` is the partition/bridge

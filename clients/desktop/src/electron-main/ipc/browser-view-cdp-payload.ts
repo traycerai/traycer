@@ -1,4 +1,4 @@
-import type { AgentBrowserViewCdpCommand } from "../../ipc-contracts/browser-view-types";
+import type { BrowserViewCdpCommand } from "../../ipc-contracts/browser-view-types";
 
 /**
  * Payload parsing for ticket 03's typed CDP bridge, shared by the two IPC
@@ -25,7 +25,7 @@ import type { AgentBrowserViewCdpCommand } from "../../ipc-contracts/browser-vie
  */
 export function parseBrowserViewCdpCommand(
   value: unknown,
-): AgentBrowserViewCdpCommand {
+): BrowserViewCdpCommand {
   const record = assertRecord(value, "Browser view CDP command");
   const kind = readString(record.kind, "command.kind");
   switch (kind) {

@@ -33,24 +33,6 @@ import {
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
 import { resetPipStoreForTests } from "@/lib/browser-view/pip-store";
-import {
-  findElectronBrowserTabBinding,
-  handleElectronBrowserTabFrame,
-  registerElectronBrowserTab,
-  resetElectronBrowserTabStoreForTests,
-} from "@/lib/browser-view/electron-browser-tab-store";
-import type {
-  BrowserViewDurableTabRegistration,
-  BrowserViewStatusChange,
-  BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
-import type {
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpResult,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
-} from "@/lib/browser-view/desktop-agent-browser-view";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
@@ -202,42 +184,6 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => navigateNested,
 }));
 
-class FakeBridge {
-  registerDurableTab(_input: BrowserViewDurableTabRegistration): Promise<void> {
-    return Promise.resolve();
-  }
-
-  dispatchCdp(
-    _input: AgentBrowserViewCdpDispatch,
-  ): Promise<AgentBrowserViewCdpResult> {
-    return Promise.resolve({ kind: "cdpGetFrameTree", ok: true, frames: [] });
-  }
-
-  onStatusChange(_handler: (change: BrowserViewStatusChange) => void): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
-  }
-
-  onCdpSessionEnded(
-    _handler: (change: AgentBrowserViewCdpSessionEndedChange) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
-  }
-
-  onCdpTargetAttached(
-    _handler: (change: AgentBrowserViewCdpTargetAttachedChange) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
-  }
-
-  onTileHandoff(
-    _handler: (change: AgentBrowserViewTileHandoffChange) => void,
-  ): { dispose: () => void } {
-    return { dispose: () => undefined };
-  }
-}
-
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
@@ -326,7 +272,6 @@ describe("BrowsersPanelBody", () => {
     closeTab.mockResolvedValue(undefined);
     vi.mocked(toast.error).mockClear();
     navigateNested.mockClear();
-    resetElectronBrowserTabStoreForTests();
     usePanelHeaderSearchStore.setState(
       usePanelHeaderSearchStore.getInitialState(),
       true,
@@ -400,7 +345,6 @@ describe("BrowsersPanelBody", () => {
     vi.useRealTimers();
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    resetElectronBrowserTabStoreForTests();
     resetPipStoreForTests();
   });
 
@@ -902,177 +846,6 @@ describe("BrowsersPanelBody", () => {
     const focused = findOpenArtifactInTab("view-tab-1", existing.id);
     expect(typeof focused?.paneId).toBe("string");
     expect(focused?.instanceId).toBe(existing.instanceId);
-  });
-
-  it("focuses an existing native tile and closes it only after closeTab succeeds", async () => {
-    const bridge = new FakeBridge();
-    useEpicCanvasStore.getState().openTileInTab("view-tab-1", {
-      id: "reg-native-1",
-      sessionId: "sess-primary",
-      instanceId: "native-instance",
-      type: "agent-browser",
-      name: "Live page",
-      hostId: "host-1",
-      url: "https://app.example/live",
-      viewportPreset: "responsive",
-      runtime: "isolated",
-    });
-    const nativeLocation = findOpenArtifactInTab(
-      "view-tab-1",
-      "reg-native-1",
-    );
-    if (nativeLocation === null) throw new Error("expected native tile");
-    const tileKey: BrowserViewTileKey = {
-      viewTabId: "view-tab-1",
-      paneId: nativeLocation.paneId,
-      tileInstanceId: "native-instance",
-      pageSessionId: "reg-native-1",
-    };
-    registerElectronBrowserTab({
-      epicId: "epic-1",
-      hostId: "host-1",
-      chatId: "chat-driver",
-      registrationId: "reg-native-1",
-      sessionId: "sess-primary",
-      initialUrl: "https://app.example/live",
-      title: "Live page",
-      tileKey,
-      bridge,
-      onRegistered: null,
-    });
-    handleElectronBrowserTabFrame({
-      kind: "electronTabRegistered",
-      hasBinaryPayload: false,
-      requestId: "req-reg",
-      registrationId: "reg-native-1",
-      sessionId: "sess-primary",
-      tabId: "tab-live",
-    });
-    await Promise.resolve();
-    expect(
-      findElectronBrowserTabBinding("sess-primary", "tab-live")?.registrationId,
-    ).toBe("reg-native-1");
-    const beforeCount = Object.keys(
-      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
-        ?.tilesByInstanceId ?? {},
-    ).length;
-
-    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
-    const liveDrag = dndState.draggables.find((entry) =>
-      String(entry.id).includes("browser-tile:sess-primary:tab-live"),
-    );
-    expect(readEpicCanvasDragSourceData(liveDrag?.data)).toMatchObject({
-      kind: BROWSER_TILE_DND_TYPE,
-      tile: {
-        id: "reg-native-1",
-        type: "agent-browser",
-        sessionId: "sess-primary",
-      },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /^Live page/i }));
-
-    const afterCount = Object.keys(
-      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
-        ?.tilesByInstanceId ?? {},
-    ).length;
-    expect(afterCount).toBe(beforeCount);
-    const focused = findOpenArtifactInTab("view-tab-1", "reg-native-1");
-    expect(typeof focused?.paneId).toBe("string");
-    expect(focused?.instanceId).toBe("native-instance");
-
-    fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
-    await waitFor(() => {
-      expect(
-        findOpenArtifactInTab("view-tab-1", "reg-native-1"),
-      ).toBeNull();
-    });
-  });
-
-  it("closes the native tile's current pane when close ack arrives after the tile moved", async () => {
-    let resolveClose: (() => void) | undefined;
-    closeTab.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveClose = resolve;
-        }),
-    );
-    const bridge = new FakeBridge();
-    useEpicCanvasStore.getState().openTileInTab("view-tab-1", {
-      id: "chat-driver",
-      instanceId: "chat-instance",
-      type: "chat",
-      name: "Checkout agent",
-      hostId: "host-1",
-    });
-    useEpicCanvasStore.getState().openTileInTab("view-tab-1", {
-      id: "reg-native-1",
-      sessionId: "sess-primary",
-      instanceId: "native-instance",
-      type: "agent-browser",
-      name: "Live page",
-      hostId: "host-1",
-      url: "https://app.example/live",
-      viewportPreset: "responsive",
-      runtime: "isolated",
-    });
-    const originalLocation = findOpenArtifactInTab(
-      "view-tab-1",
-      "reg-native-1",
-    );
-    if (originalLocation === null) throw new Error("expected native tile");
-    const tileKey: BrowserViewTileKey = {
-      viewTabId: "view-tab-1",
-      paneId: originalLocation.paneId,
-      tileInstanceId: "native-instance",
-      pageSessionId: "reg-native-1",
-    };
-    registerElectronBrowserTab({
-      epicId: "epic-1",
-      hostId: "host-1",
-      chatId: "chat-driver",
-      registrationId: "reg-native-1",
-      sessionId: "sess-primary",
-      initialUrl: "https://app.example/live",
-      title: "Live page",
-      tileKey,
-      bridge,
-      onRegistered: null,
-    });
-    handleElectronBrowserTabFrame({
-      kind: "electronTabRegistered",
-      hasBinaryPayload: false,
-      requestId: "req-reg-moved-close",
-      registrationId: "reg-native-1",
-      sessionId: "sess-primary",
-      tabId: "tab-live",
-    });
-    await Promise.resolve();
-
-    render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
-    fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
-    expect(closeTab).toHaveBeenCalledWith("sess-primary", "tab-live");
-    expect(findOpenArtifactInTab("view-tab-1", "reg-native-1")).not.toBeNull();
-
-    useEpicCanvasStore.getState().splitPaneWithTab("view-tab-1", {
-      sourcePaneId: originalLocation.paneId,
-      tabId: originalLocation.instanceId,
-      targetPaneId: originalLocation.paneId,
-      position: "right",
-    });
-    const movedLocation = findOpenArtifactInTab("view-tab-1", "reg-native-1");
-    expect(movedLocation).not.toBeNull();
-    expect(movedLocation?.paneId).not.toBe(originalLocation.paneId);
-
-    if (resolveClose === undefined) {
-      throw new Error("expected pending close resolution");
-    }
-    act(() => {
-      resolveClose();
-    });
-    await waitFor(() => {
-      expect(findOpenArtifactInTab("view-tab-1", "reg-native-1")).toBeNull();
-    });
-    expect(findOpenArtifactInTab("view-tab-1", "chat-driver")).not.toBeNull();
   });
 
   it("shows the empty state with an Add browser action when there are no sessions", () => {

@@ -8,16 +8,23 @@ import {
 const ENVELOPE = {
   hasBinaryPayload: false as const,
   requestId: "request-1",
-  tileInstanceId: "tile-1",
-  sessionId: null,
+  target: { kind: "electron-tab" as const, tabId: "tab-1" },
+  registrationId: "registration-1",
+  cdpSessionId: null,
 };
 
 const RESULT_ENVELOPE = {
   hasBinaryPayload: false as const,
   requestId: "request-1",
-  tileInstanceId: "tile-1",
+  target: { kind: "electron-tab" as const, tabId: "tab-1" },
+  registrationId: "registration-1",
   ok: true,
   error: null,
+};
+
+const BORROWED_TARGET = {
+  kind: "borrowed-tile" as const,
+  tileInstanceId: "tile-1",
 };
 
 describe("browser.sessions@1.0 typed CDP bridge frames", () => {
@@ -129,6 +136,17 @@ describe("browser.sessions@1.0 typed CDP bridge frames", () => {
       },
       { kind: "cdpGetFrameTreeResult", ...RESULT_ENVELOPE, frames: [] },
       {
+        kind: "cdpGetFrameTreeResult",
+        ...RESULT_ENVELOPE,
+        ok: false,
+        error: {
+          kind: "tab_not_found",
+          message: "Native tab is not active.",
+          code: null,
+        },
+        frames: null,
+      },
+      {
         kind: "cdpCreateIsolatedWorldResult",
         ...RESULT_ENVELOPE,
         executionContextId: 7,
@@ -170,15 +188,17 @@ describe("browser.sessions@1.0 typed CDP bridge frames", () => {
         kind: "cdpSessionEnded",
         hasBinaryPayload: false,
         requestId: "notif-1",
-        tileInstanceId: "tile-1",
+        target: BORROWED_TARGET,
+        registrationId: null,
         reason: "debugger detached",
       },
       {
         kind: "cdpTargetAttached",
         hasBinaryPayload: false,
         requestId: "notif-2",
-        tileInstanceId: "tile-1",
-        sessionId: "child-session-1",
+        target: ENVELOPE.target,
+        registrationId: "registration-1",
+        cdpSessionId: "child-session-1",
         targetId: "target-1",
         targetType: "iframe",
         url: "https://example.com/child",
@@ -190,6 +210,52 @@ describe("browser.sessions@1.0 typed CDP bridge frames", () => {
       const parsed = browserSessionsClientFrameSchema.safeParse(frame);
       expect(parsed.success, `expected ${frame.kind} to parse`).toBe(true);
     }
+  });
+
+  it("addresses agent and borrowed CDP traffic without tile/session ambiguity", () => {
+    const electronRequest = {
+      kind: "cdpGetFrameTree",
+      ...ENVELOPE,
+    };
+    const borrowedRequest = {
+      ...electronRequest,
+      target: BORROWED_TARGET,
+      registrationId: null,
+    };
+    const parsedElectron =
+      browserSessionsServerFrameSchema.safeParse(electronRequest);
+    const parsedBorrowed =
+      browserSessionsServerFrameSchema.safeParse(borrowedRequest);
+    expect(parsedElectron.success).toBe(true);
+    expect(parsedBorrowed.success).toBe(true);
+    if (parsedElectron.success) {
+      expect(parsedElectron.data).toEqual(electronRequest);
+    }
+    if (parsedBorrowed.success) {
+      expect(parsedBorrowed.data).toEqual(borrowedRequest);
+    }
+
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...electronRequest,
+        target: {
+          kind: "electron-tab",
+          tabId: "tab-1",
+          tileInstanceId: "tile-1",
+        },
+      }).success,
+    ).toBe(false);
+
+    const oldTileOnlyRequest = {
+      kind: "cdpGetFrameTree",
+      hasBinaryPayload: false,
+      requestId: "request-legacy",
+      tileInstanceId: "tile-1",
+      sessionId: null,
+    };
+    expect(
+      browserSessionsServerFrameSchema.safeParse(oldTileOnlyRequest).success,
+    ).toBe(false);
   });
 
   it("rejects a malformed cdpNavigate request missing url", () => {
@@ -244,8 +310,8 @@ describe("browser.sessions@1.0 typed CDP bridge frames", () => {
       "cdpGetFullAXTree",
     ];
     const v1Kinds: ReadonlySet<string> = new Set(
-      browserSessionsV1.serverFrameSchema.def.options.map(
-        (option): string => String(option.shape.kind.def.values[0]),
+      browserSessionsV1.serverFrameSchema.def.options.map((option): string =>
+        String(option.shape.kind.def.values[0]),
       ),
     );
     for (const kind of requiredKinds) {

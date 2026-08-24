@@ -2,30 +2,28 @@ import { useEffect, useState, type SyntheticEvent } from "react";
 import type { TileChromeCapabilities, TileController } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-link-routing-core";
-import type { DesktopAgentBrowserViewBridge } from "@/lib/browser-view/desktop-agent-browser-view";
 import type {
   BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
+  BrowserViewElectronTabControlAction,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
   DesktopBrowserViewBridge,
 } from "@/lib/browser-view/desktop-browser-view";
-
-export type ElectronTileChromeView =
-  | DesktopBrowserViewBridge
-  | DesktopAgentBrowserViewBridge;
 
 interface AddressDraft {
   readonly sourceUrl: string | null;
   readonly value: string;
 }
 
-interface UseElectronTileChromeArgs {
-  readonly chromeView: ElectronTileChromeView | null;
+interface UseElectronTabChromeArgs {
+  readonly control: (
+    action: BrowserViewElectronTabControlAction,
+  ) => Promise<void>;
+  readonly surfaceServices: DesktopBrowserViewBridge | null;
   readonly tileKey: BrowserViewTileKey;
   readonly initialUrl: string;
-  readonly visible: boolean;
   readonly capabilities: TileChromeCapabilities;
   readonly annotation: BrowserAnnotationSessionController | null;
   readonly cookieCryptoState: BrowserCookieCryptoState | null;
@@ -40,8 +38,8 @@ interface UseElectronTileChromeArgs {
   readonly onAttemptedUrl: (url: string) => void;
 }
 
-export interface ElectronTileChrome {
-  readonly controller: TileController | null;
+export interface ElectronTabChrome {
+  readonly controller: TileController;
   readonly downloads: readonly BrowserViewDownloadChange[];
   readonly certificateError: BrowserViewCertificateErrorChange | null;
   readonly certificateProceeding: boolean;
@@ -51,18 +49,18 @@ export interface ElectronTileChrome {
 }
 
 /**
- * Builds a TileController from a chrome-capable Electron bridge (today:
- * the PRIMARY desktop bridge). Session/agent tiles navigate through the
- * view, never by writing a canvas URL.
+ * Builds chrome for one host-owned Electron tab. Navigation and page controls
+ * use the durable tab identity; the tile key is reserved for services that
+ * exist only while this particular surface is mounted.
  */
-export function useElectronTileChrome(
-  args: UseElectronTileChromeArgs,
-): ElectronTileChrome {
+export function useElectronTabChrome(
+  args: UseElectronTabChromeArgs,
+): ElectronTabChrome {
   const {
-    chromeView,
+    control,
+    surfaceServices,
     tileKey,
     initialUrl,
-    visible,
     capabilities,
     annotation,
     cookieCryptoState,
@@ -92,19 +90,19 @@ export function useElectronTileChrome(
     addressDraft.sourceUrl === liveUrl ? addressDraft.value : liveUrl;
 
   useEffect(() => {
-    if (chromeView === null) return;
-    const subscription = chromeView.onDownloadChange((change) => {
+    if (surfaceServices === null) return;
+    const subscription = surfaceServices.onDownloadChange((change) => {
       if (!isChangeForTile(change, tileKey)) return;
       setDownloads((current) => upsertDownload(current, change));
     });
     return () => {
       subscription.dispose();
     };
-  }, [chromeView, tileKey]);
+  }, [surfaceServices, tileKey]);
 
   useEffect(() => {
-    if (chromeView === null) return;
-    const subscription = chromeView.onCertificateError((change) => {
+    if (surfaceServices === null) return;
+    const subscription = surfaceServices.onCertificateError((change) => {
       if (!isChangeForTile(change, tileKey)) return;
       setCertificateProceeding(false);
       setCertificateError(change);
@@ -112,19 +110,7 @@ export function useElectronTileChrome(
     return () => {
       subscription.dispose();
     };
-  }, [chromeView, tileKey]);
-
-  if (chromeView === null) {
-    return {
-      controller: null,
-      downloads: [],
-      certificateError: null,
-      certificateProceeding: false,
-      cancelDownload: ignoreChromeAction,
-      proceedCertificate: ignoreChromeAction,
-      viewportPreset,
-    };
-  }
+  }, [surfaceServices, tileKey]);
 
   const navigateToAddress = (
     event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
@@ -136,52 +122,47 @@ export function useElectronTileChrome(
     onAttemptedUrl(nextUrl);
     setCertificateError(null);
     setCertificateProceeding(false);
-    void chromeView
-      .upsertTile({
-        ...tileKey,
-        url: nextUrl,
-        visible,
-        viewportPreset,
-      })
-      .catch(ignoreChromeError);
+    void control({ kind: "navigate", url: nextUrl }).catch(ignoreChromeError);
   };
 
   const reload = (): void => {
     setCertificateError(null);
     setCertificateProceeding(false);
-    void chromeView.reloadTile(tileKey).catch(ignoreChromeError);
+    void control({ kind: "reload" }).catch(ignoreChromeError);
   };
 
   const goBack = (): void => {
     if (!canGoBack) return;
     setCertificateError(null);
     setCertificateProceeding(false);
-    void chromeView.goBack(tileKey).catch(ignoreChromeError);
+    void control({ kind: "goBack" }).catch(ignoreChromeError);
   };
 
   const goForward = (): void => {
     if (!canGoForward) return;
     setCertificateError(null);
     setCertificateProceeding(false);
-    void chromeView.goForward(tileKey).catch(ignoreChromeError);
+    void control({ kind: "goForward" }).catch(ignoreChromeError);
   };
 
   const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
     setViewportPreset(preset);
     persistViewportPreset(preset);
-    void chromeView
-      .setViewportPreset({ ...tileKey, viewportPreset: preset })
-      .catch(ignoreChromeError);
+    void control({ kind: "setViewportPreset", viewportPreset: preset }).catch(
+      ignoreChromeError,
+    );
   };
 
   const cancelDownload = (downloadId: string): void => {
-    void chromeView.cancelDownload({ downloadId }).catch(ignoreChromeError);
+    if (surfaceServices === null) return;
+    void surfaceServices.cancelDownload({ downloadId }).catch(ignoreChromeError);
   };
 
   const proceedCertificate = (): void => {
     if (certificateError === null) return;
+    if (surfaceServices === null) return;
     setCertificateProceeding(true);
-    void chromeView
+    void surfaceServices
       .trustCertificate({
         ...tileKey,
         certificateErrorId: certificateError.certificateErrorId,
@@ -216,17 +197,17 @@ export function useElectronTileChrome(
     onForward: goForward,
     onReload: reload,
     onZoomOut: () => {
-      void chromeView.zoomOut(tileKey).catch(ignoreChromeError);
+      void control({ kind: "zoomOut" }).catch(ignoreChromeError);
     },
     onZoomIn: () => {
-      void chromeView.zoomIn(tileKey).catch(ignoreChromeError);
+      void control({ kind: "zoomIn" }).catch(ignoreChromeError);
     },
     onResetZoom: () => {
-      void chromeView.resetZoom(tileKey).catch(ignoreChromeError);
+      void control({ kind: "resetZoom" }).catch(ignoreChromeError);
     },
     onViewportPresetChange: applyViewportPreset,
     onOpenDevTools: () => {
-      void chromeView.openDevTools(tileKey).catch(ignoreChromeError);
+      void control({ kind: "openDevTools" }).catch(ignoreChromeError);
     },
   };
 
@@ -269,5 +250,3 @@ function upsertDownload(
 }
 
 function ignoreChromeError(_error: unknown): void {}
-
-function ignoreChromeAction(): void {}

@@ -3,32 +3,28 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
-import type { BrowserViewTileKey } from "../../ipc-contracts/browser-view-types";
 import type {
   PipCaptureIpcPayload,
   PipCaptureStartInput,
 } from "../../ipc-contracts/pip-capture-types";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import { parseBrowserViewNativeTabCapability } from "./browser-view-native-tab-payload";
 
 /**
- * Native-tab PiP capture IPC. Looks up the tile in every browser-view
- * manager (user partition and agent partition) so one preload surface
- * covers both native pools. Capture commands stay off the CDP dispatch
- * path - managers forward to `BrowserDebugSession` only.
+ * Native-tab PiP capture IPC. Capture commands stay off the host CDP dispatch
+ * path and go directly to `BrowserDebugSession`.
  */
 export function registerPipCaptureIpc(
   bridge: RunnerIpcBridge,
-  managers: readonly BrowserViewManager[],
+  manager: BrowserViewManager,
 ): void {
   bridge.handleInvoke(
     RunnerHostInvoke.pipCaptureStart,
     async (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
       const input = parsePipCaptureStart(payload);
-      for (const manager of managers) {
-        manager.stopPipCapture();
-      }
+      manager.stopPipCapture();
       const onFrame = (framePayload: PipCaptureIpcPayload): void => {
         bridge.safeSendToWindow(
           windowId,
@@ -36,18 +32,17 @@ export function registerPipCaptureIpc(
           framePayload,
         );
       };
-      for (const manager of managers) {
-        const started = await manager.startPipCapture(windowId, input, onFrame);
-        if (started) return;
+      const started = await manager.startPipCapture(windowId, input, onFrame);
+      if (!started) {
+        throw new Error(
+          "Electron browser tab is not available for pip capture",
+        );
       }
-      throw new Error("Browser view tile is not available for pip capture");
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.pipCaptureStop, () => {
-    for (const manager of managers) {
-      manager.stopPipCapture();
-    }
+    manager.stopPipCapture();
   });
 }
 
@@ -65,40 +60,20 @@ function readSenderWindowId(
 function parsePipCaptureStart(value: unknown): PipCaptureStartInput {
   const record = assertRecord(value, "Pip capture start payload");
   return {
-    tileKey: parseTileKey(record.tileKey),
+    ...parseBrowserViewNativeTabCapability(record),
     maxWidth: readPositiveInt(record.maxWidth, "maxWidth"),
     maxHeight: readPositiveInt(record.maxHeight, "maxHeight"),
     quality: readQuality(record.quality),
   };
 }
 
-function parseTileKey(value: unknown): BrowserViewTileKey {
-  const record = assertRecord(value, "Pip capture tile key");
-  return {
-    viewTabId: readString(record.viewTabId, "viewTabId"),
-    paneId: readString(record.paneId, "paneId"),
-    tileInstanceId: readString(record.tileInstanceId, "tileInstanceId"),
-    pageSessionId: readString(record.pageSessionId, "pageSessionId"),
-  };
-}
-
-function assertRecord(
-  value: unknown,
-  label: string,
-): Record<string, unknown> {
+function assertRecord(value: unknown, label: string): Record<string, unknown> {
   if (isRecord(value)) return value;
   throw new Error(`${label} must be an object`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Pip capture ${field} must be a non-empty string`);
-  }
-  return value;
 }
 
 function readPositiveInt(value: unknown, field: string): number {

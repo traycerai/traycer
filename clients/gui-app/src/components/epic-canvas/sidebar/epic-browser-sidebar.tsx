@@ -83,7 +83,6 @@ import {
   nextSettledTabIdentity,
   type SettledTabIdentity,
 } from "@/lib/browser-view/browser-tab-display";
-import { findElectronBrowserTabBindingOnHost } from "@/lib/browser-view/electron-browser-tab-store";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { cn } from "@/lib/utils";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
@@ -513,18 +512,6 @@ function BrowsersPanelBodyLive(props: {
 
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
-      const binding = findElectronBrowserTabBindingOnHost(
-        session.sessionId,
-        tab.tabId,
-        session.hostId,
-      );
-      const existingNative =
-        binding === null
-          ? null
-          : findOpenTileInTab(props.tabId, {
-              id: binding.registrationId,
-              hostId: session.hostId,
-            });
       const tile = makeBrowserSessionTileRef({
         name: tab.title ?? session.name,
         hostId: session.hostId,
@@ -532,11 +519,14 @@ function BrowsersPanelBodyLive(props: {
         tabId: tab.tabId,
       });
       const existingPointer = findOpenTileInTab(props.tabId, tile);
-      const existing = existingNative ?? existingPointer;
       navigateNested(props.epicId, props.tabId, () =>
-        existing === null
+        existingPointer === null
           ? prepareOpen(props.tabId, tile)
-          : prepareFocus(props.tabId, existing.paneId, existing.instanceId),
+          : prepareFocus(
+              props.tabId,
+              existingPointer.paneId,
+              existingPointer.instanceId,
+            ),
       );
     },
     [navigateNested, prepareFocus, prepareOpen, props.epicId, props.tabId],
@@ -857,31 +847,10 @@ function BrowserTabRow(props: BrowserTabRowProps) {
       }),
     [session.hostId, session.name, session.sessionId, tab.tabId, tab.title],
   );
-  const binding = findElectronBrowserTabBindingOnHost(
-    session.sessionId,
-    tab.tabId,
-    session.hostId,
-  );
-  const nativeRegistrationId = binding?.registrationId ?? null;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareClose = useEpicCanvasStore(
     (state) => state.prepareCloseCanvasTabFocusTarget,
   );
-  const nativeTile = useEpicCanvasStore((state) => {
-    if (nativeRegistrationId === null) return null;
-    const canvas = state.canvasByTabId[viewTabId];
-    if (canvas === undefined) return null;
-    for (const candidate of Object.values(canvas.tilesByInstanceId)) {
-      if (
-        candidate?.id === nativeRegistrationId &&
-        candidate.type === "agent-browser" &&
-        candidate.hostId === session.hostId
-      ) {
-        return candidate;
-      }
-    }
-    return null;
-  });
   const handleClose = useCallback(() => {
     if (isClosing) return;
     setClosePending(true);
@@ -893,21 +862,6 @@ function BrowserTabRow(props: BrowserTabRowProps) {
             prepareClose(viewTabId, pointer.paneId, pointer.instanceId),
           );
         }
-        if (nativeRegistrationId !== null) {
-          const currentNativeTile = findOpenTileInTab(viewTabId, {
-            id: nativeRegistrationId,
-            hostId: session.hostId,
-          });
-          if (currentNativeTile !== null) {
-            navigateNested(epicId, viewTabId, () =>
-              prepareClose(
-                viewTabId,
-                currentNativeTile.paneId,
-                currentNativeTile.instanceId,
-              ),
-            );
-          }
-        }
       })
       .catch(() => {
         toast.error(`Couldn't close ${title}. Try again.`, {
@@ -918,7 +872,6 @@ function BrowserTabRow(props: BrowserTabRowProps) {
   }, [
     epicId,
     isClosing,
-    nativeRegistrationId,
     navigateNested,
     onCloseTab,
     prepareClose,
@@ -936,9 +889,9 @@ function BrowserTabRow(props: BrowserTabRowProps) {
     if (activeInstanceId === null) return false;
     const active = canvas.tilesByInstanceId[activeInstanceId];
     if (active?.hostId !== session.hostId) return false;
-    return active.id === tile.id || active.id === nativeRegistrationId;
+    return active.id === tile.id;
   });
-  const dragTile = nativeTile ?? tile;
+  const dragTile = tile;
   const dragData = useMemo<EpicCanvasBrowserTileDragData>(
     () => ({
       kind: BROWSER_TILE_DND_TYPE,

@@ -2,42 +2,13 @@
  * Schema + factory for the agent's own browser tile. Mirrors `browser-tile.ts`
  * including `viewportPreset` so the shared toolbar can persist device chrome.
  */
-import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_AGENT_BROWSER } from "../tile-kinds";
 import type { AgentBrowserTileRef } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
-export const DEFAULT_AGENT_BROWSER_TILE_NAME = "Agent browser";
-export const DEFAULT_AGENT_BROWSER_TILE_URL = "about:blank";
 export const DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET = "responsive";
-
-function agentBrowserTilePageSessionId(): string {
-  return `agent-browser-${uuidv4()}`;
-}
-
-export function makeAgentBrowserTileRef(args: {
-  readonly name: string;
-  readonly hostId: string;
-  readonly url: string;
-  readonly sessionId: string | null;
-  readonly viewportPreset: string;
-  readonly runtime: "primary" | "isolated";
-}): AgentBrowserTileRef {
-  const id = agentBrowserTilePageSessionId();
-  return {
-    id,
-    sessionId: args.sessionId ?? id,
-    instanceId: uuidv4(),
-    type: TILE_KIND_AGENT_BROWSER,
-    name: args.name,
-    hostId: args.hostId,
-    url: args.url,
-    viewportPreset: args.viewportPreset,
-    runtime: args.runtime,
-  };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

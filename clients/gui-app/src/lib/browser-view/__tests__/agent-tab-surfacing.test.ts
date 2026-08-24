@@ -9,6 +9,7 @@ import {
   isManualPipActive,
   placeAgentElectronTile,
   placeHeadlessAgentSessionTile,
+  rememberElectronTabCreate,
   resetAgentTabSurfacingForTests,
   setEpicSurfaceVisibility,
   surfaceAgentTabsFromSessionFrame,
@@ -20,11 +21,10 @@ import {
 } from "../pip-store";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import { makeBrowserTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
-  DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-  makeAgentBrowserTileRef,
-} from "@/stores/epics/canvas/tile-schema/agent-browser-tile";
+  makeBrowserSessionTileRef,
+  makeBrowserTileRef,
+} from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -64,7 +64,9 @@ function agentSessionFixture(overrides?: {
 }
 
 function seedCanvasWithTile(
-  tile: ReturnType<typeof makeBrowserTileRef> | ReturnType<typeof makeAgentBrowserTileRef>,
+  tile:
+    | ReturnType<typeof makeBrowserTileRef>
+    | ReturnType<typeof makeBrowserSessionTileRef>,
 ): string {
   const canvas = createSingleTileCanvas(tile);
   const pane = collectPanes(canvas.root).at(0);
@@ -164,6 +166,26 @@ describe("collectNewAgentTabsFromSessionFrame", () => {
     ]);
     // Replay of the same frame must not re-report.
     expect(collectNewAgentTabsFromSessionFrame(next)).toEqual([]);
+  });
+
+  it("does not re-surface a tab whose targeted Electron create owns presentation", () => {
+    collectNewAgentTabsFromSessionFrame(agentSessionFixture());
+    rememberElectronTabCreate("session-a", "tab-a2");
+    const updated = agentSessionFixture();
+
+    expect(
+      collectNewAgentTabsFromSessionFrame({
+        ...updated,
+        tabs: [
+          ...updated.tabs,
+          {
+            ...updated.tabs[0],
+            tabId: "tab-a2",
+            url: "https://example.com/b",
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 
   it("ignores new tabs on sessions no agent created or drove", () => {
@@ -275,26 +297,22 @@ describe("canvas placement", () => {
   });
 
   it("groups a same-session electron open as a tab instead of splitting", () => {
-    const sourceTile = makeAgentBrowserTileRef({
+    const sourceTile = makeBrowserSessionTileRef({
       name: "Source",
       hostId: HOST,
-      url: "https://app.example/source",
       sessionId: "session-shared",
-      viewportPreset: DEFAULT_AGENT_BROWSER_VIEWPORT_PRESET,
-      runtime: "isolated",
+      tabId: "tab-source",
     });
-    const anchorPaneId = seedCanvasWithTile(sourceTile);
+    seedCanvasWithTile(sourceTile);
 
     const placed = placeAgentElectronTile({
-      viewTabId: VIEW_TAB_ID,
-      anchorPaneId,
+      epicId: EPIC,
       hostId: HOST,
       sessionId: "session-shared",
+      tabId: "tab-second",
       url: "https://example.com/second",
-      runtime: "isolated",
     });
-    expect(placed).not.toBeNull();
-    expect(placed?.sessionId).toBe("session-shared");
+    expect(placed).toBe(true);
 
     const canvas =
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
@@ -315,15 +333,13 @@ describe("canvas placement", () => {
     const anchorPaneId = seedCanvasWithTile(sourceTile);
 
     const placed = placeAgentElectronTile({
-      viewTabId: VIEW_TAB_ID,
-      anchorPaneId,
+      epicId: EPIC,
       hostId: HOST,
       sessionId: "session-fresh",
+      tabId: "tab-fresh",
       url: "https://example.com/fresh",
-      runtime: "isolated",
     });
-    expect(placed).not.toBeNull();
-    expect(placed?.sessionId).toBe("session-fresh");
+    expect(placed).toBe(true);
 
     const canvas =
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];

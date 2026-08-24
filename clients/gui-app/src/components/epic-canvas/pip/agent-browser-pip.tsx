@@ -19,7 +19,6 @@ import {
   browserTabHostname,
   resolveTabTitle,
 } from "@/lib/browser-view/browser-tab-display";
-import { findElectronBrowserTabBindingOnHost } from "@/lib/browser-view/electron-browser-tab-store";
 import {
   clampPipGeometry,
   defaultPipGeometry,
@@ -613,18 +612,6 @@ function useOpenPipTarget(
       );
       const tab = session?.tabs.find((item) => item.tabId === target.tabId);
       if (session === undefined || tab === undefined) return;
-      const binding = findElectronBrowserTabBindingOnHost(
-        target.sessionId,
-        target.tabId,
-        target.hostId,
-      );
-      const existingNative =
-        binding === null
-          ? null
-          : findOpenTileInTab(viewTabId, {
-              id: binding.registrationId,
-              hostId: target.hostId,
-            });
       const tile = makeBrowserSessionTileRef({
         name: resolveTabTitle(tab),
         hostId: target.hostId,
@@ -635,11 +622,14 @@ function useOpenPipTarget(
         id: tile.id,
         hostId: target.hostId,
       });
-      const existing = existingNative ?? existingPointer;
       navigateNested(epicId, viewTabId, () =>
-        existing === null
+        existingPointer === null
           ? prepareOpen(viewTabId, tile)
-          : prepareFocus(viewTabId, existing.paneId, existing.instanceId),
+          : prepareFocus(
+              viewTabId,
+              existingPointer.paneId,
+              existingPointer.instanceId,
+            ),
       );
     },
     [epicId, items, navigateNested, prepareFocus, prepareOpen, viewTabId],

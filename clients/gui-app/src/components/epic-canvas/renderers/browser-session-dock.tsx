@@ -46,24 +46,31 @@ import {
   publishBrowserTileControlActionRequest,
   publishBrowserTileControlRequest,
 } from "@/lib/browser-view/browser-tile-control-store";
-import { publishAgentBrowserCdpRequest } from "@/lib/browser-view/agent-browser-cdp-store";
+import { publishBorrowedTileCdpRequest } from "@/lib/browser-view/borrowed-tile-cdp";
 import {
   collectNewAgentTabsFromSessionFrame,
+  decideAgentTabDisposition,
   forgetSeenAgentTabsForSession,
+  isEpicSurfaceVisible,
+  isManualPipActive,
+  openAgentTabInPip,
+  placeAgentElectronTile,
+  rememberElectronTabCreate,
   surfaceAgentTabsFromSessionFrame,
+  trackAgentTabSurfaced,
 } from "@/lib/browser-view/agent-tab-surfacing";
 import {
-  attachElectronBrowserBackgroundTabRoute,
-  attachElectronBrowserTabStream,
-  handleElectronBrowserTabFrame,
-  replayElectronBrowserTabRegistrations,
-  syncElectronBrowserTabDrivers,
-} from "@/lib/browser-view/electron-browser-tab-store";
-import type { AgentBrowserViewCdpCommand } from "@/lib/browser-view/desktop-agent-browser-view";
+  createElectronTabs,
+  type ElectronTabPresentation,
+  type ElectronTabs,
+} from "@/lib/browser-view/electron-tabs";
+import { browserCdpRequestFromFrame } from "@/lib/browser-view/browser-cdp-frames";
 import {
   canCapturePrimaryProfile,
   resolveDesktopBrowserViewBridge,
+  resolveDesktopElectronTabLifecycleBridge,
   type DesktopBrowserViewBridge,
+  type DesktopElectronTabLifecycleBridge,
   type BrowserViewStorageStateCaptureResult,
   type BrowserViewStorageStateApplyResult,
   type BrowserViewTileKey,
@@ -72,6 +79,7 @@ import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { makeBrowserPeekTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -85,14 +93,38 @@ import {
   type BrowserSessionsState,
 } from "./browser-sessions-context";
 
-/**
- * Shared-browser-runtime ticket 01: sessions always carry exactly one tab
- * this ticket's consumers mint (multi-tab mechanics are a later ticket).
- * `null` only if a session somehow arrives with no tabs at all - display
- * code degrades gracefully rather than throwing.
- */
+/** Picks the session's lead tab for the dock's one-row summary. */
 function primaryTab(session: BrowserSessionInfo): BrowserTabInfo | null {
   return session.tabs[0] ?? null;
+}
+
+/** Presentation is downstream of native readiness and host acceptance. */
+function presentAcceptedElectronTab(tab: ElectronTabPresentation): void {
+  if (tab.reason !== "agent-open") return;
+  const disposition = decideAgentTabDisposition({
+    mode: useSettingsStore.getState().agentTabSurfacingMode,
+    epicVisible: isEpicSurfaceVisible(tab.epicId),
+    manualPipActive: isManualPipActive(tab.epicId),
+  });
+  trackAgentTabSurfaced(disposition, "electron-create");
+  if (disposition.action === "tile") {
+    placeAgentElectronTile({
+      epicId: tab.epicId,
+      hostId: tab.hostId,
+      sessionId: tab.sessionId,
+      tabId: tab.tabId,
+      url: tab.url,
+    });
+    return;
+  }
+  if (disposition.action === "float") {
+    openAgentTabInPip({
+      epicId: tab.epicId,
+      hostId: tab.hostId,
+      sessionId: tab.sessionId,
+      tabId: tab.tabId,
+    });
+  }
 }
 
 type PromoteStateFrame = Extract<
@@ -178,6 +210,10 @@ export function BrowserSessionsHostProvider(props: {
     () => resolveDesktopBrowserViewBridge(runnerHost),
     [runnerHost],
   );
+  const electronTabLifecycle = useMemo(
+    () => resolveDesktopElectronTabLifecycleBridge(runnerHost),
+    [runnerHost],
+  );
   const primaryProfileCaptureReady = useMemo(
     () => canCapturePrimaryProfile(runnerHost),
     [runnerHost],
@@ -188,6 +224,7 @@ export function BrowserSessionsHostProvider(props: {
     epicId: props.epicId,
     chatId: props.routingChatId,
     browserView,
+    electronTabLifecycle,
     primaryProfileCaptureReady,
   });
   return (
@@ -716,14 +753,21 @@ interface UseBrowserSessionsArgs {
   readonly epicId: string;
   readonly chatId: string | null;
   readonly browserView: DesktopBrowserViewBridge | null;
+  readonly electronTabLifecycle: DesktopElectronTabLifecycleBridge | null;
   readonly primaryProfileCaptureReady: boolean;
 }
 
 function useBrowserSessions(
   args: UseBrowserSessionsArgs,
 ): Omit<BrowserSessionsState, "routingChatId"> {
-  const { hostId, epicId, chatId, browserView, primaryProfileCaptureReady } =
-    args;
+  const {
+    hostId,
+    epicId,
+    chatId,
+    browserView,
+    electronTabLifecycle,
+    primaryProfileCaptureReady,
+  } = args;
   const hostEntry = useHostDirectoryEntry(hostId ?? UNKNOWN_HOST_PLACEHOLDER);
   const transportReady =
     args.hostClient !== null &&
@@ -805,28 +849,28 @@ function useBrowserSessions(
       }
     })();
     sessionRef.current = stream;
-    // The shared stream transport deliberately drops client frames until the
-    // subscription is open and during reconnects. Re-advertise this durable
-    // capability once per live connection so the host always has an endpoint.
-    let captureReadySentForConnection = false;
-    let electronTabsReplayedForConnection = false;
-    const detachElectronTabs = attachElectronBrowserTabStream(
+    // Keep one coordinator across this durable subscription's reconnects so
+    // native settlements replay without exposing them to another host/epic.
+    const electronTabs = createElectronTabs({
       epicId,
       hostId,
-      (frame) => {
+      native: electronTabLifecycle,
+      sendFrame: (frame) => {
         stream.sendClientFrame(frame, null);
       },
-    );
-    const detachBackgroundRoute =
-      browserView === null
-        ? null
-        : attachElectronBrowserBackgroundTabRoute(epicId, hostId, browserView);
+      present: presentAcceptedElectronTab,
+    });
+    let captureReadySentForConnection = false;
+    let electronLifecycleReadySentForConnection = false;
+    let electronTabsReplayedForConnection = false;
     stream.onStatusChange((status, reason) => {
       if (sessionRef.current !== stream) return;
       const lifecycle = browserSessionsLifecycle(status, reason);
       lifecycleRef.current = lifecycle;
       if (status !== "open") {
+        electronTabs.disconnect();
         captureReadySentForConnection = false;
+        electronLifecycleReadySentForConnection = false;
         electronTabsReplayedForConnection = false;
         rejectPendingRequests(
           pendingCloses,
@@ -835,7 +879,21 @@ function useBrowserSessions(
       } else {
         if (!electronTabsReplayedForConnection) {
           electronTabsReplayedForConnection = true;
-          replayElectronBrowserTabRegistrations(epicId, hostId);
+          electronTabs.replaySettlements();
+        }
+        if (
+          electronTabLifecycle !== null &&
+          !electronLifecycleReadySentForConnection
+        ) {
+          electronLifecycleReadySentForConnection = true;
+          stream.sendClientFrame(
+            {
+              kind: "electronTabLifecycleReady",
+              hasBinaryPayload: false,
+              requestId: crypto.randomUUID(),
+            },
+            null,
+          );
         }
         if (primaryProfileCaptureReady && !captureReadySentForConnection) {
           captureReadySentForConnection = true;
@@ -863,7 +921,6 @@ function useBrowserSessions(
       if (!parsed.success) return;
       handleBrowserSessionsFrame({
         frame: parsed.data,
-        chatId,
         setItems: (value) => {
           setStreamState((current) => {
             const currentItems = current.client === client ? current.items : [];
@@ -883,6 +940,7 @@ function useBrowserSessions(
         pendingLends,
         pendingCloses,
         browserView,
+        electronTabs,
         sendClientFrame: (frame) => {
           stream.sendClientFrame(frame, null);
         },
@@ -892,8 +950,7 @@ function useBrowserSessions(
       if (sessionRef.current === stream) {
         sessionRef.current = null;
       }
-      detachElectronTabs();
-      detachBackgroundRoute?.();
+      electronTabs.dispose();
       stream.close();
       transport.close();
       rejectPendingRequests(
@@ -912,6 +969,7 @@ function useBrowserSessions(
   }, [
     browserView,
     chatId,
+    electronTabLifecycle,
     epicId,
     hostId,
     openTransport,
@@ -1124,11 +1182,13 @@ function handleBrowserSessionsFrame(args: {
   >;
   readonly pendingCloses: Map<string, PendingCloseRequest>;
   readonly browserView: DesktopBrowserViewBridge | null;
+  readonly electronTabs: ElectronTabs;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
-  readonly chatId: string | null;
 }): void {
-  if (handleElectronBrowserTabFrame(args.frame, { chatId: args.chatId }))
-    return;
+  if (args.frame.kind === "createElectronTab") {
+    rememberElectronTabCreate(args.frame.sessionId, args.frame.tabId);
+  }
+  if (args.electronTabs.handleFrame(args.frame)) return;
   if (
     handlePrimaryProfileCaptureFrame({
       frame: args.frame,
@@ -1156,7 +1216,7 @@ function handleBrowserSessionsFrame(args: {
     return;
   }
   if (
-    handleAgentBrowserCdpFrame({
+    handleBorrowedTileCdpFrame({
       frame: args.frame,
       sendClientFrame: args.sendClientFrame,
     })
@@ -1228,7 +1288,6 @@ function handleBrowserSessionLifecycleFrame(args: {
 }): boolean {
   if (args.frame.kind === "snapshot") {
     for (const session of args.frame.sessions) {
-      syncElectronBrowserTabDrivers(session);
       // Seed-only: a snapshot replays the full inventory (initial load,
       // reconnect, renderer reload) and must not re-surface old tabs.
       collectNewAgentTabsFromSessionFrame(session);
@@ -1238,7 +1297,6 @@ function handleBrowserSessionLifecycleFrame(args: {
   }
   if (args.frame.kind === "sessionCreated") {
     const session = args.frame.session;
-    syncElectronBrowserTabDrivers(session);
     args.setItems((current) => upsertSession(current, session));
     // A session's inaugural tab stays quiet by design ("tabs only"); this
     // seeds the seen-tab set so later openTab additions are recognized.
@@ -1247,7 +1305,6 @@ function handleBrowserSessionLifecycleFrame(args: {
   }
   if (args.frame.kind === "sessionUpdated") {
     const session = args.frame.session;
-    syncElectronBrowserTabDrivers(session);
     args.setItems((current) => upsertSession(current, session));
     // Diff against the last seen tabs and apply the agent-tab-surfacing
     // preference to genuinely new agent-created tabs (headless sessions
@@ -1267,195 +1324,24 @@ function handleBrowserSessionLifecycleFrame(args: {
 }
 
 /**
- * Ticket 03's transport plumbing: translates each enumerated `cdpXxx` server
- * frame into the gui-app-local `AgentBrowserViewCdpCommand` shape and hands
- * it to whichever `AgentBrowserTile` registered for this `tileInstanceId`.
- * Does not decide what to send - only forwards what the host already decided.
+ * Translates enumerated CDP frames for an explicitly borrowed user-owned
+ * surface. Host-owned Electron tabs are handled earlier by ElectronTabs and
+ * never enter this tile-addressed registry.
  */
-function handleAgentBrowserCdpFrame(args: {
+function handleBorrowedTileCdpFrame(args: {
   readonly frame: BrowserSessionsServerFrame;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): boolean {
-  const request = agentBrowserCdpRequestFromFrame(args.frame);
-  if (request === null) return false;
-  publishAgentBrowserCdpRequest({
-    ...request,
+  const request = browserCdpRequestFromFrame(args.frame);
+  if (request === null || request.target.kind !== "borrowed-tile") return false;
+  publishBorrowedTileCdpRequest({
+    requestId: request.requestId,
+    tileInstanceId: request.target.tileInstanceId,
+    cdpSessionId: request.cdpSessionId,
+    command: request.command,
     sendFrame: args.sendClientFrame,
   });
   return true;
-}
-
-type AgentBrowserCdpFrameRequest = {
-  readonly requestId: string;
-  readonly tileInstanceId: string;
-  readonly sessionId: string | null;
-  readonly command: AgentBrowserViewCdpCommand;
-};
-
-function agentBrowserCdpRequestFromFrame(
-  frame: BrowserSessionsServerFrame,
-): AgentBrowserCdpFrameRequest | null {
-  switch (frame.kind) {
-    case "cdpNavigate":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: { kind: "cdpNavigate", url: frame.url },
-      };
-    case "cdpCaptureScreenshot":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpCaptureScreenshot",
-          format: frame.format,
-          quality: frame.quality,
-        },
-      };
-    case "cdpGetFrameTree":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: { kind: "cdpGetFrameTree" },
-      };
-    case "cdpCreateIsolatedWorld":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpCreateIsolatedWorld",
-          frameId: frame.frameId,
-          worldName: frame.worldName,
-          grantUniversalAccess: frame.grantUniversalAccess,
-        },
-      };
-    case "cdpEvaluate":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpEvaluate",
-          expression: frame.expression,
-          awaitPromise: frame.awaitPromise,
-          returnByValue: frame.returnByValue,
-          contextId: frame.contextId,
-        },
-      };
-    case "cdpCallFunctionOn":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpCallFunctionOn",
-          objectId: frame.objectId,
-          executionContextId: frame.executionContextId,
-          functionDeclaration: frame.functionDeclaration,
-          argumentsJson: frame.argumentsJson,
-          returnByValue: frame.returnByValue,
-        },
-      };
-    case "cdpReleaseObject":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: { kind: "cdpReleaseObject", objectId: frame.objectId },
-      };
-    case "cdpDispatchMouseEvent":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpDispatchMouseEvent",
-          type: frame.type,
-          x: frame.x,
-          y: frame.y,
-          button: frame.button,
-          clickCount: frame.clickCount,
-          deltaX: frame.deltaX,
-          deltaY: frame.deltaY,
-        },
-      };
-    case "cdpInsertText":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: { kind: "cdpInsertText", text: frame.text },
-      };
-    case "cdpDispatchKeyEvent":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpDispatchKeyEvent",
-          type: frame.type,
-          key: frame.key,
-          code: frame.code,
-          text: frame.text,
-          modifiers: frame.modifiers,
-          unmodifiedText: frame.unmodifiedText,
-          windowsVirtualKeyCode: frame.windowsVirtualKeyCode,
-          location: frame.location,
-          isKeypad: frame.isKeypad,
-          autoRepeat: frame.autoRepeat,
-          commands: frame.commands,
-        },
-      };
-    case "cdpSetDeviceMetricsOverride":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpSetDeviceMetricsOverride",
-          width: frame.width,
-          height: frame.height,
-          deviceScaleFactor: frame.deviceScaleFactor,
-          mobile: frame.mobile,
-        },
-      };
-    case "cdpSetAutoAttach":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpSetAutoAttach",
-          autoAttach: frame.autoAttach,
-          waitForDebuggerOnStart: frame.waitForDebuggerOnStart,
-        },
-      };
-    case "cdpDescribeNode":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: {
-          kind: "cdpDescribeNode",
-          objectId: frame.objectId,
-          depth: frame.depth,
-          pierce: frame.pierce,
-        },
-      };
-    case "cdpGetFullAXTree":
-      return {
-        requestId: frame.requestId,
-        tileInstanceId: frame.tileInstanceId,
-        sessionId: frame.sessionId,
-        command: { kind: "cdpGetFullAXTree", depth: frame.depth },
-      };
-    default:
-      return null;
-  }
 }
 
 function handleVisibleTileControlFrame(args: {
@@ -1540,10 +1426,7 @@ function browserSessionsLabel(lifecycle: BrowserSessionsLifecycle): string {
 
 function rejectPendingRequests<
   T extends { readonly reject: (error: Error) => void },
->(
-  pendingRequests: Map<string, T>,
-  error: Error,
-): void {
+>(pendingRequests: Map<string, T>, error: Error): void {
   pendingRequests.forEach((pending) => pending.reject(error));
   pendingRequests.clear();
 }

@@ -6,17 +6,12 @@ import {
   type SyntheticEvent,
 } from "react";
 import { AlertTriangle, ShieldCheck, Square } from "lucide-react";
-import { toast } from "sonner";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { Button } from "@/components/ui/button";
 import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/browser-overlay-coordinator";
 import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-degraded-message";
 import { selectSiblingChatIdForBrowserTile } from "@/lib/browser-view/browser-tile-chat-routing";
-import {
-  registerElectronBrowserTab,
-  updateElectronBrowserTabView,
-} from "@/lib/browser-view/electron-browser-tab-store";
 import {
   type BrowserViewCertificateErrorChange,
   type BrowserViewDownloadChange,
@@ -49,11 +44,9 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { BrowserTileRef } from "@/stores/epics/canvas/types";
 import { BrowserDebugPanels } from "@/components/epic-canvas/renderers/browser-debug-panels";
 import { BrowserTileToolbar } from "@/components/epic-canvas/renderers/browser-tile-toolbar";
-import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
 import { PRIMARY_TILE_CHROME_CAPABILITIES } from "@/components/epic-canvas/renderers/tile-controller";
-import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { BrowserViewSnapshotLayer } from "@/components/epic-canvas/renderers/browser-view-snapshot-layer";
 import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-browser-view-snapshot";
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
@@ -61,8 +54,7 @@ import {
   BrowserTileCertificateInterstitial,
   BrowserTileDownloadStrip,
 } from "@/components/epic-canvas/renderers/browser-tile-status-panels";
-import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
-import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/visible-tile-registry";
+import { attachBorrowedTileCdpSurface } from "@/lib/browser-view/borrowed-tile-cdp";
 
 export interface BrowserTileProps {
   readonly node: BrowserTileRef;
@@ -99,7 +91,6 @@ export function BrowserTile(props: BrowserTileProps) {
   const hostId = useTabHostId();
   const runnerHost = useRunnerHost();
   const visible = useTileBodyVisible();
-  const paneFocused = usePaneFocused();
   const browserView = useMemo(
     () => resolveDesktopBrowserViewBridge(runnerHost),
     [runnerHost],
@@ -117,13 +108,6 @@ export function BrowserTile(props: BrowserTileProps) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [durableTabId, setDurableTabId] = useState<string | null>(null);
-  useRegisterVisibleBrowserTile({
-    hostId,
-    sessionId: props.node.id,
-    tabId: durableTabId,
-    visible,
-  });
   const [downloads, setDownloads] = useState<
     readonly BrowserViewDownloadChange[]
   >([]);
@@ -137,11 +121,6 @@ export function BrowserTile(props: BrowserTileProps) {
   );
   const updateBrowserTileViewportPreset = useEpicCanvasStore(
     (state) => state.updateBrowserTileViewportPresetInTab,
-  );
-  const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
-    props.viewTabId,
-    props.paneId,
-    props.node.instanceId,
   );
   const browserAttachmentTargetChatId = useEpicCanvasStore((state) =>
     selectSiblingChatIdForBrowserTile(
@@ -172,6 +151,11 @@ export function BrowserTile(props: BrowserTileProps) {
 
   useEffect(() => {
     if (browserView === null) return;
+    return attachBorrowedTileCdpSurface({ bridge: browserView, tileKey });
+  }, [browserView, tileKey]);
+
+  useEffect(() => {
+    if (browserView === null) return;
     return () => {
       void browserView.releaseTile(tileKey).catch(ignoreBrowserViewError);
     };
@@ -194,54 +178,6 @@ export function BrowserTile(props: BrowserTileProps) {
     props.node.viewportPreset,
     visible,
   ]);
-
-  useEffect(() => {
-    if (browserView === null) return;
-    registerElectronBrowserTab({
-      epicId: props.epicId,
-      hostId,
-      chatId: browserAttachmentTargetChatId,
-      registrationId: props.node.id,
-      sessionId: props.node.id,
-      initialUrl: props.node.url,
-      title: props.node.name,
-      tileKey,
-      bridge: browserView,
-      onRegistered: setDurableTabId,
-      onActivatedHeadless: null,
-    });
-  }, [
-    browserAttachmentTargetChatId,
-    browserView,
-    hostId,
-    props.epicId,
-    props.node.id,
-    props.node.name,
-    props.node.url,
-    tileKey,
-  ]);
-
-  useEffect(() => {
-    if (browserView === null) return;
-    updateElectronBrowserTabView({
-      sessionId: props.node.id,
-      registrationId: props.node.id,
-      visible,
-      focused: paneFocused,
-    });
-  }, [browserView, paneFocused, props.node.id, visible]);
-
-  useEffect(() => {
-    if (browserView === null) return;
-    return () => {
-      updateElectronBrowserTabView({
-        sessionId: props.node.id,
-        registrationId: props.node.id,
-        visible: false,
-        focused: false,
-      });
-    };
-  }, [browserView, props.node.id]);
 
   useEffect(() => {
     if (browserView === null) return;
@@ -734,21 +670,7 @@ export function BrowserTile(props: BrowserTileProps) {
         tileKey={tileKey}
       />
       <BrowserTileToolbar
-        pictureInPicture={{
-          disabled: browserView === null || durableTabId === null,
-          convert: () => {
-            if (durableTabId === null) return;
-            convertBrowserTabToPip({
-              epicId: props.epicId,
-              hostId,
-              sessionId: props.node.id,
-              tabId: durableTabId,
-              origin: "manual",
-              onReady: closeCanvasTile,
-              onError: (message) => toast.error(message),
-            });
-          },
-        }}
+        pictureInPicture={null}
         controller={{
           capabilities: PRIMARY_TILE_CHROME_CAPABILITIES,
           url: props.node.url,

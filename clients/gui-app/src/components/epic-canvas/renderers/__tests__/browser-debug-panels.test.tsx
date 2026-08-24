@@ -26,14 +26,12 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
+  BrowserViewTileCdpDispatch,
   BrowserViewTileKey,
   BrowserViewNetworkEntry,
   DesktopBrowserViewBridge,
 } from "@/lib/browser-view/desktop-browser-view";
-import type {
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpResult,
-} from "@/lib/browser-view/desktop-agent-browser-view";
+import type { BrowserCdpResult } from "@/lib/browser-view/browser-cdp-contract";
 
 const TILE: BrowserViewTileKey = {
   viewTabId: "view-tab",
@@ -98,10 +96,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   >();
 
   upsertTile(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  registerDurableTab(): Promise<void> {
     return Promise.resolve();
   }
 
@@ -302,9 +296,7 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     };
   }
 
-  dispatchCdp(
-    _input: AgentBrowserViewCdpDispatch,
-  ): Promise<AgentBrowserViewCdpResult> {
+  dispatchCdp(_input: BrowserViewTileCdpDispatch): Promise<BrowserCdpResult> {
     return Promise.resolve({
       kind: "cdpGetFrameTree",
       ok: false,
@@ -321,10 +313,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   }
 
   onCdpTargetAttached() {
-    return disposable;
-  }
-
-  onTileHandoff() {
     return disposable;
   }
 

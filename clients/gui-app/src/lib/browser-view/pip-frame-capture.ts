@@ -16,9 +16,9 @@ import {
   type DesktopPipCaptureBridge,
 } from "@/lib/browser-view/desktop-pip-capture";
 import {
-  useElectronBrowserTabBindingOnHost,
-  type ElectronBrowserTabRegistration,
-} from "@/lib/browser-view/electron-browser-tab-store";
+  useElectronTabBindingOnHost,
+  type ElectronTabBinding,
+} from "@/lib/browser-view/electron-tabs";
 import { incrementPipHeadlessArmRunsForTests } from "@/lib/browser-view/pip-capture-arm-counts";
 import {
   openPipHeadlessStream,
@@ -54,7 +54,7 @@ export function usePipOwnedFrame(
     sessionId,
     tabId,
   } = pipCaptureCoordinates(snapshot);
-  const binding = useElectronBrowserTabBindingOnHost(sessionId, tabId, hostId);
+  const binding = useElectronTabBindingOnHost(sessionId, tabId, hostId);
   const hostEntry = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(
@@ -150,21 +150,18 @@ function usePipHostClientHandle(
   return handle;
 }
 
-function nativeTileBindingKey(binding: ElectronBrowserTabRegistration): string {
-  const tileKey = binding.tileKey;
+function nativeTabBindingKey(binding: ElectronTabBinding): string {
   return [
-    binding.registrationId,
-    tileKey.viewTabId,
-    tileKey.paneId,
-    tileKey.tileInstanceId,
-    tileKey.pageSessionId,
+    binding.hostId,
     binding.sessionId,
+    binding.tabId,
+    binding.registrationId,
   ].join("\u001f");
 }
 
 function usePipNativeCaptureArm(input: {
   readonly enabled: boolean;
-  readonly binding: ElectronBrowserTabRegistration | null;
+  readonly binding: ElectronTabBinding | null;
   readonly bridge: DesktopPipCaptureBridge | null;
   readonly selectionId: string | null;
   readonly epicId: string;
@@ -172,7 +169,7 @@ function usePipNativeCaptureArm(input: {
 }): void {
   const tileKey =
     input.enabled && input.binding !== null
-      ? `${nativeTileBindingKey(input.binding)}\u001f${input.selectionId ?? ""}`
+      ? `${nativeTabBindingKey(input.binding)}\u001f${input.selectionId ?? ""}`
       : null;
   const argsRef = useRef(input);
   useEffect(() => {
@@ -319,7 +316,7 @@ function usePipFrameOwner(
 }
 
 function startNativePipCapture(input: {
-  readonly binding: ElectronBrowserTabRegistration;
+  readonly binding: ElectronTabBinding;
   readonly bridge: DesktopPipCaptureBridge;
   readonly epicId: string;
   readonly selectionId: string;
@@ -341,12 +338,15 @@ function startNativePipCapture(input: {
   };
   const subscription = input.bridge.onFrame(applyFrame);
   void input.bridge
-    .start(
-      input.binding.tileKey,
-      PIP_HEADLESS_MAX_WIDTH,
-      PIP_HEADLESS_MAX_HEIGHT,
-      PIP_HEADLESS_QUALITY,
-    )
+    .start({
+      hostId: input.binding.hostId,
+      sessionId: input.binding.sessionId,
+      tabId: input.binding.tabId,
+      registrationId: input.binding.registrationId,
+      maxWidth: PIP_HEADLESS_MAX_WIDTH,
+      maxHeight: PIP_HEADLESS_MAX_HEIGHT,
+      quality: PIP_HEADLESS_QUALITY,
+    })
     .catch((error: unknown) => {
       failPipConversion(
         input.epicId,

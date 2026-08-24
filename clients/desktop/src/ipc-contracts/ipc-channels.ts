@@ -105,8 +105,7 @@ export const RunnerHostInvoke = {
   respondToQuitRequest: "runnerHost:appLifecycle:respondToQuitRequest",
   freshUnsyncedSnapshotResponse:
     "runnerHost:appLifecycle:freshUnsyncedSnapshotResponse",
-  browserHandoffsDrained:
-    "runnerHost:appLifecycle:browserHandoffsDrained",
+  browserHandoffsDrained: "runnerHost:appLifecycle:browserHandoffsDrained",
   // The CROSS-WINDOW unsyncable set, which no renderer can compute: each one
   // holds only its own Epic session registry, while `appUpdateInstall`
   // restarts the whole app and its quit path deliberately skips the
@@ -316,21 +315,19 @@ export const RunnerHostInvoke = {
   zoomStepOut: "runnerHost:zoom:stepOut",
   zoomReset: "runnerHost:zoom:reset",
   browserViewUpsert: "runnerHost:browserView:upsert",
-  browserViewCreateBackgroundTab: "runnerHost:browserView:createBackgroundTab",
-  browserViewRegisterDurableTab: "runnerHost:browserView:registerDurableTab",
-  browserViewReleaseDurableTab: "runnerHost:browserView:releaseDurableTab",
-  browserViewSetBackgroundThrottling:
-    "runnerHost:browserView:setBackgroundThrottling",
+  browserViewEnsureTab: "runnerHost:browserView:nativeTab:ensure",
+  browserViewAcceptTab: "runnerHost:browserView:nativeTab:accept",
+  browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
+  browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
+  browserViewReleaseTab: "runnerHost:browserView:nativeTab:release",
+  browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
+  browserViewElectronTabCdpDispatch:
+    "runnerHost:browserView:nativeTab:cdp:dispatch",
   browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
   browserViewSetViewportPreset: "runnerHost:browserView:setViewportPreset",
   browserViewRelease: "runnerHost:browserView:release",
-  browserViewSetReservedChords:
-    "runnerHost:browserView:setReservedChords",
-  agentBrowserViewSetReservedChords:
-    "runnerHost:agentBrowserView:setReservedChords",
+  browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
-  agentBrowserViewOverlayPaintAck:
-    "runnerHost:agentBrowserView:overlayPaintAck",
   browserViewReload: "runnerHost:browserView:reload",
   browserViewGoBack: "runnerHost:browserView:goBack",
   browserViewGoForward: "runnerHost:browserView:goForward",
@@ -353,8 +350,7 @@ export const RunnerHostInvoke = {
   browserViewControlGrant: "runnerHost:browserView:control:grant",
   browserViewControlRevoke: "runnerHost:browserView:control:revoke",
   browserViewControlAction: "runnerHost:browserView:control:action",
-  // The same typed CDP surface as agentBrowserViewCdpDispatch, routed to a
-  // host-registered durable tab in the user's browser partition.
+  // Typed CDP surface for a host-registered durable browser tile.
   browserViewCdpDispatch: "runnerHost:browserView:cdp:dispatch",
   browserViewCookieCryptoStateGet:
     "runnerHost:browserView:cookieCryptoState:get",
@@ -366,40 +362,6 @@ export const RunnerHostInvoke = {
   browserViewAnnotationAttachResult:
     "runnerHost:browserView:annotation:attachResult",
   browserViewOpenDevTools: "runnerHost:browserView:openDevTools",
-  // Agent-owned browser tile (ticket 02): a separate WebContentsView pool in
-  // `AGENT_BROWSER_VIEW_PARTITION`, deliberately not sharing the full
-  // `browserView:*` surface above. Driving (control grant/action), storage
-  // lending, find, zoom and devtools are out of scope until a later ticket
-  // wires the agent's own REPL-driven surface.
-  agentBrowserViewUpsert: "runnerHost:agentBrowserView:upsert",
-  agentBrowserViewRegisterDurableTab:
-    "runnerHost:agentBrowserView:registerDurableTab",
-  agentBrowserViewUpdateBounds: "runnerHost:agentBrowserView:updateBounds",
-  agentBrowserViewRelease: "runnerHost:agentBrowserView:release",
-  // Fix round 3 (native-view overlay bug): the renderer's overlay coordinator
-  // broadcasts the same occlude/release call to both the primary and agent
-  // managers - each one silently no-ops the tiles it does not own - so the
-  // agent manager needs this surface too, not just the primary one above.
-  agentBrowserViewOccludeForOverlay:
-    "runnerHost:agentBrowserView:occludeForOverlay",
-  agentBrowserViewReleaseOverlay: "runnerHost:agentBrowserView:releaseOverlay",
-  agentBrowserViewSetViewportPreset:
-    "runnerHost:agentBrowserView:setViewportPreset",
-  agentBrowserViewReload: "runnerHost:agentBrowserView:reload",
-  agentBrowserViewGoBack: "runnerHost:agentBrowserView:goBack",
-  agentBrowserViewGoForward: "runnerHost:agentBrowserView:goForward",
-  agentBrowserViewFindInPage: "runnerHost:agentBrowserView:findInPage",
-  agentBrowserViewStopFindInPage: "runnerHost:agentBrowserView:stopFindInPage",
-  agentBrowserViewCancelDownload: "runnerHost:agentBrowserView:cancelDownload",
-  agentBrowserViewTrustCertificate:
-    "runnerHost:agentBrowserView:trustCertificate",
-  agentBrowserViewZoomIn: "runnerHost:agentBrowserView:zoomIn",
-  agentBrowserViewZoomOut: "runnerHost:agentBrowserView:zoomOut",
-  agentBrowserViewResetZoom: "runnerHost:agentBrowserView:resetZoom",
-  agentBrowserViewOpenDevTools: "runnerHost:agentBrowserView:openDevTools",
-  // Ticket 03's typed CDP bridge: one invoke carrying an enumerated command
-  // (see `AgentBrowserViewCdpCommand`), never a generic method/params pair.
-  agentBrowserViewCdpDispatch: "runnerHost:agentBrowserView:cdp:dispatch",
   // Native-tab PiP capture (agent-browser-pip ticket 02). Rides the existing
   // debugger attach; frames are pushed on `pipCaptureFrame`.
   pipCaptureStart: "runnerHost:pipCapture:start",
@@ -459,6 +421,14 @@ export const RunnerHostEvent = {
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
   browserViewStatusChange: "runnerHost:event:browserView:statusChange",
+  browserViewNativeTabStatusChange:
+    "runnerHost:event:browserView:nativeTab:statusChange",
+  browserViewNativeTabCdpSessionEnded:
+    "runnerHost:event:browserView:nativeTab:cdp:sessionEnded",
+  browserViewNativeTabCdpTargetAttached:
+    "runnerHost:event:browserView:nativeTab:cdp:targetAttached",
+  browserViewElectronTabHandoff:
+    "runnerHost:event:browserView:electronTab:handoff",
   browserViewFindChange: "runnerHost:event:browserView:findChange",
   browserViewDownloadChange: "runnerHost:event:browserView:downloadChange",
   browserViewCertificateError: "runnerHost:event:browserView:certificateError",
@@ -471,39 +441,9 @@ export const RunnerHostEvent = {
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
-  // Durable user-tab counterparts of the agent-tab events below.
   browserViewCdpSessionEnded: "runnerHost:event:browserView:cdp:sessionEnded",
   browserViewCdpTargetAttached:
     "runnerHost:event:browserView:cdp:targetAttached",
-  // Destructive runtime-transition handoff, counterpart of the agent-tab
-  // event below.
-  browserViewTileHandoff: "runnerHost:event:browserView:tileHandoff",
-  agentBrowserViewStatusChange:
-    "runnerHost:event:agentBrowserView:statusChange",
-  agentBrowserViewOpenTileRequest:
-    "runnerHost:event:agentBrowserView:openTileRequest",
-  agentBrowserViewSnapshotInvalidated:
-    "runnerHost:event:agentBrowserView:snapshotInvalidated",
-  agentBrowserViewFindChange: "runnerHost:event:agentBrowserView:findChange",
-  agentBrowserViewDownloadChange:
-    "runnerHost:event:agentBrowserView:downloadChange",
-  agentBrowserViewCertificateError:
-    "runnerHost:event:agentBrowserView:certificateError",
-  // Fired the moment the agent tile's CDP debugger detaches for a reason
-  // outside our control (target destroyed, renderer crash, explicit
-  // detach) - ends the agent's access rather than only logging it. Opening
-  // DevTools is not one of those reasons on Electron 42.7.1 - it coexists
-  // with the attached debugger there (verified 2026-07-28).
-  agentBrowserViewCdpSessionEnded:
-    "runnerHost:event:agentBrowserView:cdp:sessionEnded",
-  // Fired whenever CDP's own `Target.attachedToTarget` fires on the agent
-  // tile's root session, so the renderer can forward child-session discovery
-  // to the host.
-  agentBrowserViewCdpTargetAttached:
-    "runnerHost:event:agentBrowserView:cdp:targetAttached",
-  // Ticket 12 / ticket 10's design. Fired once, just before the agent tile
-  // dies for any teardown reason, carrying captured `{url, storageState}`.
-  agentBrowserViewTileHandoff: "runnerHost:event:agentBrowserView:tileHandoff",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",

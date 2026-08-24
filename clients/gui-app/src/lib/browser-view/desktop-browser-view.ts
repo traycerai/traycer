@@ -17,18 +17,10 @@ import type {
   BrowserViewElementCapture,
   BrowserViewElementStyle,
 } from "@traycer/protocol/persistence/epic/schemas";
-// Type-only, and deliberately so: `desktop-agent-browser-view.ts` already
-// imports this module's tile-key types, and a value import back would be a
-// real cycle. Ticket 03 defined the CDP command/result shapes there because
-// the agent's own tile was their only consumer; ticket 09 gives them a
-// second one on this bridge, and they are erased at build time either way.
 import type {
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpResult,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
-} from "./desktop-agent-browser-view";
+  BrowserCdpCommand,
+  BrowserCdpResult,
+} from "./browser-cdp-contract";
 
 export type {
   BrowserAnnotationAttachedIpcEvent,
@@ -46,18 +38,52 @@ export interface BrowserViewTileUpsert extends BrowserViewTileKey {
   readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
-export interface BrowserViewDurableTabRegistration extends BrowserViewTileKey {
+export interface BrowserViewNativeTabKey {
+  readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
 }
 
-export interface BrowserViewBackgroundTabCreate extends BrowserViewDurableTabRegistration {
-  readonly url: string;
-  readonly seedStorageState?: unknown;
+/** Exact authority for one live Electron-owned browser guest incarnation. */
+export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey {
+  readonly registrationId: string;
 }
 
-export interface BrowserViewBackgroundThrottlingChange extends BrowserViewTileKey {
-  readonly enabled: boolean;
+export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
+  readonly requestedUrl: string;
+  readonly seedStorageState: unknown | null;
+}
+
+export type BrowserViewProvisionedTab = BrowserViewNativeTabCapability;
+
+export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
+  readonly bindingId: string;
+  readonly surface: BrowserViewTileKey;
+  readonly visible: boolean;
+}
+
+export interface BrowserViewDetachSurface extends BrowserViewNativeTabCapability {
+  readonly bindingId: string;
+}
+
+export type BrowserViewReleaseTab = BrowserViewNativeTabCapability;
+
+export type BrowserViewElectronTabControlAction =
+  | { readonly kind: "navigate"; readonly url: string }
+  | { readonly kind: "reload" }
+  | { readonly kind: "goBack" }
+  | { readonly kind: "goForward" }
+  | {
+      readonly kind: "setViewportPreset";
+      readonly viewportPreset: BrowserViewViewportPresetId;
+    }
+  | { readonly kind: "zoomIn" }
+  | { readonly kind: "zoomOut" }
+  | { readonly kind: "resetZoom" }
+  | { readonly kind: "openDevTools" };
+
+export interface BrowserViewElectronTabControl extends BrowserViewNativeTabCapability {
+  readonly action: BrowserViewElectronTabControlAction;
 }
 
 export interface BrowserViewBounds {
@@ -88,6 +114,64 @@ export interface BrowserViewStatusChange extends BrowserViewTileKey {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
+}
+
+export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCapability {
+  readonly url: string;
+  readonly title: string | null;
+  readonly status: BrowserViewStatus;
+  readonly reason: string | null;
+  readonly canGoBack: boolean;
+  readonly canGoForward: boolean;
+  readonly zoomPercent: number;
+}
+
+export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
+  readonly cdpSessionId: string | null;
+  readonly command: BrowserCdpCommand;
+}
+
+export interface BrowserViewTileCdpDispatch extends BrowserViewTileKey {
+  readonly sessionId: string | null;
+  readonly command: BrowserCdpCommand;
+}
+
+export interface BrowserViewTileCdpSessionEndedChange extends BrowserViewTileKey {
+  readonly reason: string;
+}
+
+export interface BrowserViewTileCdpTargetAttachedChange extends BrowserViewTileKey {
+  readonly sessionId: string;
+  readonly targetId: string;
+  readonly targetType: string;
+  readonly url: string;
+  readonly waitingForDebugger: boolean;
+}
+
+export interface BrowserViewNativeTabCdpSessionEndedChange extends BrowserViewNativeTabCapability {
+  readonly reason: string;
+}
+
+export interface BrowserViewNativeTabCdpTargetAttachedChange extends BrowserViewNativeTabCapability {
+  readonly cdpSessionId: string;
+  readonly targetId: string;
+  readonly targetType: string;
+  readonly url: string;
+  readonly waitingForDebugger: boolean;
+}
+
+export interface BrowserViewElectronTabHandoffSibling {
+  readonly tabId: string;
+  readonly registrationId: string;
+  readonly url: string;
+  readonly capturedStorageState: unknown;
+}
+
+export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
+  readonly capturedUrl: string;
+  readonly capturedStorageState: unknown;
+  readonly siblingTabs: readonly BrowserViewElectronTabHandoffSibling[];
+  readonly reason: "gui-quit" | "tab-released" | "crash-no-capture";
 }
 
 export interface BrowserViewFindRequest extends BrowserViewTileKey {
@@ -377,12 +461,6 @@ export interface BrowserLabsStateUpdate {
 
 export interface DesktopBrowserViewBridge {
   upsertTile(input: BrowserViewTileUpsert): Promise<void>;
-  createBackgroundTab?(input: BrowserViewBackgroundTabCreate): Promise<void>;
-  registerDurableTab(input: BrowserViewDurableTabRegistration): Promise<void>;
-  releaseDurableTab?(input: BrowserViewDurableTabRegistration): Promise<void>;
-  setBackgroundThrottling?(
-    input: BrowserViewBackgroundThrottlingChange,
-  ): Promise<void>;
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
   releaseTile(input: BrowserViewTileKey): Promise<void>;
@@ -468,20 +546,15 @@ export interface DesktopBrowserViewBridge {
     dispose: () => void;
   };
   /** Typed CDP bridge shared by every host-registered Electron tab. */
-  dispatchCdp(
-    input: AgentBrowserViewCdpDispatch,
-  ): Promise<AgentBrowserViewCdpResult>;
+  dispatchCdp(input: BrowserViewTileCdpDispatch): Promise<BrowserCdpResult>;
   onCdpSessionEnded(
-    handler: (change: AgentBrowserViewCdpSessionEndedChange) => void,
+    handler: (change: BrowserViewTileCdpSessionEndedChange) => void,
   ): {
     dispose: () => void;
   };
   onCdpTargetAttached(
-    handler: (change: AgentBrowserViewCdpTargetAttachedChange) => void,
+    handler: (change: BrowserViewTileCdpTargetAttachedChange) => void,
   ): {
-    dispose: () => void;
-  };
-  onTileHandoff(handler: (change: AgentBrowserViewTileHandoffChange) => void): {
     dispose: () => void;
   };
   onControlRevoked(
@@ -501,23 +574,49 @@ export interface DesktopBrowserViewBridge {
   };
 }
 
+/** Complete native-tab lifecycle capability. It is never inferred from the general tile bridge. */
+export interface DesktopElectronTabLifecycleBridge {
+  ensureTab(input: BrowserViewEnsureTab): Promise<BrowserViewProvisionedTab>;
+  acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
+  attachSurface(input: BrowserViewAttachSurface): Promise<void>;
+  detachSurface(input: BrowserViewDetachSurface): Promise<void>;
+  releaseTab(input: BrowserViewReleaseTab): Promise<boolean>;
+  controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
+  dispatchElectronTabCdp(
+    input: BrowserViewElectronTabCdpDispatch,
+  ): Promise<BrowserCdpResult>;
+  onNativeTabStatusChange(
+    handler: (change: BrowserViewNativeTabStatusChange) => void,
+  ): { dispose: () => void };
+  onNativeTabCdpSessionEnded(
+    handler: (change: BrowserViewNativeTabCdpSessionEndedChange) => void,
+  ): { dispose: () => void };
+  onNativeTabCdpTargetAttached(
+    handler: (change: BrowserViewNativeTabCdpTargetAttachedChange) => void,
+  ): { dispose: () => void };
+  onElectronTabHandoff(
+    handler: (change: BrowserViewElectronTabHandoffChange) => void,
+  ): { dispose: () => void };
+}
+
 type BrowserViewBridgeMethod = (this: unknown, ...args: unknown[]) => unknown;
 type BrowserViewBridgeSource = Record<string, unknown>;
+type BrowserViewOptionalBridgeMethod =
+  "capturePrimaryProfile" | "overlayPaintAck";
 type BrowserViewBridgeMethodSet = {
   readonly [
     MethodName in Exclude<
       keyof DesktopBrowserViewBridge,
-      "capturePrimaryProfile"
+      BrowserViewOptionalBridgeMethod
     >
   ]: BrowserViewBridgeMethod;
 } & {
-  readonly capturePrimaryProfile: BrowserViewBridgeMethod | undefined;
-  readonly overlayPaintAck: BrowserViewBridgeMethod | undefined;
+  readonly [MethodName in BrowserViewOptionalBridgeMethod]:
+    BrowserViewBridgeMethod | undefined;
 };
 
 const REQUIRED_BROWSER_VIEW_BRIDGE_METHODS = [
   "upsertTile",
-  "registerDurableTab",
   "updateBounds",
   "setViewportPreset",
   "releaseTile",
@@ -558,24 +657,6 @@ const REQUIRED_BROWSER_VIEW_BRIDGE_METHODS = [
   "onControlRevoked",
   "onAnnotationEvent",
   "onAnnotationAttached",
-  // Electron-tab CDP members are deliberately NOT required.
-  //
-  // This list is a gate: a preload missing any entry makes
-  // `resolveDesktopBrowserViewBridge` return null and every browser tile in
-  // the app render as unavailable. That is the right answer for members the
-  // bridge is useless without - but a browser tab is not useless without
-  // agent driving. Requiring these would turn "this build cannot drive a tab"
-  // into "the user has no browser at all", which is a far
-  // worse failure than the capability it guards.
-  //
-  // A renderer newer than its preload is not hypothetical here: the desktop
-  // dev loop hot-reloads the renderer but not the preload, so the strict
-  // form breaks every open browser tile until a full relaunch.
-  //
-  // `readBridgeMethod` already covers the mismatch honestly - a missing
-  // member resolves to a stub that throws when called, so a dispatch fails
-  // with a typed CDP error the model can react to, and nothing else on the
-  // tile is affected.
 ] satisfies readonly (keyof DesktopBrowserViewBridge)[];
 
 export function resolveDesktopBrowserViewBridge(
@@ -585,13 +666,74 @@ export function resolveDesktopBrowserViewBridge(
   if (value === null) return null;
   const methods = readBrowserViewBridgeMethods(value);
   return {
-    ...createBrowserViewLifecycleBridge(value, methods),
+    ...createBrowserViewTileLifecycleBridge(value, methods),
     ...createBrowserViewNavigationBridge(value, methods),
     ...createBrowserViewDebugBridge(value, methods),
     ...createBrowserViewOverlayBridge(value, methods),
     ...createBrowserViewStorageBridge(value, methods),
     ...createBrowserViewControlBridge(value, methods),
     ...createBrowserViewSubscriptionBridge(value, methods),
+  };
+}
+
+export function resolveDesktopElectronTabLifecycleBridge(
+  runnerHost: IRunnerHost,
+): DesktopElectronTabLifecycleBridge | null {
+  if (!isRecord(runnerHost)) return null;
+  const value = runnerHost.browserView;
+  if (!isRecord(value)) return null;
+  const ensureTab = value.ensureTab;
+  const acceptTab = value.acceptTab;
+  const attachSurface = value.attachSurface;
+  const detachSurface = value.detachSurface;
+  const releaseTab = value.releaseTab;
+  const controlElectronTab = value.controlElectronTab;
+  const dispatchElectronTabCdp = value.dispatchElectronTabCdp;
+  const onNativeTabStatusChange = value.onNativeTabStatusChange;
+  const onNativeTabCdpSessionEnded = value.onNativeTabCdpSessionEnded;
+  const onNativeTabCdpTargetAttached = value.onNativeTabCdpTargetAttached;
+  const onElectronTabHandoff = value.onElectronTabHandoff;
+  if (
+    !isBridgeMethod(ensureTab) ||
+    !isBridgeMethod(acceptTab) ||
+    !isBridgeMethod(attachSurface) ||
+    !isBridgeMethod(detachSurface) ||
+    !isBridgeMethod(releaseTab) ||
+    !isBridgeMethod(controlElectronTab) ||
+    !isBridgeMethod(dispatchElectronTabCdp) ||
+    !isBridgeMethod(onNativeTabStatusChange) ||
+    !isBridgeMethod(onNativeTabCdpSessionEnded) ||
+    !isBridgeMethod(onNativeTabCdpTargetAttached) ||
+    !isBridgeMethod(onElectronTabHandoff)
+  ) {
+    return null;
+  }
+  return {
+    ensureTab: (input) =>
+      Promise.resolve(
+        ensureTab.call(value, input),
+      ) as Promise<BrowserViewProvisionedTab>,
+    acceptTab: (input) => callBridgeVoid(value, acceptTab, input),
+    attachSurface: (input) => callBridgeVoid(value, attachSurface, input),
+    detachSurface: (input) => callBridgeVoid(value, detachSurface, input),
+    releaseTab: (input) =>
+      Promise.resolve(releaseTab.call(value, input)).then(
+        (released) => released === true,
+      ),
+    controlElectronTab: (input) =>
+      callBridgeVoid(value, controlElectronTab, input),
+    dispatchElectronTabCdp: (input) =>
+      Promise.resolve(
+        dispatchElectronTabCdp.call(value, input),
+      ) as Promise<BrowserCdpResult>,
+    onNativeTabStatusChange: (handler) =>
+      readBridgeSubscription(value, onNativeTabStatusChange, handler),
+    onNativeTabCdpSessionEnded: (handler) =>
+      readBridgeSubscription(value, onNativeTabCdpSessionEnded, handler),
+    onNativeTabCdpTargetAttached: (handler) =>
+      readBridgeSubscription(value, onNativeTabCdpTargetAttached, handler),
+    onElectronTabHandoff: (handler) =>
+      readBridgeSubscription(value, onElectronTabHandoff, handler),
   };
 }
 
@@ -615,10 +757,6 @@ function readBrowserViewBridgeMethods(
 ): BrowserViewBridgeMethodSet {
   return {
     upsertTile: readBridgeMethod(value, "upsertTile"),
-    createBackgroundTab: readBridgeMethod(value, "createBackgroundTab"),
-    registerDurableTab: readBridgeMethod(value, "registerDurableTab"),
-    releaseDurableTab: readBridgeMethod(value, "releaseDurableTab"),
-    setBackgroundThrottling: readBridgeMethod(value, "setBackgroundThrottling"),
     updateBounds: readBridgeMethod(value, "updateBounds"),
     setViewportPreset: readBridgeMethod(value, "setViewportPreset"),
     releaseTile: readBridgeMethod(value, "releaseTile"),
@@ -652,8 +790,11 @@ function readBrowserViewBridgeMethods(
     setLabsState: readBridgeMethod(value, "setLabsState"),
     applyStorageState: readBridgeMethod(value, "applyStorageState"),
     captureStorageState: readBridgeMethod(value, "captureStorageState"),
-    capturePrimaryProfile: readBridgeMethod(value, "capturePrimaryProfile"),
-    overlayPaintAck: readBridgeMethod(value, "overlayPaintAck"),
+    capturePrimaryProfile: readOptionalBridgeMethod(
+      value,
+      "capturePrimaryProfile",
+    ),
+    overlayPaintAck: readOptionalBridgeMethod(value, "overlayPaintAck"),
     grantControl: readBridgeMethod(value, "grantControl"),
     revokeControl: readBridgeMethod(value, "revokeControl"),
     executeControlAction: readBridgeMethod(value, "executeControlAction"),
@@ -670,39 +811,31 @@ function readBrowserViewBridgeMethods(
     dispatchCdp: readBridgeMethod(value, "dispatchCdp"),
     onCdpSessionEnded: readBridgeMethod(value, "onCdpSessionEnded"),
     onCdpTargetAttached: readBridgeMethod(value, "onCdpTargetAttached"),
-    onTileHandoff: readBridgeMethod(value, "onTileHandoff"),
   };
 }
 
-function createBrowserViewLifecycleBridge(
+function createBrowserViewTileLifecycleBridge(
   value: BrowserViewBridgeSource,
   methods: BrowserViewBridgeMethodSet,
 ) {
+  const overlayPaintAck = methods.overlayPaintAck;
   return {
     upsertTile: (input) => callBridgeVoid(value, methods.upsertTile, input),
-    createBackgroundTab: (input) =>
-      callBridgeVoid(value, methods.createBackgroundTab, input),
-    registerDurableTab: (input) =>
-      callBridgeVoid(value, methods.registerDurableTab, input),
-    releaseDurableTab: (input) =>
-      callBridgeVoid(value, methods.releaseDurableTab, input),
-    setBackgroundThrottling: (input) =>
-      callBridgeVoid(value, methods.setBackgroundThrottling, input),
     updateBounds: (input) => callBridgeVoid(value, methods.updateBounds, input),
     setViewportPreset: (input) =>
       callBridgeVoid(value, methods.setViewportPreset, input),
     releaseTile: (input) => callBridgeVoid(value, methods.releaseTile, input),
-    overlayPaintAck: (overlayId: string) =>
-      Promise.resolve(
-        methods.overlayPaintAck.call(value, overlayId),
-      ) as Promise<void>,
+    ...(overlayPaintAck === undefined
+      ? {}
+      : {
+          overlayPaintAck: (overlayId: string) =>
+            Promise.resolve(
+              overlayPaintAck.call(value, overlayId),
+            ) as Promise<void>,
+        }),
   } satisfies Pick<
     DesktopBrowserViewBridge,
     | "upsertTile"
-    | "createBackgroundTab"
-    | "registerDurableTab"
-    | "releaseDurableTab"
-    | "setBackgroundThrottling"
     | "updateBounds"
     | "setViewportPreset"
     | "releaseTile"
@@ -926,19 +1059,16 @@ function createBrowserViewSubscriptionBridge(
     dispatchCdp: (input) =>
       Promise.resolve(
         methods.dispatchCdp.call(value, input),
-      ) as Promise<AgentBrowserViewCdpResult>,
+      ) as Promise<BrowserCdpResult>,
     onCdpSessionEnded: (handler) =>
       readBridgeSubscription(value, methods.onCdpSessionEnded, handler),
     onCdpTargetAttached: (handler) =>
       readBridgeSubscription(value, methods.onCdpTargetAttached, handler),
-    onTileHandoff: (handler) =>
-      readBridgeSubscription(value, methods.onTileHandoff, handler),
   } satisfies Pick<
     DesktopBrowserViewBridge,
     | "dispatchCdp"
     | "onCdpSessionEnded"
     | "onCdpTargetAttached"
-    | "onTileHandoff"
     | "onStatusChange"
     | "onFindChange"
     | "onDownloadChange"
@@ -1002,6 +1132,14 @@ function readBridgeMethod(
   return function missingBrowserViewBridgeMethod() {
     throw new Error(`Desktop browser view bridge method ${name} is missing.`);
   };
+}
+
+function readOptionalBridgeMethod(
+  value: BrowserViewBridgeSource,
+  name: BrowserViewOptionalBridgeMethod,
+): BrowserViewBridgeMethod | undefined {
+  const method = value[name];
+  return isBridgeMethod(method) ? method : undefined;
 }
 
 function isBridgeMethod(value: unknown): value is BrowserViewBridgeMethod {

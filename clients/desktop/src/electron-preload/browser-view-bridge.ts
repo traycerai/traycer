@@ -4,14 +4,12 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
-  AgentBrowserViewCdpDispatch,
-  AgentBrowserViewCdpResult,
-  AgentBrowserViewCdpSessionEndedChange,
-  AgentBrowserViewCdpTargetAttachedChange,
-  AgentBrowserViewTileHandoffChange,
+  BrowserViewCdpDispatch,
+  BrowserViewCdpResult,
+  BrowserViewCdpSessionEndedChange,
+  BrowserViewCdpTargetAttachedChange,
   BrowserCookieCryptoState,
-  BrowserViewBackgroundTabCreate,
-  BrowserViewBackgroundThrottlingChange,
+  BrowserViewAttachSurface,
   BrowserLabsStateUpdate,
   BrowserPrimaryProfileCaptureResult,
   BrowserViewBoundsUpdate,
@@ -27,7 +25,10 @@ import type {
   BrowserViewDebugSnapshotChange,
   BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
-  BrowserViewDurableTabRegistration,
+  BrowserViewDetachSurface,
+  BrowserViewElectronTabCdpDispatch,
+  BrowserViewElectronTabControl,
+  BrowserViewEnsureTab,
   BrowserViewFindChange,
   BrowserViewFindRequest,
   BrowserViewFindStop,
@@ -37,6 +38,13 @@ import type {
   BrowserViewOverlayRelease,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
+  BrowserViewNativeTabCdpSessionEndedChange,
+  BrowserViewNativeTabCdpTargetAttachedChange,
+  BrowserViewElectronTabHandoffChange,
+  BrowserViewNativeTabStatusChange,
+  BrowserViewNativeTabCapability,
+  BrowserViewProvisionedTab,
+  BrowserViewReleaseTab,
   BrowserViewStatusChange,
   BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
@@ -58,14 +66,12 @@ import { subscribe, type Disposable, type Listener } from "./subscribe";
 export interface BrowserViewBridgeSurface {
   browserView: {
     upsertTile(input: BrowserViewTileUpsert): Promise<void>;
-    createBackgroundTab(input: BrowserViewBackgroundTabCreate): Promise<void>;
-    registerDurableTab(input: BrowserViewDurableTabRegistration): Promise<void>;
-    releaseDurableTab(
-      input: BrowserViewDurableTabRegistration,
-    ): Promise<void>;
-    setBackgroundThrottling(
-      input: BrowserViewBackgroundThrottlingChange,
-    ): Promise<void>;
+    ensureTab(input: BrowserViewEnsureTab): Promise<BrowserViewProvisionedTab>;
+    acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
+    attachSurface(input: BrowserViewAttachSurface): Promise<void>;
+    detachSurface(input: BrowserViewDetachSurface): Promise<void>;
+    releaseTab(input: BrowserViewReleaseTab): Promise<boolean>;
+    controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
     updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
     setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
     releaseTile(input: BrowserViewTileKey): Promise<void>;
@@ -150,18 +156,28 @@ export interface BrowserViewBridgeSurface {
     onAnnotationAttached(
       handler: Listener<BrowserAnnotationAttachedIpcEvent>,
     ): Disposable;
-    // Durable user-tab driving over the same typed CDP bridge as agent tabs.
-    dispatchCdp(
-      input: AgentBrowserViewCdpDispatch,
-    ): Promise<AgentBrowserViewCdpResult>;
+    // Typed CDP driving for a presented browser tile.
+    dispatchCdp(input: BrowserViewCdpDispatch): Promise<BrowserViewCdpResult>;
+    dispatchElectronTabCdp(
+      input: BrowserViewElectronTabCdpDispatch,
+    ): Promise<BrowserViewCdpResult>;
+    onNativeTabStatusChange(
+      handler: Listener<BrowserViewNativeTabStatusChange>,
+    ): Disposable;
+    onNativeTabCdpSessionEnded(
+      handler: Listener<BrowserViewNativeTabCdpSessionEndedChange>,
+    ): Disposable;
+    onNativeTabCdpTargetAttached(
+      handler: Listener<BrowserViewNativeTabCdpTargetAttachedChange>,
+    ): Disposable;
+    onElectronTabHandoff(
+      handler: Listener<BrowserViewElectronTabHandoffChange>,
+    ): Disposable;
     onCdpSessionEnded(
-      handler: Listener<AgentBrowserViewCdpSessionEndedChange>,
+      handler: Listener<BrowserViewCdpSessionEndedChange>,
     ): Disposable;
     onCdpTargetAttached(
-      handler: Listener<AgentBrowserViewCdpTargetAttachedChange>,
-    ): Disposable;
-    onTileHandoff(
-      handler: Listener<AgentBrowserViewTileHandoffChange>,
+      handler: Listener<BrowserViewCdpTargetAttachedChange>,
     ): Disposable;
   };
 }
@@ -174,24 +190,34 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
           RunnerHostInvoke.browserViewUpsert,
           input,
         ) as Promise<void>,
-      createBackgroundTab: (input) =>
+      ensureTab: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewCreateBackgroundTab,
+          RunnerHostInvoke.browserViewEnsureTab,
+          input,
+        ) as Promise<BrowserViewProvisionedTab>,
+      acceptTab: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewAcceptTab,
           input,
         ) as Promise<void>,
-      registerDurableTab: (input) =>
+      attachSurface: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewRegisterDurableTab,
+          RunnerHostInvoke.browserViewAttachSurface,
           input,
         ) as Promise<void>,
-      releaseDurableTab: (input) =>
+      detachSurface: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewReleaseDurableTab,
+          RunnerHostInvoke.browserViewDetachSurface,
           input,
         ) as Promise<void>,
-      setBackgroundThrottling: (input) =>
+      releaseTab: (input) =>
         ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewSetBackgroundThrottling,
+          RunnerHostInvoke.browserViewReleaseTab,
+          input,
+        ) as Promise<boolean>,
+      controlElectronTab: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewControlElectronTab,
           input,
         ) as Promise<void>,
       updateBounds: (input) =>
@@ -210,31 +236,15 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
           input,
         ) as Promise<void>,
       setReservedChords: async (tokens) => {
-        // BT-303: BOTH manager instances must learn the chord set — user
-        // durable tabs live on the primary runtime, isolated session tiles
-        // on the agent runtime; interception has to cover both.
-        const primary = ipcRenderer.invoke(
+        await ipcRenderer.invoke(
           RunnerHostInvoke.browserViewSetReservedChords,
           { tokens },
         );
-        const agent = ipcRenderer
-          .invoke(RunnerHostInvoke.agentBrowserViewSetReservedChords, {
-            tokens,
-          })
-          .catch(() => undefined);
-        await Promise.all([primary, agent]);
       },
       overlayPaintAck: async (overlayId) => {
-        const primary = ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewOverlayPaintAck,
-          { overlayId },
-        );
-        const agent = ipcRenderer
-          .invoke(RunnerHostInvoke.agentBrowserViewOverlayPaintAck, {
-            overlayId,
-          })
-          .catch(() => undefined);
-        await Promise.all([primary, agent]);
+        await ipcRenderer.invoke(RunnerHostInvoke.browserViewOverlayPaintAck, {
+          overlayId,
+        });
       },
       reloadTile: (input) =>
         ipcRenderer.invoke(
@@ -428,20 +438,40 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewCdpDispatch,
           input,
-        ) as Promise<AgentBrowserViewCdpResult>,
+        ) as Promise<BrowserViewCdpResult>,
+      dispatchElectronTabCdp: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.browserViewElectronTabCdpDispatch,
+          input,
+        ) as Promise<BrowserViewCdpResult>,
+      onNativeTabStatusChange: (handler) =>
+        subscribe<BrowserViewNativeTabStatusChange>(
+          RunnerHostEvent.browserViewNativeTabStatusChange,
+          handler,
+        ),
+      onNativeTabCdpSessionEnded: (handler) =>
+        subscribe<BrowserViewNativeTabCdpSessionEndedChange>(
+          RunnerHostEvent.browserViewNativeTabCdpSessionEnded,
+          handler,
+        ),
+      onNativeTabCdpTargetAttached: (handler) =>
+        subscribe<BrowserViewNativeTabCdpTargetAttachedChange>(
+          RunnerHostEvent.browserViewNativeTabCdpTargetAttached,
+          handler,
+        ),
+      onElectronTabHandoff: (handler) =>
+        subscribe<BrowserViewElectronTabHandoffChange>(
+          RunnerHostEvent.browserViewElectronTabHandoff,
+          handler,
+        ),
       onCdpSessionEnded: (handler) =>
-        subscribe<AgentBrowserViewCdpSessionEndedChange>(
+        subscribe<BrowserViewCdpSessionEndedChange>(
           RunnerHostEvent.browserViewCdpSessionEnded,
           handler,
         ),
       onCdpTargetAttached: (handler) =>
-        subscribe<AgentBrowserViewCdpTargetAttachedChange>(
+        subscribe<BrowserViewCdpTargetAttachedChange>(
           RunnerHostEvent.browserViewCdpTargetAttached,
-          handler,
-        ),
-      onTileHandoff: (handler) =>
-        subscribe<AgentBrowserViewTileHandoffChange>(
-          RunnerHostEvent.browserViewTileHandoff,
           handler,
         ),
     },

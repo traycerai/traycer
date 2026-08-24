@@ -18,7 +18,7 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger } from "@/lib/logger";
 import { flushLiveReadingPositions } from "@/lib/reading-position";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { drainElectronBrowserHandoffs } from "@/lib/browser-view/electron-browser-tab-store";
+import { drainElectronTabHandoffs } from "@/lib/browser-view/electron-tabs";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -207,7 +207,7 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const respond = appLifecycle?.respondBrowserHandoffsDrained;
     if (onDrain === undefined || respond === undefined) return;
     const subscription = onDrain((request) => {
-      void drainElectronBrowserHandoffs().then(() =>
+      void drainElectronTabHandoffs().then(() =>
         respond({ requestId: request.requestId }),
       ).catch(() => undefined);
     });

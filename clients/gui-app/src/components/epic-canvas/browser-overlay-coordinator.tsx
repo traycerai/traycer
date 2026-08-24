@@ -10,18 +10,10 @@ import {
 } from "@/lib/browser-view/browser-overlay-coordinator";
 import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
 import {
-  type BrowserViewOverlayOcclusion,
-  type BrowserViewOverlayOcclusionResult,
-  type BrowserViewOverlayRelease,
-  type BrowserViewOverlayReleaseResult,
   type BrowserViewTileKey,
   type DesktopBrowserViewBridge,
   resolveDesktopBrowserViewBridge,
 } from "@/lib/browser-view/desktop-browser-view";
-import {
-  type DesktopAgentBrowserViewBridge,
-  resolveDesktopAgentBrowserViewBridge,
-} from "@/lib/browser-view/desktop-agent-browser-view";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const sleep = (ms: number): Promise<void> =>
@@ -41,83 +33,15 @@ export function BrowserOverlayCoordinatorBridge() {
       runnerHost === null ? null : resolveDesktopBrowserViewBridge(runnerHost),
     [runnerHost],
   );
-  const agentBrowserView = useMemo(
-    () =>
-      runnerHost === null
-        ? null
-        : resolveDesktopAgentBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
-  return (
-    <BrowserOverlayCoordinator
-      browserView={browserView}
-      agentBrowserView={agentBrowserView}
-    />
-  );
+  return <BrowserOverlayCoordinator browserView={browserView} />;
 }
 
 function BrowserOverlayCoordinator(props: {
   readonly browserView: DesktopBrowserViewBridge | null;
-  readonly agentBrowserView: DesktopAgentBrowserViewBridge | null;
 }): null {
   useEffect(() => {
     const browserView = props.browserView;
-    const agentBrowserView = props.agentBrowserView;
     if (browserView === null) return;
-
-    // A tile's entries live in whichever manager created it (primary vs.
-    // agent) - the renderer-side registry above does not track which one.
-    // Broadcast the same occlude/release call to both; each manager
-    // silently no-ops the tile keys it does not own (see
-    // `occludeEntryForOverlay`), so this stays correct without tagging
-    // every registered tile by origin.
-    const broadcastOcclude = (
-      input: BrowserViewOverlayOcclusion,
-    ): Promise<BrowserViewOverlayOcclusionResult> => {
-      const bridges =
-        agentBrowserView === null
-          ? [browserView]
-          : [browserView, agentBrowserView];
-      return Promise.allSettled(
-        bridges.map((bridge) => bridge.occludeForOverlay(input)),
-      ).then((settlements) => {
-        const fulfilled = settlements.filter(
-          (
-            settlement,
-          ): settlement is PromiseFulfilledResult<BrowserViewOverlayOcclusionResult> =>
-            settlement.status === "fulfilled",
-        );
-        return {
-          snapshots: fulfilled.flatMap(
-            (settlement) => settlement.value.snapshots,
-          ),
-          restoredTiles: fulfilled.flatMap(
-            (settlement) => settlement.value.restoredTiles,
-          ),
-        };
-      });
-    };
-
-    const broadcastRelease = (
-      input: BrowserViewOverlayRelease,
-    ): Promise<BrowserViewOverlayReleaseResult> => {
-      const bridges =
-        agentBrowserView === null
-          ? [browserView]
-          : [browserView, agentBrowserView];
-      return Promise.allSettled(
-        bridges.map((bridge) => bridge.releaseOverlay(input)),
-      ).then((settlements) => ({
-        restoredTiles: settlements
-          .filter(
-            (
-              settlement,
-            ): settlement is PromiseFulfilledResult<BrowserViewOverlayReleaseResult> =>
-              settlement.status === "fulfilled",
-          )
-          .flatMap((settlement) => settlement.value.restoredTiles),
-      }));
-    };
 
     const activeSignaturesByOverlayId = new Map<string, string>();
     const ackedOverlayIds = new Set<string>();
@@ -181,7 +105,8 @@ function BrowserOverlayCoordinator(props: {
 
     const releaseOverlay = (overlayId: string): void => {
       activeSignaturesByOverlayId.delete(overlayId);
-      void broadcastRelease({ overlayId })
+      void browserView
+        .releaseOverlay({ overlayId })
         .then((result) => {
           if (disposed) return;
           applyRestoredTiles(result.restoredTiles);
@@ -209,10 +134,11 @@ function BrowserOverlayCoordinator(props: {
           return;
         }
         activeSignaturesByOverlayId.set(target.overlayId, target.signature);
-        void broadcastOcclude({
-          overlayId: target.overlayId,
-          tiles: target.tiles,
-        })
+        void browserView
+          .occludeForOverlay({
+            overlayId: target.overlayId,
+            tiles: target.tiles,
+          })
           .then((result) => {
             if (disposed) return;
             result.snapshots.forEach((snapshot) => {
@@ -229,12 +155,6 @@ function BrowserOverlayCoordinator(props: {
     const invalidationSubscription = browserView.onSnapshotInvalidated(
       markBrowserViewSnapshotStale,
     );
-    const agentInvalidationSubscription =
-      agentBrowserView === null
-        ? { dispose: () => undefined }
-        : agentBrowserView.onSnapshotInvalidated(
-            markBrowserViewSnapshotStale,
-          );
     const mutationObserver = new MutationObserver(scheduleScan);
     mutationObserver.observe(document.body, {
       subtree: true,
@@ -259,12 +179,12 @@ function BrowserOverlayCoordinator(props: {
       if (frameId !== null) window.cancelAnimationFrame(frameId);
       unsubscribeLayout();
       invalidationSubscription.dispose();
-      agentInvalidationSubscription.dispose();
       mutationObserver.disconnect();
       window.removeEventListener("resize", scheduleScan);
       window.removeEventListener("scroll", scheduleScan, true);
       activeSignaturesByOverlayId.forEach((_signature, overlayId) => {
-        void broadcastRelease({ overlayId })
+        void browserView
+          .releaseOverlay({ overlayId })
           .then((result) => {
             applyRestoredTiles(result.restoredTiles);
           })
@@ -272,7 +192,7 @@ function BrowserOverlayCoordinator(props: {
       });
       activeSignaturesByOverlayId.clear();
     };
-  }, [props.browserView, props.agentBrowserView]);
+  }, [props.browserView]);
 
   return null;
 }

@@ -4,7 +4,6 @@ import type {
   BrowserPrimaryProfileCaptureResult,
   BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCapture,
   BrowserViewStorageStateCaptureResult,
 } from "../../ipc-contracts/browser-view-types";
 import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
@@ -143,7 +142,9 @@ export async function captureBrowserOriginLocalStorage(
   return captured.available ? { origin, localStorage: captured.entries } : null;
 }
 
-export function browserLocalStorageSeedScript(storageState: unknown): string | null {
+export function browserLocalStorageSeedScript(
+  storageState: unknown,
+): string | null {
   if (storageState === undefined || storageState === null) return null;
   const origins = parseStorageState(storageState).origins;
   if (origins.length === 0) return null;
@@ -244,7 +245,7 @@ function cookieKey(cookie: BrowserStorageCookie): string {
 }
 
 export async function captureBrowserViewStorageState(
-  input: BrowserViewStorageStateCapture,
+  input: { readonly origin: string; readonly [key: string]: unknown },
   webContents: BrowserStorageCaptureWebContents,
 ): Promise<BrowserViewStorageStateCaptureResult> {
   return captureBrowserViewStorageStateWithDependencies(input, webContents, {
@@ -254,7 +255,7 @@ export async function captureBrowserViewStorageState(
 }
 
 export async function captureBrowserViewStorageStateWithDependencies(
-  input: BrowserViewStorageStateCapture,
+  input: { readonly origin: string; readonly [key: string]: unknown },
   webContents: BrowserStorageCaptureWebContents,
   dependencies: BrowserStorageStateCaptureDependencies,
 ): Promise<BrowserViewStorageStateCaptureResult> {

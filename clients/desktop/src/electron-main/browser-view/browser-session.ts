@@ -13,16 +13,6 @@ import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
 export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
 
-// Never `persist:`-prefixed: an in-memory Electron partition holds no cookies,
-// storage or cache once the process exits, so the agent gets a fresh,
-// credential-free browser every session with nothing durable to leak or to
-// encrypt. This is deliberately separate from `getBrowserViewPartition()` /
-// `browserViewPartitionForCryptoState()` above - those two gate the *user's*
-// partition on cookie-crypto health, and the agent partition must never be
-// reachable through that same switch (ticket 02: an agent partition must not
-// create a second route around the degraded-mode invariant).
-export const AGENT_BROWSER_VIEW_PARTITION = "traycer-agent-browser";
-
 export type BrowserPermissionRequestHandler = (
   webContents: unknown,
   permission: string,
@@ -179,29 +169,6 @@ export function ensureBrowserViewSession(): Session {
 export function createBrowserViewWebPreferences(): WebPreferences {
   return {
     partition: getBrowserViewPartition(),
-    contextIsolation: true,
-    nodeIntegration: false,
-    sandbox: true,
-  };
-}
-
-/**
- * Session for the agent's own browser tiles. Always
- * `AGENT_BROWSER_VIEW_PARTITION`, regardless of cookie-crypto health - the
- * agent partition has no persisted cookies, so degraded crypto mode has
- * nothing to affect here.
- */
-export function ensureAgentBrowserViewSession(): Session {
-  const agentSession = session.fromPartition(AGENT_BROWSER_VIEW_PARTITION, {
-    cache: true,
-  });
-  installBrowserViewSessionPolicy(agentSession);
-  return agentSession;
-}
-
-export function createAgentBrowserViewWebPreferences(): WebPreferences {
-  return {
-    partition: AGENT_BROWSER_VIEW_PARTITION,
     contextIsolation: true,
     nodeIntegration: false,
     sandbox: true,

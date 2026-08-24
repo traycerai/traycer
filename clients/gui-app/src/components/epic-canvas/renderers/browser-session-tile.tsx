@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
-import { AgentBrowserTile } from "./agent-browser-tile";
+import { ElectronTabSurface } from "./agent-browser-tile";
 import { BrowserPeekTile } from "./browser-peek-tile";
 import { BrowserSessionsHostProvider } from "./browser-session-dock";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
@@ -8,12 +8,11 @@ import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
-  useElectronBrowserTabBindingOnHost,
-  type ElectronBrowserTabRegistration,
-} from "@/lib/browser-view/electron-browser-tab-store";
+  useElectronTabBindingOnHost,
+  type ElectronTabBinding,
+} from "@/lib/browser-view/electron-tabs";
 import { appLogger } from "@/lib/logger";
 import type {
-  AgentBrowserTileRef,
   BrowserPeekTileRef,
   BrowserSessionTileRef,
 } from "@/stores/epics/canvas/types";
@@ -26,7 +25,6 @@ export interface BrowserSessionTileProps {
 }
 
 function resolveSwapState(args: {
-  readonly activatedHeadless: boolean;
   readonly tabStatus: BrowserSessionInfo["tabs"][number]["status"] | undefined;
   readonly migrationRuntime:
     NonNullable<BrowserSessionInfo["migration"]>["runtime"] | undefined;
@@ -35,16 +33,12 @@ function resolveSwapState(args: {
   readonly castMigrated: boolean;
 }): { readonly renderHeadless: boolean; readonly holdReason: string | null } {
   const renderHeadless =
-    args.activatedHeadless ||
-    (args.tabStatus !== "dormant" &&
-      (args.migrationRuntime === "headless" ||
-        args.bindingRegistrationId === null ||
-        (args.castMigrated &&
-          args.bindingRegistrationId === args.terminalBindingRegistrationId)));
+    args.tabStatus !== "dormant" &&
+    (args.migrationRuntime === "headless" ||
+      args.bindingRegistrationId === null ||
+      (args.castMigrated &&
+        args.bindingRegistrationId === args.terminalBindingRegistrationId));
   if (!renderHeadless) return { renderHeadless, holdReason: null };
-  if (args.activatedHeadless) {
-    return { renderHeadless, holdReason: "activated-headless" };
-  }
   return {
     renderHeadless,
     holdReason:
@@ -64,9 +58,7 @@ function useBrowserSessionSwap(input: {
   readonly renderHeadless: boolean;
   readonly castGeneration: number;
   readonly onMigrated: () => void;
-  readonly onActivatedHeadless: () => void;
 } {
-  const [activatedHeadless, setActivatedHeadless] = useState(false);
   const [castMigrated, setCastMigrated] = useState(false);
   const [castGeneration, setCastGeneration] = useState(0);
   const [terminalBindingRegistrationId, setTerminalBindingRegistrationId] =
@@ -82,11 +74,7 @@ function useBrowserSessionSwap(input: {
       input.session?.migration?.revision ?? 0;
   }, [input.bindingRegistrationId, input.session?.migration?.revision]);
 
-  const onActivatedHeadless = useCallback(() => {
-    setActivatedHeadless(true);
-  }, []);
   const onMigrated = useCallback(() => {
-    setActivatedHeadless(false);
     setTerminalBindingRegistrationId(bindingRegistrationIdRef.current);
     terminalMigrationRevisionRef.current = latestMigrationRevisionRef.current;
     setCastMigrated(true);
@@ -105,7 +93,6 @@ function useBrowserSessionSwap(input: {
   }, [castMigrated, input.session?.migration]);
 
   const { renderHeadless, holdReason } = resolveSwapState({
-    activatedHeadless,
     tabStatus: input.tab?.status,
     migrationRuntime: input.session?.migration?.runtime,
     bindingRegistrationId: input.bindingRegistrationId,
@@ -154,19 +141,17 @@ function useBrowserSessionSwap(input: {
     renderHeadless,
     castGeneration,
     onMigrated,
-    onActivatedHeadless,
   };
 }
 
 interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly session: BrowserSessionInfo | undefined;
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
-  readonly binding: ElectronBrowserTabRegistration | null;
+  readonly binding: ElectronTabBinding | null;
   readonly routingChatId: string | null;
   readonly renderHeadless: boolean;
   readonly castGeneration: number;
   readonly onMigrated: () => void;
-  readonly onActivatedHeadless: () => void;
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -202,26 +187,29 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  const native: AgentBrowserTileRef = {
-    id: props.binding?.registrationId ?? props.node.id,
+  if (props.binding === null) {
+    return (
+      <div className="flex h-full w-full items-center justify-center px-4 text-ui-sm text-muted-foreground">
+        Waiting for the native browser tab.
+      </div>
+    );
+  }
+
+  const native = {
+    id: props.node.id,
     sessionId: props.node.sessionId,
     instanceId: props.node.instanceId,
-    type: "agent-browser",
     name: props.tab.title ?? props.node.name,
     hostId: props.node.hostId,
     url: props.tab.url,
     viewportPreset: "responsive",
-    runtime: props.binding?.background === true ? "primary" : "isolated",
   };
   return (
-    <AgentBrowserTile
+    <ElectronTabSurface
       node={native}
+      binding={props.binding}
       viewTabId={props.viewTabId}
       paneId={props.paneId}
-      requestedTabId={props.node.tabId}
-      activateBeforeNativeView
-      usePrimaryProfileRuntime={props.binding?.background === true}
-      onActivatedHeadless={props.onActivatedHeadless}
     />
   );
 }
@@ -232,7 +220,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     (item) => item.sessionId === props.node.sessionId,
   );
   const tab = session?.tabs.find((item) => item.tabId === props.node.tabId);
-  const binding = useElectronBrowserTabBindingOnHost(
+  const binding = useElectronTabBindingOnHost(
     props.node.sessionId,
     props.node.tabId,
     props.node.hostId,
@@ -256,7 +244,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     sessions.lifecycle,
     tab,
   ]);
-  const { renderHeadless, castGeneration, onMigrated, onActivatedHeadless } =
+  const { renderHeadless, castGeneration, onMigrated } =
     useBrowserSessionSwap({
       session,
       tab,
@@ -275,7 +263,6 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
       renderHeadless={renderHeadless}
       castGeneration={castGeneration}
       onMigrated={onMigrated}
-      onActivatedHeadless={onActivatedHeadless}
     />
   );
 }
