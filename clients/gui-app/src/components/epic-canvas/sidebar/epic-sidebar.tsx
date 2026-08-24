@@ -2023,26 +2023,25 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="chats"
-            collapsed={props.collapsed}
-            addLabel="Add agent"
-            menuTestId="epic-sidebar-add-chat-root-menu"
-            triggerTestId="epic-sidebar-add-chat-root"
-            itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
-            excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
-          />
-          <ChatHeaderMoreMenu
-            epicId={props.epicId}
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-            onCollapseAll={collapseAll}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="chats"
+          collapsed={props.collapsed}
+          addLabel="Add agent"
+          menuTestId="epic-sidebar-add-chat-root-menu"
+          triggerTestId="epic-sidebar-add-chat-root"
+          itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
+          excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ChatHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ChatFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
@@ -2138,6 +2137,7 @@ function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
   readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
@@ -2160,13 +2160,15 @@ function ChatHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
       >
-        <DropdownMenuItem
-          onSelect={() => openSearch(props.tabId, "chats", "")}
-          data-testid="epic-sidebar-more-search-chats"
-        >
-          <Search className="size-4" />
-          Search agents
-        </DropdownMenuItem>
+        {props.searching ? null : (
+          <DropdownMenuItem
+            onSelect={() => openSearch(props.tabId, "chats", "")}
+            data-testid="epic-sidebar-more-search-chats"
+          >
+            <Search className="size-4" />
+            Search agents
+          </DropdownMenuItem>
+        )}
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
         <DropdownMenuItem onSelect={props.onCollapseAll}>
           <CopyMinus className="size-4" />
@@ -2189,6 +2191,7 @@ function ChatHeaderMoreMenu(props: {
 function ArtifactHeaderMoreMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
   readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
@@ -2216,7 +2219,7 @@ function ArtifactHeaderMoreMenu(props: {
         {/* Hidden only when the Epic has NO artifacts - see
             `useArtifactSearchAvailable` for why emptiness gates this and a size
             threshold does not. */}
-        {searchAvailable ? (
+        {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => openSearch(props.tabId, "artifacts", "")}
             data-testid="epic-sidebar-more-search-artifacts"
@@ -2255,25 +2258,24 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="artifacts"
-            collapsed={props.collapsed}
-            addLabel="Add artifact"
-            menuTestId="epic-sidebar-add-artifact-root-menu"
-            triggerTestId="epic-sidebar-add-artifact-root"
-            itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
-            excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
-          />
-          <ArtifactHeaderMoreMenu
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-            onCollapseAll={collapseAll}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="artifacts"
+          collapsed={props.collapsed}
+          addLabel="Add artifact"
+          menuTestId="epic-sidebar-add-artifact-root-menu"
+          triggerTestId="epic-sidebar-add-artifact-root"
+          itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
+          excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ArtifactHeaderMoreMenu
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ArtifactFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
