@@ -206,6 +206,8 @@ export function buildOverviewHostFixture(options: {
     }),
     "host.update.check": () => ({
       outcome: "ok" as const,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: {
         schemaVersion: 1 as const,
         generatedAt: "2026-08-12T00:00:00Z",

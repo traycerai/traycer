@@ -828,6 +828,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </div>
             <div className="flex min-w-0 items-center gap-2">
               <HarnessModelPicker
+                labelDisplay="responsive"
                 key={modelPickerKey}
                 store={toolbarStore}
                 withServiceTier

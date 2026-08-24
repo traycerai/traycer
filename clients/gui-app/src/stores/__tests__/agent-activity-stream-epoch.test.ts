@@ -78,6 +78,10 @@ class StubHostStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
     readonly instanceId: string,
   ) {}
 
+  isReady(): boolean {
+    return true;
+  }
+
   subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
     _params: ParamsOf<HostStreamRpcRegistry, Method>,

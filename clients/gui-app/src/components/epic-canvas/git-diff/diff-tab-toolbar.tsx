@@ -7,9 +7,9 @@ import {
   ExternalLink,
   EyeOff,
   type LucideIcon,
-  RotateCcw,
   Settings2,
 } from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import { DiffSplitIcon, DiffUnifiedIcon } from "./diff-mode-icons";
 import type { GitDiffTileViewState } from "@/stores/epics/canvas/types";
 import type {
@@ -179,9 +179,7 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
               aria-label="Refresh diff"
               className="text-muted-foreground hover:text-foreground"
             >
-              <RotateCcw
-                className={cn("size-4", props.refreshing && "animate-spin")}
-              />
+              <RefreshIcon refreshing={props.refreshing} />
             </Button>
           </span>
         </TooltipWrapper>

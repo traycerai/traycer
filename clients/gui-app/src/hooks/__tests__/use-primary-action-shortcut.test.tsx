@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect } from "react";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
+import { setMobileApp } from "@/lib/mobile-app";
 
 function ShortcutOwner(props: {
   readonly active: boolean;
@@ -24,7 +25,10 @@ function ShortcutOwnerWithLayoutDispatch(props: {
 }
 
 describe("usePrimaryActionShortcut", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
 
   it("routes Cmd/Ctrl+Enter only to the topmost active owner", () => {
     const lowerAction = vi.fn();
@@ -80,5 +84,18 @@ describe("usePrimaryActionShortcut", () => {
 
     expect(previousAction).not.toHaveBeenCalled();
     expect(nextAction).toHaveBeenCalledTimes(1);
+  });
+
+  // The load-bearing guarantee: hiding the shortcut HINT on the installed
+  // mobile app must never unbind the shortcut itself - an iPad with a
+  // hardware keyboard still dispatches Cmd/Ctrl+Enter.
+  it("still dispatches on the installed mobile app", () => {
+    setMobileApp(true);
+    const action = vi.fn();
+    render(<ShortcutOwner active action={action} />);
+
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(action).toHaveBeenCalledTimes(1);
   });
 });

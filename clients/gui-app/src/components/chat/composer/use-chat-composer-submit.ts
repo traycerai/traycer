@@ -6,6 +6,8 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
+import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
@@ -164,6 +166,12 @@ export function useChatComposerSubmit(
       clearDraftInStore(taskId);
       pickerStore.getState().reset();
       editorRef.current?.clear();
+      // Gated on ACCEPTANCE, which is why it sits below the early return: a
+      // rejected send leaves the text in place, and dropping the keyboard there
+      // would take the user away from the message they still have to fix. On a
+      // phone the keyboard covers most of the screen, so holding it open after
+      // a send hides the reply the send was for.
+      if (isMobileApp()) blurTextEntry();
       return true;
     },
     [

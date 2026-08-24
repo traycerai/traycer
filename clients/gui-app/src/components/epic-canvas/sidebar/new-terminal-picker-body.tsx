@@ -26,6 +26,7 @@ import {
 } from "@/hooks/host/use-surface-host-pin";
 import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
+import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { usePrimaryActionShortcut } from "@/hooks/use-primary-action-shortcut";
@@ -160,16 +161,15 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
 
 /**
  * Default row for the terminal picker, mirroring the git diff panel's
- * `pickDefaultRow`: skip rows the host disabled (setup pending/failed, missing
- * worktree, ...), prefer the primary directory the agent runs in, and otherwise
- * take the first selectable row. Returns null when nothing is selectable so
- * Launch stays disabled. Terminals don't require a git repo, so selectability
- * is just `disabledReason === null` (unlike the git surfaces' `isGitSelectable`).
+ * `pickDefaultRow`: skip only genuinely unavailable rows. A verified worktree
+ * stays browsable while setup is pending, running, failed, or cancelled.
+ * Prefer the primary directory the agent runs in, then the first browsable
+ * row. Terminals don't require a git repo.
  */
 function pickDefaultTerminalRow(
   rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
 ): WorktreeBindingSelectorRowV12 | null {
-  const selectable = rows.filter((row) => row.disabledReason === null);
+  const selectable = rows.filter(isBrowsable);
   if (selectable.length === 0) return null;
   return selectable.find((row) => row.isPrimary) ?? selectable[0];
 }
@@ -187,8 +187,7 @@ function resolveTerminalSelection(
   if (explicit !== null) {
     const explicitKey = worktreeRowKey(explicit);
     const live = rows.find(
-      (row) =>
-        worktreeRowKey(row) === explicitKey && row.disabledReason === null,
+      (row) => worktreeRowKey(row) === explicitKey && isBrowsable(row),
     );
     if (live !== undefined) return live;
   }

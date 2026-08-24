@@ -134,6 +134,21 @@ export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
 
 /**
+ * Deadline for the answer to a WAKE-time ping (`RelaySocket.pokeKeepalive`),
+ * as opposed to the 60s the scheduled keepalive allows.
+ *
+ * A runtime that was frozen (OS sleep, a suspended WebView) comes back holding
+ * a socket the network may have dropped underneath it without ever delivering a
+ * close - and `RELAY_PONG_TIMEOUT_MS` only catches that once the silence is a
+ * full minute old, which on a phone is most of an app switch. The pong is
+ * auto-answered at the relay's edge without waking the durable object, so the
+ * only thing between the two ends is round-trip time; a deadline in the dial
+ * timeout's league is generous for a link that works and quick for one that
+ * does not. A false positive costs exactly one redial.
+ */
+export const RELAY_WAKE_PROBE_TIMEOUT_MS = 10_000;
+
+/**
  * How often the keepalive loop WAKES. Distinct from how often it PINGS: the
  * loop now runs two cadences (below) and a single timer that ticks at the
  * faster of them is what lets it switch between them without tearing the

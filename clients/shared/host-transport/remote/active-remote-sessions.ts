@@ -431,6 +431,20 @@ export function acquireRemoteSession<
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),
+    wake: (reason) => {
+      // Only a LIVE reference may accelerate a session. A view whose `close()`
+      // already ran is a stale callback - a discarded render, a disposed
+      // binding - and honouring it would redial a session this consumer no
+      // longer holds, including one sitting at refCount 0 in its keep-warm
+      // linger with nobody waiting on it at all. A superseded or closed entry
+      // is worse: its key embeds a public key, relay URL or auth epoch the
+      // world has moved off, so it can never re-handshake or re-mint, and
+      // hurrying it only spends grants against a retired identity.
+      if (released || entry.superseded || session.isClosed()) {
+        return;
+      }
+      session.wake(reason);
+    },
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
       session.subscribeAvailabilityRecovered(listener),
@@ -572,9 +586,45 @@ export function retireAllRemoteSessions(): void {
 }
 
 /**
+ * Wakes every session a consumer currently HOLDS - see
+ * {@link IRemoteSession.wake}. The single seam for runtime-resume coverage, and
+ * deliberately not per-consumer.
+ *
+ * A resume is a fact about the RUNTIME, not about one binding: the whole
+ * JavaScript context froze, so every held session is equally suspect, including
+ * ones no React component is subscribed to. Sweeping from here is what covers
+ * the sessions that have no wake wiring of their own - a messenger-only binding
+ * with no stream client, and a pinned non-active asset client whose hook defers
+ * `close()` until the final unpin. It also means N consumers of one physical
+ * session cannot install N listeners against it; the sweep is idempotent, and
+ * each session's own one-collapse-per-armed-timer rule makes duplicate calls
+ * free.
+ *
+ * `refCount > 0` is the ownership test, and the reason a zero-ref keep-warm
+ * entry is skipped: keep-warm exists so a prompt RE-acquire is free, not so an
+ * abandoned session keeps dialing on wakes nobody asked for. It gets its wake
+ * from the consumer that adopts it. Superseded and closed entries are skipped
+ * for the same reason the per-consumer view refuses them.
+ */
+export function wakeHeldRemoteSessions(reason: string): void {
+  for (const entry of entriesByKey.values()) {
+    if (entry.refCount <= 0 || entry.superseded || entry.session.isClosed()) {
+      continue;
+    }
+    entry.session.wake(reason);
+  }
+}
+
+/**
  * True if the cached session for `hostId` (any signed-in user) is currently
  * ready. A lingering keep-warm session (refCount 0, window not yet expired)
  * counts: it is a live, attached connection, so it is honest evidence.
+ *
+ * NOT a readiness read for a surface that speaks for ONE session: this matches
+ * on `hostId` across every entry, so a ready one-shot or a lingering keep-warm
+ * session answers for a durable session that is down. Ask the client itself
+ * (`IHostStreamClient.isReady`) when the question is about a particular
+ * session.
  *
  * A SUPERSEDED entry never counts, whoever still holds it. Free ones are gone
  * from the map already (see {@link closeSupersededIdentities}); a held one is

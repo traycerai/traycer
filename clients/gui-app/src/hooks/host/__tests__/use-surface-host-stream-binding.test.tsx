@@ -83,6 +83,7 @@ function fakeStreamClient(
     },
     close: () => undefined,
     isClosed: () => false,
+    isReady: () => true,
     notifyBearerRotated: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unknown",

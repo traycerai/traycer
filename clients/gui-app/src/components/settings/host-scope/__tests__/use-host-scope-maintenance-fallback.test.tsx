@@ -102,6 +102,8 @@ function makeClient(input: {
           if (rpcCalls !== undefined) rpcCalls.push("host.update.check");
           return {
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("rpc-only-1.0.0"),
           };
         },
@@ -161,6 +163,8 @@ describe("useHostScopeFor local-maintenance fallback construction", () => {
     const maintenanceUpdateCheck = vi.fn(() =>
       Promise.resolve({
         outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
         manifest: updateCheckManifest("bridge-1.2.0"),
       }),
     );
@@ -186,6 +190,8 @@ describe("useHostScopeFor local-maintenance fallback construction", () => {
     });
     expect(answer).toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("bridge-1.2.0"),
     });
     expect(maintenanceUpdateCheck).toHaveBeenCalledTimes(1);
@@ -198,6 +204,8 @@ describe("useHostScopeFor local-maintenance fallback construction", () => {
     const maintenanceUpdateCheck = vi.fn(() =>
       Promise.resolve({
         outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
         manifest: updateCheckManifest("bridge-1.2.0"),
       }),
     );
@@ -221,6 +229,8 @@ describe("useHostScopeFor local-maintenance fallback construction", () => {
     });
     expect(answer).toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("rpc-only-1.0.0"),
     });
     expect(rpcCalls).toEqual(["host.update.check"]);

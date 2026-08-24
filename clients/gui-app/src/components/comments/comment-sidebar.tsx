@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { MessageSquarePlus, MessageSquareWarning } from "lucide-react";
 import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { cn } from "@/lib/utils";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -284,7 +285,9 @@ function UnavailableState() {
 
 function emptyMessageFor(filter: CommentThreadStatusFilter): string {
   if (filter === "open") {
-    return "No open comments. Select text in the editor and click 💬 to start a thread (⌘⌥M).";
+    const howTo =
+      "No open comments. Select text in the editor and click 💬 to start a thread";
+    return shortcutHintsVisible() ? `${howTo} (⌘⌥M).` : `${howTo}.`;
   }
   if (filter === "resolved") return "No resolved comments yet.";
   return "No comments on this artifact yet.";

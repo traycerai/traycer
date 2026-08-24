@@ -57,6 +57,7 @@ function buildParams(closeWs: () => void) {
       closeWs();
     }),
     reconnectAll: vi.fn(),
+    isReady: () => true,
     notifyBearerRotated: vi.fn(),
     subscribeAvailabilityRecovered: vi.fn((listener: () => void) => {
       availabilityListener = listener;

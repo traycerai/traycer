@@ -29,6 +29,20 @@ import { ToolbarButton } from "./toolbar-button";
 import { ARTIFACT_LINK_CREATE_EVENT } from "../links/artifact-link-popover";
 import { canUseArtifactLinkControl } from "../links/artifact-link-selection";
 import { isMac } from "@/lib/keybindings/platform";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+
+// Toolbar button labels double as their tooltip text, so the chord is part of
+// the label rather than a separate chip. Where shortcut hints are suppressed
+// the plain action name is what remains.
+function linkToolbarLabel(): string {
+  if (!shortcutHintsVisible()) return "Link";
+  return isMac() ? "Link (⌘K)" : "Link (Ctrl+K)";
+}
+
+function commentToolbarLabel(): string {
+  if (!shortcutHintsVisible()) return "Comment";
+  return "Comment (⌘⌥M)";
+}
 
 export interface ArtifactCommentAction {
   /** Snap the current selection into a draft and open the floating
@@ -122,7 +136,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
   });
 
   const editable = editor.isEditable;
-  const linkShortcutLabel = isMac() ? "Link (⌘K)" : "Link (Ctrl+K)";
+  const linkShortcutLabel = linkToolbarLabel();
   const bubbleMenuOptions = useMemo(
     () => createArtifactToolbarOptions(scrollTarget),
     [scrollTarget],
@@ -366,7 +380,7 @@ export function ArtifactToolbar(props: ArtifactToolbarProps) {
                 icon={
                   <MessageSquarePlus className="size-4" aria-hidden="true" />
                 }
-                label="Comment (⌘⌥M)"
+                label={commentToolbarLabel()}
                 active={false}
                 disabled={false}
                 onMouseDown={(event) => event.preventDefault()}

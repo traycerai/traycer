@@ -411,6 +411,7 @@ function renderPickerWithFixture(
       <SurfaceActivityProvider active>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
+            labelDisplay="responsive"
             store={store}
             withServiceTier={false}
             tuiOnly={false}

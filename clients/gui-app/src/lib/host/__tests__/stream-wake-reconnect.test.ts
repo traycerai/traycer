@@ -17,7 +17,10 @@ vi.mock("@/lib/host/wake-reconnect", () => ({
   onWakeReconnect: mocks.onWakeReconnect,
 }));
 
-import { subscribeStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import {
+  resetRemoteResumeSweepForTest,
+  subscribeStreamWakeReconnect,
+} from "@/lib/host/stream-wake-reconnect";
 
 const LOCAL_TARGET: HostDirectoryEntry = {
   hostId: "host-a",
@@ -65,6 +68,10 @@ beforeEach(() => {
   mocks.onWakeReconnect.mockReset();
   mocks.offOnline.mockReset();
   mocks.onWakeReconnect.mockReturnValue(mocks.offOnline);
+  // The sweep's install flag is module-level and would otherwise survive from
+  // whichever test subscribed first, making every later case here see one
+  // fewer registration than production has.
+  resetRemoteResumeSweepForTest();
 });
 
 describe("subscribeStreamWakeReconnect", () => {
@@ -96,5 +103,23 @@ describe("subscribeStreamWakeReconnect", () => {
     dispose();
     expect(mocks.offOnline).toHaveBeenCalledTimes(1);
     expect(resumeDispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs the process-wide resume sweep once, however many clients subscribe", () => {
+    const runnerHost = makeRunnerHost();
+    const resumeSpy = vi
+      .spyOn(runnerHost, "onSystemResumed")
+      .mockReturnValue({ dispose: vi.fn() });
+
+    subscribeStreamWakeReconnect(makeClient(), runnerHost);
+    // One per-client subscription, plus the sweep on its first install.
+    expect(resumeSpy).toHaveBeenCalledTimes(2);
+
+    subscribeStreamWakeReconnect(makeClient(), runnerHost);
+    // The second client brings its OWN subscription - per-client wake stays
+    // per-client, because the local transport's re-dial belongs to the client
+    // that owns it - but the sweep is not installed again. Three, not four:
+    // the invariant is one sweep, not one subscription.
+    expect(resumeSpy).toHaveBeenCalledTimes(3);
   });
 });

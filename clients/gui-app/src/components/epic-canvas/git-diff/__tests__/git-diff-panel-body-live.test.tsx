@@ -728,9 +728,9 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
     ).toBeDefined();
     await expectModuleHeaderPreview(
       screen.getByTestId("git-module-header-traycer"),
-      "pinned commit out of date",
+      "Checkout differs from parent reference",
     );
-    expect(screen.queryByText("pinned commit out of date")).toBeNull();
+    expect(screen.getByText("Differs from parent")).toBeDefined();
     expect(screen.getByTestId("git-module-no-changes-traycer")).toBeDefined();
     expect(
       screen

@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { interviewDraftKey } from "@/lib/persist";
 import {
@@ -140,11 +141,14 @@ function card(): HTMLElement {
   return screen.getByTestId("interview-card");
 }
 
-// The proceed (Next/Submit) action button, distinct from the pager's
-// "Next question" / "Previous question" buttons.
+// The proceed (Next/Submit) action button, identified by its exact accessible
+// name - distinct from the pager's "Next question" / "Previous question"
+// buttons. `PrimaryActionShortcutHint` marks its chord `aria-hidden`, so the
+// name carries no "↵"; the anchored regex is what rules out "Next question"
+// matching "Next".
 function proceedButton(): HTMLButtonElement {
   return screen.getByRole<HTMLButtonElement>("button", {
-    name: /^(Next|Submit)$/,
+    name: /^(Submit|Next)$/,
   });
 }
 
@@ -153,6 +157,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
     cleanup();
     useInterviewDraftStore.setState({ draftsByChat: {} });
     window.localStorage.clear();
+    setMobileApp(false);
   });
 
   it("keeps the Submit shortcut keycaps at the primary action contrast", () => {
@@ -399,6 +404,73 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(document.activeElement).toBe(
         screen.getByLabelText("Interview answer"),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A free-text question renders its field the moment the card mounts. Taking
+  // focus there is a gift on desktop and an ambush on a phone, where it raises
+  // the software keyboard over the question the user has not read yet: a phone
+  // keyboard must be summoned by a tap.
+  it("focuses a free-text answer field on mount off the mobile app", () => {
+    vi.useFakeTimers();
+    try {
+      setMobileApp(false);
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [singleSelect("free", "Describe it", [])],
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a free-text answer field unfocused on the mobile app", () => {
+    vi.useFakeTimers();
+    try {
+      setMobileApp(true);
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [singleSelect("free", "Describe it", [])],
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      const field =
+        screen.getByLabelText<HTMLTextAreaElement>("Interview answer");
+      expect(document.activeElement).not.toBe(field);
+      // Tapping it is still the ordinary way in.
+      act(() => {
+        field.focus();
+      });
+      expect(document.activeElement).toBe(field);
     } finally {
       vi.useRealTimers();
     }

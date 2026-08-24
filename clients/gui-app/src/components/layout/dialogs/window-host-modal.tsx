@@ -142,7 +142,12 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           onInteractOutside={(event) => {
             event.preventDefault();
           }}
-          className="fixed top-1/2 left-1/2 z-[60] flex max-h-[85svh] w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          // `top-safe-center-y` / `left-safe-center-x`, not the halfway
+          // marks: a fixed surface escapes `#root`'s safe-area reservation,
+          // and the raw centre lines run through the reserved strips (the
+          // same rule `dialog.tsx` and the migration modal follow). The width
+          // clamp carries `--safe-area-width` for the same reason.
+          className="fixed top-safe-center-y left-safe-center-x z-[60] flex max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
         >
           <DialogPrimitive.Title
             data-slot="dialog-title"

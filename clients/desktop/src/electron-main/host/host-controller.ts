@@ -22,6 +22,11 @@ import {
 } from "../cli/traycer-cli";
 import { withDesktopCliLock } from "./desktop-cli-lock";
 import {
+  requiresPreReleaseListing,
+  resolveHostChannelMode,
+  resolveHostStageTarget,
+} from "./host-stage-policy";
+import {
   getHostFsLayout,
   cliLockPath,
   type Environment,
@@ -554,49 +559,14 @@ function latestVersionFromSnapshot(
   return entry !== undefined && entry.available ? entry.version : null;
 }
 
-// Newest available version in the snapshot, INCLUDING pre-releases (unlike
-// `latestVersionFromSnapshot`, which reads the manifest's stable `latest`
-// pointer). Registry versions are always valid SemVer, so the pairwise
-// `isStrictlyNewerHostVersion` comparison never hits the incomparable arm.
-function maxAvailableVersion(snapshot: AvailableSnapshotShape): string | null {
-  const available = snapshot.versions.filter((entry) => entry.available);
-  if (available.length === 0) return null;
-  return available.reduce((max, entry) =>
-    isStrictlyNewerHostVersion(entry.version, max.version) ? entry : max,
-  ).version;
-}
-
-/**
- * Resolve-then-pin target for opt-in release-candidate auto-updates.
- *
- * `host download --automatic` follows the manifest's `latest` pointer, which
- * RC releases never move - so it is stable-only by construction, and
- * `host available --include-pre-releases` widens the version list but leaves
- * `latest` on stable too. When the user has opted into release candidates and
- * the pre-release listing carries an RC newer than BOTH the installed host
- * and the stable `latest`, return that exact version so the caller pins it via
- * `host download <version>` instead of `--automatic`. Returns null (use
- * `--automatic`, unchanged stable behavior) otherwise. `isStrictlyNewerHostVersion`
- * is the downgrade guard: an incomparable (e.g. `local-*` install) or older
- * target never pins.
- */
-function resolveRcDownloadTarget(
-  snapshot: AvailableSnapshotShape,
-  installedVersion: string | null,
-  optedIntoPreReleases: boolean,
-): string | null {
-  if (!optedIntoPreReleases || installedVersion === null) return null;
-  const rcLatest = maxAvailableVersion(snapshot);
-  if (rcLatest === null || !rcLatest.includes("-")) return null;
-  if (!isStrictlyNewerHostVersion(rcLatest, installedVersion)) return null;
-  const stableLatest = latestVersionFromSnapshot(snapshot);
-  if (
-    stableLatest !== null &&
-    !isStrictlyNewerHostVersion(rcLatest, stableLatest)
-  ) {
-    return null;
-  }
-  return rcLatest;
+// The listing rows background staging may actually choose between: installable
+// on this platform and not yanked. Every policy question in
+// `host-stage-policy.ts` is asked against this set, so a broken or withdrawn
+// release is gone before any of them run.
+function installableVersions(snapshot: AvailableSnapshotShape): string[] {
+  return snapshot.versions
+    .filter((entry) => entry.available)
+    .map((entry) => entry.version);
 }
 
 /**
@@ -2390,14 +2360,42 @@ export class HostController {
     this.eligibleStage = null;
     let staged = await readDesktopHostStagedRecord(this.layout);
     let snapshot: AvailableSnapshotShape;
-    const optedIntoPreReleases = prereleaseUpdatesEnabled();
+    // THE INSTALL RECORD IS READ BEFORE THE REGISTRY REQUEST, because it is an
+    // input to that request: an installed canonical `X.Y.Z-rc.N` follows its
+    // own line with no saved preference, and a stable-only listing would not
+    // even contain the candidates that follow implies. A missing or unreadable
+    // record fails closed to stable-only (see `resolveHostChannelMode`).
+    const installed = await readDesktopHostInstallRecord(this.layout);
+    const installedVersion = installed?.version ?? null;
+    const mode = resolveHostChannelMode({
+      explicitPrerelease: prereleaseUpdatesEnabled(),
+      installedVersion,
+    });
+    // THE ORDINARY `--automatic` PATH IS CLOSED WHILE FOLLOWING A LINE.
+    //
+    // `host download --automatic` follows the manifest's stable `latest`
+    // pointer, and for a build following its own release line that pointer is
+    // another line - so falling through to it whenever this line has nothing to
+    // offer is exactly the cross-line jump implicit participation forbids. The
+    // only builds this mode may stage are the ones `resolveHostStageTarget`
+    // returns: a later RC on the line, or the line's own stable.
+    //
+    // The consequence is deliberate and matches the Desktop app: an ABANDONED
+    // line has no automatic exit. If `2.0.0` is never published and the work
+    // ships as `2.1.0`, a `2.0.0-rc.1` host stays where it is rather than being
+    // moved to a line nobody put it on. Publishing the line's stable, or a
+    // reinstall, is the exit.
+    const automaticStablePathOpen = mode !== "implicit-rc-line";
     try {
       snapshot = parseAvailableSnapshot(
         await this.runBundled<unknown>([
           "host",
           "available",
           "--json",
-          ...(staged?.version.includes("-") === true || optedIntoPreReleases
+          ...(requiresPreReleaseListing({
+            mode,
+            stagedVersion: staged?.version ?? null,
+          })
             ? ["--include-pre-releases"]
             : []),
         ]),
@@ -2421,24 +2419,32 @@ export class HostController {
           version: staged.version,
           fingerprint: encodeStageFingerprint(staged.stageId),
         };
-        if (this.mutationStatus === null) {
+        // An unparseable manifest leaves nothing to resolve a same-line
+        // candidate from, so a follower has no admissible target here and the
+        // `--automatic` repair would stage whatever `latest` names. The stage
+        // above stays eligible either way; only the speculative refresh is
+        // skipped.
+        if (this.mutationStatus === null && automaticStablePathOpen) {
           await this.runDownloadLane(null);
-        } else {
+        } else if (this.mutationStatus !== null) {
           this.stageLatestPending = true;
         }
       }
       return;
     }
-    const installed = await readDesktopHostInstallRecord(this.layout);
-    const installedVersion = installed?.version ?? null;
-    // Opt-in RC auto-update: `--automatic` is stable-only (follows the
-    // manifest `latest` pointer, which RC releases never move), so pin the
-    // exact newer RC when the user opted in. Downgrade-guarded inside.
-    const rcTarget = resolveRcDownloadTarget(
-      snapshot,
+    // Resolve-then-pin: `--automatic` follows the manifest's stable `latest`
+    // pointer, so it can reach neither a later RC on the installed line nor a
+    // matching stable published while `latest` still lags. When this mode picks
+    // a candidate, it is pinned by exact version instead. Downgrade- and
+    // line-guarded inside; null means "nothing this mode may stage", which for
+    // `stable-only`/`explicit-prerelease` hands over to `--automatic` and for
+    // `implicit-rc-line` means no download at all.
+    const downloadTarget = resolveHostStageTarget({
+      mode,
       installedVersion,
-      optedIntoPreReleases,
-    );
+      availableVersions: installableVersions(snapshot),
+      stableLatest: this.latestVersionCache,
+    });
     let migratedLegacyStage = false;
     if (staged?.stageId === null) {
       // Legacy archives predate the stage fingerprint used by the atomic
@@ -2446,13 +2452,51 @@ export class HostController {
       // normal automatic download path to replace them with a freshly
       // verified, fingerprinted stage; otherwise this valid update remains
       // permanently deferred because Desktop can neither apply nor purge it.
-      log.info(
-        "[host-controller] replacing a legacy staged host without a handoff fingerprint",
-        { version: staged.version },
-      );
-      await this.runDownloadLane(null);
-      migratedLegacyStage = true;
-      staged = await readDesktopHostStagedRecord(this.layout);
+      //
+      // A FOLLOWER REPAIRS FROM ITS OWN LINE OR NOT AT ALL: `--automatic` here
+      // would repair the stage by fetching another line's stable, so the pinned
+      // same-line candidate is used instead. With no such candidate the legacy
+      // bytes are left alone - already unusable, and no worse for waiting -
+      // rather than replaced by a build this mode may not select.
+      //
+      // The lane overloads `null` to mean "run `--automatic`", so the two cases
+      // are spelled out rather than left to that overload: `repairWithAutomatic`
+      // says WHICH lane, `repairPin` is the exact version when the automatic
+      // lane is closed, and `null` is only ever passed when the automatic lane
+      // is genuinely the one we want.
+      const repairWithAutomatic = automaticStablePathOpen;
+      const repairPin = repairWithAutomatic ? null : downloadTarget;
+      if (repairWithAutomatic || repairPin !== null) {
+        log.info(
+          "[host-controller] replacing a legacy staged host without a handoff fingerprint",
+          {
+            version: staged.version,
+            replacement: repairWithAutomatic ? "--automatic" : repairPin,
+          },
+        );
+        await this.runDownloadLane(repairPin);
+        migratedLegacyStage = true;
+        staged = await readDesktopHostStagedRecord(this.layout);
+      } else {
+        // TERMINAL FOR THIS RECONCILE, and returning here is the point.
+        //
+        // Falling through would reach the purge branch below, which requires a
+        // fingerprint this stage does not have, and would log "cannot purge an
+        // unpinned staged host after registry invalidation" at `warn` on every
+        // single reconcile - naming a cause that did not happen. The registry
+        // is fine; the stage is fine; this build's line simply has nothing to
+        // replace it with yet. Say that once, at debug, since it is a standing
+        // condition rather than an event, and stop.
+        log.debug(
+          "[host-controller] leaving an unpinned legacy stage in place: its release line has no candidate to replace it with",
+          {
+            version: staged.version,
+            installedVersion,
+            mode,
+          },
+        );
+        return;
+      }
     }
     const stageIsEligible =
       staged !== null &&
@@ -2465,8 +2509,13 @@ export class HostController {
       const expectedStageFingerprint =
         staged.stageId === null ? null : encodeStageFingerprint(staged.stageId);
       if (expectedStageFingerprint === null) {
+        // Reached only when a replacement WAS attempted and left the stage
+        // unpinned anyway (the repair download failed). The deliberate
+        // leave-in-place case returns above, so this no longer speaks for it -
+        // and it no longer blames registry invalidation, which is one possible
+        // reason a stage is ineligible but not the reason it cannot be purged.
         log.warn(
-          "[host-controller] cannot purge an unpinned staged host after registry invalidation",
+          "[host-controller] cannot purge an ineligible staged host: it carries no handoff fingerprint",
           { version: staged.version },
         );
         return;
@@ -2501,16 +2550,23 @@ export class HostController {
       }
       staged = null;
     }
-    const needsDownload =
-      !migratedLegacyStage &&
+    // Work the `--automatic` lane would do: refresh an existing stage, or take
+    // a stable release newer than the installed build. Both are gated on the
+    // automatic path being open, so a follower whose line offers nothing simply
+    // does not download - it never reaches `runDownloadLane(null)` and so can
+    // never be handed another line's `latest`.
+    const hasAutomaticStableWork =
+      automaticStablePathOpen &&
       (staged !== null ||
-        rcTarget !== null ||
         (this.latestVersionCache !== null &&
           installedVersion !== null &&
           isStrictlyNewerHostVersion(
             this.latestVersionCache,
             installedVersion,
           )));
+    const needsDownload =
+      !migratedLegacyStage &&
+      (downloadTarget !== null || hasAutomaticStableWork);
     if (!needsDownload) {
       if (stageIsEligible && staged !== null && staged.stageId !== null) {
         this.eligibleStage = {
@@ -2530,7 +2586,7 @@ export class HostController {
       this.stageLatestPending = true;
       return;
     }
-    await this.runDownloadLane(rcTarget);
+    await this.runDownloadLane(downloadTarget);
     staged = await readDesktopHostStagedRecord(this.layout);
     const downloadedStageIsEligible =
       staged !== null &&

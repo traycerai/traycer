@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug builds only (see ../../AndroidManifest.xml). Cleartext stays off
+    everywhere except the loopback addresses the dev stack listens on.
+
+    `localhost`/`127.0.0.1` are what the emulator sees once `dev-android.ts`
+    has run `adb reverse` for each dev port, which is how the baked
+    `http://localhost:<port>` config from `vite.config.ts` resolves unchanged.
+    `10.0.2.2` is the emulator's alias for the host machine and is listed as
+    the manual fallback for when the reverse tunnels are not in place.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

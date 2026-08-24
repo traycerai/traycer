@@ -1542,7 +1542,12 @@ export function WorktreesList(props: {
     >
       <div className="flex h-full min-h-0 flex-col">
         {confirmed !== null && run !== null ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          // Gutter padding rather than an inset box, so the child centres
+          // inside the safe region while the backdrop below still covers the
+          // whole screen - a dim over the status bar is a dim, not a surface.
+          // Each gutter is the layout's own 1rem or the device inset,
+          // whichever is larger, so nothing doubles up.
+          <div className="fixed inset-0 z-50 flex items-center justify-center pt-safe-top-gutter pr-safe-right-gutter pb-safe-bottom-gutter pl-safe-left-gutter">
             <div
               aria-hidden
               className="absolute inset-0 bg-background/80 backdrop-blur-sm"

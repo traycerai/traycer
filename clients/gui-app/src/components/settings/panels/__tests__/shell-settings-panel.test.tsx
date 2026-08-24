@@ -412,6 +412,33 @@ describe("<ShellSettingsPanel /> flags row", () => {
     expect(screen.getByText(/loads your full shell profile/)).toBeTruthy();
   });
 
+  it("floors the flags row label below md so the chips take their own line", async () => {
+    // This row is two columns from its own markup rather than through
+    // SettingsRow, so the shared floor is the only thing putting one under its
+    // label - and the floor is what flex line-breaking acts on. Without it the
+    // chips-plus-restore-button cluster keeps its intrinsic width, the label
+    // takes whatever remains, and at phone width that is a sliver breaking
+    // "Startup flags for zsh" one word per line. The floor pushes the cluster
+    // onto a line of its own instead.
+    renderPanel((cli) => {
+      cli.shellConfig = {
+        path: "/bin/zsh",
+        args: ["-i", "-l"],
+        synthesised: true,
+      };
+    });
+
+    const label = await screen.findByText("Startup flags for zsh");
+    const labelBlock = label.parentElement;
+    if (labelBlock === null) throw new Error("expected label block parent");
+    const row = labelBlock.parentElement;
+    if (row === null) throw new Error("expected flags row container");
+
+    expect(labelBlock.className).toContain("max-md:min-w-[70%]");
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).toContain("max-md:gap-y-3");
+  });
+
   it("swaps the flags row to the newly-selected shell (label + helper + chips)", async () => {
     renderPanel((cli) => {
       // Synthesised so the picker trigger reads "System default" (unambiguous

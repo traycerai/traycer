@@ -757,9 +757,15 @@ describe("Terminals opener sub-page", () => {
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
   });
 
-  it("keeps setup-disabled workspaces visible as non-actionable rows", () => {
+  it("keeps failed setup visible while allowing terminal creation", () => {
     terminalBindingsMock.active.data.rows = [
-      { ...ACTIVE_ROWS[0], disabledReason: "setup_failed" },
+      {
+        ...ACTIVE_ROWS[0],
+        setupState: "failed",
+        // Compatibility with an older host that still projected setup failure
+        // as a disabled reason.
+        disabledReason: "setup_failed",
+      },
     ];
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
@@ -767,17 +773,19 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal workspace subpage");
     }
 
-    const disabled = renderItems(newTerminal.subpage.useItems).find(
+    const warning = renderItems(newTerminal.subpage.useItems).find(
       (item) => item.label === "/work/active-repo",
     );
-    if (disabled === undefined) {
-      throw new Error("expected disabled workspace row");
+    if (warning === undefined) {
+      throw new Error("expected setup warning workspace row");
     }
-    expect(disabled.description).toBe("Workspace unavailable: failed");
-    expect(disabled.statusBadge).toBe("Unavailable: failed");
-    expect(disabled.disabled).toBe(true);
-    void disabled.run(CTX);
-    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    expect(warning.description).toBe(
+      "Setup did not complete, but the worktree is still usable.",
+    );
+    expect(warning.statusBadge).toBe("Setup failed");
+    expect(warning.disabled).not.toBe(true);
+    void warning.run(CTX);
+    expect(spies.openTileIntoTargetGroup).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error when a folderless terminal directory cannot be resolved", () => {

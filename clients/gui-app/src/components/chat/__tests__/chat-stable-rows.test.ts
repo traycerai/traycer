@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
+  chatTimelineKeySequence,
   computeStableChatTimelineRows,
+  didChatTimelineKeySequenceChange,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "@/components/chat/chat-stable-rows";
@@ -199,5 +201,57 @@ describe("computeStableChatTimelineRows", () => {
 
     const next = computeStableChatTimelineRows([], empty);
     expect(next).toBe(empty);
+  });
+});
+
+describe("didChatTimelineKeySequenceChange", () => {
+  const rowsFor = (...ids: ReadonlyArray<string>): ReadonlyArray<ChatMessage> =>
+    ids.map((id, index) => ({ ...makeMessage(index, "user"), id }));
+
+  it("reports no move for a first population", () => {
+    expect(didChatTimelineKeySequenceChange(undefined, rowsFor("a", "b"))).toBe(
+      false,
+    );
+    expect(didChatTimelineKeySequenceChange([], rowsFor("a", "b"))).toBe(false);
+  });
+
+  it("reports no move when a row changes content in place", () => {
+    expect(
+      didChatTimelineKeySequenceChange(["a", "b"], rowsFor("a", "b")),
+    ).toBe(false);
+  });
+
+  it("reports a move for an insert, a removal, and a reorder", () => {
+    expect(
+      didChatTimelineKeySequenceChange(["a", "b"], rowsFor("a", "b", "c")),
+    ).toBe(true);
+    expect(didChatTimelineKeySequenceChange(["a", "b"], rowsFor("b"))).toBe(
+      true,
+    );
+    // Same ids, different order - a setup card reaching its anchor.
+    expect(
+      didChatTimelineKeySequenceChange(["a", "b", "c"], rowsFor("a", "c", "b")),
+    ).toBe(true);
+  });
+
+  /**
+   * The baseline is what the list last RENDERED, so a render React discarded
+   * must not move it. Deriving it from a render-time cache would: a discarded
+   * [a,b,c] would leave the next real render comparing three keys against
+   * three and calling a genuine insertion settled content.
+   */
+  it("still reports the insertion when a discarded render already saw it", () => {
+    const committed = chatTimelineKeySequence(rowsFor("a", "b"));
+
+    // The render React throws away. It computes a verdict; it publishes no
+    // committed sequence, because only a commit does that.
+    expect(
+      didChatTimelineKeySequenceChange(committed, rowsFor("a", "b", "c")),
+    ).toBe(true);
+
+    // The real render that replaces it: same new keys, one further token.
+    expect(
+      didChatTimelineKeySequenceChange(committed, rowsFor("a", "b", "c")),
+    ).toBe(true);
   });
 });
