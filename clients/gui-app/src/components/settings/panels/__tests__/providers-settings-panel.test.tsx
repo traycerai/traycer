@@ -692,6 +692,12 @@ vi.mock("@/components/ui/dropdown-menu", async () => ({
 vi.mock("@/components/ui/select", async () => {
   const { createContext, useContext } = await import("react");
   const ValueChangeContext = createContext<(value: string) => void>(() => {});
+  // The currently-selected value, threaded down to `SelectItem` so it can
+  // report `data-state` the way real Radix does. Absent from the mock until
+  // the mobile section picker's "reopening marks the picked row as checked"
+  // test needed it - every other consumer just clicks an item and never reads
+  // this attribute back.
+  const SelectedValueContext = createContext<string | undefined>(undefined);
   return {
     Select: (props: {
       readonly children: ReactNode;
@@ -706,14 +712,28 @@ vi.mock("@/components/ui/select", async () => {
             : (props.onValueChange ?? (() => {}))
         }
       >
-        <div>{props.children}</div>
+        <SelectedValueContext.Provider value={props.value}>
+          <div>{props.children}</div>
+        </SelectedValueContext.Provider>
       </ValueChangeContext.Provider>
     ),
+    // `role="combobox"` and the forwarded `aria-label` mirror real Radix
+    // (`SelectPrimitive.Trigger` sets `role="combobox"`; the trigger's
+    // `aria-label` prop passes straight through). Without both, every
+    // `getByRole("combobox", { name: ... })` query this file already had
+    // before this mock existed - the mobile provider/section pickers - would
+    // find a plain unnamed `role="button"` element instead.
     SelectTrigger: (props: {
       readonly children: ReactNode;
       readonly id?: string;
+      readonly "aria-label"?: string;
     }) => (
-      <button type="button" id={props.id}>
+      <button
+        type="button"
+        role="combobox"
+        id={props.id}
+        aria-label={props["aria-label"]}
+      >
         {props.children}
       </button>
     ),
@@ -727,10 +747,12 @@ vi.mock("@/components/ui/select", async () => {
       readonly disabled?: boolean;
     }) => {
       const onValueChange = useContext(ValueChangeContext);
+      const selectedValue = useContext(SelectedValueContext);
       return (
         <button
           type="button"
           data-value={props.value}
+          data-state={props.value === selectedValue ? "checked" : "unchecked"}
           disabled={props.disabled ?? false}
           onClick={() => onValueChange(props.value)}
         >
@@ -1324,6 +1346,23 @@ function railProviderNames(): readonly string[] {
     .map((button) => button.getAttribute("aria-label") ?? "");
 }
 
+/**
+ * The rail row for a provider, scoped to the rail LIST like
+ * `railProviderNames` above - never bare `screen`. Below `md` the
+ * always-mounted `ProvidersMobileSelect` renders one item per provider under
+ * the SAME display name (jsdom applies no CSS, so `md:hidden` never actually
+ * hides it there), so an unscoped `getByRole("button", { name })` collides
+ * with that item the moment more than one provider is in the fixture.
+ * `hidden` is threaded through explicitly rather than defaulted, since the
+ * one caller behind a dialog's `hideOthers` needs it true and every other
+ * caller needs it false.
+ */
+function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
+  const nav = screen.getByRole("navigation", { name: "Providers", hidden });
+  const list = within(nav).getByRole("list", { name: "Providers", hidden });
+  return within(list).getByRole("button", { name, hidden });
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     useProvidersFocusStore.setState({
@@ -1723,7 +1762,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
     // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
     selectTab("CLI & Args");
 
@@ -2156,10 +2195,10 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Configured, not verified")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByText("Could not check account status")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    fireEvent.click(railProviderRow("Qwen Code", false));
     expect(screen.getByText("Checking account")).toBeDefined();
   });
 
@@ -2205,7 +2244,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
   });
@@ -2217,7 +2256,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    fireEvent.click(railProviderRow(/OpenRouter/i, false));
     selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
@@ -2799,7 +2838,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expectPinnedRailLayout();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
@@ -2838,7 +2877,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("Env");
     expect(screen.getByDisplayValue("A")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByDisplayValue("B")).toBeDefined();
     expect(
       screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
@@ -2884,7 +2923,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("Account");
     expect(field().value).toBe("sk-live-secret");
 
-    fireEvent.click(screen.getByRole("button", { name: "Devin" }));
+    fireEvent.click(railProviderRow("Devin", false));
     selectTab("Account");
     expect(field().value).toBe("");
   });
@@ -2918,7 +2957,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("MCP");
     expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Amp" }));
+    fireEvent.click(railProviderRow("Amp", false));
     expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByText("Environment variables")).toBeDefined();
@@ -5658,9 +5697,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
     // fail getByRole("tab") without { hidden: true }.
     expect(
-      screen
-        .getByRole("button", { name: "Claude Code", hidden: true })
-        .getAttribute("data-active"),
+      railProviderRow("Claude Code", true).getAttribute("data-active"),
     ).toBe("true");
     expect(
       screen
@@ -7421,9 +7458,33 @@ describe("<ProvidersSettingsPanel />", () => {
 
 // Radix Select opens from a click on the trigger, and the trigger is named by
 // its `aria-label` - which is what tells it apart from the PROVIDER select one
-// row above it, the only other combobox on this screen.
+// row above it. Not "the only other combobox on this screen" any more: a
+// provider whose `enablementMode` is set (the three-way Auto/On/Off control)
+// renders a THIRD one, labelled "Availability" via its `<label htmlFor>`. No
+// fixture in this describe block sets `enablementMode`, so that one never
+// mounts here - but a query by name is what keeps this helper correct if a
+// future fixture in this file does.
 function openSectionPicker(): void {
   fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
+}
+
+/**
+ * The section picker's own rendered items, scoped to ITS `Select` root - not
+ * `screen`, which also holds the always-mounted `ProvidersMobileSelect` one
+ * row above it (same collision `railProviderRow` exists for). The mock
+ * renders a `Select`'s trigger and content as siblings under one wrapping
+ * element (see the `@/components/ui/select` mock), and the trigger is
+ * `role="combobox"` rather than `"button"`, so scoping to that sibling group
+ * and querying `role="button"` reaches exactly the section rows and nothing
+ * else on the page.
+ */
+function sectionPicker(): ReturnType<typeof within> {
+  const trigger = screen.getByRole("combobox", { name: "Section" });
+  const root = trigger.parentElement;
+  if (root === null) {
+    throw new Error("Section picker trigger has no parent element");
+  }
+  return within(root);
 }
 
 // `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or
@@ -7543,7 +7604,9 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     // one ordered array rather than eight presence checks, since the order is
     // half of what is being asserted.
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
     ).toEqual([
       "Account",
       "Profiles & Limits",
@@ -7564,7 +7627,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     );
 
     openSectionPicker();
-    fireEvent.click(screen.getByRole("option", { name: "Env" }));
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
 
     expect(screen.getByText("Environment variables")).toBeDefined();
     expect(screen.getByRole("tabpanel")).toBeDefined();
@@ -7574,7 +7637,9 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     // `aria-selected`, which Radix only sets on the FOCUSED item.
     openSectionPicker();
     expect(
-      screen.getByRole("option", { name: "Env" }).getAttribute("data-state"),
+      sectionPicker()
+        .getByRole("button", { name: "Env" })
+        .getAttribute("data-state"),
     ).toBe("checked");
   });
 
@@ -7586,7 +7651,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     );
 
     openSectionPicker();
-    fireEvent.click(screen.getByRole("option", { name: "Env" }));
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
 
     // The dead-space regression this pins, now owned entirely by Radix. It
     // mounts EVERY pane's div - active or not - and hides the inactive ones
@@ -7683,7 +7748,9 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     openSectionPicker();
 
     expect(
-      screen.getAllByRole("option").map((option) => option.textContent),
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
     ).toEqual(["Account", "CLI & Args", "MCP"]);
   });
 
@@ -7701,7 +7768,7 @@ describe("<ProvidersSettingsPanel /> mobile section picker", () => {
     // changes, so the body keeps its queries, scroll position and half-typed
     // fields.
     openSectionPicker();
-    fireEvent.click(screen.getByRole("option", { name: "Account" }));
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Account" }));
 
     expect(screen.getByRole("tabpanel")).toBe(panel);
   });
