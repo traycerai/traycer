@@ -26,9 +26,11 @@ export const EPIC_ARTIFACT_INDEX_FILENAME = "index.md";
  * rejection, and the writers cannot drift apart on the spelling.
  *
  * Only `.comments` is additionally RESERVED against artifact ingest (see
- * {@link artifactLayoutFromChain}); `images` is not, because unlike a leading
- * dot it is a name `slugify` can legitimately mint. That asymmetry is
- * deliberate - the reasoning is on `artifactLayoutFromChain`.
+ * {@link artifactLayoutFromChain}), and reserved case-insensitively, since a
+ * case-insensitive volume makes `.COMMENTS` the same directory. `images` is not
+ * reserved at all, because unlike a leading dot it is a name `slugify` can
+ * legitimately mint. That asymmetry is deliberate - the reasoning is on
+ * `artifactLayoutFromChain`.
  */
 export const EPIC_ARTIFACT_IMAGES_DIRNAME = "images";
 export const EPIC_ARTIFACT_COMMENTS_DIRNAME = ".comments";
@@ -67,6 +69,24 @@ function normalizeArtifactPathSegments(filePath: string): string[] {
 }
 
 /**
+ * ASCII-only lowercase, for the reserved-name comparison below.
+ *
+ * Deliberately NOT `String.prototype.toLowerCase`, which carries Unicode
+ * mappings no filesystem applies to a directory name (U+212A KELVIN SIGN to
+ * `k`, U+0130 to `i` plus a combining dot). Neither of those happens to collide
+ * with `.comments`, so this is not fixing a live false positive - it is
+ * refusing to depend on that coincidence. The reservation should widen by
+ * exactly the ASCII case variants a case-insensitive volume collapses, and a
+ * Unicode fold is a larger, vaguer set that would need re-checking every time
+ * the reserved name changed.
+ */
+function asciiLowerCase(value: string): string {
+  return value.replace(/[A-Z]/gu, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) + 32),
+  );
+}
+
+/**
  * Build the `{ folderName, parentSegments }` layout from the chain of folders
  * between `artifacts/` and the trailing `index.md`. Returns `null` when the
  * chain is empty (a bare `…/artifacts/index.md` is not an artifact) or when any
@@ -97,6 +117,15 @@ function normalizeArtifactPathSegments(filePath: string): string[] {
  * reserving it would break a legitimately-named artifact. The `images/`
  * ambiguity predates this gate and is left exactly as it was.
  *
+ * The comparison folds ASCII case, because the reservation has to hold on the
+ * filesystem rather than in the string. Windows is supported and macOS volumes
+ * are case-insensitive by default, so `.COMMENTS` there NAMES the projection
+ * directory; an exact match would admit it as an artifact chain and hand the
+ * ingest path a folder the projection is already writing into. Widening to the
+ * case variants costs nothing for the same reason the base reservation does -
+ * `slugify` cannot mint a leading dot in any casing - so unlike a blanket
+ * dot-prefix gate this cannot strand a disk-ingested artifact.
+ *
  * `.` / `..` need no backstop here - `normalizeArtifactPathSegments` consumes
  * both before a chain is ever built, and every caller routes through it.
  */
@@ -104,7 +133,12 @@ export function artifactLayoutFromChain(
   chain: string[],
 ): { folderName: string; parentSegments: string[] } | null {
   if (chain.length === 0) return null;
-  if (chain.some((segment) => segment === EPIC_ARTIFACT_COMMENTS_DIRNAME)) {
+  // The constant is already ASCII-lowercase, so only the segment is folded.
+  if (
+    chain.some(
+      (segment) => asciiLowerCase(segment) === EPIC_ARTIFACT_COMMENTS_DIRNAME,
+    )
+  ) {
     return null;
   }
   return {

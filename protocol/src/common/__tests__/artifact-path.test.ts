@@ -181,6 +181,38 @@ describe("artifactLayoutFromChain", () => {
   });
 
   /**
+   * The reservation has to hold on the FILESYSTEM, not in the string. Windows
+   * is supported and macOS volumes are case-insensitive by default, so
+   * `.COMMENTS` there names the very directory the projection writes into -
+   * admitting it as a chain hands ingest a folder that already has another
+   * writer. Widening to case variants strands nothing, because `slugify`
+   * cannot mint a leading dot in any casing.
+   */
+  it.each([".COMMENTS", ".Comments", ".cOmMeNtS"])(
+    "returns null for the case variant %s, which names the same directory on a case-insensitive volume",
+    (variant) => {
+      expect(artifactLayoutFromChain(["auth", variant])).toBeNull();
+      expect(artifactLayoutFromChain([variant, "auth"])).toBeNull();
+    },
+  );
+
+  /**
+   * The widening is case ONLY. A near-miss is a genuinely different directory
+   * on every platform, so it stays a resolvable artifact - the same
+   * do-not-strand-a-disk-ingested-folder constraint that kept the gate one
+   * name wide to begin with.
+   */
+  it.each([".comments-old", ".comments2", "comments", ".comment"])(
+    "still resolves the near-miss %s, which is a distinct directory everywhere",
+    (name) => {
+      expect(artifactLayoutFromChain(["auth", name])).toEqual({
+        folderName: name,
+        parentSegments: ["auth"],
+      });
+    },
+  );
+
+  /**
    * The reservation is exactly one name wide, and these two cases are why.
    *
    * An earlier revision rejected EVERY dot-prefixed segment, on the stated
