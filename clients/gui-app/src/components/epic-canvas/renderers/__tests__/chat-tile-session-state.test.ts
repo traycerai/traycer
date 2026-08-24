@@ -8,6 +8,8 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatMessage,
   InterviewSegment,
@@ -45,10 +47,14 @@ import {
   findPendingInterview,
   findUnanswerableInterviews,
   resolvedTurnStatus,
+  shouldGenerateChatTitleForSubmittedMessage,
   showRestoreResultToast,
   type InlineEditState,
 } from "../chat-tile-session-state";
-import type { PendingUserMessage } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  PendingUserMessage,
+} from "@/stores/chats/chat-session-store";
 
 beforeEach(() => {
   toastSuccess.mockClear();
@@ -987,5 +993,130 @@ describe("findUnanswerableInterviews", () => {
 
     expect(first).toEqual([]);
     expect(second).toBe(first);
+  });
+});
+
+/**
+ * A minimal `ChatSessionRecord` - `ChatSessionState["chat"]` post
+ * `chatRecordWithoutTranscript`, so it carries no `messages`/`events` fields.
+ * `shouldGenerateChatTitleForSubmittedMessage` only reads `isTitleEditedByUser`
+ * off it, but the fixture is typed through the real field so a widening back
+ * to `Chat` would surface here too.
+ */
+function chatRecord(
+  isTitleEditedByUser: boolean,
+): NonNullable<ChatSessionState["chat"]> {
+  return {
+    id: "chat-1",
+    parentId: null,
+    userId: "owner-1",
+    hostId: "host-1",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser,
+    settings: null,
+    activeSessionChain: null,
+    claudePendingWakes: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
+}
+
+function persistedUserMessage(
+  messageId: string,
+): Extract<Message, { role: "user" }> {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "owner-1" },
+    message: { kind: "user", content: CONTENT },
+    timestamp: 4,
+    sessionAnchor: null,
+  };
+}
+
+function pendingUserMessage(clientActionId: string): PendingUserMessage {
+  const accountContext: AccountContext = { type: "PERSONAL" };
+  return {
+    clientActionId,
+    messageId: `message-${clientActionId}`,
+    content: CONTENT,
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    timestamp: 4,
+    accountContext,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+  };
+}
+
+describe("shouldGenerateChatTitleForSubmittedMessage", () => {
+  it("generates a title for the first message on a fresh, unedited chat", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not generate a title once the user has edited it themselves", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(true),
+        messages: [],
+        pendingUserMessages: [],
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title for an empty submission", () => {
+    const empty: JsonContent = { type: "doc", content: [] };
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        content: empty,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title while a send is already pending", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [pendingUserMessage("action-1")],
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not generate a title once the transcript already has a user message", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [persistedUserMessage("m1")],
+        pendingUserMessages: [],
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("still reads a null chat (no snapshot yet) as not user-edited", () => {
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: null,
+        messages: [],
+        pendingUserMessages: [],
+        content: CONTENT,
+      }),
+    ).toBe(true);
   });
 });

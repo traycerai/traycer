@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
+  Chat,
   ChatEvent,
   ClaudePendingWake,
   Message,
@@ -620,32 +621,38 @@ function emitSnapshotWithQueuedSend(
   });
 }
 
-function emitSnapshotFrame(input: SnapshotFrameInput): void {
+/**
+ * Returns the raw `chat` record it just sent, so a caller can hold a
+ * reference to the exact object the snapshot carried - the aliasing test
+ * mutates it after the fact to prove the store copied rather than aliased it.
+ */
+function emitSnapshotFrame(input: SnapshotFrameInput): Chat {
   input.callbacks.onConnectionStatus("open", null);
+  const chat: Chat = {
+    id: CHAT_ID,
+    parentId: null,
+    userId: OWNER_ID,
+    hostId: "test-host",
+    title: "Host Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    settings: input.settings ?? null,
+    activeSessionChain: null,
+    claudePendingWakes: [...(input.claudePendingWakes ?? [])],
+    messages: [...input.messages],
+    events: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
   input.callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
     snapshot: {
-      chat: {
-        id: CHAT_ID,
-        parentId: null,
-        userId: OWNER_ID,
-        hostId: "test-host",
-        title: "Host Chat",
-        createdAt: 1,
-        updatedAt: 1,
-        isTitleEditedByUser: false,
-        settings: input.settings ?? null,
-        activeSessionChain: null,
-        claudePendingWakes: [...(input.claudePendingWakes ?? [])],
-        messages: [...input.messages],
-        events: [],
-        archivedAt: null,
-        pinnedUserProviderHandle: null,
-        lastDeliveredRolesDigest: null,
-      },
+      chat,
       access: {
         role: input.access,
         ownerUserId: OWNER_ID,
@@ -670,6 +677,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         : { turnInProgress: input.turnInProgress }),
     },
   });
+  return chat;
 }
 
 function emitSnapshotWithWorktree(
@@ -1075,6 +1083,73 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().chat?.claudePendingWakes).toEqual([
       PENDING_CLAUDE_WAKE,
     ]);
+  });
+
+  it("carries the transcript once: `chat` drops the arrays while the scalars and the real messages copy survive", () => {
+    const harness = createHarness();
+    const messages = [persistedUserMessage("m1"), persistedUserMessage("m2")];
+
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages,
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      settings: SETTINGS,
+    });
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+
+    // The regression guard: a future `{...snapshot.chat}` spread would
+    // silently reintroduce the duplicate, and this is the only check that
+    // would catch it - the type-level guarantee disappears the moment
+    // someone widens `ChatSessionRecord` back to `Chat`.
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(Object.keys(state.chat)).not.toContain("events");
+
+    // The four scalar reads `ChatSessionRecord` exists to serve.
+    expect(state.chat.title).toBe("Host Chat");
+    expect(state.chat.isTitleEditedByUser).toBe(false);
+    expect(state.chat.settings).toEqual(SETTINGS);
+    expect(state.chat.parentId).toBeNull();
+
+    // The strip must not have taken the real copy.
+    expect(state.messages).toEqual(messages);
+  });
+
+  it("carries the events transcript once: `chat` drops events too, and state.events keeps the full copy", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const events = [
+      chatEvent("event-1", "turn.started", null),
+      chatEvent("event-2", "turn.completed", null),
+    ];
+
+    emitSnapshotWithWorktree(callbacks, events, null);
+
+    const state = harness.handle.store.getState();
+    if (state.chat === null) throw new Error("Expected chat");
+    expect(Object.keys(state.chat)).not.toContain("events");
+    expect(Object.keys(state.chat)).not.toContain("messages");
+    expect(state.events).toEqual(events);
+  });
+
+  it("does not alias the snapshot's chat object - mutating it after the fact does not write through into store state", () => {
+    const harness = createHarness();
+    const sentChat = emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // Simulates a caller (or a future bug) mutating the object it handed to
+    // the store after the fact - it must not be the same reference.
+    sentChat.title = "mutated after the fact";
+
+    expect(harness.handle.store.getState().chat?.title).toBe("Host Chat");
   });
 
   it("seeds composer settings from the initial persisted chat snapshot", () => {
