@@ -87,6 +87,25 @@ function asciiLowerCase(value: string): string {
 }
 
 /**
+ * Whether a single directory name IS the reserved comment-projection dirname,
+ * folding ASCII case.
+ *
+ * Exported because "is this our projection directory?" is asked in two places
+ * that must never disagree: here, where a matching chain segment is REFUSED as
+ * an artifact, and in the host's file-sync, where a matching directory is
+ * EXEMPTED from the unmanaged-folder sweep. If the ingest side folds case and
+ * the sweep side does not, a `.COMMENTS/` on a case-insensitive volume becomes
+ * a directory that can be neither ingested nor recognized as ours - so the
+ * sweep deletes the live projection, which has no local authority to
+ * regenerate from. Sharing the predicate is what makes that divergence
+ * unrepresentable, in the same spirit as sharing the dirname constants.
+ */
+export function isEpicArtifactCommentsDirName(name: string): boolean {
+  // The constant is already ASCII-lowercase, so only the input is folded.
+  return asciiLowerCase(name) === EPIC_ARTIFACT_COMMENTS_DIRNAME;
+}
+
+/**
  * Build the `{ folderName, parentSegments }` layout from the chain of folders
  * between `artifacts/` and the trailing `index.md`. Returns `null` when the
  * chain is empty (a bare `…/artifacts/index.md` is not an artifact) or when any
@@ -133,14 +152,7 @@ export function artifactLayoutFromChain(
   chain: string[],
 ): { folderName: string; parentSegments: string[] } | null {
   if (chain.length === 0) return null;
-  // The constant is already ASCII-lowercase, so only the segment is folded.
-  if (
-    chain.some(
-      (segment) => asciiLowerCase(segment) === EPIC_ARTIFACT_COMMENTS_DIRNAME,
-    )
-  ) {
-    return null;
-  }
+  if (chain.some(isEpicArtifactCommentsDirName)) return null;
   return {
     folderName: chain[chain.length - 1],
     parentSegments: chain.slice(0, -1),

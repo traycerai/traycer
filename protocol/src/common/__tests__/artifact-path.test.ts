@@ -5,6 +5,7 @@ import {
   deriveArtifactPathLayoutRootAgnostic,
   EPIC_ARTIFACT_COMMENTS_DIRNAME,
   EPIC_ARTIFACT_IMAGES_DIRNAME,
+  isEpicArtifactCommentsDirName,
 } from "../artifact-path";
 
 /**
@@ -294,6 +295,42 @@ describe("deriveArtifactPathLayoutRootAgnostic - the reserved `.comments` segmen
         null,
       ),
     ).toEqual({ epicId: EPIC, folderName: ".draft", parentSegments: [] });
+  });
+});
+
+/**
+ * The predicate is exported so the host's file-sync answers "is this our
+ * projection directory?" with the very same code that refuses it as an
+ * artifact chain. The two sides diverging is the failure this guards: an
+ * ingest that folds case plus a sweep that does not turns a `.COMMENTS/` on a
+ * case-insensitive volume into a directory that is neither ingestable nor
+ * recognized as ours, and the sweep then deletes a live projection that has no
+ * local authority to regenerate from.
+ */
+describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption", () => {
+  it.each([".comments", ".COMMENTS", ".Comments", ".cOmMeNtS"])(
+    "matches %s, every casing a case-insensitive volume collapses",
+    (name) => {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(true);
+    },
+  );
+
+  it.each(["comments", ".comment", ".comments2", ".comments-old", "", "images"])(
+    "does not match the near-miss %s, a distinct directory on every platform",
+    (name) => {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(false);
+    },
+  );
+
+  it("agrees with the chain reservation, which is the point of sharing it", () => {
+    for (const name of [".comments", ".COMMENTS", ".Comments"]) {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(true);
+      expect(artifactLayoutFromChain(["auth", name])).toBeNull();
+    }
+    for (const name of [".draft", "images", ".comment"]) {
+      expect(isEpicArtifactCommentsDirName(name)).toBe(false);
+      expect(artifactLayoutFromChain(["auth", name])).not.toBeNull();
+    }
   });
 });
 
