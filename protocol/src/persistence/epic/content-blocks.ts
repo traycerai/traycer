@@ -1,7 +1,10 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  userMessageSenderSchema,
+  userMessageSenderSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import {
   imageByteLengthSchema,
@@ -55,6 +58,33 @@ const harnessIdSchema = getRecordSchema(
   "harness-id",
   "latest",
 );
+
+// Frozen pre-Reasonix copy of the canonical harness enum, for the three block
+// members that carry a harness id onto a released `chat.subscribe` line (see
+// `contentBlockSchemaPreReasonix`). Derived with `.extract()` off the live enum
+// rather than re-spelled, so adding a vendor to the canonical list without
+// deciding its freeze story is a compile error here. Do NOT add new harnesses.
+const harnessIdSchemaPreReasonix = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
 
 // Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
 // with the artifact metadata + tombstone schemas and the GUI node registries.
@@ -427,7 +457,7 @@ export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 // Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
 // existed (`chat.subscribe@1.0-1.5`). Bound (via the frozen content-block
 // union below) to every released `chat.subscribe` minor so those lines can
-// never observe image data - see `contentBlockSchemaPreImage`. Hand-frozen,
+// never observe image data - see `contentBlockSchemaPreReasonix`. Hand-frozen,
 // NOT derived from the live shape via `.omit()`, so a future field added to
 // the live block cannot silently leak onto a released wire line.
 export const toolCallBlockSchemaPreImage = z.object({
@@ -1305,40 +1335,85 @@ export const contentBlockSchema = z.discriminatedUnion("type", [
 ]);
 export type ContentBlock = z.infer<typeof contentBlockSchema>;
 
-// Wire-freeze copy of `contentBlockSchema` with `tool_call` swapped for its
-// pre-image freeze (`toolCallBlockSchemaPreImage`) - the only member that
-// gains image data - and `interview` swapped for its pre-settlement freeze.
-// Bound (via the frozen message/chat schemas) to every released
-// `chat.subscribe@1.0-1.5` minor so those lines structurally match the shipped
-// wire and can never observe `imageResults` or canonical interview settlement.
-// Every other member reuses the live sub-schema (same convention as
-// `messageSchemaPreInReplyTo`).
-export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
-  textBlockSchema,
-  reasoningBlockSchema,
-  toolCallBlockSchemaPreImage,
-  fileChangeBlockSchema,
-  commandBlockSchema,
-  subAgentBlockSchema,
-  approvalBlockSchema,
-  todoBlockSchema,
-  planBlockSchema,
-  errorBlockSchema,
-  compactionBlockSchema,
-  autonomousResumeBlockSchema,
-  steerBlockSchema,
-  interviewBlockSchemaPreSettlement,
-  artifactOperationBlockSchema,
-]);
+// ── Wire-freeze variants (pre-Reasonix) ─────────────────────────────────────
+// These three block members carry harness ids through persisted assistant
+// messages. Released `chat.subscribe@1.0–1.6` peers must never observe the
+// Reasonix enum value, while keeping every other field they originally shipped.
+const planSourceSchemaPreReasonix = z.object({
+  harnessId: harnessIdSchemaPreReasonix,
+  sessionId: z.string().nullable().default(null),
+  turnId: z.string().nullable().default(null),
+  kind: z.string(),
+});
 
-// Wire-freeze copy of `contentBlockSchema` as `chat.subscribe@1.6` shipped it
-// in `host-v1.2.0-rc.1`: the LIVE `tool_call` (that line does carry image
-// results) with `interview` swapped for its pre-settlement freeze. Bound to
-// `@1.6` via `messageSchemaPreSettlement` / `chatSchemaV16`, so the RC cohort
-// in the field keeps decoding exactly the block union it was shipped with.
-// Every other member reuses the live sub-schema.
-export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
-  textBlockSchema,
+const planBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("plan"),
+  planStatus: planStatusSchema,
+  planId: z.string(),
+  harnessId: harnessIdSchemaPreReasonix,
+  source: planSourceSchemaPreReasonix,
+  title: z.string().nullable().default(null),
+  summary: z.string().nullable().default(null),
+  markdownPreview: z.string().default(""),
+  fullContentRef: planContentRefSchema.nullable().default(null),
+  steps: z.array(planStepSchema).default([]),
+  actions: z.array(planActionSchema).default([]),
+  approvalId: z.string().nullable().default(null),
+  supersededByPlanId: z.string().nullable().default(null),
+  metadata: z.record(z.string(), z.unknown()).nullable().default(null),
+});
+
+export const providerNoticeMetadataSchemaPreReasonix = z
+  .object({
+    harnessId: harnessIdSchemaPreReasonix,
+    noticeKind: providerNoticeKindSchema,
+    tone: providerNoticeToneSchema,
+    title: z.string(),
+    message: z.string().nullable(),
+    details: z.array(providerNoticeDetailSchema),
+    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  })
+  .superRefine((notice, ctx) => {
+    if (
+      notice.metadata !== null &&
+      notice.noticeKind !== notice.metadata.type
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["metadata", "type"],
+        message: "providerNotice.metadata.type must match noticeKind.",
+      });
+    }
+  });
+
+const textBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("text"),
+  text: z.string(),
+  providerNotice: providerNoticeMetadataSchemaPreReasonix
+    .nullable()
+    .default(null),
+});
+
+const steerBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("steer"),
+  queueItemId: z.string(),
+  messageId: z.string(),
+  content: jsonContentSchema,
+  mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
+  sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
+});
+
+/**
+ * Persistence freeze for the Epic 2.0 contract: the complete live block
+ * vocabulary with only harness-bearing members held to the pre-Reasonix enum.
+ * Unlike the wire freezes below, this retains the live interview and image
+ * shapes because those were already part of Epic 2.0 when Reasonix arrived.
+ */
+export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
   reasoningBlockSchema,
   toolCallBlockSchema,
   fileChangeBlockSchema,
@@ -1346,11 +1421,66 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   subAgentBlockSchema,
   approvalBlockSchema,
   todoBlockSchema,
-  planBlockSchema,
+  planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
   autonomousResumeBlockSchema,
-  steerBlockSchema,
+  steerBlockSchemaPreReasonix,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
+// Wire-freeze copy of `contentBlockSchema` carrying THREE independent freezes,
+// bound (via the frozen message/chat schemas) to every released
+// `chat.subscribe@1.0-1.5` minor: `tool_call` swapped for its pre-image freeze
+// (`toolCallBlockSchemaPreImage`, the only member that gains image data),
+// `interview` swapped for its pre-settlement freeze so those lines never
+// observe canonical interview settlement or answer selection evidence, and
+// `text`/`plan`/`steer` swapped for their pre-Reasonix freezes so they never
+// observe a harness id their enum cannot decode. The name records the FIRST
+// freeze only - see the stacked comments on each swapped member. Every other
+// member reuses the live sub-schema (same convention as
+// `messageSchemaPreInReplyTo`).
+export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
+  reasoningBlockSchema,
+  toolCallBlockSchemaPreImage,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchemaPreReasonix,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchemaPreReasonix,
+  interviewBlockSchemaPreSettlement,
+  artifactOperationBlockSchema,
+]);
+
+// Wire-freeze copy of `contentBlockSchema` as `chat.subscribe@1.6` shipped it
+// in `host-v1.2.0-rc.1`: the LIVE `tool_call` (that line does carry image
+// results) with `interview` swapped for its pre-settlement freeze, so the RC
+// cohort in the field keeps decoding exactly the block union it was shipped
+// with. `text`/`plan`/`steer` additionally take their pre-Reasonix freezes:
+// `1.6` is released with a nineteen-id harness enum, so it cannot observe a
+// Reasonix id either. Bound to `@1.6` via `messageSchemaPreSettlement` /
+// `chatSchemaV16`. Every other member reuses the live sub-schema.
+export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchemaPreReasonix,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
 ]);

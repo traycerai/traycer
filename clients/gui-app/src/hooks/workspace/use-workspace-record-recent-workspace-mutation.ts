@@ -1,9 +1,10 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { WorkspacePrepareFoldersResponseV14 } from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { recentWorkspacesQueryKey } from "./use-workspace-list-recent-workspaces-query";
 
 interface RecordRecentContext {
   readonly hostId: string | null;
@@ -13,6 +14,19 @@ export interface RecordRecentWorkspaceInput {
   readonly path: string;
   readonly bumpRecency: boolean;
   readonly failureFeedback: "silent" | "move_warning";
+}
+
+export function writeRecentWorkspacesCache(
+  queryClient: QueryClient,
+  hostId: string | null,
+  result: WorkspacePrepareFoldersResponseV14,
+): boolean {
+  if (result.recentWorkspaces === null) return false;
+  queryClient.setQueryData<WorkspacePrepareFoldersResponseV14>(
+    recentWorkspacesQueryKey(hostId),
+    { ...result, operation: "listRecentWorkspaces" },
+  );
+  return true;
 }
 
 /**
@@ -46,19 +60,18 @@ export function useWorkspaceRecordRecentWorkspace(args: {
     }),
     options: {
       retry: false,
-      // The host is the only owner of the recents order, so the appended list
-      // has to be re-read rather than guessed at. Host captured in `onMutate`
-      // and used in `onSuccess`: the picker settles and closes the moment this
-      // is fired, so the active host can have moved on by the time it lands -
-      // invalidating the CURRENT host would refetch the wrong machine's list
-      // and leave the right one stale.
+      // The host is the only owner of recents order, so current hosts return
+      // the authoritative post-write list for a cache write-through. Older
+      // hosts return null and fall back to one exact invalidation. Host is
+      // captured before dispatch because the picker closes immediately and
+      // the active host can move before this lands.
       onMutate: () => ({ hostId: args.client?.getActiveHostId() ?? null }),
-      onSuccess: async (_result, _variables, context) => {
+      onSuccess: async (result, _variables, context) => {
+        if (writeRecentWorkspacesCache(queryClient, context.hostId, result))
+          return;
+        if (result.validation?.ok === false) return;
         await queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            context.hostId,
-            "workspace.prepareFolders",
-          ),
+          queryKey: recentWorkspacesQueryKey(context.hostId),
         });
       },
       onError: (_error, variables) => {

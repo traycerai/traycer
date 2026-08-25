@@ -775,6 +775,12 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     client.close();
   });
 
+  // `1.6` is a RELEASED line that is not the live one, and it emits live-SHAPED
+  // frames. Gating the shallow path on exact equality with
+  // `chatSubscribeLiveSchemaVersion` would silently deep-parse every snapshot
+  // from a current `1.6` host the moment `1.7` opened - "seconds of
+  // render-thread CPU per snapshot" by the shallow schema's own doc, on the
+  // routine new-app-before-new-host pairing. Hence the per-line fast path.
   it("takes the 1.6 shallow path and delivers a normalized interview snapshot", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];

@@ -1,15 +1,23 @@
 import {
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
+  chatEventSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/chat-events";
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
+  messageSchemaPreReasonix,
   messageSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/messages";
-import { activeSessionChainSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  activeSessionChainSchema,
+  activeSessionChainSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 
 /**
@@ -38,6 +46,18 @@ export const claudePendingWakeSchema = z.object({
   heldChain: activeSessionChainSchema.nullable().optional(),
 });
 export type ClaudePendingWake = z.infer<typeof claudePendingWakeSchema>;
+
+// Pre-Reasonix copy for `chat.subscribe@1.6`: `heldChain` names the harness
+// whose session the parked wake will resume.
+const claudePendingWakeSchemaPreReasonix = z.object({
+  sessionId: z.string(),
+  toolUseId: z.string(),
+  scheduledFor: z.number(),
+  prompt: z.string(),
+  reason: z.string(),
+  retryDeadlineStartedAt: z.number().nullable().optional(),
+  heldChain: activeSessionChainSchemaPreReasonix.nullable().optional(),
+});
 
 // `claudePendingWakeSchema` is persisted state. The chat.subscribe snapshots
 // below are frozen wire contracts, so they retain this pre-deadline shape.
@@ -117,6 +137,32 @@ export const chatSchema = z.object({
 });
 export type Chat = z.infer<typeof chatSchema>;
 
+/**
+ * Frozen Epic 2.0 chat record. It preserves the complete persisted chat shape
+ * that shipped before Reasonix while holding every harness-bearing leaf to the
+ * pre-Reasonix enum/anchor union. Wire-specific shape freezes remain separate.
+ */
+export const chatSchemaPreReasonix = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
+  messages: z.array(messageSchemaPreReasonix),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
+
 // Wire-freeze copy with `messages`/`events` swapped for their pre-`inReplyTo`
 // freezes, bound to `chat.subscribe@1.0–1.3` snapshot serverFrames so those
 // lines match the shipped wire and strip `inReplyTo` for older peers.
@@ -131,8 +177,13 @@ export const chatSchemaPreInReplyTo = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  // Pre-Reasonix freeze: this released line must never observe a harness id
+  // its installed client's strict enum cannot decode (see
+  // `chatRunSettingsSchemaPreReasonix`).
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
   claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
     [],
   ),
@@ -154,8 +205,13 @@ export const chatSchemaV14 = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  // Pre-Reasonix freeze: this released line must never observe a harness id
+  // its installed client's strict enum cannot decode (see
+  // `chatRunSettingsSchemaPreReasonix`).
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
   claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
     [],
   ),
@@ -163,7 +219,7 @@ export const chatSchemaV14 = z.object({
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
   messages: z.array(messageSchemaPreImage),
-  events: z.array(chatEventSchema).default([]),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
 });
 
 // Wire-freeze copy with `archivedAt` (the field `1.5` shipped) but without
@@ -181,8 +237,13 @@ export const chatSchemaV15 = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  // Pre-Reasonix freeze: this released line must never observe a harness id
+  // its installed client's strict enum cannot decode (see
+  // `chatRunSettingsSchemaPreReasonix`).
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
   claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
     [],
   ),
@@ -190,7 +251,7 @@ export const chatSchemaV15 = z.object({
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
   messages: z.array(messageSchemaPreImage),
-  events: z.array(chatEventSchema).default([]),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
   archivedAt: z.number().nullable().default(null),
 });
 
@@ -214,11 +275,17 @@ export const chatSchemaV16 = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  // Every harness-bearing leaf additionally takes its pre-Reasonix freeze:
+  // `1.6` is released with a nineteen-id enum, so the settings tuple, the
+  // session chain, a parked wake's held chain, the message tree and the event
+  // actors must all stay on ids that cohort can decode.
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
   messages: z.array(messageSchemaPreSettlement),
-  events: z.array(chatEventSchema).default([]),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
   archivedAt: z.number().nullable().default(null),
   pinnedUserProviderHandle: z.string().nullable().default(null),
   lastDeliveredRolesDigest: z.string().nullable().default(null),

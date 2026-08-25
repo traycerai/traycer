@@ -4,11 +4,15 @@ import {
   DEFAULT_ACCOUNT_CONTEXT,
   accountContextSchema,
 } from "@traycer/protocol/common/schemas";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreReasonix,
+} from "@traycer/protocol/host/agent/shared";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  userMessageSenderSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/senders";
 import {
   interviewAnswerSchema,
@@ -145,6 +149,17 @@ export const runtimeSessionInfoSchema = z.object({
 });
 export type RuntimeSessionInfo = z.infer<typeof runtimeSessionInfoSchema>;
 
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.5` blockDelta frames.
+// `session.created` / `session.resumed` carry the harness id verbatim, so the
+// live enum would otherwise let a newer host announce a Reasonix session on a
+// minor whose installed client cannot decode the id. Hand-frozen, not derived.
+const runtimeSessionInfoSchemaPreReasonix = z.object({
+  id: z.string(),
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  createdAt: z.number(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const runtimeApprovalDecisionSchema = z.object({
   approved: z.boolean(),
   reason: z.string().optional(),
@@ -270,6 +285,17 @@ export const runtimePlanSourceSchema = z.object({
   kind: z.string(),
 });
 export type RuntimePlanSource = z.infer<typeof runtimePlanSourceSchema>;
+
+// Wire-freeze copy for the released `chat.subscribe@1.0–1.5` blockDelta frames.
+// Every `plan.*` event embeds the plan's originating harness, so this shares the
+// same exposure as `runtimeSessionInfoSchemaPreReasonix`. Hand-frozen, not
+// derived from the live shape.
+const runtimePlanSourceSchemaPreReasonix = z.object({
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  sessionId: z.string().nullable(),
+  turnId: z.string().nullable(),
+  kind: z.string(),
+});
 
 export const runtimePlanStepSchema = z.object({
   id: z.string().nullable(),
@@ -536,6 +562,48 @@ export const planCompletedEventSchema = z.object({
 });
 export type PlanCompletedEvent = z.infer<typeof planCompletedEventSchema>;
 
+// Wire-freeze copies of the three `plan.*` events with `source` pinned to the
+// pre-Reasonix harness enum, bound to the released `chat.subscribe@1.0–1.5`
+// blockDelta frames. Only `source` differs from the live shapes above; every
+// other field (and every default) is reproduced verbatim so the frozen line
+// keeps parsing exactly what it shipped with.
+const planDeltaEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("plan.delta"),
+  planId: z.string(),
+  source: runtimePlanSourceSchemaPreReasonix,
+  delta: z.string(),
+});
+
+const planUpdatedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("plan.updated"),
+  planId: z.string(),
+  source: runtimePlanSourceSchemaPreReasonix,
+  planStatus: runtimePlanStatusSchema.default("drafting"),
+  title: z.string().nullable().default(null),
+  summary: z.string().nullable().default(null),
+  markdownPreview: z.string().default(""),
+  fullContentRef: runtimePlanContentRefSchema.nullable().default(null),
+  steps: z.array(runtimePlanStepSchema).default([]),
+  actions: z.array(runtimePlanActionSchema).default([]),
+  approvalId: z.string().nullable().default(null),
+  supersededByPlanId: z.string().nullable().default(null),
+  metadata: z.record(z.string(), z.unknown()).nullable().default(null),
+});
+
+const planCompletedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("plan.completed"),
+  planId: z.string(),
+  source: runtimePlanSourceSchemaPreReasonix,
+  planStatus: runtimePlanCompletionStatusSchema.default("ready"),
+  markdownPreview: z.string().nullable().default(null),
+  fullContentRef: runtimePlanContentRefSchema.nullable().default(null),
+  actions: z.array(runtimePlanActionSchema).default([]),
+  approvalId: z.string().nullable().default(null),
+});
+
 export const compactionStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("compaction.started"),
@@ -606,7 +674,22 @@ export const steerSubmittedEventSchemaPreInReplyTo = z.object({
   messageId: z.string(),
   content: jsonContentSchema,
   mode: chatQueueSteerModeSchema.default("safe_point"),
+  // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
+  // carries the enum freeze as well as the `inReplyTo` freeze.
   sender: userMessageSenderSchemaPreInReplyTo.nullable().default(null),
+});
+
+// Wire-freeze copy for released `chat.subscribe@1.4`/`@1.5`: those lines shipped
+// after `inReplyTo`, so the steer sender keeps that field and freezes only the
+// harness enum. Hand-frozen; see `agentSenderSchemaPreReasonix`.
+const steerSubmittedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("steer.submitted"),
+  queueItemId: z.string(),
+  messageId: z.string(),
+  content: jsonContentSchema,
+  mode: chatQueueSteerModeSchema.default("safe_point"),
+  sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
 });
 
 export const interviewRequestedEventSchema = z.object({
@@ -772,6 +855,24 @@ export type ProviderNoticeUpsertEvent = z.infer<
   typeof providerNoticeUpsertEventSchema
 >;
 
+// Wire-freeze copy with `harnessId` pinned to the pre-Reasonix enum, bound to
+// the released `chat.subscribe@1.0`/`@1.3`/`@1.4`/`@1.5`/`@1.6` blockDelta frames
+// (`1.1`/`1.2` predate `provider_notice.upsert` entirely). Hand-frozen, not
+// derived from the live shape.
+const providerNoticeUpsertEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("provider_notice.upsert"),
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  noticeKind: providerNoticeKindSchema,
+  tone: providerNoticeToneSchema,
+  status: z.enum(["streaming", "completed"]),
+  title: z.string(),
+  message: z.string().nullable(),
+  details: z.array(providerNoticeDetailSchema),
+  fallbackText: z.string().min(1),
+  metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+});
+
 export const fileChangeStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("file_change.started"),
@@ -891,6 +992,21 @@ export const sessionResumedEventSchema = z.object({
   session: runtimeSessionInfoSchema,
 });
 export type SessionResumedEvent = z.infer<typeof sessionResumedEventSchema>;
+
+// Wire-freeze copies of the two session-announcement events, bound to the
+// released `chat.subscribe@1.0–1.5` blockDelta frames (see
+// `runtimeSessionInfoSchemaPreReasonix`).
+const sessionCreatedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("session.created"),
+  session: runtimeSessionInfoSchemaPreReasonix,
+});
+
+const sessionResumedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("session.resumed"),
+  session: runtimeSessionInfoSchemaPreReasonix,
+});
 
 export const turnStartedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1040,7 +1156,50 @@ export const huggingFaceUserMessageAnchorResolvedSchema = z.object({
   opencodeUserMessageId: z.string(),
 });
 
+export const reasonixUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("reasonix"),
+  sessionId: z.string(),
+  // The ACP session id the `reasonix acp` process assigned for this turn.
+  // Null until `session/new` resolves; used to resume the same ACP session.
+  reasonixSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("user_message.anchor_resolved"),
+  messageId: z.string(),
+  anchor: z.discriminatedUnion("harnessId", [
+    claudeUserMessageAnchorResolvedSchema,
+    codexUserMessageAnchorResolvedSchema,
+    openCodeUserMessageAnchorResolvedSchema,
+    cursorUserMessageAnchorResolvedSchema,
+    traycerUserMessageAnchorResolvedSchema,
+    openRouterUserMessageAnchorResolvedSchema,
+    grokUserMessageAnchorResolvedSchema,
+    qwenUserMessageAnchorResolvedSchema,
+    kiroUserMessageAnchorResolvedSchema,
+    droidUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
+    copilotUserMessageAnchorResolvedSchema,
+    kilocodeUserMessageAnchorResolvedSchema,
+    ampUserMessageAnchorResolvedSchema,
+    devinUserMessageAnchorResolvedSchema,
+    piUserMessageAnchorResolvedSchema,
+    hermesUserMessageAnchorResolvedSchema,
+    ompUserMessageAnchorResolvedSchema,
+    huggingFaceUserMessageAnchorResolvedSchema,
+    reasonixUserMessageAnchorResolvedSchema,
+  ]),
+});
+export type UserMessageAnchorResolvedEvent = z.infer<
+  typeof userMessageAnchorResolvedEventSchema
+>;
+
+// Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
+// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
+// this union prevents a newer host from sending an anchor an installed older
+// client cannot decode.
+const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
   messageId: z.string(),
@@ -1066,9 +1225,6 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     huggingFaceUserMessageAnchorResolvedSchema,
   ]),
 });
-export type UserMessageAnchorResolvedEvent = z.infer<
-  typeof userMessageAnchorResolvedEventSchema
->;
 
 /**
  * Advances the durable turn-tail on a user message's session anchor while the
@@ -1266,11 +1422,13 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
 // Wire-freeze copy of the live runtime-event union from before image support
-// existed (`chat.subscribe@1.4-1.6`): every live member EXCEPT
+// existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`):
+// every live member EXCEPT
 // `image_resolution.updated` (which cannot exist on these lines at all), with
 // `tool_call.completed` swapped for its pre-image freeze
 // (`tool_call.progress` needs no freeze - it carries no image field).
-// Bound to `chat.subscribe@1.4-1.6`'s `blockDelta` frame - those
+// Bound to `chat.subscribe@1.4`/`1.5`'s `blockDelta` frame (`1.6` takes
+// `runtimeEventSchemaPreSettlement`) - those
 // minors shipped after `inReplyTo` (so they keep the live sender-bearing
 // `steerSubmittedEventSchema`, unlike `runtimeEventSchemaPreInReplyTo`) but
 // before image support. Explicitly listed (not derived from the live union)
@@ -1288,9 +1446,9 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
   todoUpdatedEventSchema,
-  planDeltaEventSchema,
-  planUpdatedEventSchema,
-  planCompletedEventSchema,
+  planDeltaEventSchemaPreReasonix,
+  planUpdatedEventSchemaPreReasonix,
+  planCompletedEventSchemaPreReasonix,
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
@@ -1305,20 +1463,20 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   artifactOperationEventSchema,
   commandStartedEventSchema,
   commandCompletedEventSchema,
-  sessionCreatedEventSchema,
-  sessionResumedEventSchema,
+  sessionCreatedEventSchemaPreReasonix,
+  sessionResumedEventSchemaPreReasonix,
   turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
   turnInterruptedEventSchema,
-  steerSubmittedEventSchema,
+  steerSubmittedEventSchemaPreReasonix,
   usageUpdatedEventSchema,
   errorEventSchema,
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
-  providerNoticeUpsertEventSchema,
+  providerNoticeUpsertEventSchemaPreReasonix,
 ]);
 
 // Wire-freeze copies of the runtime-event unions with `steer.submitted` swapped
@@ -1339,9 +1497,9 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
   todoUpdatedEventSchema,
-  planDeltaEventSchema,
-  planUpdatedEventSchema,
-  planCompletedEventSchema,
+  planDeltaEventSchemaPreReasonix,
+  planUpdatedEventSchemaPreReasonix,
+  planCompletedEventSchemaPreReasonix,
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
@@ -1356,10 +1514,10 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   artifactOperationEventSchema,
   commandStartedEventSchemaPreBackgroundTask,
   commandCompletedEventSchemaPreBackgroundTask,
-  sessionCreatedEventSchema,
-  sessionResumedEventSchema,
+  sessionCreatedEventSchemaPreReasonix,
+  sessionResumedEventSchemaPreReasonix,
   turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
   turnInterruptedEventSchema,
@@ -1373,14 +1531,17 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
-  providerNoticeUpsertEventSchema,
+  providerNoticeUpsertEventSchemaPreReasonix,
 ]);
 
 // Wire-freeze copy of the runtime-event union as `chat.subscribe@1.6` shipped
 // it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
 // is the minor that added them) with `interview.resolved` swapped for its
 // pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
-// selection evidence. Explicitly listed rather than derived from the live
+// selection evidence - AND every harness-bearing member swapped for its
+// pre-Reasonix copy, since `1.6` is released with a nineteen-id enum and its
+// decoder rejects any frame naming an id outside it. Explicitly listed rather
+// than derived from the live
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
@@ -1395,9 +1556,9 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   approvalRequestedEventSchema,
   approvalResolvedEventSchema,
   todoUpdatedEventSchema,
-  planDeltaEventSchema,
-  planUpdatedEventSchema,
-  planCompletedEventSchema,
+  planDeltaEventSchemaPreReasonix,
+  planUpdatedEventSchemaPreReasonix,
+  planCompletedEventSchemaPreReasonix,
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
@@ -1412,20 +1573,20 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   artifactOperationEventSchema,
   commandStartedEventSchema,
   commandCompletedEventSchema,
-  sessionCreatedEventSchema,
-  sessionResumedEventSchema,
+  sessionCreatedEventSchemaPreReasonix,
+  sessionResumedEventSchemaPreReasonix,
   turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
   turnInterruptedEventSchema,
-  steerSubmittedEventSchema,
+  steerSubmittedEventSchemaPreReasonix,
   usageUpdatedEventSchema,
   errorEventSchema,
   workflowStartedEventSchema,
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
-  providerNoticeUpsertEventSchema,
+  providerNoticeUpsertEventSchemaPreReasonix,
   imageResolutionUpdatedEventSchema,
   userMessageAnchorTailUpdatedEventSchema,
 ]);

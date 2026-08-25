@@ -284,7 +284,7 @@ describe("the tab id can only reach a decoder that knows it", () => {
     for (const targetMajor of [1, 2, 3, 4, 5, 6] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         liveResponse,
       );
@@ -324,7 +324,7 @@ describe("providers.list head line -> every older major", () => {
       ).toBeDefined();
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         liveResponse,
       );
@@ -343,7 +343,7 @@ describe("providers.list head line -> every older major", () => {
     // drop it wholesale and the ids survive untouched.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       6,
       liveResponse,
     );
@@ -1957,7 +1957,7 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         { providers: [newestProvider, claudeState], native: null },
       );

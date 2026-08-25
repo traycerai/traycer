@@ -31,12 +31,14 @@ import {
   listAgentsResponseSchemaV40,
   listAgentsResponseSchemaV50,
   listAgentsResponseSchemaV60,
+  listAgentsResponseSchemaV70,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
   agentSummarySchemaV40,
   agentSummarySchemaV50,
   agentSummarySchemaV60,
+  agentSummarySchemaV70,
   sendAgentMessageRequestSchema,
   sendAgentMessageResponseSchema,
   stopAgentRequestSchema,
@@ -710,7 +712,11 @@ export const agentListV70 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 7, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  // Frozen: the v1.2.0 tags shipped this line, so it must serve the v7.0
+  // harness id set rather than the live one. Before that release it pointed at
+  // the canonical schema - the same defect that let `omp` first try to ride
+  // v5.0 and `huggingface` v6.0, one line later each time.
+  responseSchema: listAgentsResponseSchemaV70,
 });
 
 export const agentListUpgradeV6ToV7 = defineUpgradePath<
@@ -719,10 +725,14 @@ export const agentListUpgradeV6ToV7 = defineUpgradePath<
 >({
   from: { major: 6, minor: 0 },
   to: { major: 7, minor: 0 },
-  // The request shape is identical. Parsing the response through the live v7
-  // schema default-fills `runConfig: null` on every released v6 row.
+  // The request shape is identical. Parsing the response through the v7 schema
+  // default-fills `runConfig: null` on every released v6 row. Parses through
+  // the FROZEN v7.0 shape, not the live one: the target of this hop is
+  // `agentListV70`, and a hop that parses through a schema wider than its own
+  // target is how a fill silently starts producing values the target line
+  // cannot carry.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => listAgentsResponseSchema.parse(response),
+  upgradeResponse: (response) => listAgentsResponseSchemaV70.parse(response),
 });
 
 export const agentListDowngradeV7ToV6 = defineDowngradePath<
@@ -828,6 +838,162 @@ export const agentListDowngradeV7ToV1 = defineDowngradePath<
   typeof agentListV10
 >({
   from: { major: 7, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV10.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV10.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListV80 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 8, minor: 0 } as const,
+  requestSchema: listAgentsRequestSchema,
+  responseSchema: listAgentsResponseSchema,
+});
+
+export const agentListUpgradeV7ToV8 = defineUpgradePath<
+  typeof agentListV70,
+  typeof agentListV80
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 8, minor: 0 },
+  // The request shape is identical, and a v7.0 response without Reasonix
+  // agents is a valid v8.0 response (purely additive) - both upgrades are
+  // identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListDowngradeV8ToV7 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV70
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 7, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Reasonix agents so an already-shipped v7.0 client's strict decode
+  // never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV70.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV70.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV6 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV60
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hugging Face/Reasonix agents so an already-shipped v6.0 client's
+  // strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV60.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV60.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV5 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV50
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp/Hugging Face/Reasonix agents so an already-shipped v5.0 client's
+  // strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV50.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV50.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV4 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV40
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes/omp/Hugging Face/Reasonix agents so an already-shipped v4.0
+  // client's strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV40.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV40.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV3 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV30
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Devin/Pi/Hermes/omp/Hugging Face/Reasonix agents so an
+  // already-shipped v3.0 client's strict decode never sees one.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV30.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV30.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV2 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV20
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listAgentsResponseSchemaV20.parse({
+      ...response,
+      agents: response.agents.filter(
+        (agent) => agentSummarySchemaV20.safeParse(agent).success,
+      ),
+    }),
+  }),
+});
+
+export const agentListDowngradeV8ToV1 = defineDowngradePath<
+  typeof agentListV80,
+  typeof agentListV10
+>({
+  from: { major: 8, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

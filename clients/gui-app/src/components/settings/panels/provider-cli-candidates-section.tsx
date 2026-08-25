@@ -116,6 +116,9 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   pi: null,
   hermes: null,
   omp: null,
+  // Reasonix ships its own self-contained binary (six prebuilt targets), so it
+  // borrows nobody's.
+  reasonix: null,
 };
 
 /**
@@ -158,6 +161,10 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   hermes:
     "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
   omp: null,
+  // Reasonix IS bundled, so this empty state is not its normal path - it only
+  // appears if the managed binary is missing on this machine. Left null rather
+  // than shipping an unverified upstream install page for that edge.
+  reasonix: null,
 };
 
 interface ProviderCandidateConfig {

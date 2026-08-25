@@ -262,13 +262,14 @@ function assertSchemaCompatibility(
         const previous = schemas[name][major][previousMinor];
         const current = schemas[name][major][currentMinor];
 
-        // Records stay lenient on value growth: readers are versioned
-        // through the same upgrade-chain discipline, and record history
-        // predates the response-lane strictness.
+        // Persisted readers can outlive or roll back behind writers. Growing a
+        // closed enum/union within a major therefore breaks a shipped reader
+        // just like removing a field does; require a major with explicit
+        // migration/downgrade behavior.
         const violation = findAdditivityViolation(
           previous,
           current,
-          "lenient",
+          "no-value-growth",
           toUnknownKeyTree(line.versions[previousMinor].contract.schema),
           toUnknownKeyTree(line.versions[currentMinor].contract.schema),
         );
@@ -290,7 +291,19 @@ function assertSchemaCompatibility(
       const currentLatest =
         schemas[name][currentMajor][currentLine.latestMinor];
 
+      const valueGrowth = findAdditivityViolation(
+        previousLatest,
+        currentLatest,
+        "no-value-growth",
+        toUnknownKeyTree(
+          previousLine.versions[previousLine.latestMinor].contract.schema,
+        ),
+        toUnknownKeyTree(
+          currentLine.versions[currentLine.latestMinor].contract.schema,
+        ),
+      );
       if (
+        valueGrowth === null &&
         findBreakingChange(
           previousLatest,
           currentLatest,

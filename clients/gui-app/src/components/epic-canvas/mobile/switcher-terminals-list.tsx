@@ -3,7 +3,7 @@ import { Terminal } from "lucide-react";
 import { SwitcherListRow } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { SwitcherTerminalRowActions } from "@/components/epic-canvas/mobile/switcher-terminal-row-actions";
 import { SwitcherNewTerminalRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
-import { useMobileEpicTiles } from "@/components/epic-canvas/mobile/use-mobile-epic-tiles";
+import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import {
   FailedTerminalCreateRow,
   TerminalsEmptyState,
@@ -17,15 +17,10 @@ import {
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
 import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
 import type { TerminalSidebarSessionRow } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-  useIsActiveTile,
-} from "@/stores/epics/canvas/store";
+import { useIsActiveTile } from "@/stores/epics/canvas/store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 /** Every test id this list's shared states and rows are grabbed by. */
@@ -48,46 +43,26 @@ interface SwitcherListProps {
  * tile.
  *
  * This file owns only the touch chrome: a flat scroller instead of the
- * desktop's draggable tree rows, and a tap that lands the chosen terminal as
- * the single full-screen mobile tile.
+ * desktop's draggable tree rows. The tap itself goes through
+ * {@link useSwitcherActivate}, so this category recycles the one shown tile on
+ * exactly the terms every other category does.
  */
 export function SwitcherTerminalsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
   const panel = useEpicTerminalsPanel({ epicId });
   const canMutate = isEditableRole(useEpicPermissionRole());
-  const { selectTile } = useMobileEpicTiles(tabId);
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const activate = useSwitcherActivate(epicId, tabId, onClose);
 
   const prepareOpenRow = panel.prepareOpenRow;
   const openRow = useCallback(
     (row: TerminalSidebarSessionRow) => {
+      // A refused row (unreachable owner host) never reaches the canvas, and
+      // leaves the sheet open on the toast explaining why.
       const tile = prepareOpenRow(row);
       if (tile === null) return;
-      // By REF, not by content id: two fleet terminals can share a terminalId
-      // across hosts, and "focus the one already open" must not hand back the
-      // other machine's tile.
-      const found = findOpenTileInTab(tabId, tile);
-      if (found === null) {
-        navigateNested(epicId, tabId, () =>
-          prepareOpenTileInTabFocusTarget(tabId, tile),
-        );
-      } else {
-        selectTile(found.paneId, found.instanceId);
-      }
-      onClose();
+      activate(() => tile);
     },
-    [
-      epicId,
-      navigateNested,
-      onClose,
-      prepareOpenRow,
-      prepareOpenTileInTabFocusTarget,
-      selectTile,
-      tabId,
-    ],
+    [activate, prepareOpenRow],
   );
 
   return (
