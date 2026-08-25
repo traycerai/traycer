@@ -324,7 +324,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       const next = new Set(draft.selected);
       if (next.has(optionIndex)) next.delete(optionIndex);
       else next.add(optionIndex);
-      updateDraft({ ...draft, selected: next });
+      updateDraft({
+        ...draft,
+        selected: next,
+        selectionEvidenceExact: true,
+      });
       return;
     }
     // Single-select: commit the choice, hold a brief highlight, then advance.
@@ -385,24 +389,34 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     clearAdvanceTimer();
     setPendingOptionIndex(null);
     if (question.multiSelect) {
-      updateDraft({ ...draft, otherSelected: !draft.otherSelected });
+      updateDraft({
+        ...draft,
+        selectionEvidenceExact: true,
+        otherSelected: !draft.otherSelected,
+      });
       return;
     }
     updateDraft({
       ...draft,
       selected: new Set<number>(),
+      selectionEvidenceExact: true,
       otherSelected: !draft.otherSelected,
     });
   };
 
   const setOtherText = (text: string) => {
     if (isBusy) return;
-    updateDraft({ ...draft, otherText: text });
+    updateDraft({ ...draft, selectionEvidenceExact: true, otherText: text });
   };
 
   const setFreeText = (text: string) => {
     if (isBusy) return;
-    updateDraft({ ...draft, otherText: text, otherSelected: true });
+    updateDraft({
+      ...draft,
+      selectionEvidenceExact: true,
+      otherText: text,
+      otherSelected: true,
+    });
   };
 
   // Pick the option/Other bound to a bare digit; returns false when the key is

@@ -59,7 +59,7 @@ export function questionIdentity(question: InterviewQuestion): string {
 }
 
 function questionAssociationIdentity(question: InterviewQuestion): string {
-  if (question.questionId !== null && question.questionId.length > 0) {
+  if (question.questionId !== null && question.questionId.trim().length > 0) {
     return JSON.stringify(["question-id", question.questionId]);
   }
   return question.question.trim().length > 0
@@ -67,22 +67,47 @@ function questionAssociationIdentity(question: InterviewQuestion): string {
     : questionIdentity(question);
 }
 
-function storedQuestionAssociationIdentity(identity: string): string {
+interface StoredQuestionAssociation {
+  readonly identity: string;
+  readonly promptIdentity: string | null;
+  readonly hasStableId: boolean;
+}
+
+function questionPromptIdentity(question: InterviewQuestion): string | null {
+  return question.question.trim().length > 0
+    ? JSON.stringify(["question-prompt", question.question])
+    : null;
+}
+
+function storedQuestionAssociation(
+  identity: string,
+): StoredQuestionAssociation {
   try {
     const decoded: unknown = JSON.parse(identity);
     if (Array.isArray(decoded) && decoded[0] === "question") {
-      if (typeof decoded[1] === "string" && decoded[1].length > 0) {
-        return JSON.stringify(["question-id", decoded[1]]);
+      if (typeof decoded[1] === "string" && decoded[1].trim().length > 0) {
+        return {
+          identity: JSON.stringify(["question-id", decoded[1]]),
+          promptIdentity:
+            typeof decoded[2] === "string" && decoded[2].trim().length > 0
+              ? JSON.stringify(["question-prompt", decoded[2]])
+              : null,
+          hasStableId: true,
+        };
       }
       if (typeof decoded[2] === "string" && decoded[2].trim().length > 0) {
-        return JSON.stringify(["anonymous-question", decoded[2]]);
+        return {
+          identity: JSON.stringify(["anonymous-question", decoded[2]]),
+          promptIdentity: JSON.stringify(["question-prompt", decoded[2]]),
+          hasStableId: false,
+        };
       }
     }
   } catch {
     // A future or corrupt identity cannot prove more than exact string
     // equality, so retain it as its own association key.
   }
-  return identity;
+  return { identity, promptIdentity: null, hasStableId: false };
 }
 
 export function draftsFromStoredAnswers(
@@ -101,16 +126,38 @@ export function draftsFromStoredAnswers(
     string,
     ReadonlyArray<StoredInterviewDraftAnswer>
   >();
+  const storedByPrompt = new Map<
+    string,
+    ReadonlyArray<{
+      readonly answer: StoredInterviewDraftAnswer;
+      readonly hasStableId: boolean;
+    }>
+  >();
   for (const answer of storedAnswers ?? []) {
-    const identity =
+    const association =
       answer.questionIdentity === undefined
         ? undefined
-        : storedQuestionAssociationIdentity(answer.questionIdentity);
-    if (identity === undefined) continue;
-    storedByIdentity.set(identity, [
-      ...(storedByIdentity.get(identity) ?? []),
+        : storedQuestionAssociation(answer.questionIdentity);
+    if (association === undefined) continue;
+    storedByIdentity.set(association.identity, [
+      ...(storedByIdentity.get(association.identity) ?? []),
       answer,
     ]);
+    if (association.promptIdentity !== null) {
+      storedByPrompt.set(association.promptIdentity, [
+        ...(storedByPrompt.get(association.promptIdentity) ?? []),
+        { answer, hasStableId: association.hasStableId },
+      ]);
+    }
+  }
+  const currentPromptCounts = new Map<string, number>();
+  for (const question of questions) {
+    const promptIdentity = questionPromptIdentity(question);
+    if (promptIdentity === null) continue;
+    currentPromptCounts.set(
+      promptIdentity,
+      (currentPromptCounts.get(promptIdentity) ?? 0) + 1,
+    );
   }
 
   return questions.map((question, index) => {
@@ -120,6 +167,23 @@ export function draftsFromStoredAnswers(
     const matches = storedByIdentity.get(identity) ?? [];
     if (currentIdentityCounts.get(identity) === 1 && matches.length === 1) {
       return draftFromStoredAnswer(matches[0], question);
+    }
+    // A repeated request can enrich a question with a stable ID (or remove an
+    // ID) without changing its unique prompt. Preserve the draft content in
+    // that one-to-one case, while draftFromStoredAnswer deliberately
+    // downgrades the changed full identity to inexact option evidence.
+    const promptIdentity = questionPromptIdentity(question);
+    const promptMatches =
+      promptIdentity === null ? [] : (storedByPrompt.get(promptIdentity) ?? []);
+    const questionHasStableId =
+      question.questionId !== null && question.questionId.trim().length > 0;
+    if (
+      promptIdentity !== null &&
+      currentPromptCounts.get(promptIdentity) === 1 &&
+      promptMatches.length === 1 &&
+      promptMatches[0].hasStableId !== questionHasStableId
+    ) {
+      return draftFromStoredAnswer(promptMatches[0].answer, question);
     }
     const positional = storedAnswers.at(index);
     return positional?.questionIdentity === undefined

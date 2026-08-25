@@ -16,6 +16,7 @@ import {
   draftFromStoredAnswer,
   draftsFromStoredAnswers,
   draftToStoredAnswer,
+  emptyDraft,
   questionIdentity,
 } from "@/components/chat/segments/pending-interview/interview-draft";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
@@ -264,6 +265,49 @@ describe("draftFromStoredAnswer", () => {
         otherText: "",
         otherSelected: false,
       },
+    ]);
+  });
+
+  it("preserves draft content when a unique question gains a stable ID", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      { ...original, questionId: "provider-question" },
+    ]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("does not attach an ID-enriched draft across an ambiguous prompt", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to one question",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const current = { ...original, questionId: "provider-question" };
+
+    expect(draftsFromStoredAnswers(stored, [current, current])).toEqual([
+      emptyDraft(),
+      emptyDraft(),
     ]);
   });
 
@@ -1721,6 +1765,67 @@ describe("PendingInterviewCard keyboard navigation", () => {
         selection: null,
       }),
     ]);
+  });
+
+  it("promotes an explicit multi-select edit to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Same" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [0, 1],
+      optionLabels: ["Same", "Same"],
+      customText: null,
+    });
+  });
+
+  it("promotes an explicit Other choice to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [singleSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.change(screen.getByLabelText("Other answer"), {
+      target: { value: "Custom" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [],
+      optionLabels: [],
+      customText: "Custom",
+    });
   });
 
   it("sends only non-empty saved pages when Skip includes draft metadata", () => {
