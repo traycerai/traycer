@@ -435,6 +435,8 @@ function ShellSettingsPanelBody(props: {
         configError={controller.configError}
         onRetryConfig={controller.retryConfig}
         shells={shells}
+        onRefreshShells={controller.refreshShells}
+        shellsRefreshing={controller.shellsRefreshing}
         probeSource={controller.probeSource}
         pending={shellPending}
         saveTarget={shellSaveTarget}
@@ -507,6 +509,8 @@ function TerminalShellGroup(props: {
   readonly configError: HostRpcError | null;
   readonly onRetryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
+  readonly onRefreshShells: () => void;
+  readonly shellsRefreshing: boolean;
   readonly probeSource: ShellProbeSource;
   readonly pending: boolean;
   readonly saveTarget: ShellSaveTarget | null;
@@ -520,10 +524,8 @@ function TerminalShellGroup(props: {
   readonly onRevertFlags: () => void;
 }) {
   const { config } = props;
-  const showWslCaption =
-    config !== undefined &&
-    isWindows() &&
-    windowsShellCaptionFamily(config.path) === "wsl";
+  const wslCaption = resolveWslCaption(config, props.shells);
+  const showWslCaption = wslCaption !== null;
   return (
     <SettingsGroup
       title="Terminal shell · New terminals"
@@ -588,6 +590,8 @@ function TerminalShellGroup(props: {
                     onAdd={props.onAddShell}
                     onRemove={props.onRemoveShell}
                     onUseSystemDefault={props.onUseSystemDefault}
+                    onRefresh={props.onRefreshShells}
+                    refreshing={props.shellsRefreshing}
                   />
                   <TransientSaveIndicator
                     pending={
@@ -597,7 +601,7 @@ function TerminalShellGroup(props: {
                     testId="settings-shell-program-saving-spinner"
                   />
                 </div>
-                {showWslCaption ? <WslAgentCaption /> : null}
+                <WslCaptionSlot caption={wslCaption} />
               </div>
             </div>
             <div
@@ -698,6 +702,113 @@ function WslAgentCaption() {
           Choosing WSL here changes the shell for new terminal tabs. It does not
           move the Traycer host or agents into WSL.
         </p>
+        <a
+          href={WSL_INSTALL_DOCS_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
+        >
+          Install Traycer in WSL
+        </a>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+type WslHealthValue = NonNullable<ConfigDetectedShell["wslHealth"]>;
+
+/** Which caption (if any) belongs under the picker; see {@link resolveWslCaption}. */
+type WslCaption =
+  | { readonly kind: "unavailable"; readonly health: WslHealthValue }
+  | { readonly kind: "scoping" }
+  | null;
+
+/**
+ * The one caption slot under a WSL shell pick, in priority order.
+ *
+ * The configured shell can already BE a broken WSL (picked before it broke, or
+ * set via the CLI), which outranks the quiet scoping note: terminals failing to
+ * start is not a trade-off to mention, it is the thing to fix.
+ *
+ * That arm keys off `wslHealth` and NOTHING else. The annotation is computed on
+ * the machine being configured and only ever set for a Windows `wsl.exe`, so it
+ * stays truthful when a macOS or Linux GUI configures a remote Windows host -
+ * where `isWindows()`, which reads the RENDERER's platform, would wrongly say
+ * "not Windows" and hide the warning. The scoping note has no host-side signal
+ * of its own, so it keeps the renderer-platform gate it shipped with.
+ */
+function resolveWslCaption(
+  config: ShellConfigSnapshot | undefined,
+  shells: readonly ConfigDetectedShell[],
+): WslCaption {
+  if (config === undefined) return null;
+  const health = shells.find(
+    // win32 paths, so case-insensitive; only such rows carry `wslHealth`.
+    (shell) => shell.path.toLowerCase() === config.path.toLowerCase(),
+  )?.wslHealth;
+  if (health !== undefined) return { kind: "unavailable", health };
+  if (isWindows() && windowsShellCaptionFamily(config.path) === "wsl") {
+    return { kind: "scoping" };
+  }
+  return null;
+}
+
+function WslCaptionSlot(props: { readonly caption: WslCaption }) {
+  const { caption } = props;
+  if (caption === null) return null;
+  if (caption.kind === "unavailable") {
+    return <WslUnavailableCaption health={caption.health} />;
+  }
+  return <WslAgentCaption />;
+}
+
+/**
+ * The caption when the CONFIGURED shell is a WSL that cannot host a terminal:
+ * a new tab would spawn wsl.exe, which prints usage text (the installer stub)
+ * or "no distributions" and exits immediately - the user experiences terminals
+ * that never start. Red, not amber: this is not a trade-off note like
+ * `WslAgentCaption`, it is "your terminals are broken until you act", and the
+ * hover card carries the one command that fixes it.
+ */
+function WslUnavailableCaption(props: { readonly health: WslHealthValue }) {
+  const notInstalled = props.health === "not-installed";
+  return (
+    <HoverCard>
+      <HoverCardTrigger asChild>
+        <span
+          data-testid="settings-shell-wsl-unavailable"
+          className="inline-flex cursor-default items-center gap-1.5 text-ui-xs text-muted-foreground"
+        >
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-[var(--term-ansi-red)]"
+          />
+          {notInstalled
+            ? "WSL isn't installed — terminals won't start"
+            : "WSL has no Linux distribution — terminals won't start"}
+          <a
+            href={WSL_INSTALL_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Install Traycer in WSL"
+            className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Info className="size-3" />
+          </a>
+        </span>
+      </HoverCardTrigger>
+      <HoverCardContent
+        align="end"
+        className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
+      >
+        <p className="text-muted-foreground">
+          {notInstalled
+            ? "wsl.exe on this machine is only the Windows installer stub, so a terminal tab opens, prints its usage text, and exits. Run the command below from an elevated terminal, restart Windows, then re-detect shells."
+            : "WSL runs, but no Linux distribution is registered, so a terminal tab exits immediately. Run the command below, then re-detect shells."}
+        </p>
+        <code className="block rounded bg-foreground/5 px-2 py-1 font-mono">
+          {notInstalled ? "wsl --install" : "wsl --install -d Ubuntu"}
+        </code>
         <a
           href={WSL_INSTALL_DOCS_URL}
           target="_blank"

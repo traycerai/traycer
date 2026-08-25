@@ -80,6 +80,8 @@ function renderCombobox(props: {
           onAdd={props.onAdd ?? (() => undefined)}
           onRemove={() => undefined}
           onUseSystemDefault={() => undefined}
+          onRefresh={() => undefined}
+          refreshing={false}
         />
       </RunnerHostProvider>
     </QueryClientProvider>,
