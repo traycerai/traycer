@@ -129,6 +129,7 @@ describe("host.chatRecords.subscribe@1.0 contract", () => {
     expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
       major: 1,
       minor: 1,
+      supportedMajors: [1],
     });
   });
 

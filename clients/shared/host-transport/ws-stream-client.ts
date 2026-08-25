@@ -2625,8 +2625,9 @@ interface PreparedStreamSubscribeRequest {
  * never heard of, even though the abstract compatibility check passed (this
  * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
  * passed, but the client still declared `1.1`, which host-v1.0.0's registry
- * has no contract for). Cross-major skew never reaches here: streams have no
- * cross-major bridge, so `compat.ok` would already be `false`.
+ * has no contract for). Cross-major canonical skew never reaches here: the
+ * open-ack selection has already chosen the highest shared installed major
+ * before this request is prepared.
  */
 export function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,

@@ -13,7 +13,10 @@ import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { checkStreamCompatibility } from "@traycer/protocol/framework/stream-compat";
+import {
+  buildStreamManifest,
+  checkStreamCompatibility,
+} from "@traycer/protocol/framework/stream-compat";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -587,6 +590,17 @@ describe("stream bridging mirrors the shipped stream checker", () => {
     });
   }
 
+  function streamRegistryAtBothMajors() {
+    const majorOne = streamRegistryAt(1)["demo.subscribe"][1];
+    const majorTwo = streamRegistryAt(2)["demo.subscribe"][2];
+    return defineVersionedStreamRpcRegistry({
+      "demo.subscribe": {
+        1: majorOne,
+        2: majorTwo,
+      },
+    });
+  }
+
   it("treats a cross-major stream mismatch as breaking, mirroring checkStreamCompatibility's per-method verdict", () => {
     const mineRegistry = streamRegistryAt(2);
     const theirsRegistry = streamRegistryAt(1);
@@ -619,6 +633,37 @@ describe("stream bridging mirrors the shipped stream checker", () => {
       "client",
     );
     expect(verdict.ok).toBe(false);
+  });
+
+  it("accepts canonical-major skew when the current surface retains the released major", () => {
+    const mineRegistry = streamRegistryAtBothMajors();
+    const theirsRegistry = streamRegistryAt(1);
+    const mine = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: mineRegistry,
+    });
+    const theirs = buildProtocolSurface({
+      unary: {},
+      unaryFloorMethodNames: [],
+      stream: theirsRegistry,
+    });
+
+    const blocking = checkSurfaceCompatibility({
+      mine,
+      theirs,
+      theirsLabel: "released",
+      exceptions: [],
+    }).blocking;
+    expect(blocking).toEqual([]);
+
+    const verdict = checkStreamCompatibility(
+      mineRegistry,
+      buildStreamManifest(mineRegistry),
+      manifestFromSurface(theirs, "stream"),
+      "client",
+    );
+    expect(verdict).toEqual({ ok: true });
   });
 
   it("treats a stream method the released peer never had as advisory (the resources.subscribe precedent)", () => {

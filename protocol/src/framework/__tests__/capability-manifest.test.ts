@@ -67,6 +67,17 @@ const MULTI_MAJOR_MANIFEST_REGISTRY = {
   },
 } as const;
 
+const UNSORTED_MAJOR_MANIFEST_REGISTRY = {
+  echo: {
+    3: { latestMinor: 2 },
+    1: { latestMinor: 4 },
+    2: { latestMinor: 1 },
+  },
+  single: {
+    4: { latestMinor: 0 },
+  },
+} as const;
+
 describe("capability manifest helpers", () => {
   it("keeps the host legacy manifest exactly the released floor set", () => {
     // Old peers negotiate against `manifest` alone with fail-closed name-set
@@ -101,10 +112,28 @@ describe("capability manifest helpers", () => {
 
     expect(split).toEqual({
       manifest: {
-        "floor.method": { major: 1, minor: 0 },
+        "floor.method": { major: 1, minor: 0, supportedMajors: [1] },
       },
       optionalManifest: {
-        "optional.method": { major: 1, minor: 0 },
+        "optional.method": { major: 1, minor: 0, supportedMajors: [1] },
+      },
+    });
+  });
+
+  it("emits every installed major in ascending order, including single-major methods", () => {
+    expect(buildConnectionManifest(UNSORTED_MAJOR_MANIFEST_REGISTRY)).toEqual({
+      echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
+      single: { major: 4, minor: 0, supportedMajors: [4] },
+    });
+
+    expect(
+      splitConnectionManifest(UNSORTED_MAJOR_MANIFEST_REGISTRY, ["echo"]),
+    ).toEqual({
+      manifest: {
+        echo: { major: 3, minor: 2, supportedMajors: [1, 2, 3] },
+      },
+      optionalManifest: {
+        single: { major: 4, minor: 0, supportedMajors: [4] },
       },
     });
   });
@@ -151,7 +180,56 @@ describe("capability manifest helpers", () => {
         echo: { major: 1, minor: 0 },
         },
       ),
-    ).toEqual({ echo: { major: 1, minor: 1 } });
+    ).toEqual({
+      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+    });
+  });
+
+  it("selects the highest shared major for a new peer and a legacy peer", () => {
+    const hostManifest = buildConnectionManifest(MULTI_MAJOR_MANIFEST_REGISTRY);
+
+    expect(
+      selectConnectionManifestForPeer(
+        MULTI_MAJOR_MANIFEST_REGISTRY,
+        hostManifest,
+        {
+          echo: {
+            major: 2,
+            minor: 0,
+            supportedMajors: [1, 2],
+          },
+        },
+      ),
+    ).toEqual({
+      echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+    });
+
+    expect(
+      selectConnectionManifestForPeer(
+        MULTI_MAJOR_MANIFEST_REGISTRY,
+        hostManifest,
+        { echo: { major: 1, minor: 0 } },
+      ),
+    ).toEqual({
+      echo: { major: 1, minor: 1, supportedMajors: [1, 2] },
+    });
+  });
+
+  it("retains the host canonical when a peer advertises an uninstalled major", () => {
+    const hostRegistry = {
+      echo: {
+        1: { latestMinor: 1 },
+      },
+    } as const;
+    const hostManifest = buildConnectionManifest(hostRegistry);
+
+    expect(
+      selectConnectionManifestForPeer(hostRegistry, hostManifest, {
+        echo: { major: 3, minor: 0, supportedMajors: [3] },
+      }),
+    ).toEqual({
+      echo: { major: 1, minor: 1, supportedMajors: [1] },
+    });
   });
 
   it("retains the host canonical when the peer's major is not installed", () => {
@@ -166,7 +244,9 @@ describe("capability manifest helpers", () => {
           "peer.only": { major: 1, minor: 0 },
         },
       ),
-    ).toEqual({ echo: { major: 2, minor: 0 } });
+    ).toEqual({
+      echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+    });
   });
 });
 
@@ -219,10 +299,14 @@ describe("floor-aware RPC registry validation", () => {
 
     expect(splitConnectionManifest(registry, ["floor.method"])).toEqual({
       manifest: {
-        "floor.method": { major: 1, minor: 0 },
+        "floor.method": { major: 1, minor: 0, supportedMajors: [1] },
       },
       optionalManifest: {
-        "optional.method": { major: 1, minor: 0 },
+        "optional.method": {
+          major: 1,
+          minor: 0,
+          supportedMajors: [1],
+        },
       },
     });
   });

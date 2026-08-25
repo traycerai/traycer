@@ -13,6 +13,59 @@ import {
 } from "@traycer/protocol/framework/stream-compat";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
+const handshakeV10 = defineStreamRpcContract({
+  method: "handshake.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: z.object({ id: z.string() }),
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(true),
+    }),
+    z.object({
+      kind: z.literal("legacy"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+  clientFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+});
+
+const handshakeV20 = defineStreamRpcContract({
+  method: "handshake.subscribe",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  openRequestSchema: z.object({ id: z.string(), generation: z.number() }),
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(true),
+    }),
+  ]),
+  clientFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+});
+
+const MULTI_MAJOR_STREAM_REGISTRY = defineVersionedStreamRpcRegistry({
+  "handshake.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: { 0: { contract: handshakeV10 } },
+    },
+    2: {
+      latestMinor: 0,
+      versions: { 0: { contract: handshakeV20 } },
+    },
+  },
+});
+
 /**
  * Structural and schema-compatibility tests for the versioned streaming-RPC
  * framework plus a smoke test that `defineVersionedStreamRpcRegistry`
@@ -295,6 +348,66 @@ describe("stream compatibility", () => {
       "chat.subscribe",
     );
     expect(chatSubscribe.ok).toBe(false);
+  });
+
+  it("bridges a new multi-major peer to a frozen legacy peer through major 1", () => {
+    const currentManifest = buildStreamManifest(MULTI_MAJOR_STREAM_REGISTRY);
+    const legacyManifest = {
+      ...currentManifest,
+      "handshake.subscribe": { major: 1, minor: 0 },
+    };
+
+    const fromNewSide = checkStreamMethodCompatibility(
+      MULTI_MAJOR_STREAM_REGISTRY,
+      currentManifest,
+      legacyManifest,
+      "host",
+      "handshake.subscribe",
+    );
+    const fromLegacySide = checkStreamMethodCompatibility(
+      MULTI_MAJOR_STREAM_REGISTRY,
+      legacyManifest,
+      currentManifest,
+      "client",
+      "handshake.subscribe",
+    );
+
+    expect(fromNewSide).toEqual({ ok: true });
+    expect(fromLegacySide).toEqual({ ok: true });
+  });
+
+  it("keeps a method incompatible when the advertised majors do not intersect", () => {
+    const currentManifest = buildStreamManifest(MULTI_MAJOR_STREAM_REGISTRY);
+    const peerManifest = {
+      ...currentManifest,
+      "handshake.subscribe": {
+        major: 3,
+        minor: 0,
+        supportedMajors: [3],
+      },
+    };
+
+    const result = checkStreamMethodCompatibility(
+      MULTI_MAJOR_STREAM_REGISTRY,
+      currentManifest,
+      peerManifest,
+      "host",
+      "handshake.subscribe",
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected incompatible stream method");
+    }
+    expect(result.details.code).toBe("INCOMPATIBLE");
+    expect(result.details.incompatibleMethods).toEqual([
+      {
+        method: "handshake.subscribe",
+        clientCanonical: { major: 3, minor: 0, supportedMajors: [3] },
+        hostCanonical: currentManifest["handshake.subscribe"],
+        blocking: "no-bridge",
+      },
+    ]);
   });
 
   // Regression guard for the release-v1.1.0 RC incident: chat.subscribe

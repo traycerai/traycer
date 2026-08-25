@@ -230,16 +230,19 @@ function canBridgeUnaryFromSurface(
 }
 
 /**
- * Mirror of `stream-compat.canBridgeStream`: same-major only, the newer side
- * must have the older minor installed; cross-major is handshake-fatal.
+ * Mirror of `stream-compat.canBridgeStream`: a canonical-major skew bridges
+ * when both dumped surfaces retain an installed line for some shared major.
  */
 function canBridgeStreamFromSurface(
   mine: SurfaceMethod,
   myVersion: SurfaceVersion,
   theirVersion: SurfaceVersion,
+  theirs: SurfaceMethod,
 ): boolean {
   if (myVersion.major !== theirVersion.major) {
-    return false;
+    return Object.keys(mine.majors).some(
+      (major) => theirs.majors[major] !== undefined,
+    );
   }
   if (myVersion.minor <= theirVersion.minor) {
     return true;
@@ -868,6 +871,7 @@ function checkFamily(
     side: SurfaceMethod,
     myVersion: SurfaceVersion,
     theirVersion: SurfaceVersion,
+    otherSide: SurfaceMethod,
   ) => boolean,
   isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
 ): CompatFinding[] {
@@ -919,7 +923,14 @@ function checkFamily(
 
     const mineCanonical = mineMethod.canonical;
     const theirsCanonical = theirsMethod.canonical;
-    if (!canBridge(mineMethod, mineCanonical, theirsCanonical)) {
+    if (
+      !canBridge(
+        mineMethod,
+        mineCanonical,
+        theirsCanonical,
+        theirsMethod,
+      )
+    ) {
       pushFinding({
         family,
         method,
@@ -930,7 +941,14 @@ function checkFamily(
         detail: `this tree (canonical ${formatVersionValue(mineCanonical)}) cannot bridge ${theirsLabel}'s canonical ${formatVersionValue(theirsCanonical)}`,
       });
     }
-    if (!canBridge(theirsMethod, theirsCanonical, mineCanonical)) {
+    if (
+      !canBridge(
+        theirsMethod,
+        theirsCanonical,
+        mineCanonical,
+        mineMethod,
+      )
+    ) {
       pushFinding({
         family,
         method,

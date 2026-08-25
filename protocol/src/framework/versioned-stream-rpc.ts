@@ -17,8 +17,9 @@ import { z } from "zod";
  * The framework mirrors every structural invariant of the RPC framework:
  * `{ major, minor }` versioning, `latestMinor` must be the highest installed
  * minor in its line, contracts must line up with their registry slot and
- * registry key. In v1 there are **no cross-major downgrade bridges** for
- * streams - stream clients are expected to reconnect on a mismatched major.
+ * registry key. Stream major changes do not need cross-major payload
+ * transforms: when two peers retain an installed major, their handshake
+ * selects that shared line before subscribing.
  *
  * Schema compatibility is evaluated **separately** for each of the three
  * sub-schemas (open request, server frame, client frame):

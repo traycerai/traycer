@@ -1,17 +1,16 @@
-import type {
-  SchemaVersion,
-  VersionedStreamRpcRegistry,
-} from "@traycer/protocol/framework/versioned-stream-rpc";
+import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   type ConnectionManifest,
   type IncompatibleMethodDetails,
   type FatalErrorDetails,
+  type ManifestMethodEntry,
 } from "@traycer/protocol/framework/ws-protocol";
 import { buildConnectionManifest } from "@traycer/protocol/framework/capability-manifest";
 import {
   buildIncompatibleReason,
   collectManifestMethods,
   deriveUpgradeGuidance,
+  highestSharedMajor,
   missingMethodDetail,
   noBridgeDetail,
   readManifestVersion,
@@ -19,9 +18,9 @@ import {
 } from "@traycer/protocol/framework/compat-helpers";
 
 /**
- * Canonical manifest for the combined stream registry. Same shape the
- * unary handshake produces: one `{ major, minor }` per method, always the
- * highest installed minor of the highest installed major.
+ * Version manifest for the combined stream registry. Same shape the unary
+ * handshake produces: one canonical `{ major, minor }` plus every installed
+ * major per method.
  */
 export function buildStreamManifest(
   registry: VersionedStreamRpcRegistry,
@@ -33,11 +32,11 @@ export function buildStreamManifest(
  * Mirror compatibility check for a `/stream` connection.
  *
  * Structurally parallel to the unary `check` in
- * `@traycer/protocol/host/compatibility-checker`, but without cross-major
- * downgrade bridges - in v1, stream clients reconnect on a mismatched
- * major rather than bridging. The result shape matches the unary
- * `FatalErrorDetails` so the client can emit the existing
- * `fatalError` frame schema unchanged.
+ * `@traycer/protocol/host/compatibility-checker`. A stream pair bridges a
+ * canonical-major skew when their installed-major advertisements intersect;
+ * the handshake then selects that shared major for the subscription. The
+ * result shape matches the unary `FatalErrorDetails` so the client can emit
+ * the existing `fatalError` frame schema unchanged.
  *
  * `selfRole` is required so the host side labels `clientCanonical` /
  * `hostCanonical` objectively instead of treating "mine" as "client".
@@ -127,15 +126,14 @@ function checkStreamCompatibilityForMethods(
 function canBridgeStream(
   registry: VersionedStreamRpcRegistry,
   method: string,
-  mine: SchemaVersion,
-  theirs: SchemaVersion,
+  mine: ManifestMethodEntry,
+  theirs: ManifestMethodEntry,
 ): boolean {
   if (mine.major === theirs.major && mine.minor === theirs.minor) {
     return true;
   }
   if (mine.major !== theirs.major) {
-    // v1: streams reconnect on a mismatched major; no cross-major bridge.
-    return false;
+    return highestSharedMajor(mine, theirs) !== null;
   }
   if (mine.minor < theirs.minor) {
     // Older side never transforms; additive-minors guarantees the frames
