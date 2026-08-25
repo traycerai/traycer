@@ -109,6 +109,38 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(screen.queryByRole("link", { name: "Keybindings" })).toBeNull();
   });
 
+  // The panel is the DISPLAY end of a pairing whose scanner end is the mobile
+  // app itself, so that build does not offer it either.
+  it("omits the Link a phone entry in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Link a phone" })).toBeNull();
+    // Its Account-group sibling stays, so what is asserted is one row's
+    // absence rather than a group that failed to render.
+    expect(screen.getByRole("link", { name: "Sessions" })).toBeDefined();
+  });
+
+  it("renders the Link a phone entry on other builds", async () => {
+    setMobileApp(false);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "Link a phone" }),
+    ).toBeDefined();
+  });
+
   it("renders the Keybindings entry on other builds", async () => {
     setMobileApp(false);
     const router = buildRouter("/settings/general");
