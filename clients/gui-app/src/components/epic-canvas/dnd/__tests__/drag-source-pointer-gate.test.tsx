@@ -1,8 +1,18 @@
 import type { ReactNode } from "react";
-import { renderHook } from "@testing-library/react";
-import { DndContext } from "@dnd-kit/core";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import { DndContext, useDraggable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE,
+  EpicCanvasPointerSensor,
+} from "@/components/epic-canvas/dnd/epic-canvas-pointer-sensor";
 import { useQueuedMessageRowSortable } from "@/components/chat/queued-message-reorder-dnd";
 import { useArtifactDragSource } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
@@ -58,6 +68,79 @@ function SortableWrapper(props: { readonly children: ReactNode }) {
 }
 
 beforeEach(() => stubCoarsePointer(false));
+afterEach(cleanup);
+
+function RootSensorRow() {
+  const { listeners, setNodeRef } = useDraggable({
+    id: "row",
+    data: { kind: "probe" },
+  });
+  return (
+    <div ref={setNodeRef} {...listeners} data-testid="row">
+      row
+    </div>
+  );
+}
+
+function RootSensorProbe(props: { readonly onDragStart: () => void }) {
+  const sensors = useSensors(
+    useSensor(EpicCanvasPointerSensor, {
+      activationConstraint: { distance: EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE },
+    }),
+  );
+  return (
+    <DndContext sensors={sensors} onDragStart={props.onDragStart}>
+      <RootSensorRow />
+    </DndContext>
+  );
+}
+
+/** Press the row and drag past the sensor's activation distance. */
+function pressAndDrag(pointerType: string): void {
+  fireEvent.pointerDown(screen.getByTestId("row"), {
+    pointerType,
+    isPrimary: true,
+    button: 0,
+    clientX: 0,
+    clientY: 0,
+  });
+  fireEvent.pointerMove(document, {
+    pointerType,
+    clientX: 0,
+    clientY: EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE * 4,
+  });
+}
+
+describe("root pointer sensor", () => {
+  /**
+   * The device gate cannot answer this one. A HYBRID machine - a fine-primary
+   * laptop with a touchscreen - reports `(pointer: coarse)` false, so its rows
+   * keep their listeners and their mouse drag, and a finger on the glass still
+   * reaches the sensor. The veto is therefore per gesture, not per device.
+   */
+  it("activates on a mouse press", () => {
+    const onDragStart = vi.fn();
+    render(<RootSensorProbe onDragStart={onDragStart} />);
+    pressAndDrag("mouse");
+    expect(onDragStart).toHaveBeenCalled();
+  });
+
+  it("activates on a pen press", () => {
+    // A pen press is as deliberate as a mouse press - it is not a scroll.
+    const onDragStart = vi.fn();
+    render(<RootSensorProbe onDragStart={onDragStart} />);
+    pressAndDrag("pen");
+    expect(onDragStart).toHaveBeenCalled();
+  });
+
+  it("vetoes a touch press even where the device gate stays open", () => {
+    stubCoarsePointer(false);
+    const onDragStart = vi.fn();
+    render(<RootSensorProbe onDragStart={onDragStart} />);
+    pressAndDrag("touch");
+    expect(onDragStart).not.toHaveBeenCalled();
+  });
+});
 
 describe("useDragSourceDisabled", () => {
   it("reads the pointer, not the viewport", () => {

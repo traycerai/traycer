@@ -23,6 +23,14 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
  * The exception is a drag whose listeners live on a dedicated handle rather
  * than the row (the queued-message reorder grip). Pressing a grip is explicit
  * drag intent and cannot be a scroll, so those sources stay enabled.
+ *
+ * This answers "does this DEVICE offer drag", which is the question an
+ * affordance asks - a grab cursor and a draggable role are properties of the
+ * rendered row. It cannot answer "is THIS press a finger", which a hybrid
+ * device (a fine-primary laptop with a touchscreen) makes a different
+ * question: it reads `false` here and still has a finger on the glass. That
+ * one is vetoed per gesture, by `pointerType` in `EpicCanvasPointerSensor`.
+ * The two are complements, not duplicates.
  */
 export function useDragSourceDisabled(): boolean {
   return useCoarsePointer();

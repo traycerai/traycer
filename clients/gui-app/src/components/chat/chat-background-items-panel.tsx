@@ -575,6 +575,7 @@ function ManagedCommandRow(props: {
     data: dragData,
     disabled: dragDisabled,
   });
+  const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
 
   return (
     <li className="m-0">
@@ -602,7 +603,8 @@ function ManagedCommandRow(props: {
             }}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              isDragging ? "cursor-grabbing" : "cursor-grab",
+              // No grab affordance where the gesture is gone.
+              dragDisabled ? null : grabCursor,
             )}
           >
             <ManagedCommandMonitorIcon

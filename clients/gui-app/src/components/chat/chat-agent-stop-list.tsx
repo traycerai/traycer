@@ -117,7 +117,9 @@ function AgentStopRow(props: {
     data: dragData,
   });
   const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);
-  const cursorClass = isDragging ? "cursor-grabbing" : "cursor-grab";
+  // No grab affordance where the gesture is gone: the row is a plain button.
+  const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
+  const cursorClass = dragDisabled ? null : grabCursor;
 
   return (
     <li
