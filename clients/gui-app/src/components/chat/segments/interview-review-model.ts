@@ -138,6 +138,14 @@ function meaningfulText(value: string | null): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function stableQuestionId(value: string | null): string | null {
+  return value !== null && value.trim().length > 0 ? value : null;
+}
+
+function hasMeaningfulAnswerContent(answer: InterviewAnswer): boolean {
+  return answer.values.length > 0 || meaningfulText(answer.notes) !== null;
+}
+
 function normalizedFraming(value: string): string {
   return value
     .normalize("NFKC")
@@ -219,9 +227,11 @@ function selectionCanTargetQuestion(
   if (selection === null || selection.questionIndex !== questionIndex) {
     return false;
   }
+  const answerQuestionId = stableQuestionId(answer.questionId);
+  const questionId = stableQuestionId(question.questionId);
   return (
-    (answer.questionId === null || answer.questionId === question.questionId) &&
-    (answer.questionId !== null ||
+    (answerQuestionId === null || answerQuestionId === questionId) &&
+    (answerQuestionId !== null ||
       answer.question === null ||
       answer.question === question.question)
   );
@@ -232,9 +242,8 @@ function associateAnswers(
   answers: ReadonlyArray<InterviewAnswer>,
 ): AnswerAssociationResult {
   const byPage: AssociatedAnswer[][] = questions.map(() => []);
-  const questionIdCounts = countBy(
-    questions,
-    (question) => question.questionId,
+  const questionIdCounts = countBy(questions, (question) =>
+    stableQuestionId(question.questionId),
   );
   const questionTextCounts = countBy(
     questions,
@@ -242,7 +251,7 @@ function associateAnswers(
   );
   const questionIdIndices = uniqueIndicesBy(
     questions,
-    (question) => question.questionId,
+    (question) => stableQuestionId(question.questionId),
     questionIdCounts,
   );
   const questionTextIndices = uniqueIndicesBy(
@@ -261,10 +270,11 @@ function associateAnswers(
       continue;
     }
 
+    const answerQuestionId = stableQuestionId(answer.questionId);
     const idIndex =
-      answer.questionId === null
+      answerQuestionId === null
         ? undefined
-        : questionIdIndices.get(answer.questionId);
+        : questionIdIndices.get(answerQuestionId);
     if (idIndex !== undefined) {
       byPage[idIndex]?.push({ answer, association: "id" });
       continue;
@@ -481,10 +491,7 @@ function outcomeFor(
 }
 
 function savedDraftCount(drafts: ReadonlyArray<InterviewAnswer>): number {
-  return drafts.filter(
-    (answer) =>
-      answer.values.length > 0 || meaningfulText(answer.notes) !== null,
-  ).length;
+  return drafts.filter(hasMeaningfulAnswerContent).length;
 }
 
 function answeredCount(pages: ReadonlyArray<InterviewReviewPage>): number {
@@ -775,9 +782,7 @@ export function deriveInterviewReviewModel(
     const draftForPage = drafts.pages[index] ?? [];
     const submittedForPage = submitted.pages[index] ?? [];
     return outcome === "skipped" &&
-      draftForPage.some(
-        ({ answer }) => answer.values.length > 0 || answer.notes !== null,
-      )
+      draftForPage.some(({ answer }) => hasMeaningfulAnswerContent(answer))
       ? pageFromAnswers(question, index, draftForPage, true)
       : pageFromAnswers(question, index, submittedForPage, false);
   });

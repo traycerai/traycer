@@ -345,6 +345,29 @@ describe("deriveInterviewReviewModel", () => {
     expect(model.fallbackAnswers).toHaveLength(1);
   });
 
+  it("treats a blank question id as absent positional evidence", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        questions: [question("", "New question", ["Alpha"], undefined)],
+        answers: [
+          answer(["Alpha"], {
+            questionId: "",
+            question: "Old question",
+            selection: {
+              questionIndex: 0,
+              optionIndices: [0],
+              optionLabels: ["Alpha"],
+              customText: null,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(model.pages[0]?.fidelity).toBe("no-answer");
+    expect(model.fallbackAnswers).toHaveLength(1);
+  });
+
   it("keeps unmatched answers in a neutral block-level fallback", () => {
     const model = deriveInterviewReviewModel(
       reviewInput({
@@ -509,6 +532,35 @@ describe("deriveInterviewReviewModel", () => {
     );
     expect(model.savedDraftCount).toBe(1);
     expect(model.summary).toBe("Interview skipped · 1 draft saved");
+  });
+
+  it("ignores a blank draft note instead of hiding submitted evidence", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        outcome: "skipped",
+        questions: [question("q1", "Which mode?", undefined, undefined)],
+        answers: [
+          answer(["Alpha"], {
+            questionId: "q1",
+            question: "Which mode?",
+          }),
+        ],
+        draftAnswers: [
+          answer([], {
+            questionId: "q1",
+            question: "Which mode?",
+            notes: "   ",
+          }),
+        ],
+      }),
+    );
+
+    expect(model.pages[0]).toMatchObject({
+      fidelity: "inferred",
+      values: ["Alpha"],
+    });
+    expect(model.savedDraftCount).toBe(0);
+    expect(model.summary).toBe("Interview skipped");
   });
 
   it("does not let stale drafts hide submitted evidence for answered history", () => {
