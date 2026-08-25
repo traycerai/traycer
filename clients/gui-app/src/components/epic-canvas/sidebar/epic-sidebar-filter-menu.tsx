@@ -295,7 +295,9 @@ export function ChatFilterMenu(props: {
     base: "Filter agents",
     filterCount,
     sort,
-    showChanged: archiveVisibilityChanged,
+    visibilityLabel: archiveVisibilityChanged
+      ? archiveVisibilityLabel(archiveVisibility)
+      : null,
   });
 
   return (
@@ -446,7 +448,8 @@ export function ArtifactFilterMenu(props: {
     base: "Filter artifacts",
     filterCount,
     sort,
-    showChanged: false,
+    // The artifacts panel has no archive-visibility control.
+    visibilityLabel: null,
   });
 
   return (

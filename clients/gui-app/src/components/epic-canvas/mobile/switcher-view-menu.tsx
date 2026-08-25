@@ -145,7 +145,9 @@ export function SwitcherAgentsViewMenu(props: { readonly epicId: string }) {
         base: "Filter agents",
         filterCount,
         sort,
-        showChanged: false,
+        // Archive visibility has no control on this surface; a label naming a
+        // value the user cannot reach here would be noise, not information.
+        visibilityLabel: null,
       })}
       filterCount={filterCount}
       testId="switcher-agents-view-menu"
@@ -212,7 +214,9 @@ export function SwitcherArtifactsViewMenu(props: { readonly epicId: string }) {
         base: "Filter artifacts",
         filterCount,
         sort,
-        showChanged: false,
+        // Archive visibility has no control on this surface; a label naming a
+        // value the user cannot reach here would be noise, not information.
+        visibilityLabel: null,
       })}
       filterCount={filterCount}
       testId="switcher-artifacts-view-menu"

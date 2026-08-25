@@ -132,15 +132,23 @@ export function sortSummary(sort: SortMode): string {
 
 /**
  * Accessible name for the view-menu trigger. The count badge is `aria-hidden`
- * decoration, so everything the badge conveys - and everything it cannot, like
- * a non-default ordering - has to be said here or a screen reader hears only
- * "Filter agents" no matter how narrowed the list is.
+ * decoration, and the ordering and visibility have no badge at all, so
+ * everything the view is currently doing has to be said here - otherwise a
+ * screen reader hears "Filter agents" no matter how narrowed, reordered, or
+ * reversed the list is.
+ *
+ * Each detail names its VALUE, never just that it changed: a direction the
+ * label omits leaves ascending and descending indistinguishable, and a bare
+ * "visibility changed" tells the user something is hidden without saying what,
+ * which is the one thing they would act on. `visibilityLabel` is `null` for a
+ * panel showing its default visibility, and for a surface with no visibility
+ * control at all.
  */
 export function viewTriggerLabel(args: {
   readonly base: string;
   readonly filterCount: number;
   readonly sort: SortMode;
-  readonly showChanged: boolean;
+  readonly visibilityLabel: string | null;
 }): string {
   const details: string[] = [];
   if (args.filterCount > 0) {
@@ -149,9 +157,15 @@ export function viewTriggerLabel(args: {
     );
   }
   if (isSortModeActive(args.sort)) {
-    details.push(`ordered by ${SORT_FIELD_LABELS[args.sort.field]}`);
+    const direction =
+      args.sort.direction === SORT_DIRECTION.Asc ? "ascending" : "descending";
+    details.push(
+      `ordered by ${SORT_FIELD_LABELS[args.sort.field]} ${direction}`,
+    );
   }
-  if (args.showChanged) details.push("visibility changed");
+  if (args.visibilityLabel !== null) {
+    details.push(`showing ${args.visibilityLabel.toLowerCase()}`);
+  }
   return details.length === 0
     ? args.base
     : `${args.base}, ${details.join(", ")}`;

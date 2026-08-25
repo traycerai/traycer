@@ -192,6 +192,24 @@ describe("switcher Agents narrowing", () => {
     expect(renderedAgentNames()).toEqual(["Alpha", "Bravo", "Charlie"]);
   });
 
+  it("distinguishes the two sort directions in the trigger's accessible name", () => {
+    // The count badge is aria-hidden and the ordering has no badge at all, so
+    // this label is the ONLY channel carrying the direction. Naming the field
+    // without it would leave ascending and descending indistinguishable.
+    holder.records = [agentRecord("a-1", "Alpha", "chat")];
+    useLeftPanelStore.getState().setChatSortField(EPIC_ID, SORT_FIELD.Name);
+    const view = render(<SwitcherAgentsList {...PROPS} />);
+    expect(
+      screen.getByLabelText("Filter agents, ordered by Name descending"),
+    ).toBeDefined();
+
+    useLeftPanelStore.getState().toggleChatSortDirection(EPIC_ID);
+    view.rerender(<SwitcherAgentsList {...PROPS} />);
+    expect(
+      screen.getByLabelText("Filter agents, ordered by Name ascending"),
+    ).toBeDefined();
+  });
+
   it("narrows to one interface when the Interface facet is set", () => {
     holder.records = [
       agentRecord("a-1", "Alpha", "chat"),
