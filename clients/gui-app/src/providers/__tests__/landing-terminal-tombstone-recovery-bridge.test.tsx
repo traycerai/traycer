@@ -12,24 +12,63 @@ const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   const terminalsById: Readonly<Record<string, unknown>> = {};
+  // Whether the registry has answered for the fleet, held in a cell so
+  // `binding` can stay one stable object: it sits in a dependency list, and a
+  // fresh identity per render would recompute on every commit. The fleet ITSELF
+  // is `entries`, exactly as the bridge reads it.
+  const fleetSettled: { current: boolean } = { current: false };
+  const directoryListeners = new Set<() => void>();
   return {
     entries: [] as readonly HostDirectoryEntry[],
-    kill: vi.fn(),
+    // The bridge's legacy drain now dispatches through `mutateAsync` so a
+    // rejection can be retried; one fn backs both so existing call
+    // assertions keep describing the same dispatch.
+    kill: vi.fn(() => Promise.resolve()),
     readySessionHosts: new Set<string>(),
     authorityStatus: initialAuthorityStatus(),
     canMutate: false,
+    /** Bump to make the fleet mock re-emit an entry with the current status. */
+    authorityRevision: 0,
     terminalsById,
     closeAsync: vi.fn(() => Promise.resolve()),
+    /** The host ids the authority fleet was last asked to probe. */
+    probedHostIds: [] as readonly string[],
+    /** `false` models a registry nobody has successfully reached yet. */
+    fleetSettled,
+    /** Drives the directory's `onChange`, which is how settlement propagates. */
+    emitDirectoryChange: (): void => {
+      for (const listener of directoryListeners) listener();
+    },
+    binding: {
+      directory: {
+        hasSettledFleet: (): boolean => fleetSettled.current,
+        onChange: (listener: () => void): { dispose: () => void } => {
+          directoryListeners.add(listener);
+          return {
+            dispose: () => {
+              directoryListeners.delete(listener);
+            },
+          };
+        },
+      },
+    },
   };
 });
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: mocks.entries }),
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => mocks.binding };
+});
 vi.mock(
   "@/components/home/terminal-panel/use-landing-terminal-kill-mutation",
   () => ({
-    useLandingTerminalKill: () => ({ mutate: mocks.kill }),
+    useLandingTerminalKill: () => ({
+      mutate: mocks.kill,
+      mutateAsync: mocks.kill,
+    }),
   }),
 );
 vi.mock(
@@ -43,8 +82,10 @@ vi.mock(
       }) => {
         const { onEntry } = props;
         const hostKey = props.hostIds.join("\u0000");
+        const revision = mocks.authorityRevision;
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
+          mocks.probedHostIds = hostIds;
           hostIds.forEach((hostId) => {
             onEntry(hostId, {
               authority: {
@@ -73,7 +114,7 @@ vi.mock(
           return () => {
             hostIds.forEach((hostId) => onEntry(hostId, null));
           };
-        }, [hostKey, onEntry]);
+        }, [hostKey, onEntry, revision]);
         return null;
       },
     };
@@ -114,16 +155,35 @@ const offlineHost: HostDirectoryEntry = {
   transportDialability: "not-dialable",
 };
 
+/**
+ * This machine's own host. It reaches a snapshot through the local arm alone,
+ * so it is present with or without a registry listing - which is what makes a
+ * row count useless as evidence that the fleet is known.
+ */
+const localHost: HostDirectoryEntry = {
+  hostId: "host-local",
+  label: "This Mac",
+  kind: "local",
+  websocketUrl: null,
+  version: "1.0.0",
+  transportDialability: "dialable",
+};
+
 describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   beforeEach(() => {
     mocks.entries = [offlineHost];
     mocks.kill.mockReset();
+    mocks.kill.mockImplementation(() => Promise.resolve());
     mocks.readySessionHosts = new Set();
     mocks.authorityStatus = "legacy";
     mocks.canMutate = false;
+    mocks.authorityRevision = 0;
     mocks.terminalsById = {};
     mocks.closeAsync.mockReset();
     mocks.closeAsync.mockImplementation(() => Promise.resolve());
+    // Drain cases run with the registry unanswered, so every tombstoned host
+    // is probed and probe scoping cannot be confused for what they assert.
+    mocks.fleetSettled.current = false;
     useLandingTerminalStore.getState().resetForTests();
   });
 
@@ -267,6 +327,50 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+  });
+
+  it("retries a LEGACY kill after a transient rejection", async () => {
+    // The legacy arm used to be a bare `mutate` with no rejection handling.
+    // That was survivable only while an offline close was impossible; now this
+    // is the path a legacy host's deferred kill travels, so a single transient
+    // failure would otherwise strand the PTY until a route flap or a reload.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(undefined);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "legacy-retry-tab",
+      sessionId: "session-legacy-retry",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "legacy-retry-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(2);
+    expect(mocks.kill).toHaveBeenLastCalledWith({
+      hostId: "host-b",
+      sessionId: "session-legacy-retry",
+    });
   });
 
   it("backs off repeated capable close failures without concurrent retries", async () => {
@@ -480,7 +584,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
   });
 
-  it("treats a READY remote session as confirmed recovery while the registry stays offline", () => {
+  it("treats a READY remote session as confirmed recovery while the registry stays offline", async () => {
     // The registry never leaves `offline` for the whole credential-plane
     // incident, so the directory alone can never provide the recovery edge.
     // The recovery dial the fuse window kept open SUCCEEDS instead - the
@@ -537,6 +641,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         vi.advanceTimersByTime(1_000);
       });
       view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      // The close boundary dispatches on a microtask, so let it run.
+      await act(async () => Promise.resolve());
 
       expect(mocks.kill).toHaveBeenCalledWith({
         hostId: "host-b",
@@ -545,5 +651,465 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("withholds the authority probe for a host that left the account, and keeps its tombstone", async () => {
+    // host-b stays listed (the default fixture); the tombstone below names a
+    // DIFFERENT host that has left the account entirely - deregistration, not
+    // merely offline. Nothing is destroyed: deregistration revokes a credential
+    // and leaves the machine untouched, so the record that its shell needs
+    // killing has to outlive the probe that would have delivered it.
+    mocks.entries = [offlineHost];
+    mocks.fleetSettled.current = true;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-gone", sessionId: "session-gone" },
+    ]);
+  });
+
+  it("probes again, and drains, when a deregistered host is re-enrolled under the same id", async () => {
+    // `host-deregister-fetcher` documents that removal revokes the credential
+    // and nothing else - "the hostId survives" and "re-enrollment re-adopts the
+    // SAME id". Deleting the tombstone would have destroyed the kill record at
+    // the exact moment it became useful again.
+    mocks.entries = [offlineHost];
+    mocks.fleetSettled.current = true;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.probedHostIds).toEqual([]);
+
+    // The machine is set up again and re-adopts its old id.
+    mocks.fleetSettled.current = true;
+    mocks.entries = [offlineHost, { ...offlineHost, hostId: "host-gone" }];
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual(["host-gone"]);
+  });
+
+  it("probes every tombstoned host while the registry is unanswered, even though a local host keeps the snapshot non-empty", async () => {
+    // Absence from a fleet nobody has answered for is not evidence of
+    // anything. A directory snapshot is `localEntry` + `remoteEntries`, so a
+    // machine running a local host renders one ordinary row whether the
+    // registry answered or not - scoping on row count would strand host-b's
+    // drain at every launch that started offline.
+    mocks.entries = [localHost];
+    mocks.fleetSettled.current = false;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "boot-tab",
+      sessionId: "session-boot",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "boot-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual(["host-b"]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-boot" },
+    ]);
+  });
+
+  it("keeps probing a host that is offline but still listed in the settled fleet", async () => {
+    mocks.entries = [offlineHost];
+    mocks.fleetSettled.current = true;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "offline-tab",
+      sessionId: "session-offline",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "offline-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual(["host-b"]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-offline" },
+    ]);
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("withholds probes for an ANSWERED empty fleet without discarding the tombstones", async () => {
+    // An answered `[]` is knowledge - it is how a single-host account
+    // deregisters - so the probe is withheld. The tombstone is still not
+    // destroyed, because that same account can re-enroll the machine under the
+    // id the tombstone already names.
+    mocks.entries = [];
+    mocks.fleetSettled.current = true;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "solo-tab",
+      sessionId: "session-solo",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "solo-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-solo" },
+    ]);
+  });
+
+  it("dispatches a tombstone recorded while its host was ALREADY drainable", async () => {
+    // No route transition to ride in on, and no retry record yet. The two
+    // conditions the drain gates on would both be false, so without a
+    // first-sight rule this kill waits for the host to flap - and a close under
+    // an unresolved probe dispatches nothing itself, so the bridge is the only
+    // thing that would ever send it.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "first-tab",
+      sessionId: "session-first",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "first-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-first",
+      });
+    });
+    // Counted, not just matched: `toHaveBeenCalledWith` passes on a duplicate,
+    // and one gesture sending two kills is the thing the shared close boundary
+    // exists to prevent.
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    // Host stays drainable throughout - only the tombstone set changes.
+    act(() => {
+      useLandingTerminalStore.getState().addTab({
+        instanceId: "second-tab",
+        sessionId: "session-second",
+        hostId: "host-b",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      useLandingTerminalStore.getState().closeTab("landing-page", "second-tab");
+    });
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-second",
+      });
+    });
+    // One dispatch per tombstone - the first close is not re-sent.
+    expect(mocks.kill).toHaveBeenCalledTimes(2);
+  });
+
+  it("rescopes probes when settlement flips without the directory rows changing", async () => {
+    // TanStack's structural sharing hands back the SAME `data` array when a
+    // fetch produces deeply-equal rows - a desktop whose one local host is the
+    // whole snapshot, with an empty remote listing. A derivation keyed on the
+    // rows would never observe the flag move, so settlement is subscribed
+    // through `onChange` instead. `mocks.entries` is deliberately NOT touched
+    // here; only the flag moves.
+    mocks.entries = [localHost];
+    mocks.fleetSettled.current = false;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.probedHostIds).toEqual(["host-gone"]);
+
+    mocks.fleetSettled.current = true;
+    await act(async () => {
+      mocks.emitDirectoryChange();
+      await Promise.resolve();
+    });
+
+    expect(mocks.probedHostIds).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-gone", sessionId: "session-gone" },
+    ]);
+  });
+
+  it("re-dispatches with the NEW capability when authority flips during an in-flight close", async () => {
+    // A `terminal.plain.close` incompatibility can drop a host back to legacy
+    // while it stays dialable. The capable request then rejects, but
+    // `closeRetryStillWarranted` refuses a retry because the capability no
+    // longer matches the one that dispatched - and the authority-change render
+    // had already skipped this key for being in flight. Clearing that ref
+    // renders nothing, so without a capability-aware mark plus a signal on
+    // settlement the correct close is never sent.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-flip": {} };
+    let rejectClose: (reason: Error) => void = () => undefined;
+    mocks.closeAsync.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectClose = reject;
+        }),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "flip-tab",
+      sessionId: "session-flip",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "flip-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    // The host drops to legacy while that close is still outstanding.
+    mocks.authorityStatus = "legacy";
+    mocks.canMutate = false;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectClose(new Error("plain close unsupported"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-flip",
+      });
+    });
+  });
+
+  it("re-dispatches the other way too: legacy in flight, authority becomes capable", async () => {
+    // The mirror of the case above. Same suppression in
+    // `closeRetryStillWarranted`, same invisible `finally`, so the capability
+    // -keyed mark has to work in both directions rather than only capable ->
+    // legacy.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    let rejectKill: (reason: Error) => void = () => undefined;
+    mocks.kill.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectKill = reject;
+        }),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "mirror-tab",
+      sessionId: "session-mirror",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "mirror-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    // The probe resolves to the plain protocol while the kill is outstanding.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-mirror": {} };
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectKill(new Error("legacy kill unsupported"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.closeAsync).toHaveBeenCalledWith({
+        hostId: "host-b",
+        terminalId: "session-mirror",
+      });
+    });
+  });
+
+  it("backs a permanently failing kill off to a long interval, and never gives up", async () => {
+    // The cost this guards is a permanent failure retrying every 8s for as long
+    // as the app is open. It is answered by GROWING the interval rather than by
+    // an attempt budget: a budget reaches a state the drain cannot leave, and a
+    // tombstone is a kill that is still owed.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockImplementation(() =>
+      Promise.reject(new Error("permanently rejected")),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "doomed-tab",
+      sessionId: "session-doomed",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "doomed-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    const advance = async (ms: number): Promise<void> => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    // An hour of wall clock. Under the old 8s ceiling this would be ~450 calls.
+    for (let round = 0; round < 60; round += 1) await advance(60_000);
+    const afterAnHour = mocks.kill.mock.calls.length;
+    expect(afterAnHour).toBeLessThan(30);
+
+    // Still owed, and still trying - the drain has not parked itself.
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-doomed" },
+    ]);
+    for (let round = 0; round < 10; round += 1) await advance(60_000);
+    expect(mocks.kill.mock.calls.length).toBeGreaterThan(afterAnHour);
+  });
+
+  it("restarts the backoff when the host changes capability", async () => {
+    // A protocol change deserves a prompt attempt rather than inheriting a long
+    // interval the other arm ran up while failing.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockImplementation(() =>
+      Promise.reject(new Error("permanently rejected")),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "budget-tab",
+      sessionId: "session-budget",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "budget-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    const advance = async (ms: number): Promise<void> => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    // Run the legacy arm out to its long interval.
+    for (let round = 0; round < 30; round += 1) await advance(60_000);
+
+    // The host comes back speaking the plain protocol, still failing.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-budget": {} };
+    mocks.authorityRevision += 1;
+    mocks.closeAsync.mockImplementation(() =>
+      Promise.reject(new Error("still failing")),
+    );
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    // Let the dispatch AND its rejection settle, so the retry timer is armed
+    // before the clock moves.
+    await advance(0);
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    // Retried on the SHORT end of the schedule, not the ceiling the legacy arm
+    // had climbed to.
+    await advance(1_000);
+    expect(mocks.closeAsync.mock.calls.length).toBeGreaterThan(1);
   });
 });

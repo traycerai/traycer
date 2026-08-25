@@ -565,6 +565,64 @@ describe("HostDirectoryService", () => {
     expect(directory.getCardinality()).toBe("one");
   });
 
+  it("withholds a settled fleet while the registry is unanswered, even though the local host makes the snapshot non-empty", async () => {
+    // The distinction `list()` cannot draw, for callers that destroy durable
+    // state on absence. A machine running a local host renders one ordinary
+    // row whether or not the registry was ever reached, so a FAILED first
+    // fetch looks exactly like a one-host account - and every remote host
+    // reads as deregistered.
+    const host = makeHost(localSnapshot);
+    const { fetcher } = queuedFetcher([
+      { kind: "failed" },
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    // Non-empty, and still no answer about the fleet.
+    expect((await directory.list()).length).toBe(1);
+    expect(directory.hasSettledFleet()).toBe(false);
+
+    await directory.refresh();
+
+    expect(directory.hasSettledFleet()).toBe(true);
+    expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+      localSnapshot.hostId,
+      mockRemoteHostEntry.hostId,
+    ]);
+  });
+
+  it("withdraws the settled fleet when a later fetch comes back signed-out", async () => {
+    // Same rule as the cardinality arm below: a bearer rotating out is not the
+    // registry saying those hosts are gone, so the fleet re-closes rather than
+    // presenting its cleared remote set as an answer.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+      { kind: "signed-out" },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasSettledFleet()).toBe(true);
+
+    await directory.refresh();
+
+    expect(directory.hasSettledFleet()).toBe(false);
+  });
+
   it("un-settles the directory when a later fetch comes back signed-out", async () => {
     // The other side of the race above: a bearer that rotates out from under
     // a directory that has already seen a real listing must not report

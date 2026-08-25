@@ -1,5 +1,6 @@
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
@@ -90,6 +91,36 @@ describe("<SettingsSidebar /> leader hints", () => {
     cleanup();
     vi.useRealTimers();
     scopeOverrides.current = { client: null };
+    setMobileApp(false);
+  });
+
+  // Chord capture is keyboard-only, so the installed mobile app does not offer
+  // the section at all - and the rail is what offers it.
+  it("omits the Keybindings entry in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(await screen.findByRole("link", { name: "General" })).toBeDefined();
+    expect(screen.queryByRole("link", { name: "Keybindings" })).toBeNull();
+  });
+
+  it("renders the Keybindings entry on other builds", async () => {
+    setMobileApp(false);
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "Keybindings" }),
+    ).toBeDefined();
   });
 
   // The machine console is labelled "Overview" now - it sits under the host

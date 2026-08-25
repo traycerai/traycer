@@ -35,6 +35,7 @@ import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 import {
   getPlainTerminal,
   selectPlainTerminalViewModel,
@@ -70,7 +71,10 @@ import {
   type LandingTerminalAuthorityEntry,
 } from "./landing-terminal-authority-fleet";
 import { LandingTerminalBoundHostReconciliationFleet } from "./landing-terminal-bound-host-reconciliation";
-import { useLandingTerminalKill } from "./use-landing-terminal-kill-mutation";
+import {
+  useLandingTerminalKill,
+  type LandingTerminalKillVariables,
+} from "./use-landing-terminal-kill-mutation";
 import { useLandingTerminalReconciliation } from "./use-landing-terminal-reconciliation";
 import { type LandingTerminalAvailability } from "./landing-terminal-availability";
 import {
@@ -119,8 +123,8 @@ interface LandingTerminalDirectoryRequest {
 }
 
 /**
- * Whether this host's authority can back a tab mutation right now - the single
- * predicate behind create, close, close-all, and rename.
+ * Whether this host's authority can back a LIVE tab mutation right now - the
+ * predicate behind create and rename, and the fast path of close.
  *
  * A missing or `"unknown"` entry means the capability probe has not answered,
  * so neither branch of the tile lifecycle can be chosen yet; a `"capable"`
@@ -131,6 +135,9 @@ interface LandingTerminalDirectoryRequest {
  * unresolved lands as `hostAuthorityAcknowledged: false, pendingCreate: false`,
  * which is precisely the shape of LEGACY evidence. The next capable pass then
  * tries to `importLegacy` a terminal that was never created on any host.
+ *
+ * Close deliberately does NOT gate on this - it is tombstone-first and drains
+ * later. See {@link dispatchLandingTerminalClose}.
  */
 function landingTerminalAuthorityReady(
   entry: LandingTerminalAuthorityEntry | null | undefined,
@@ -139,6 +146,72 @@ function landingTerminalAuthorityReady(
   const capability = entry.authority.capability;
   if (capability.status === "legacy") return true;
   return capability.status === "capable" && entry.authority.canMutate;
+}
+
+/**
+ * Sends the kill for an ALREADY-TOMBSTONED tab, when its bound host can be
+ * asked right now.
+ *
+ * A host that cannot be asked - offline, or a capability probe that has not
+ * answered - is not a failure here and must not block the close: the store
+ * wrote the tombstone before the tab was removed, and two existing mechanisms
+ * carry it from there. Reconciliation excludes a tombstoned session from
+ * re-adoption when the host returns, and
+ * `LandingTerminalTombstoneRecoveryBridge` (mounted above the router, so
+ * leaving the landing page cannot strand it) dispatches the capability-correct
+ * kill on the edge where that host becomes dialable again, with backoff.
+ *
+ * So this is only the fast path. It never falls back to another host: the
+ * tombstone and the mutation both carry the tab's own bound `hostId`.
+ */
+function dispatchLandingTerminalClose(args: {
+  readonly entry: LandingTerminalAuthorityEntry | undefined;
+  readonly closed: LandingTerminalTabRef;
+  readonly killTerminal: (
+    variables: LandingTerminalKillVariables,
+  ) => Promise<unknown>;
+}): void {
+  const { entry, closed, killTerminal } = args;
+  if (!landingTerminalAuthorityReady(entry)) return;
+  if (entry.authority.capability.status !== "capable") {
+    // Same boundary as the capable arm below, for the same reason. `terminal.kill`
+    // is scheduled `fifo`, and `selectJob` returns null for fifo rather than
+    // joining an identical queued job - so an unmediated duplicate is two real
+    // RPCs and two `terminal.list` invalidations on every ordinary legacy close,
+    // the second answering `killed: false` about a session the first removed.
+    void requestLandingTerminalClose({
+      hostId: closed.hostId,
+      sessionId: closed.sessionId,
+      close: () =>
+        killTerminal({
+          hostId: closed.hostId,
+          sessionId: closed.sessionId,
+        }).then(() => undefined),
+    }).catch(() => undefined);
+    return;
+  }
+  // Through the shared close boundary, not straight at the mutation. The
+  // tombstone this close follows is also watched by
+  // `LandingTerminalTombstoneRecoveryBridge`, which sends the close for any key
+  // it has not dispatched before - so on an already-drainable host both fire for
+  // one gesture, from separate mutation instances that cannot see each other.
+  // The coordinator collapses them onto one request; without it the loser fails
+  // on a terminal the winner already removed and raises "Couldn't close the
+  // terminal." for a close that worked.
+  void requestLandingTerminalClose({
+    hostId: closed.hostId,
+    sessionId: closed.sessionId,
+    close: () =>
+      entry.mutations.close
+        .mutateAsync({ hostId: closed.hostId, terminalId: closed.sessionId })
+        .then(() => undefined),
+  })
+    .then(() => {
+      useLandingTerminalStore
+        .getState()
+        .clearPendingKill(closed.hostId, closed.sessionId);
+    })
+    .catch(() => undefined);
 }
 
 function directoryRequestFor(
@@ -328,7 +401,6 @@ export function LandingTerminalPanel(): ReactNode {
   const renameTab = useLandingTerminalStore((state) => state.renameTab);
   const closeTab = useLandingTerminalStore((state) => state.closeTab);
   const kill = useLandingTerminalKill();
-  const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
   // Last settled generation's host context. Manual create uses it only when
   // `hostId` still equals the active host; auto-spawn never reads this alone.
@@ -762,38 +834,34 @@ export function LandingTerminalPanel(): ReactNode {
     onSettled: handleReconciliationSettled,
   });
 
-  // One predicate for every tab mutation, so the affordance and the action it
-  // fires can never disagree. Before this, close silently no-oped behind an
-  // enabled button whenever authority was not ready, with nothing said.
-  const canMutateTab = useCallback(
+  // Rename is a LIVE mutation with no durable fallback - only the host can
+  // record a manual title - so its affordance gates on that host's authority
+  // being ready, and the gate and the action stay one predicate. Close is
+  // deliberately NOT here: it is tombstone-first, so it stays available for a
+  // host that cannot be asked right now.
+  const canRenameTab = useCallback(
     (tab: LandingTerminalTabRef): boolean =>
       landingTerminalAuthorityReady(authorityEntries[tab.hostId]),
     [authorityEntries],
   );
 
+  // Closing always removes the tab and records its tombstone, whatever the
+  // bound host's authority looks like - a tab bound to an offline host is
+  // closable, and its shell is killed when that host comes back. The dispatch
+  // is the fast path only; `dispatchLandingTerminalClose` documents who carries
+  // the kill otherwise.
   const closeTerminalTab = useCallback(
     (tab: LandingTerminalTabRef) => {
       replaceDirectoryRequest(null);
       clearPending();
       const authorityEntry = authorityEntries[tab.hostId];
-      if (!landingTerminalAuthorityReady(authorityEntry)) return;
       const closed = closeTab(landingPageId, tab.instanceId);
       if (closed === null) return;
-      if (authorityEntry.authority.capability.status === "capable") {
-        void authorityEntry.mutations.close
-          .mutateAsync({
-            hostId: closed.hostId,
-            terminalId: closed.sessionId,
-          })
-          .then(() => {
-            useLandingTerminalStore
-              .getState()
-              .clearPendingKill(closed.hostId, closed.sessionId);
-          })
-          .catch(() => undefined);
-      } else {
-        killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
-      }
+      dispatchLandingTerminalClose({
+        entry: authorityEntry,
+        closed,
+        killTerminal: killTerminalAsync,
+      });
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
       // the open-transition effect hands focus back to the composer instead.
@@ -812,24 +880,28 @@ export function LandingTerminalPanel(): ReactNode {
       clearPending,
       closeTab,
       authorityEntries,
-      killTerminal,
+      killTerminalAsync,
       landingPageId,
       replaceDirectoryRequest,
     ],
   );
 
   const closeAllTerminalTabs = useCallback(() => {
-    // Same tombstone-first ordering as a single close, batched: every ref is
-    // durably tombstoned in one write before the first kill is dispatched.
+    // Every tab closes - "Close All" means all of them, including tabs whose
+    // host cannot be asked yet, whose kills the recovery bridge drains later.
+    //
+    // This replays a single close per tab, so the durability ordering is
+    // per-tab: each tombstone is written with its own tab's removal, then that
+    // tab's kill dispatches. An interruption mid-loop therefore leaves every
+    // tab either untouched or tombstoned, never removed without a tombstone -
+    // which is the invariant that matters, and it keeps focus handling and the
+    // fast-path dispatch in one place instead of duplicating them per tab.
     replaceDirectoryRequest(null);
     clearPending();
-    const closable = useLandingTerminalStore
-      .getState()
-      .tabs.filter(canMutateTab);
-    closable.forEach(closeTerminalTab);
+    useLandingTerminalStore.getState().tabs.forEach(closeTerminalTab);
     clearPendingTerminalFocus(null);
     focusActiveComposer();
-  }, [canMutateTab, clearPending, closeTerminalTab, replaceDirectoryRequest]);
+  }, [clearPending, closeTerminalTab, replaceDirectoryRequest]);
 
   const togglePanel = useCallback(() => {
     if (panelOpen) {
@@ -973,8 +1045,7 @@ export function LandingTerminalPanel(): ReactNode {
           onCloseTab={closeTerminalTab}
           onCloseAllTabs={closeAllTerminalTabs}
           onRenameTab={renameTerminalTab}
-          canRenameTab={canMutateTab}
-          canCloseTab={canMutateTab}
+          canRenameTab={canRenameTab}
           authorityEntries={authorityEntries}
           terminalViewModels={terminalViewModels}
         />
@@ -1010,7 +1081,6 @@ interface LandingTerminalPanelContentsProps {
   readonly onCloseAllTabs: () => void;
   readonly onRenameTab: (instanceId: string, name: string) => void;
   readonly canRenameTab: (tab: LandingTerminalTabRef) => boolean;
-  readonly canCloseTab: (tab: LandingTerminalTabRef) => boolean;
   readonly authorityEntries: LandingTerminalAuthorityEntries;
   readonly terminalViewModels: Readonly<
     Partial<Record<string, PlainTerminalViewModel>>
@@ -1170,7 +1240,6 @@ function LandingTerminalPanelContents(
           onCloseAll={props.onCloseAllTabs}
           onRename={props.onRenameTab}
           canRename={props.canRenameTab}
-          canClose={props.canCloseTab}
           terminalViewModels={props.terminalViewModels}
         />
         <LandingTerminalPanelBody
