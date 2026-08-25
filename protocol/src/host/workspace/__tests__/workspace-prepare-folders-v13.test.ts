@@ -50,4 +50,29 @@ describe("workspace.prepareFolders v1.3", () => {
       }).success,
     ).toBe(false);
   });
+
+  it.each(["projects/new-workspace", "~/new-workspace"]) (
+    "rejects a relative create-and-prepare path %j",
+    (path) => {
+      expect(
+        workspacePrepareFoldersRequestSchemaV13.safeParse({
+          operation: "createAndPrepare",
+          folderPaths: null,
+          path,
+          bumpRecency: null,
+        }).success,
+      ).toBe(false);
+    },
+  );
+
+  it("keeps nullable paths for non-creation operations", () => {
+    expect(
+      workspacePrepareFoldersRequestSchemaV13.parse({
+        operation: "prepare",
+        folderPaths: ["relative/path"],
+        path: null,
+        bumpRecency: null,
+      }).path,
+    ).toBeNull();
+  });
 });

@@ -179,7 +179,7 @@ describe("pickAndPrepareFolders picker routing", () => {
     expect(toastMock).not.toHaveBeenCalled();
   });
 
-  it("prepares every folder returned by the native picker", async () => {
+  it("prepares every folder returned by the shared picker", async () => {
     useRemoteFolderPickerStore.setState({
       requestPick: vi.fn().mockResolvedValue({
         kind: "prepare",

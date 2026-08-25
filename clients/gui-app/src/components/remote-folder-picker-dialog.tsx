@@ -65,7 +65,10 @@ import {
   useHostNegotiatedMethodVersion,
   type NegotiatedMethodVersion,
 } from "@/hooks/host/use-host-negotiated-method-version";
-import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
+import {
+  useRemoteFolderPickerStore,
+  type FolderPickerIntent,
+} from "@/stores/workspace/remote-folder-picker-store";
 
 /**
  * Folder picker for hosts the client cannot open a native OS dialog for
@@ -414,6 +417,9 @@ function readFolderPickerAddState(args: {
 }
 
 function supportsCreateDirectory(version: NegotiatedMethodVersion): boolean {
+  // `createAndPrepare` is a v1 extension of this exact contract. A future
+  // major may redefine the operation envelope, so do not treat it as
+  // create-capable until that major has an explicit renderer gate.
   return (
     version !== null &&
     version !== false &&
@@ -425,7 +431,7 @@ function supportsCreateDirectory(version: NegotiatedMethodVersion): boolean {
 function readFolderPickerSelection(
   addTarget: string | null,
   createDirectory: boolean,
-) {
+): FolderPickerIntent | null {
   if (addTarget === null) return null;
   return createDirectory
     ? { kind: "createAndPrepare" as const, path: addTarget }

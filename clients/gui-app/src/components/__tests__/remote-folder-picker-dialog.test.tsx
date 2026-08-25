@@ -1,12 +1,13 @@
 import {
   act,
   cleanup,
-  render,
+  render as renderBase,
   screen,
   fireEvent,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -20,6 +21,7 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { modLabel } from "@/lib/keybindings/platform";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
+import type { NegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated-method-version";
 
 interface FakeQueryState {
   readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
@@ -101,8 +103,14 @@ vi.mock("@/hooks/workspace/use-workspace-get-home-dir-query", () => ({
   }),
 }));
 
+const negotiatedVersion: { current: NegotiatedMethodVersion } = vi.hoisted(
+  () => ({
+    current: { major: 1, minor: 4 },
+  }),
+);
+
 vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
-  useHostNegotiatedMethodVersion: () => ({ major: 1, minor: 4 }),
+  useHostNegotiatedMethodVersion: () => negotiatedVersion.current,
 }));
 
 /**
@@ -192,6 +200,15 @@ function rowNames(): string[] {
     .map((row) => row.textContent);
 }
 
+function render(ui: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return renderBase(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
+
 describe("<RemoteFolderPickerDialog />", () => {
   beforeEach(() => {
     queryByPath.clear();
@@ -214,6 +231,7 @@ describe("<RemoteFolderPickerDialog />", () => {
     // pre-existing expectation describes the picker WITHOUT recents.
     recentEntries = undefined;
     reportedHomeDir = undefined;
+    negotiatedVersion.current = { major: 1, minor: 4 };
     useRemoteFolderPickerStore.setState({
       open: false,
       client: null,
@@ -546,6 +564,27 @@ describe("<RemoteFolderPickerDialog />", () => {
       screen.getByTestId("remote-folder-picker-add").hasAttribute("disabled"),
     ).toBe(true);
   });
+
+  it.each([
+    ["v1.2", { major: 1, minor: 2 }],
+    ["unsupported", false],
+    ["unknown", null],
+  ] as const)(
+    "keeps Add disabled for a missing folder on a %s host",
+    async (_label, version) => {
+      negotiatedVersion.current = version;
+      render(<RemoteFolderPickerDialog />);
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+      await screen.findAllByTestId("remote-folder-picker-row");
+      fireEvent.change(pathInput(), {
+        target: { value: "/Users/tester/new-folder" },
+      });
+      const add = screen.getByTestId("remote-folder-picker-add");
+      expect(add.hasAttribute("disabled")).toBe(true);
+      expect(add.textContent).toContain("Add");
+      expect(add.textContent).not.toContain("Create & Add");
+    },
+  );
 
   it("keeps the .. row and offers Retry on a non-consent failure", async () => {
     queryByPath.set(pathKey("/Users/tester/code"), {

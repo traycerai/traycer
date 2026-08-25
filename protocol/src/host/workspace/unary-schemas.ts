@@ -635,10 +635,20 @@ export const workspacePrepareFoldersRequestSchemaV13 =
       operation: workspacePrepareFoldersOperationSchemaV13,
     })
     .superRefine((request, context) => {
-      if (request.operation === "createAndPrepare" && request.path === null) {
+      if (request.operation !== "createAndPrepare") return;
+      if (request.path === null) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           message: "createAndPrepare requires path",
+          path: ["path"],
+        });
+        return;
+      }
+      const absolutePath = absoluteHostPathSchema.safeParse(request.path);
+      if (!absolutePath.success) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "createAndPrepare requires an absolute host path",
           path: ["path"],
         });
       }
