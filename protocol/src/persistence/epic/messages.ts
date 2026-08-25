@@ -3,6 +3,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreImage,
+  contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
@@ -219,6 +220,26 @@ export const userMessageSchemaPreReasonix = z
       message: "User message sender.type must match message.kind.",
     });
   });
+
+export const assistantMessageSchemaPreReasonix = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchemaPreReasonix,
+  blocks: z.array(contentBlockSchemaPreReasonix),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+export const messageSchemaPreReasonix = z.discriminatedUnion("role", [
+  userMessageSchemaPreReasonix,
+  assistantMessageSchemaPreReasonix,
+]);
 
 // ── Wire-freeze variants (pre-inReplyTo) ────────────────────────────────────
 // Hand-frozen copies of the message schemas with the sender leaf swapped for

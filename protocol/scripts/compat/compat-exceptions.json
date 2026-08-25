@@ -94,6 +94,14 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.harnessId.enum",
+      "reason": "Chat stream frames only carry harness ids for chats the client already opened against a negotiated harness catalog; additive ids stay behind that gate."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.action.enum",
       "reason": "Action-ack kinds grow with gated client actions; old clients only observe acks for actions they can issue."
     },

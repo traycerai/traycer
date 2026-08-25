@@ -1406,6 +1406,30 @@ const steerBlockSchemaPreReasonix = z.object({
   sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
 });
 
+/**
+ * Persistence freeze for the Epic 2.0 contract: the complete live block
+ * vocabulary with only harness-bearing members held to the pre-Reasonix enum.
+ * Unlike the wire freezes below, this retains the live interview and image
+ * shapes because those were already part of Epic 2.0 when Reasonix arrived.
+ */
+export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchemaPreReasonix,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchemaPreReasonix,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
 // Wire-freeze copy of `contentBlockSchema` carrying THREE independent freezes,
 // bound (via the frozen message/chat schemas) to every released
 // `chat.subscribe@1.0-1.5` minor: `tool_call` swapped for its pre-image freeze

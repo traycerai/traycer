@@ -11,6 +11,7 @@ import {
   messageSchema,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
+  messageSchemaPreReasonix,
   messageSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
@@ -135,6 +136,32 @@ export const chatSchema = z.object({
   lastDeliveredRolesDigest: z.string().nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
+
+/**
+ * Frozen Epic 2.0 chat record. It preserves the complete persisted chat shape
+ * that shipped before Reasonix while holding every harness-bearing leaf to the
+ * pre-Reasonix enum/anchor union. Wire-specific shape freezes remain separate.
+ */
+export const chatSchemaPreReasonix = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
+  messages: z.array(messageSchemaPreReasonix),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
 
 // Wire-freeze copy with `messages`/`events` swapped for their pre-`inReplyTo`
 // freezes, bound to `chat.subscribe@1.0–1.3` snapshot serverFrames so those
