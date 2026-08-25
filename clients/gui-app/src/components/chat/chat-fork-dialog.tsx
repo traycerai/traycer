@@ -33,6 +33,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
 import { useHostCapabilityProbe } from "@/hooks/host/use-host-capability-probe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
@@ -190,6 +191,14 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const navigateNestedFocus = useEpicNestedFocusNavigation();
   const openCancelsRef = useRef<Set<() => void> | null>(null);
   const stagingSessionRef = useRef<ForkWorkspaceStagingSession | null>(null);
+  // The title field is the first tabbable descendant, so Radix's own
+  // open-autofocus lands on it. On a touch pointer that is a request for a
+  // software keyboard, over a form whose common path is "accept the seeded
+  // title and press Fork". The pointer decides, not the viewport and not the
+  // build: a narrow desktop window types with hardware, a tablet at desktop
+  // width does not.
+  const coarsePointer = useCoarsePointer();
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const openCancels = new Set<() => void>();
@@ -789,6 +798,21 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         // natively, Android Chrome honours `interactive-widget=resizes-content`),
         // so `dvh` already resolves against what is left uncovered.
         className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,34rem)]"
+        ref={contentRef}
+        onOpenAutoFocus={(event) => {
+          // Focus moves to the dialog itself rather than being merely
+          // declined: Radix leaves focus wherever it was when this is
+          // prevented, which is the trigger - outside the focus scope, and
+          // often already unmounting with the menu it lived in. The content
+          // element carries `tabIndex={-1}` for exactly this, and taking it
+          // announces the dialog to a screen reader without asking for a
+          // keyboard. Fails safe: with no element to move to, Radix's own
+          // default runs instead of being cancelled with nowhere to go.
+          if (!coarsePointer) return;
+          if (contentRef.current === null) return;
+          event.preventDefault();
+          contentRef.current.focus();
+        }}
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is

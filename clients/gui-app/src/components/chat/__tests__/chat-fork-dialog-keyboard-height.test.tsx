@@ -1,9 +1,9 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostWorkspaceControlsHostScope } from "@/components/home/host-workspace-selector/host-workspace-controls-scope";
 
 /**
- * Geometry contract for `chat-fork-dialog.tsx`.
+ * Geometry and open-focus contract for `chat-fork-dialog.tsx`.
  *
  * The dialog carries a title field, a harness picker, stacked workspace
  * controls and a notice stack - a stack taller than a phone viewport before a
@@ -13,6 +13,12 @@ import type { HostWorkspaceControlsHostScope } from "@/components/home/host-work
  * The structural guarantee, not pixels: the height cap is applied, the middle
  * region owns the scroll, and the footer sits outside that region so Fork
  * stays put while the form scrolls under it.
+ *
+ * Focus is the other half, and it is what decides whether a keyboard opens at
+ * all. The title field is the first tabbable descendant, so Radix's own
+ * open-autofocus takes it - free on a keyboard-driven machine, a summoned
+ * software keyboard on a touch one. Both arms are pinned here because the
+ * coarse arm is invisible on every developer's desktop.
  */
 
 const dialogMocks = vi.hoisted(() => ({
@@ -190,8 +196,42 @@ function renderDialog(): void {
   );
 }
 
+/**
+ * The global test shim answers every media query with `matches: false`, which
+ * is the fine-pointer arm. This narrows the coarse-pointer query alone so the
+ * rest of the app's queries keep the shim's answer, and the original is put
+ * back afterwards so neither arm leaks into the next case.
+ */
+const originalMatchMedia = window.matchMedia.bind(window);
+
+function stubCoarsePointer(coarse: boolean): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: coarse && query === "(pointer: coarse)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 describe("<ChatForkDialog /> height cap and footer", () => {
+  beforeEach(() => {
+    stubCoarsePointer(false);
+  });
+
   afterEach(() => {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
     dialogMocks.createMutate.mockReset();
     cleanup();
   });
@@ -228,5 +268,28 @@ describe("<ChatForkDialog /> height cap and footer", () => {
     expect(footer?.contains(screen.getByRole("button", { name: "Fork" }))).toBe(
       true,
     );
+  });
+
+  it("focuses the title field when a fine pointer is driving", () => {
+    renderDialog();
+
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("Fork agent title"),
+    );
+  });
+
+  it("leaves the title field unfocused on a coarse pointer", () => {
+    stubCoarsePointer(true);
+    renderDialog();
+
+    // The whole point: no focused text field means no software keyboard over a
+    // form whose common path is "keep the seeded title and press Fork".
+    expect(document.activeElement).not.toBe(
+      screen.getByLabelText("Fork agent title"),
+    );
+    // Declining the field is not a licence to strand focus on the trigger,
+    // outside the focus scope - the dialog itself takes it.
+    const dialog = screen.getByRole("dialog");
+    expect(document.activeElement).toBe(dialog);
   });
 });
