@@ -4056,6 +4056,46 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
   });
 
+  it("echoes an existing native tab's current status when a renderer ensures it again", async () => {
+    const harness = createHarness();
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      requestedUrl: "https://example.com/",
+      seedStorageState: null,
+    } as const;
+    const provisioned = await harness.manager.ensureTab("window-1", input);
+    const view = harness.views[0];
+    if (view === undefined) throw new Error("expected native guest");
+    await harness.manager.acceptTab(provisioned);
+    view.webContents.emit(
+      "did-frame-navigate",
+      {},
+      "https://example.com/",
+      200,
+      "OK",
+      true,
+    );
+    view.webContents.title = "Example Domain";
+    view.webContents.emit("page-title-updated", {}, "Example Domain");
+    harness.nativeTabStatuses.length = 0;
+
+    await harness.manager.ensureTab("window-1", input);
+
+    expect(harness.nativeTabStatuses).toEqual([
+      expect.objectContaining({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: provisioned.registrationId,
+        url: "https://example.com/",
+        title: "Example Domain",
+        status: "ready",
+      }),
+    ]);
+  });
+
   it("owns one guest per native identity across concurrent ensure, surface moves, and exact release", async () => {
     const harness = createHarness();
     const nativeKey = {

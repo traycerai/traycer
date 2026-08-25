@@ -753,9 +753,13 @@ export class BrowserViewManager {
           this.ensureTab(windowId, input),
         );
       }
-      return existing.identity.lifecycle.provisioned.then(() =>
-        this.resolveNativeTabProvisioned(existing),
-      );
+      return existing.identity.lifecycle.provisioned.then(() => {
+        const provisioned = this.resolveNativeTabProvisioned(existing);
+        // A renderer reload reuses the guest without causing navigation, so
+        // replay the state that the new renderer could not have observed.
+        this.emitStatus(existing);
+        return provisioned;
+      });
     }
 
     log.info("[browser-view] native tab ensure stage", {
