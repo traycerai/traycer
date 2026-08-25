@@ -132,6 +132,19 @@ describe("<ExpandedImageDialogContent />", () => {
     ).toBeTruthy();
   });
 
+  it("takes focus onto the dialog itself, not onto the Copy button", async () => {
+    renderOpenDialog({
+      status: "ready",
+      src: "blob:http://localhost/raster",
+      mediaType: "image/png",
+    });
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(dialog);
+    });
+  });
+
   it("shows no action buttons when the image is unavailable", () => {
     renderOpenDialog({ status: "unavailable" });
 

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ImageOff } from "lucide-react";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
@@ -37,6 +37,7 @@ export function ExpandedImageDialogContent(props: {
   readonly onCloseAutoFocus: ((event: Event) => void) | undefined;
 }): ReactNode {
   const image = props.image;
+  const contentRef = useRef<HTMLDivElement>(null);
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
     mutationFn: (action) => {
@@ -94,9 +95,15 @@ export function ExpandedImageDialogContent(props: {
     <DialogContent
       className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
       showCloseButton
-      // Focus the dialog itself, not the first action button - auto-focusing
-      // the Copy button popped its tooltip on every open.
-      onOpenAutoFocus={(event) => event.preventDefault()}
+      ref={contentRef}
+      // Focus the dialog itself, not the first action button, whose tooltip
+      // pops open on that focus. Radix skips its own focus move once this is
+      // prevented, so the dialog has to take focus explicitly or it would be
+      // left outside the modal, on the trigger Radix hides from screen readers.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        contentRef.current?.focus();
+      }}
       onCloseAutoFocus={props.onCloseAutoFocus}
     >
       <DialogTitle className="sr-only">{props.title}</DialogTitle>

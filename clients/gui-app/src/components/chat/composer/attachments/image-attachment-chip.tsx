@@ -5,7 +5,7 @@ import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
-import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
+import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
 import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 
@@ -39,8 +39,16 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
   // called unconditionally; for a base64-only atom (`hash === null`) it returns
   // null, so the `dataUrl` fallback keeps chat paste instant.
   const sessionUrl = atom.hash === null ? null : sessionObjectUrl(atom.hash);
-  const blobUrl = useImageBlobUrl(atom.hash, atom.mimeType, fetcher);
-  const src = sessionUrl ?? blobUrl ?? dataUrl;
+  const blob = useImageBlobUrlState(atom.hash, atom.mimeType, fetcher, null);
+  const src = sessionUrl ?? blob.url ?? dataUrl;
+  // A restored hash's bytes are typed by the serving host's sniff, which can
+  // disagree with the stored claim and decides whether Copy is offered at all.
+  // The claim only stands where it IS the source: a same-session paste or
+  // inline base64.
+  const mediaType =
+    sessionUrl === null && blob.status === "ready"
+      ? blob.mediaType
+      : atom.mimeType;
   return (
     <Dialog>
       <div
@@ -111,7 +119,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         image={
           src === null
             ? { status: "loading" }
-            : { status: "ready", src, mediaType: atom.mimeType }
+            : { status: "ready", src, mediaType }
         }
         suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
         onCloseAutoFocus={(event) => {

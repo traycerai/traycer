@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useRef, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
 import {
@@ -37,6 +37,7 @@ const UntrustedSvgLightbox = lazy(() =>
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
+  const contentRef = useRef<HTMLDivElement>(null);
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
@@ -95,9 +96,15 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
       <DialogContent
         className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
         showCloseButton
-        // Focus the dialog itself, not the first action button - auto-focusing
-        // the Copy button popped its tooltip on every open.
-        onOpenAutoFocus={(event) => event.preventDefault()}
+        ref={contentRef}
+        // Focus the dialog itself, not the first action button, whose tooltip
+        // pops open on that focus. Radix skips its own focus move once this is
+        // prevented, so the dialog has to take focus explicitly or it would be
+        // left outside the modal, on the trigger Radix hides from screen readers.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          contentRef.current?.focus();
+        }}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
         <div className="relative flex max-h-[90vh] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
