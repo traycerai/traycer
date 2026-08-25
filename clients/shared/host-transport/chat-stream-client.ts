@@ -151,6 +151,17 @@ export interface ChatStreamClientOptions {
 }
 
 /**
+ * The oldest `chat.subscribe@1.x` minor whose server frames carry the LIVE
+ * message/event SHAPE - i.e. every field the current types promise is present
+ * on the wire, with no compatibility default needed to synthesize it.
+ *
+ * `1.6` is that floor: it shipped image support (`imageResolutions`, the
+ * image-bearing `tool_call`) and the turn-tail anchor, and the only difference
+ * between its serverFrame and the live `1.7` one is the harness enum, which
+ * changes no field's presence. Raise this ONLY when a minor adds or removes a
+ * FIELD, not when one merely widens an enum.
+ */
+/**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
  * Chat frames are text-only, so outbound action methods always send a null
@@ -239,13 +250,8 @@ export class ChatStreamClient {
     this.session.close();
   }
 
-  /**
-   * Whether THIS session negotiated exactly the live `chat.subscribe` line.
-   * Gates the shallow snapshot path: on any other (older) line the host sends
-   * pre-image shapes that only the deep parse's compatibility defaults
-   * up-convert to the current `Message`/`ChatEvent` types.
-   */
-  private isOnLiveSchemaLine(): boolean {
+  /** Whether this session negotiated the current live schema line. */
+  private isOnLiveShapedSchemaLine(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
     return (
       version !== null &&
@@ -275,7 +281,7 @@ export class ChatStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (binaryPayload !== null) return;
-    if (envelope.kind === "snapshot" && this.isOnLiveSchemaLine()) {
+    if (envelope.kind === "snapshot" && this.isOnLiveShapedSchemaLine()) {
       // Snapshots are the one frame whose size scales with chat history
       // (10s-100s of MB under full-chat-on-subscribe); a deep zod parse over
       // the message/event histories is seconds of render-thread CPU per

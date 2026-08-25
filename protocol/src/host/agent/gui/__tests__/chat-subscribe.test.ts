@@ -1561,7 +1561,7 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
   });
 
   it("carries a managed-command queue item through a 1.6 snapshot frame", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithQueueItems([managedCommandItem]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -1572,7 +1572,7 @@ describe("chat.subscribe@1.6 (managed-command queue items)", () => {
   });
 
   it("carries a managed-command queue item through a 1.6 queueChanged frame", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse({
+    const parsed = chatSubscribeV17.serverFrameSchema.parse({
       kind: "queueChanged",
       hasBinaryPayload: false,
       epicId: "epic-1",
@@ -1679,7 +1679,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
   };
 
   it("carries the chat's commands on a live snapshot", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithManagedCommands([shell]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -1701,11 +1701,11 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
     const snapshot = frame["snapshot"] as Record<string, unknown>;
     delete snapshot["managedCommands"];
 
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(frame);
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(frame);
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
     expect(parsed.snapshot.managedCommands).toEqual([]);
 
-    const changed = chatSubscribeV16.serverFrameSchema.parse({
+    const changed = chatSubscribeV17.serverFrameSchema.parse({
       kind: "managedCommandsChanged",
       hasBinaryPayload: false,
       epicId: "epic-1",
@@ -1726,7 +1726,7 @@ describe("chat.subscribe@1.6 (the chat's managed commands)", () => {
   });
 
   it("carries the whole set on every managedCommandsChanged frame", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
       managedCommandsChangedFrame,
     );
     if (parsed.kind !== "managedCommandsChanged") {
@@ -2042,7 +2042,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
   });
 
   it("round-trips tool_call.completed with imageResults through the head-line frame", () => {
-    const withImages = chatSubscribeV16.serverFrameSchema.parse(
+    const withImages = chatSubscribeV17.serverFrameSchema.parse(
       blockDeltaFrame({
         type: "tool_call.completed",
         blockId: "tool-image-1",
@@ -2062,7 +2062,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
       },
     });
 
-    const omitted = chatSubscribeV16.serverFrameSchema.parse(
+    const omitted = chatSubscribeV17.serverFrameSchema.parse(
       blockDeltaFrame({
         type: "tool_call.completed",
         blockId: "tool-image-1",
@@ -2135,7 +2135,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 
   it("round-trips image_resolution.updated through the head-line serverFrame", () => {
     for (const entry of imageResolutions) {
-      const parsed = chatSubscribeV16.serverFrameSchema.parse(
+      const parsed = chatSubscribeV17.serverFrameSchema.parse(
         createImageResolutionUpdatedFrame({
           epicId: "epic-1",
           chatId: "chat-1",
@@ -2161,7 +2161,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
   });
 
   it("carries imageResults and imageResolutions through a live 1.6 snapshot", () => {
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -2233,15 +2233,15 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     }
   });
 
-  it("binds 1.6 to the LIVE chat schema rather than a pre-image", () => {
-    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
+  it("binds the LIVE line (1.7) to the live chat schema, with 1.6 now pinned", () => {
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
 
     // The inverse of what this asserted while a 1.7 sat above a pre-image-
     // pinned 1.6. Collapsing that unreleased minor made 1.6 the live line, so
     // an image-bearing chat must now arrive INTACT rather than stripped -
     // stripping is what a frozen line does, and 1.6 has no peer to be frozen
     // against. The lines below it stay pinned because they DO have peers.
-    const parsed = chatSubscribeV16.serverFrameSchema.parse(
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
       snapshotFrameWithChat(chatWithImages),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -2267,9 +2267,682 @@ describe("chat.subscribe registry membership", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     expect(entry[1].latestMinor).toBe(7);
+    expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(entry[1].versions).not.toHaveProperty("8");
+  });
+});
+
+describe("chat.subscribe Reasonix anchor versioning", () => {
+  const reasonixMessage: UserMessage = {
+    ...userMessage,
+    sessionAnchor: {
+      harnessId: "reasonix",
+      hostId: "test-host",
+      sessionId: "reasonix-session-1",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      createdAt: 1000,
+      coveredUntilMessageId: null,
+      profileId: null,
+      labelSnapshot: null,
+      accountUuid: null,
+      accentColor: null,
+    },
+  };
+  const frame = {
+    kind: "messageAccepted" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    message: reasonixMessage,
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+    ["1.6", chatSubscribeV16],
+  ])("keeps a Reasonix anchor off released %s frames", (_version, contract) => {
+    expect(contract.serverFrameSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it("carries a Reasonix anchor on the unreleased 1.7 line", () => {
+    expect(chatSubscribeV17.serverFrameSchema.parse(frame)).toMatchObject({
+      kind: "messageAccepted",
+      message: { sessionAnchor: { harnessId: "reasonix" } },
+    });
+  });
+
+  const anchorResolvedFrame = {
+    kind: "blockDelta" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event: {
+      type: "user_message.anchor_resolved" as const,
+      blockId: "message-1",
+      timestamp: 1000,
+      messageId: "message-1",
+      anchor: {
+        harnessId: "reasonix" as const,
+        sessionId: "reasonix-session-1",
+        reasonixSessionId: "reasonix-session-1",
+      },
+    },
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+    ["1.6", chatSubscribeV16],
+  ])(
+    "keeps a Reasonix anchor-resolved event off released %s frames",
+    (_version, contract) => {
+      expect(
+        contract.serverFrameSchema.safeParse(anchorResolvedFrame).success,
+      ).toBe(false);
+    },
+  );
+
+  it("carries a Reasonix anchor-resolved event on the unreleased 1.7 line", () => {
+    expect(
+      chatSubscribeV17.serverFrameSchema.parse(anchorResolvedFrame),
+    ).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "user_message.anchor_resolved",
+        anchor: { harnessId: "reasonix" },
+      },
+    });
+  });
+});
+
+// The anchor freezes above cover `user_message.anchor_resolved` only. A harness
+// id also reaches a released server frame through the runtime session/plan
+// events, the active turn, and every settings tuple (queue items + the chat
+// record). Each of those is an independent path to the same break: a newer host
+// projecting `"reasonix"` onto a negotiated minor whose installed client has a
+// strict enum without it.
+describe("chat.subscribe Reasonix released-frame freezes", () => {
+  const RELEASED_CONTRACTS = [
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+    ["1.6", chatSubscribeV16],
+  ] as const;
+
+  const blockDelta = (event: unknown) => ({
+    kind: "blockDelta" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event,
+  });
+
+  const reasonixSettings = {
+    harnessId: "reasonix" as const,
+    model: "reasonix-pro",
+    permissionMode: "supervised" as const,
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "regular" as const,
+    profileId: null,
+  };
+
+  const reasonixActiveTurn = {
+    turnId: "turn-1",
+    status: "running" as const,
+    harnessId: "reasonix" as const,
+    model: "reasonix-pro",
+    userMessageId: "message-1",
+    startedAt: 2000,
+    updatedAt: 2000,
+  };
+
+  const reasonixQueueItem = {
+    queueItemId: "q-reasonix",
+    messageId: "message-1",
+    message: userMessage.message,
+    sender: userMessage.sender,
+    settings: reasonixSettings,
+    createdAt: 2000,
+    updatedAt: 2000,
+  };
+
+  const snapshotWith = (overrides: {
+    chat?: Chat;
+    activeTurn?: unknown;
+    queueItems?: unknown[];
+  }) => ({
+    kind: "snapshot" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    snapshot: {
+      chat: overrides.chat ?? chat,
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+      queue: { status: "idle", items: overrides.queueItems ?? [] },
+      activeTurn: overrides.activeTurn ?? null,
+      runStatus: "idle",
+      pendingApprovals: [],
+      pendingInterviews: [],
+      pendingFileEditApprovals: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      accumulatedFileChanges: [],
+    },
+  });
+
+  // Every frame below carries `reasonix` through a DIFFERENT schema path, so a
+  // fix that freezes one and misses another still fails here.
+  const reasonixFrames = [
+    [
+      "session.created blockDelta",
+      blockDelta({
+        type: "session.created",
+        blockId: "block-1",
+        timestamp: 1000,
+        session: {
+          id: "reasonix-session-1",
+          harnessId: "reasonix",
+          createdAt: 1000,
+        },
+      }),
+    ],
+    [
+      "session.resumed blockDelta",
+      blockDelta({
+        type: "session.resumed",
+        blockId: "block-1",
+        timestamp: 1000,
+        session: {
+          id: "reasonix-session-1",
+          harnessId: "reasonix",
+          createdAt: 1000,
+        },
+      }),
+    ],
+    [
+      "plan.delta blockDelta",
+      blockDelta({
+        type: "plan.delta",
+        blockId: "block-1",
+        timestamp: 1000,
+        planId: "plan-1",
+        source: {
+          harnessId: "reasonix",
+          sessionId: "reasonix-session-1",
+          turnId: "turn-1",
+          kind: "native",
+        },
+        delta: "step",
+      }),
+    ],
+    [
+      "plan.updated blockDelta",
+      blockDelta({
+        type: "plan.updated",
+        blockId: "block-1",
+        timestamp: 1000,
+        planId: "plan-1",
+        source: {
+          harnessId: "reasonix",
+          sessionId: "reasonix-session-1",
+          turnId: "turn-1",
+          kind: "native",
+        },
+      }),
+    ],
+    [
+      "plan.completed blockDelta",
+      blockDelta({
+        type: "plan.completed",
+        blockId: "block-1",
+        timestamp: 1000,
+        planId: "plan-1",
+        source: {
+          harnessId: "reasonix",
+          sessionId: "reasonix-session-1",
+          turnId: "turn-1",
+          kind: "native",
+        },
+      }),
+    ],
+    [
+      "turnStateChanged activeTurn",
+      {
+        kind: "turnStateChanged" as const,
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        runStatus: "running",
+        activeTurn: reasonixActiveTurn,
+      },
+    ],
+    ["snapshot activeTurn", snapshotWith({ activeTurn: reasonixActiveTurn })],
+    [
+      "queueChanged queue-item settings",
+      {
+        kind: "queueChanged" as const,
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: { status: "idle", items: [reasonixQueueItem] },
+      },
+    ],
+    [
+      "snapshot queue-item settings",
+      snapshotWith({ queueItems: [reasonixQueueItem] }),
+    ],
+    [
+      "snapshot chat.settings",
+      snapshotWith({ chat: { ...chat, settings: reasonixSettings } }),
+    ],
+  ] as const;
+
+  it.each(
+    reasonixFrames.flatMap(([path, frame]) =>
+      RELEASED_CONTRACTS.map(
+        ([version, contract]) => [path, version, contract, frame] as const,
+      ),
+    ),
+  )("keeps %s off released %s frames", (_path, _version, contract, frame) => {
+    expect(contract.serverFrameSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it.each(reasonixFrames)(
+    "carries %s on the unreleased 1.7 line",
+    (_path, frame) => {
+      expect(chatSubscribeV17.serverFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+    },
+  );
+
+  // The freezes above must narrow ONLY the harness enum. If a released line
+  // stopped accepting the harnesses it already ships with, the same freeze that
+  // fixes Reasonix would break every existing client instead.
+  it.each(RELEASED_CONTRACTS)(
+    "still accepts a pre-Reasonix harness on released %s frames",
+    (_version, contract) => {
+      const claudeFrames = [
+        blockDelta({
+          type: "session.created",
+          blockId: "block-1",
+          timestamp: 1000,
+          session: { id: "session-1", harnessId: "claude", createdAt: 1000 },
+        }),
+        {
+          kind: "turnStateChanged" as const,
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId: "chat-1",
+          runStatus: "running",
+          activeTurn: { ...reasonixActiveTurn, harnessId: "claude" },
+        },
+        {
+          kind: "queueChanged" as const,
+          hasBinaryPayload: false,
+          epicId: "epic-1",
+          chatId: "chat-1",
+          queue: {
+            status: "idle",
+            items: [
+              {
+                ...reasonixQueueItem,
+                settings: { ...reasonixSettings, harnessId: "claude" },
+              },
+            ],
+          },
+        },
+      ];
+
+      for (const frame of claudeFrames) {
+        expect(contract.serverFrameSchema.safeParse(frame).success).toBe(true);
+      }
+    },
+  );
+
+  // `1.5` shipped `sameTurnSteeringSupported`; the Reasonix freeze must not roll
+  // that field back while pinning the enum.
+  it("keeps the 1.5 steering-capability field on the 1.5 active turn", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: {
+        ...reasonixActiveTurn,
+        harnessId: "claude",
+        sameTurnSteeringSupported: true,
+      },
+    });
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.activeTurn).toMatchObject({
+      sameTurnSteeringSupported: true,
+    });
+  });
+
+  // Every NEWLY frozen harness-bearing path gets its own runtime negative, so a
+  // future edit to any single leaf fails here rather than only in the
+  // structural compat gate. Each frame names `reasonix` in exactly one place.
+  const agentSender = (harnessId: string) => ({
+    type: "agent" as const,
+    harnessId,
+    agentId: "agent-1",
+    displayName: null,
+    reply: { expectsReply: false as const },
+    inReplyTo: null,
+  });
+
+  const assistantRow = (harnessId: string) => ({
+    role: "assistant" as const,
+    messageId: "assistant-1",
+    sender: agentSender(harnessId),
+    blocks: [],
+    startedAt: null,
+    timestamp: 2000,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  });
+
+  const planBlock = (harnessId: string) => ({
+    blockId: "block-1",
+    status: "completed" as const,
+    timestamp: 1,
+    type: "plan" as const,
+    planStatus: "ready" as const,
+    planId: "plan-1",
+    harnessId,
+    source: { harnessId, sessionId: "s1", turnId: "t1", kind: "native" },
+  });
+
+  const noticeBlock = (harnessId: string) => ({
+    blockId: "block-1",
+    status: "completed" as const,
+    timestamp: 1,
+    type: "text" as const,
+    text: "hi",
+    providerNotice: {
+      harnessId,
+      noticeKind: "model_rerouted" as const,
+      tone: "info" as const,
+      title: "t",
+      message: null,
+      details: [],
+      metadata: null,
+    },
+  });
+
+  const steerBlock = (harnessId: string) => ({
+    blockId: "block-1",
+    status: "completed" as const,
+    timestamp: 1,
+    type: "steer" as const,
+    queueItemId: "q1",
+    messageId: "m1",
+    content: { type: "doc", content: [] },
+    mode: "safe_point" as const,
+    sender: agentSender(harnessId),
+  });
+
+  const sessionChain = (harnessId: string) => ({
+    harnessId,
+    sessionId: "s1",
+    sessionWorkspaceSnapshot: {
+      workspaceKind: "session-snapshot",
+      primaryWorkspace: "/repo",
+      secondaryWorkspaces: [],
+    },
+    coveredUntilMessageId: null,
+    profileId: null,
+  });
+
+  const eventWithActor = (harnessId: string) => ({
+    ...event,
+    actor: agentSender(harnessId),
+  });
+
+  const assistantWithBlocks = (harnessId: string, block: unknown) => ({
+    ...assistantRow("claude"),
+    blocks: [block],
+  });
+
+  // Each entry builds the SAME frame twice - once naming `reasonix`, once
+  // naming `claude` - so the negative and its control cannot drift apart.
+  const perPathFrames = [
+    [
+      "snapshot chat.messages[].sender",
+      (h: string) =>
+        snapshotWith({ chat: { ...chat, messages: [assistantRow(h)] } as Chat }),
+    ],
+    [
+      "snapshot chat.activeSessionChain",
+      (h: string) =>
+        snapshotWith({ chat: { ...chat, activeSessionChain: sessionChain(h) } as Chat }),
+    ],
+    [
+      "snapshot chat.messages[].blocks[plan]",
+      (h: string) =>
+        snapshotWith({
+          chat: {
+            ...chat,
+            messages: [assistantWithBlocks(h, planBlock(h))],
+          } as Chat,
+        }),
+    ],
+    [
+      "snapshot chat.messages[].blocks[text].providerNotice",
+      (h: string) =>
+        snapshotWith({
+          chat: {
+            ...chat,
+            messages: [assistantWithBlocks(h, noticeBlock(h))],
+          } as Chat,
+        }),
+    ],
+    [
+      "snapshot chat.messages[].blocks[steer].sender",
+      (h: string) =>
+        snapshotWith({
+          chat: {
+            ...chat,
+            messages: [assistantWithBlocks(h, steerBlock(h))],
+          } as Chat,
+        }),
+    ],
+    [
+      "snapshot chat.events[].actor",
+      (h: string) =>
+        snapshotWith({ chat: { ...chat, events: [eventWithActor(h)] } as Chat }),
+    ],
+    [
+      "messageAccepted message.sender",
+      (h: string) => ({
+        kind: "messageAccepted" as const,
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        message: {
+          ...userMessage,
+          sender: agentSender(h),
+          message: {
+            kind: "agent" as const,
+            content: { type: "doc", content: [] },
+            fromAgentId: "agent-1",
+            senderTitle: null,
+            senderHarnessId: null,
+            reply: { expectsReply: false as const },
+          },
+        },
+      }),
+    ],
+    [
+      "eventAppended event.actor",
+      (h: string) => ({
+        kind: "eventAppended" as const,
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        event: eventWithActor(h),
+      }),
+    ],
+    [
+      "queueChanged queue-item sender",
+      (h: string) => ({
+        kind: "queueChanged" as const,
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: {
+          status: "idle",
+          items: [
+            {
+              ...reasonixQueueItem,
+              settings: { ...reasonixSettings, harnessId: "claude" },
+              sender: agentSender(h),
+              message: {
+                kind: "agent" as const,
+                content: { type: "doc", content: [] },
+                fromAgentId: "agent-1",
+                senderTitle: null,
+                senderHarnessId: null,
+                reply: { expectsReply: false as const },
+              },
+            },
+          ],
+        },
+      }),
+    ],
+    [
+      "blockDelta steer.submitted sender",
+      (h: string) =>
+        blockDelta({
+          type: "steer.submitted",
+          blockId: "block-1",
+          timestamp: 1,
+          queueItemId: "q1",
+          messageId: "m1",
+          content: { type: "doc", content: [] },
+          mode: "safe_point",
+          sender: agentSender(h),
+        }),
+    ],
+    [
+      // `provider_notice.upsert` arrived on 1.3, so 1.1/1.2 reject it outright
+      // and have no meaningful `claude` control - the negative still holds
+      // there, trivially.
+      "blockDelta provider_notice.upsert",
+      (h: string) =>
+        blockDelta({
+          type: "provider_notice.upsert",
+          blockId: "block-1",
+          timestamp: 1,
+          harnessId: h,
+          noticeKind: "model_rerouted",
+          tone: "info",
+          status: "completed",
+          title: "t",
+          message: null,
+          details: [],
+          fallbackText: "t",
+          metadata: null,
+        }),
+    ],
+  ] as const;
+
+  // Rows whose EVENT predates a given minor: the negative still holds, but the
+  // `claude` control cannot, because that line has no such variant at all.
+  const CONTROL_NOT_APPLICABLE: Readonly<Record<string, readonly string[]>> = {
+    "blockDelta provider_notice.upsert": ["1.1", "1.2"],
+  };
+
+  it.each(
+    perPathFrames.flatMap(([path, build]) =>
+      RELEASED_CONTRACTS.map(
+        ([version, contract]) => [path, version, contract, build] as const,
+      ),
+    ),
+  )(
+    "keeps %s off released %s frames",
+    (path, version, contract, build) => {
+      expect(contract.serverFrameSchema.safeParse(build("reasonix")).success).toBe(
+        false,
+      );
+      if ((CONTROL_NOT_APPLICABLE[path] ?? []).includes(version)) return;
+      // Paired control: the identical frame naming a shipped harness parses,
+      // so the negative above cannot be passing for a structural reason.
+      expect(contract.serverFrameSchema.safeParse(build("claude")).success).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(perPathFrames)("carries %s on the unreleased 1.7 line", (_path, build) => {
+    expect(
+      chatSubscribeV17.serverFrameSchema.safeParse(build("reasonix")).success,
+    ).toBe(true);
+  });
+
+  // ...and ≤1.4 must still strip it, exactly as before the enum pin.
+  it("still strips the steering-capability field on the 1.4 active turn", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: {
+        ...reasonixActiveTurn,
+        harnessId: "claude",
+        sameTurnSteeringSupported: true,
+      },
+    });
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.activeTurn).not.toHaveProperty("sameTurnSteeringSupported");
+  });
+
+  it("carries a Reasonix active turn and queue item on the unreleased 1.7 line", () => {
+    const parsed = chatSubscribeV17.serverFrameSchema.parse(
+      snapshotWith({
+        activeTurn: reasonixActiveTurn,
+        queueItems: [reasonixQueueItem],
+        chat: { ...chat, settings: reasonixSettings },
+      }),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.activeTurn).toMatchObject({
+      harnessId: "reasonix",
+    });
+    expect(parsed.snapshot.chat.settings).toMatchObject({
+      harnessId: "reasonix",
+    });
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      settings: { harnessId: "reasonix" },
+    });
   });
 
   it("keeps `1.6` registered and bound to its own frozen contract", () => {

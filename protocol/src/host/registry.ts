@@ -45,12 +45,20 @@ import {
   agentListDowngradeV7ToV4,
   agentListDowngradeV7ToV5,
   agentListDowngradeV7ToV6,
+  agentListDowngradeV8ToV1,
+  agentListDowngradeV8ToV2,
+  agentListDowngradeV8ToV3,
+  agentListDowngradeV8ToV4,
+  agentListDowngradeV8ToV5,
+  agentListDowngradeV8ToV6,
+  agentListDowngradeV8ToV7,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
   agentListUpgradeV4ToV5,
   agentListUpgradeV5ToV6,
   agentListUpgradeV6ToV7,
+  agentListUpgradeV7ToV8,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -58,6 +66,7 @@ import {
   agentListV50,
   agentListV60,
   agentListV70,
+  agentListV80,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -74,39 +83,57 @@ import {
   agentConfigureDowngradeV40ToV10,
   agentConfigureDowngradeV40ToV20,
   agentConfigureDowngradeV40ToV30,
+  agentConfigureDowngradeV50ToV10,
+  agentConfigureDowngradeV50ToV20,
+  agentConfigureDowngradeV50ToV30,
+  agentConfigureDowngradeV50ToV40,
   agentConfigureV10,
   agentConfigureV20,
   agentConfigureV30,
   agentConfigureV40,
+  agentConfigureV50,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
   agentConfigureUpgradeV30ToV40,
+  agentConfigureUpgradeV40ToV50,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
   agentGetProviderProfileRateLimitsDowngradeV40ToV10,
   agentGetProviderProfileRateLimitsDowngradeV40ToV20,
   agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV40,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
   agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsV40,
+  agentGetProviderProfileRateLimitsV50,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
+  agentGetProviderProfileRateLimitsUpgradeV40ToV50,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
   agentListProviderProfilesDowngradeV40ToV10,
   agentListProviderProfilesDowngradeV40ToV20,
   agentListProviderProfilesDowngradeV40ToV30,
+  agentListProviderProfilesDowngradeV50ToV10,
+  agentListProviderProfilesDowngradeV50ToV20,
+  agentListProviderProfilesDowngradeV50ToV30,
+  agentListProviderProfilesDowngradeV50ToV40,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
   agentListProviderProfilesV30,
   agentListProviderProfilesV40,
+  agentListProviderProfilesV50,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
   agentListProviderProfilesUpgradeV30ToV40,
+  agentListProviderProfilesUpgradeV40ToV50,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxAckV10,
@@ -156,6 +183,13 @@ import {
   agentGuiListHarnessesDowngradeV7ToV4,
   agentGuiListHarnessesDowngradeV7ToV5,
   agentGuiListHarnessesDowngradeV7ToV6,
+  agentGuiListHarnessesDowngradeV8ToV1,
+  agentGuiListHarnessesDowngradeV8ToV2,
+  agentGuiListHarnessesDowngradeV8ToV3,
+  agentGuiListHarnessesDowngradeV8ToV4,
+  agentGuiListHarnessesDowngradeV8ToV5,
+  agentGuiListHarnessesDowngradeV8ToV6,
+  agentGuiListHarnessesDowngradeV8ToV7,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
@@ -164,6 +198,7 @@ import {
   agentGuiListHarnessesUpgradeV5ToV6,
   agentGuiListHarnessesUpgradeV6ToV7,
   agentGuiListHarnessesUpgradeV70ToV71,
+  agentGuiListHarnessesUpgradeV71ToV80,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -173,6 +208,7 @@ import {
   agentGuiListHarnessesV60,
   agentGuiListHarnessesV70,
   agentGuiListHarnessesV71,
+  agentGuiListHarnessesV80,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -317,7 +353,10 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicListChatRecordsV10,
+  epicGetChatRunSettingsDowngradeV20ToV10,
+  epicGetChatRunSettingsUpgradeV10ToV20,
   epicGetChatRunSettingsV10,
+  epicGetChatRunSettingsV20,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -371,6 +410,7 @@ import {
 import { epicListTuiAgentsV10 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
+  workspaceBrowseFoldersV11,
   workspaceMentionFilesV10,
   workspaceMentionFoldersV10,
   workspaceMentionWorktreesV10,
@@ -382,6 +422,8 @@ import {
   workspacePrepareFoldersV10,
   workspacePrepareFoldersV11,
   workspacePrepareFoldersV12,
+  workspacePrepareFoldersV13,
+  workspacePrepareFoldersV14,
   workspaceReadFileV10,
   workspaceWriteFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
@@ -1740,6 +1782,11 @@ export const providersListV71 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 1 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen at the v7.0 PROVIDER ID SET, not the live one - see
+  // `providersListResponseSchemaV71`'s comment. v7.0 is released, and a minor
+  // may not grow a response enum over its predecessor, so no minor of major 7
+  // can carry a provider id v7.0 lacks. The REQUEST stays live for the reason
+  // v7.0's does.
   responseSchema: providersListResponseSchemaV71,
 });
 
@@ -1750,7 +1797,7 @@ export const providersListV80 = defineRpcContract({
   responseSchema: providersListResponseSchema,
 });
 
-export const providersListUpgradeV7ToV8 = defineUpgradePath<
+export const providersListUpgradeV71ToV80 = defineUpgradePath<
   typeof providersListV71,
   typeof providersListV80
 >({
@@ -3861,6 +3908,43 @@ export const workspacePrepareFoldersUpgradeV11ToV12 = defineUpgradePath<
   }),
   upgradeResponse: (response) => response,
 });
+
+export const workspacePrepareFoldersUpgradeV12ToV13 = defineUpgradePath<
+  typeof workspacePrepareFoldersV12,
+  typeof workspacePrepareFoldersV13
+>({
+  from: workspacePrepareFoldersV12.schemaVersion,
+  to: workspacePrepareFoldersV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const workspacePrepareFoldersUpgradeV13ToV14 = defineUpgradePath<
+  typeof workspacePrepareFoldersV13,
+  typeof workspacePrepareFoldersV14
+>({
+  from: workspacePrepareFoldersV13.schemaVersion,
+  to: workspacePrepareFoldersV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const workspaceBrowseFoldersUpgradeV10ToV11 = defineUpgradePath<
+  typeof workspaceBrowseFoldersV10,
+  typeof workspaceBrowseFoldersV11
+>({
+  from: workspaceBrowseFoldersV10.schemaVersion,
+  to: workspaceBrowseFoldersV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    entries: response.entries.map((entry) => ({
+      ...entry,
+      hidden: entry.name.startsWith("."),
+    })),
+  }),
+});
+
 // Additive upgrade from v1.0: a peer on the frozen v1.0 line predates fork
 // provenance entirely, so its creates carry no fork source. The newer side
 // runs this when bridging a v1.0 peer up to canonical (host: inbound v1.0
@@ -4849,6 +4933,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         6: agentGuiListHarnessesDowngradeV7ToV6,
       },
     },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV80,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV71ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV8ToV1,
+        2: agentGuiListHarnessesDowngradeV8ToV2,
+        3: agentGuiListHarnessesDowngradeV8ToV3,
+        4: agentGuiListHarnessesDowngradeV8ToV4,
+        5: agentGuiListHarnessesDowngradeV8ToV5,
+        6: agentGuiListHarnessesDowngradeV8ToV6,
+        7: agentGuiListHarnessesDowngradeV8ToV7,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -5211,6 +5313,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         6: agentListDowngradeV7ToV6,
       },
     },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV80,
+          upgradeFromPreviousVersion: agentListUpgradeV7ToV8,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV8ToV1,
+        2: agentListDowngradeV8ToV2,
+        3: agentListDowngradeV8ToV3,
+        4: agentListDowngradeV8ToV4,
+        5: agentListDowngradeV8ToV5,
+        6: agentListDowngradeV8ToV6,
+        7: agentListDowngradeV8ToV7,
+      },
+    },
   },
   "agent.sendMessage": {
     1: {
@@ -5471,7 +5591,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "workspace.prepareFolders": {
     1: {
-      latestMinor: 2,
+      latestMinor: 4,
       versions: {
         0: {
           contract: workspacePrepareFoldersV10,
@@ -5485,6 +5605,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: workspacePrepareFoldersV12,
           upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV11ToV12,
           responseGrowthProjectionGated: true,
+        },
+        3: {
+          contract: workspacePrepareFoldersV13,
+          upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV12ToV13,
+          responseGrowthProjectionGated: true,
+        },
+        4: {
+          contract: workspacePrepareFoldersV14,
+          upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -5523,11 +5652,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "workspace.browseFolders": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspaceBrowseFoldersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: workspaceBrowseFoldersV11,
+          upgradeFromPreviousVersion: workspaceBrowseFoldersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6409,6 +6542,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    // Major 2 carries the post-v1.2.0 harness ids. v1.0 is frozen at the id set
+    // those tags shipped: its response embeds the PERSISTED harness enum, so it
+    // absorbed every new id silently until the tag-based gate caught it.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV20,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: epicGetChatRunSettingsDowngradeV20ToV10,
+      },
+    },
     degrade: { kind: "unsupported" },
   },
   // The terminal-agent record read (the TUI eviction). Optional and
@@ -7132,6 +7280,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentListProviderProfilesDowngradeV40ToV30,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV50,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV50ToV10,
+        2: agentListProviderProfilesDowngradeV50ToV20,
+        3: agentListProviderProfilesDowngradeV50ToV30,
+        4: agentListProviderProfilesDowngradeV50ToV40,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -7187,6 +7350,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV50,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -7235,6 +7414,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: agentConfigureDowngradeV40ToV10,
         2: agentConfigureDowngradeV40ToV20,
         3: agentConfigureDowngradeV40ToV30,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV50,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV50ToV10,
+        2: agentConfigureDowngradeV50ToV20,
+        3: agentConfigureDowngradeV50ToV30,
+        4: agentConfigureDowngradeV50ToV40,
       },
     },
   },
@@ -7444,7 +7638,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersListV80,
-          upgradeFromPreviousVersion: providersListUpgradeV7ToV8,
+          upgradeFromPreviousVersion: providersListUpgradeV71ToV80,
         },
       },
       downgradePathsFromLatest: {

@@ -11,6 +11,7 @@ export interface RemoteFolderPickerHeaderProps {
   /** Id of the highlighted row, or undefined when the listing is empty. */
   readonly activeOptionId: string | undefined;
   readonly addDisabled: boolean;
+  readonly addLabel: string;
   readonly onAdd: () => void;
   /** True while the location heading is swapped for the raw path field. */
   readonly editingPath: boolean;
@@ -111,7 +112,7 @@ export function RemoteFolderPickerHeader(
           disabled={props.addDisabled}
           onClick={props.onAdd}
         >
-          Add
+          {props.addLabel}
           <PrimaryActionShortcutHint />
         </Button>
       </div>

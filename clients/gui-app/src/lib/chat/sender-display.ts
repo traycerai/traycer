@@ -154,6 +154,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   pi: "Pi",
   hermes: "Hermes Agent",
   omp: "Oh My Pi",
+  reasonix: "Reasonix",
 };
 
 export function agentProviderLabel(provider: GuiHarnessId): string {

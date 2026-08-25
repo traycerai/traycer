@@ -99,7 +99,7 @@ describe("versioned-record framework - non-object schemas", () => {
 });
 
 describe("versioned-record framework - minor additivity", () => {
-  it("allows adding an enum value across minors", () => {
+  it("rejects adding an enum value across minors", () => {
     const enumV101 = defineRecordContract({
       name: "role-record",
       schemaVersion: { major: 1, minor: 1 } as const,
@@ -127,7 +127,9 @@ describe("versioned-record framework - minor additivity", () => {
       },
     };
 
-    expect(() => validateVersionedRecordRegistry(registry)).not.toThrow();
+    expect(() => validateVersionedRecordRegistry(registry)).toThrow(
+      /adds enum value 'guest'/,
+    );
   });
 
   it("rejects removing an enum value across minors", () => {

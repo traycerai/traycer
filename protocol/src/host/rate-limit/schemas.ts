@@ -8,6 +8,7 @@ import {
   providerIdSchemaV40,
   providerIdSchemaV50,
   providerIdSchemaV60,
+  providerIdSchemaV70,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -796,6 +797,57 @@ export const providerRateLimitsSchemaV60 = z.union([
   unavailableProviderRateLimitsSchemaV60,
 ]);
 export type ProviderRateLimitsV60 = z.infer<typeof providerRateLimitsSchemaV60>;
+
+// Frozen pre-Reasonix unavailable arm: same v2 reason enum, but `provider` is
+// pinned to `providerIdSchemaV70` (the provider id set as shipped in
+// cli-v1.2.0 / host-v1.2.0, with Hugging Face and before Reasonix) so an
+// already-shipped `agent.getProviderProfileRateLimits@4.0` caller's strict
+// decode never sees `"reasonix"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV70 = z.object({
+  provider: providerIdSchemaV70,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen `agent.getProviderProfileRateLimits@4.0` provider union - the live
+ * union as the v1.2.0 tags (2026-08-24) shipped it, with the `available: false`
+ * arm's `provider` pinned to `providerIdSchemaV70`.
+ *
+ * A union of this name existed here before and was deliberately REMOVED when
+ * the pre-release collapse put the Hugging Face / OpenCode-Go arms on 4.0 and
+ * nothing bound it any more (see the live union's comment). It is back for the
+ * opposite reason: 4.0 is now RELEASED, so it must stop tracking the live
+ * union. Reasonix is the first id added since that release.
+ *
+ * It KEEPS every available arm the live union carries at the freeze cut -
+ * codex, claude-code, openrouter, kilocode, grok, huggingface, opencode and
+ * cursor all shipped on 4.0 - and the unavailable arm keeps the live shape's
+ * optional `credentialGeneration`. Only the `provider` enum is narrowed.
+ *
+ * Reasonix appears in NEITHER arm: it has no available arm (it exposes no
+ * queryable quota API, so it is outside `rateLimitCapableProviderIdSchema`),
+ * and `providerIdSchemaV70` cannot name it in the unavailable one. Pinning that
+ * arm's enum is what closes the second door - left live, a Reasonix
+ * `unsupported_provider` row would still reach a v4.0 caller naming a provider
+ * that line has never heard of.
+ *
+ * Do NOT widen this schema - extend the latest union and use the v5 bridge.
+ */
+export const providerRateLimitsSchemaV70 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  huggingFaceRateLimitsSchema,
+  openCodeRateLimitsSchema,
+  cursorRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV70.extend({
+    credentialGeneration: z.string().min(1).optional(),
+  }),
+]);
+export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see

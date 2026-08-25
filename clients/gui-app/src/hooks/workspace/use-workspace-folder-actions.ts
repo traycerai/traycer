@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   useIsMutating,
   useQueryClient,
@@ -6,15 +6,15 @@ import {
 } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type {
-  PreparedWorkspaceFolder,
-  RemoveEpicRepoRequest,
-  RemoveEpicRepoResponse,
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  type PreparedWorkspaceFolder,
+  type RemoveEpicRepoRequest,
+  type RemoveEpicRepoResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
-  WorkspacePrepareFoldersRequestV12,
-  WorkspacePrepareFoldersResponseV12,
+  WorkspacePrepareFoldersRequestV14,
+  WorkspacePrepareFoldersResponseV14,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host/runtime";
@@ -24,11 +24,14 @@ import {
   isCloudEpicTasksQueryKey,
   workspaceMutationKeys,
 } from "@/lib/query-keys";
-import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-import { useWorkspaceRecordRecentWorkspace } from "./use-workspace-record-recent-workspace-mutation";
+import { workspaceMappingQueryPredicate } from "./use-resolved-workspace-folders-query";
+import {
+  useWorkspaceRecordRecentWorkspace,
+  writeRecentWorkspacesCache,
+} from "./use-workspace-record-recent-workspace-mutation";
 
 interface MutationContext {
   readonly hostId: string | null;
@@ -41,7 +44,7 @@ interface MutationContext {
  */
 export type PrepareFoldersWithHostResult = {
   readonly folders: readonly PreparedWorkspaceFolder[];
-  readonly repoIdentifiers: WorkspacePrepareFoldersResponseV12["repoIdentifiers"];
+  readonly repoIdentifiers: WorkspacePrepareFoldersResponseV14["repoIdentifiers"];
   readonly hostId: string;
 };
 
@@ -49,9 +52,9 @@ export interface WorkspaceFolderActions {
   readonly isPreparing: boolean;
   readonly isRemoving: boolean;
   readonly prepareFoldersMutation: UseMutationResult<
-    WorkspacePrepareFoldersResponseV12,
+    WorkspacePrepareFoldersResponseV14,
     HostRpcError,
-    WorkspacePrepareFoldersRequestV12,
+    WorkspacePrepareFoldersRequestV14,
     MutationContext
   >;
   readonly removeEpicRepoMutation: UseMutationResult<
@@ -73,11 +76,13 @@ export function useWorkspaceFolderActions(): WorkspaceFolderActions {
 export function useWorkspaceFolderActionsForClient(
   client: HostClient<HostRpcRegistry> | null,
 ): WorkspaceFolderActions {
-  const runnerHost = useRunnerHost();
   const queryClient = useQueryClient();
   const recordRecentWorkspace = useWorkspaceRecordRecentWorkspace({
     client,
   }).mutate;
+  const prepareRecentsByResponse = useRef(
+    new WeakMap<WorkspacePrepareFoldersResponseV14, boolean>(),
+  );
 
   const prepareFoldersMutation = useHostMutation<
     HostRpcRegistry,
@@ -87,16 +92,42 @@ export function useWorkspaceFolderActionsForClient(
     client,
     method: "workspace.prepareFolders",
     mapVariables: (variables) => variables,
+    onResponse: (response) => {
+      const hostId = client?.getActiveHostId() ?? null;
+      const version =
+        hostId === null
+          ? null
+          : getNegotiatedHostMethodVersion(hostId, "workspace.prepareFolders");
+      prepareRecentsByResponse.current.set(
+        response,
+        version?.major === 1 && version.minor >= 4,
+      );
+    },
     options: {
       mutationKey: workspaceMutationKeys.prepareFolders(),
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      onSuccess: async (_result, _variables, context) => {
+      onSuccess: async (result, variables, context) => {
+        writeRecentWorkspacesCache(queryClient, context.hostId, result);
+        if (variables.operation === "createAndPrepare") {
+          await queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "workspace.browseFolders",
+            ),
+            refetchType: "none",
+          });
+        }
+        if (result.repoIdentifiers.length === 0) return;
         const queryKey = hostQueryKeys.methodScope(
           context.hostId,
           "workspace.resolvePathsByRepoIdentifiers",
         );
-        await queryClient.cancelQueries({ queryKey });
-        await queryClient.invalidateQueries({ queryKey });
+        const predicate = workspaceMappingQueryPredicate(
+          queryKey.length,
+          result.repoIdentifiers,
+        );
+        await queryClient.cancelQueries({ queryKey, predicate });
+        await queryClient.invalidateQueries({ queryKey, predicate });
       },
       // No success toast: added folders appear immediately in the picker rows.
       onError: (error) => {
@@ -175,33 +206,15 @@ export function useWorkspaceFolderActionsForClient(
       }
       const dispatchHostId = dispatchHost.hostId;
 
-      // A local/mock host shares the client machine, so the shell's native OS
-      // directory dialog picks real host paths. Everything else — a remote host,
-      // or any shell without a native dialog (mobile/browser) — browses the
-      // host's filesystem over `workspace.browseFolders`. Both resolve to the
-      // same `readonly string[]` shape (`IRunnerHost.workspaceFolders
-      // .pickFolders()`'s contract), so everything downstream
-      // (`workspace.prepareFolders`, `addResolvedFolders`, …) runs unchanged
-      // regardless of which picker produced the path.
-      let folderPaths: readonly string[];
-      if (
-        canAssociateLocalWorkspaces(dispatchHost) &&
-        runnerHost.workspaceFolders.canPickNatively
-      ) {
-        folderPaths = await runnerHost.workspaceFolders.pickFolders();
-      } else {
-        // Hand the picker a requester PINNED to dispatchHost. A tab's client is
-        // host-bound for life, but an app-wide one is not: if the active host
-        // changed while the dialog was open, an unpinned client would browse -
-        // and record recents on - whichever host became active, even though the
-        // path is submitted to dispatchHost below. The guard after this only
-        // catches the prepare call, by which point the browsing already leaked.
-        const pickedPath = await useRemoteFolderPickerStore
-          .getState()
-          .requestPick(client.createRequester(dispatchHost));
-        folderPaths = pickedPath === null ? [] : [pickedPath];
-      }
-      if (folderPaths.length === 0) {
+      // Hand the shared picker a requester PINNED to dispatchHost. A tab's
+      // client is host-bound for life, but an app-wide one is not: if the
+      // active host changed while the dialog was open, an unpinned client
+      // would browse whichever host became active even though the path is
+      // submitted to dispatchHost below.
+      const selection = await useRemoteFolderPickerStore
+        .getState()
+        .requestPick(client.createRequester(dispatchHost));
+      if (selection === null) {
         return null;
       }
       if (!hostStillBound(client, dispatchHostId)) {
@@ -218,12 +231,26 @@ export function useWorkspaceFolderActionsForClient(
         return null;
       }
 
-      const response = await prepareFoldersAsync({
-        operation: "prepare",
-        folderPaths: [...folderPaths],
-        path: null,
-        bumpRecency: null,
-      }).catch(() => null);
+      let request: WorkspacePrepareFoldersRequestV14;
+      switch (selection.kind) {
+        case "prepare":
+          request = {
+            operation: "prepare",
+            folderPaths: [...selection.folderPaths],
+            path: null,
+            bumpRecency: recordAsRecent ? true : null,
+          };
+          break;
+        case "createAndPrepare":
+          request = {
+            operation: "createAndPrepare",
+            folderPaths: null,
+            path: selection.path,
+            bumpRecency: recordAsRecent ? true : null,
+          };
+          break;
+      }
+      const response = await prepareFoldersAsync(request).catch(() => null);
       if (response === null) {
         return null;
       }
@@ -241,7 +268,9 @@ export function useWorkspaceFolderActionsForClient(
         return null;
       }
 
-      if (recordAsRecent) {
+      const recordedRecentsInPrepare =
+        prepareRecentsByResponse.current.get(response) === true;
+      if (recordAsRecent && !recordedRecentsInPrepare) {
         for (const folder of response.folders) {
           recordRecentWorkspace({
             path: folder.workspacePath,
@@ -257,7 +286,7 @@ export function useWorkspaceFolderActionsForClient(
         hostId: dispatchHostId,
       };
     },
-    [client, runnerHost, prepareFoldersAsync, recordRecentWorkspace],
+    [client, prepareFoldersAsync, recordRecentWorkspace],
   );
 
   return {
@@ -287,17 +316,6 @@ function hostStillBound(
 ): boolean {
   if (client === null) return false;
   return client.getActiveHostId() === dispatchHostId;
-}
-
-function canAssociateLocalWorkspaces(
-  activeHost: HostDirectoryEntry | null,
-): activeHost is HostDirectoryEntry & {
-  readonly kind: "local" | "mock";
-} {
-  return (
-    activeHost !== null &&
-    (activeHost.kind === "local" || activeHost.kind === "mock")
-  );
 }
 
 function readWorkspaceActionErrorMessage(error: unknown): string {
