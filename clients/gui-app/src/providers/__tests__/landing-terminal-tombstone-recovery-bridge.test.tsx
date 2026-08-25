@@ -999,11 +999,11 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
   });
 
-  it("stops retrying a permanently failing kill instead of looping forever", async () => {
-    // The backoff caps at 8s, so an unbounded retry against a host that keeps
-    // rejecting - a credential it will not accept, say - is an RPC every eight
-    // seconds for as long as the app is open, on a route that stays perfectly
-    // dialable.
+  it("backs a permanently failing kill off to a long interval, and never gives up", async () => {
+    // The cost this guards is a permanent failure retrying every 8s for as long
+    // as the app is open. It is answered by GROWING the interval rather than by
+    // an attempt budget: a budget reaches a state the drain cannot leave, and a
+    // tombstone is a kill that is still owed.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -1030,30 +1030,31 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     await act(async () => Promise.resolve());
     expect(mocks.kill).toHaveBeenCalledTimes(1);
 
-    // Well past the whole backoff schedule (500+1000+2000+4000+8000+8000ms).
-    for (let round = 0; round < 20; round += 1) {
+    const advance = async (ms: number): Promise<void> => {
       await act(async () => {
-        vi.advanceTimersByTime(8_000);
+        vi.advanceTimersByTime(ms);
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
       });
-    }
+    };
 
-    // One initial dispatch plus the capped retries, and then silence - not a
-    // call per 8s tick for the rest of the session.
-    expect(mocks.kill).toHaveBeenCalledTimes(7);
-    // The tombstone is SUSPENDED, not retired: the kill is still owed and the
-    // next route or authority change sends it.
+    // An hour of wall clock. Under the old 8s ceiling this would be ~450 calls.
+    for (let round = 0; round < 60; round += 1) await advance(60_000);
+    const afterAnHour = mocks.kill.mock.calls.length;
+    expect(afterAnHour).toBeLessThan(30);
+
+    // Still owed, and still trying - the drain has not parked itself.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-b", sessionId: "session-doomed" },
     ]);
+    for (let round = 0; round < 10; round += 1) await advance(60_000);
+    expect(mocks.kill.mock.calls.length).toBeGreaterThan(afterAnHour);
   });
 
-  it("gives a capability change a FRESH retry budget rather than an exhausted one", async () => {
-    // A budget spent under one protocol must not silence the first transient
-    // failure of the other. The attempts that failed were a different request
-    // against a different arm.
+  it("restarts the backoff when the host changes capability", async () => {
+    // A protocol change deserves a prompt attempt rather than inheriting a long
+    // interval the other arm ran up while failing.
     vi.useFakeTimers();
     mocks.entries = [
       {
@@ -1080,16 +1081,17 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     const view = render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
-    // Spend the whole legacy budget.
-    for (let round = 0; round < 20; round += 1) {
+    const advance = async (ms: number): Promise<void> => {
       await act(async () => {
-        vi.advanceTimersByTime(8_000);
+        vi.advanceTimersByTime(ms);
         await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
       });
-    }
-    expect(mocks.kill).toHaveBeenCalledTimes(7);
+    };
+
+    // Run the legacy arm out to its long interval.
+    for (let round = 0; round < 30; round += 1) await advance(60_000);
 
     // The host comes back speaking the plain protocol, still failing.
     mocks.authorityStatus = "capable";
@@ -1100,18 +1102,14 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       Promise.reject(new Error("still failing")),
     );
     view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
-    await act(async () => Promise.resolve());
+    // Let the dispatch AND its rejection settle, so the retry timer is armed
+    // before the clock moves.
+    await advance(0);
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
 
-    for (let round = 0; round < 20; round += 1) {
-      await act(async () => {
-        vi.advanceTimersByTime(8_000);
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-    }
-
-    // A full budget of its own, not one attempt and silence.
-    expect(mocks.closeAsync).toHaveBeenCalledTimes(7);
+    // Retried on the SHORT end of the schedule, not the ceiling the legacy arm
+    // had climbed to.
+    await advance(1_000);
+    expect(mocks.closeAsync.mock.calls.length).toBeGreaterThan(1);
   });
 });

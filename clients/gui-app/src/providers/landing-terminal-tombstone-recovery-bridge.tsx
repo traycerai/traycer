@@ -30,20 +30,23 @@ import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
 import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
-const CAPABLE_CLOSE_RETRY_MAX_MS = 8_000;
 /**
- * Automatic attempts before a tombstone stops re-sending on its own.
+ * Ceiling on the retry interval - and there is deliberately NO ceiling on the
+ * number of attempts.
  *
- * The backoff caps at 8s, so without a ceiling a PERMANENT failure - a host
- * that keeps rejecting the current credential, say - is an RPC every eight
- * seconds for as long as the app is open, on a route that stays perfectly
- * dialable. The retry record is what carries the count, and
- * `cancelUndrainableCapableCloseRetries` drops it the moment the host stops
- * being drainable, so exhausting the budget suspends the tombstone until the
- * route or the authority actually changes rather than retiring it - the
- * kill is still owed, and the next recovery edge sends it.
+ * A tombstone is a kill that is still owed, so the drain must not reach a state
+ * it cannot leave. An attempt budget did exactly that: once spent, the three
+ * ways back in are all shut for a host that stays dialable under one
+ * capability, so a failure repaired by a credential refresh or a reconnect -
+ * which replaces the authority without changing its protocol - would never be
+ * retried, and the shell would outlive its tab until relaunch.
+ *
+ * What the budget was there to stop was the COST of a permanent failure
+ * retrying every 8s forever. Growing the interval answers that directly: the
+ * backoff reaches this ceiling after ~10 attempts and then costs a handful of
+ * requests an hour, while a host that recovers is still picked up on its own.
  */
-const CLOSE_RETRY_MAX_ATTEMPTS = 6;
+const CAPABLE_CLOSE_RETRY_MAX_MS = 300_000;
 
 interface CapableCloseRetry {
   attempt: number;
@@ -174,15 +177,18 @@ function scheduleCloseRetry(args: {
 }): void {
   if (!args.refs.mounted.current) return;
   if (!closeRetryStillWarranted(args)) return;
+  // A record belonging to the OTHER protocol is discarded outright, timer and
+  // all. Keeping it would block this arm twice over: its armed timer makes the
+  // guard below return, and its attempt count would hand a host that just
+  // changed protocol the long interval the failed arm ran up. A protocol change
+  // deserves a prompt attempt on a clean schedule.
+  const stale = args.refs.retries.current.get(args.key);
+  if (stale !== undefined && stale.capability !== args.capability) {
+    clearCapableCloseRetry(args.refs.retries.current, args.key);
+  }
   const prior = args.refs.retries.current.get(args.key);
   if (prior !== undefined && prior.timer !== null) return;
-  // Only attempts spent on THIS protocol count. Carrying them across a
-  // capability change would let a budget exhausted under the old arm silence
-  // the very first transient failure of the new one, stranding the terminal
-  // until another flap.
-  const spent = prior?.capability === args.capability ? prior.attempt : 0;
-  const attempt = spent + 1;
-  if (attempt > CLOSE_RETRY_MAX_ATTEMPTS) return;
+  const attempt = (prior?.attempt ?? 0) + 1;
   const retryDelay = Math.min(
     CAPABLE_CLOSE_RETRY_BASE_MS * 2 ** (attempt - 1),
     CAPABLE_CLOSE_RETRY_MAX_MS,
