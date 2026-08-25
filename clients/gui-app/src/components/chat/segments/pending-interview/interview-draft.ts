@@ -43,6 +43,60 @@ export function draftHasState(draft: DraftAnswer): boolean {
   );
 }
 
+export function questionIdentity(question: InterviewQuestion): string {
+  return JSON.stringify([
+    "question",
+    question.questionId,
+    question.question,
+    question.header,
+    question.multiSelect,
+    question.options.map((option) => [
+      option.label,
+      option.description,
+      option.preview,
+    ]),
+  ]);
+}
+
+export function draftsFromStoredAnswers(
+  storedAnswers: ReadonlyArray<StoredInterviewDraftAnswer> | undefined,
+  questions: ReadonlyArray<InterviewQuestion>,
+): ReadonlyArray<DraftAnswer> {
+  const identities = questions.map(questionIdentity);
+  const currentIdentityCounts = new Map<string, number>();
+  for (const identity of identities) {
+    currentIdentityCounts.set(
+      identity,
+      (currentIdentityCounts.get(identity) ?? 0) + 1,
+    );
+  }
+  const storedByIdentity = new Map<
+    string,
+    ReadonlyArray<StoredInterviewDraftAnswer>
+  >();
+  for (const answer of storedAnswers ?? []) {
+    if (answer.questionIdentity === undefined) continue;
+    storedByIdentity.set(answer.questionIdentity, [
+      ...(storedByIdentity.get(answer.questionIdentity) ?? []),
+      answer,
+    ]);
+  }
+
+  return questions.map((question, index) => {
+    if (storedAnswers === undefined) return emptyDraft();
+    const identity = identities.at(index);
+    if (identity === undefined) return emptyDraft();
+    const matches = storedByIdentity.get(identity) ?? [];
+    if (currentIdentityCounts.get(identity) === 1 && matches.length === 1) {
+      return draftFromStoredAnswer(matches[0], question);
+    }
+    const positional = storedAnswers.at(index);
+    return positional?.questionIdentity === undefined
+      ? draftFromStoredAnswer(positional, question)
+      : emptyDraft();
+  });
+}
+
 export function draftFromStoredAnswer(
   stored: StoredInterviewDraftAnswer | undefined,
   question: InterviewQuestion,
@@ -50,7 +104,8 @@ export function draftFromStoredAnswer(
   if (stored === undefined) return emptyDraft();
   const storedIndices = stored.selectedOptionIndices;
   const exactIndices =
-    storedIndices === undefined || stored.questionId !== question.questionId
+    storedIndices === undefined ||
+    stored.questionIdentity !== questionIdentity(question)
       ? null
       : (() => {
           const indices = [...new Set(storedIndices)].filter(
@@ -98,9 +153,7 @@ export function draftToStoredAnswer(
   question: InterviewQuestion,
 ): StoredInterviewDraftAnswer {
   return {
-    ...(question.questionId === null
-      ? {}
-      : { questionId: question.questionId }),
+    questionIdentity: questionIdentity(question),
     selected: [...draft.selected].flatMap((index) => {
       const option = question.options.at(index);
       return option === undefined ? [] : [option.label];

@@ -23,7 +23,7 @@ import {
   useInterviewDraftStore,
 } from "@/stores/composer/interview-draft-store";
 import {
-  draftFromStoredAnswer,
+  draftsFromStoredAnswers,
   draftHasContent,
   draftHasState,
   draftToAnswerValues,
@@ -141,10 +141,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   }, [isBusy]);
 
   const drafts = useMemo(
-    () =>
-      questions.map((question, index) =>
-        draftFromStoredAnswer(storedDraft?.answers[index], question),
-      ),
+    () => draftsFromStoredAnswers(storedDraft?.answers, questions),
     [questions, storedDraft],
   );
 
@@ -180,9 +177,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         Math.max(latest?.pageIndex ?? 0, 0),
         Math.max(total - 1, 0),
       ),
-      drafts: questions.map((question, index) =>
-        draftFromStoredAnswer(latest?.answers[index], question),
-      ),
+      drafts: draftsFromStoredAnswers(latest?.answers, questions),
     };
   };
 

@@ -7,9 +7,10 @@ import {
 import { interviewDraftKey, interviewDraftKeyPrefix } from "@/lib/persist";
 
 export interface StoredInterviewDraftAnswer {
-  // The question that owned the interaction-time indices. Missing on legacy
-  // rows, which may restore labels visibly but cannot prove exact selection.
-  readonly questionId?: string;
+  // Stable identity of the question that owned the interaction-time indices.
+  // Missing on legacy rows, which may restore labels visibly but cannot prove
+  // exact selection.
+  readonly questionIdentity?: string;
   // Legacy label snapshot, retained only so pre-index local rows can restore
   // their visible choices. It is never enough to manufacture exact evidence.
   readonly selected: ReadonlyArray<string>;
@@ -61,8 +62,10 @@ function parseStoredAnswer(value: unknown): StoredInterviewDraftAnswer | null {
     return null;
   }
   return {
-    questionId:
-      typeof value.questionId === "string" ? value.questionId : undefined,
+    questionIdentity:
+      typeof value.questionIdentity === "string"
+        ? value.questionIdentity
+        : undefined,
     selected: value.selected.filter(
       (label): label is string => typeof label === "string",
     ),

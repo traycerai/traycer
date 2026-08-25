@@ -44,9 +44,7 @@ function expectPlanBlock(block: ContentBlock | undefined): PlanBlock {
   return block;
 }
 
-function expectInterviewBlock(
-  block: ContentBlock | undefined,
-): InterviewBlock {
+function expectInterviewBlock(block: ContentBlock | undefined): InterviewBlock {
   if (block?.type !== "interview") {
     throw new Error("Expected an interview block");
   }
@@ -1916,6 +1914,101 @@ describe("accumulateEvent", () => {
     expect(blocks).toBe(settled);
     expect((blocks[0] as InterviewBlock).title).toBe("Original");
     expect((blocks[0] as InterviewBlock).outcome).toBe("answered");
+  });
+
+  it("backfills framing when interview.resolved arrives before interview.requested", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const terminal = blocks[0] as InterviewBlock;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Library choice",
+      description: "Choose the dependency",
+      metadata: { provider: "test" },
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [
+            { label: "date-fns", description: "Small", preview: "Preview" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    const enriched = blocks[0] as InterviewBlock;
+    expect(enriched).toMatchObject({
+      status: terminal.status,
+      timestamp: terminal.timestamp,
+      outcome: terminal.outcome,
+      answers: terminal.answers,
+      settlement: terminal.settlement,
+      toolName: "AskUserQuestion",
+      title: "Library choice",
+      description: "Choose the dependency",
+      metadata: { provider: "test" },
+    });
+    expect(enriched.questions).toHaveLength(1);
+  });
+
+  it("backfills framing when interview.errored arrives before interview.requested", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "Provider stopped",
+    });
+    const terminal = blocks[0] as InterviewBlock;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Original prompt",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Continue?",
+          header: null,
+          options: [{ label: "Yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+
+    const enriched = blocks[0] as InterviewBlock;
+    expect(enriched).toMatchObject({
+      status: terminal.status,
+      timestamp: terminal.timestamp,
+      outcome: terminal.outcome,
+      error: terminal.error,
+      settlement: terminal.settlement,
+      diagnostics: terminal.diagnostics,
+      toolName: "AskUserQuestion",
+      title: "Original prompt",
+    });
+    expect(enriched.questions).toHaveLength(1);
   });
 
   it("interview.requested while streaming still updates the pending card", () => {

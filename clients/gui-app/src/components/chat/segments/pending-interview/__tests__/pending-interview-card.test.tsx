@@ -12,7 +12,12 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
-import { draftFromStoredAnswer } from "@/components/chat/segments/pending-interview/interview-draft";
+import {
+  draftFromStoredAnswer,
+  draftsFromStoredAnswers,
+  draftToStoredAnswer,
+  questionIdentity,
+} from "@/components/chat/segments/pending-interview/interview-draft";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -31,7 +36,9 @@ describe("draftFromStoredAnswer", () => {
   it("falls back to saved labels when option indices now name different labels", () => {
     const restored = draftFromStoredAnswer(
       {
-        questionId: "q1",
+        questionIdentity: questionIdentity(
+          singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+        ),
         selected: ["Alpha"],
         selectedOptionIndices: [0],
         otherSelected: false,
@@ -46,7 +53,9 @@ describe("draftFromStoredAnswer", () => {
   it("does not treat indices from a different question as exact evidence", () => {
     const restored = draftFromStoredAnswer(
       {
-        questionId: "original-question",
+        questionIdentity: questionIdentity(
+          singleSelect("original-question", "Different prompt", ["Yes", "No"]),
+        ),
         selected: ["Yes"],
         selectedOptionIndices: [0],
         otherSelected: false,
@@ -58,10 +67,168 @@ describe("draftFromStoredAnswer", () => {
     expect([...restored.selected]).toEqual([0]);
     expect(restored.selectionEvidenceExact).toBe(false);
   });
+
+  it("keeps legacy index rows visible without promoting them to exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        selected: ["Yes"],
+        selectedOptionIndices: [1],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect(null, "Continue?", ["Yes", "Yes"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("preserves exact duplicate-label indices for a fresh question without an ID", () => {
+    const question = singleSelect(null, "Continue?", ["Yes", "Yes"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      question,
+    );
+
+    const restored = draftFromStoredAnswer(stored, question);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.selectionEvidenceExact).toBe(true);
+  });
+
+  it("does not carry anonymous-question indices across different prompt framing", () => {
+    const original = singleSelect(null, "First prompt", ["Yes", "Yes"]);
+    const replacement = singleSelect(null, "Replacement prompt", [
+      "Yes",
+      "Yes",
+    ]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, replacement);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("matches modern drafts by unique identity when questions reorder", () => {
+    const first = singleSelect("first", "First prompt", ["Yes", "No"]);
+    const second = singleSelect("second", "Second prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        first,
+      ),
+      draftToStoredAnswer(
+        {
+          selected: new Set(),
+          selectionEvidenceExact: true,
+          otherText: "second custom text",
+          otherSelected: true,
+        },
+        second,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [second, first]);
+    expect([...restored[0].selected]).toEqual([]);
+    expect(restored[0].otherText).toBe("second custom text");
+    expect([...restored[1].selected]).toEqual([0]);
+    expect(restored[1].otherText).toBe("");
+    expect(restored.every((draft) => draft.selectionEvidenceExact)).toBe(true);
+  });
+
+  it("does not positionally attach an unmatched modern draft", () => {
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to the old prompt",
+          otherSelected: true,
+        },
+        singleSelect("old", "Old prompt", ["Yes", "No"]),
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      singleSelect("new", "New prompt", ["Yes", "No"]),
+    ]);
+    expect(restored).toEqual({
+      selected: new Set(),
+      selectionEvidenceExact: true,
+      otherText: "",
+      otherSelected: false,
+    });
+  });
+
+  it("does not duplicate one modern draft across identical current questions", () => {
+    const question = singleSelect("same", "Same prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        question,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [question, question]);
+    expect(restored).toEqual([
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+    ]);
+  });
+
+  it("downgrades exact evidence when options reorder under the same question ID", () => {
+    const original = singleSelect("same", "Choose", ["First", "Second"]);
+    const reordered = singleSelect("same", "Choose", ["Second", "First"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, reordered);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
 });
 
 function singleSelect(
-  id: string,
+  id: string | null,
   question: string,
   labels: ReadonlyArray<string>,
 ): InterviewQuestion {
@@ -737,14 +904,18 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
-            questionId: "q1",
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: true,
           },
           {
-            questionId: "q2",
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
@@ -802,7 +973,9 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
-            questionId: "only",
+            questionIdentity: questionIdentity(
+              singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
@@ -942,14 +1115,18 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
-            questionId: "q1",
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: false,
           },
           {
-            questionId: "q2",
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+            ),
             selected: ["Gamma"],
             selectedOptionIndices: [0],
             otherText: "",
@@ -1016,21 +1193,27 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 2,
         answers: [
           {
-            questionId: "q1",
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
             selected: ["Alpha"],
             selectedOptionIndices: [0],
             otherText: "",
             otherSelected: false,
           },
           {
-            questionId: "q2",
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: false,
           },
           {
-            questionId: "q3",
+            questionIdentity: questionIdentity(
+              singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
+            ),
             selected: [],
             selectedOptionIndices: [],
             otherText: "",

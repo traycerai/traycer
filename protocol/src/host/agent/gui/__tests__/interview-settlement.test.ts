@@ -859,6 +859,25 @@ describe("payload ownership", () => {
     expect(filled.block.outcome).toBe("answered");
   });
 
+  it("does not fill empty runtime answers from an altered same-settlement replay", () => {
+    const empty = reduce(
+      streamingBlock(),
+      runtimeAnswered("runtime-empty", [], 10),
+    );
+    const replay = applyInterviewSettlement(
+      empty.block,
+      runtimeAnswered("runtime-empty", [makeAnswer(["lodash"])], 20),
+    );
+
+    expect(replay.changed).toBe(false);
+    expect(replay.patch.answers).toEqual([]);
+    expect(replay.patch.settlement).toEqual({
+      settlementId: "runtime-empty",
+      source: "runtime",
+    });
+    expect(replay.patch.timestamp).toBe(empty.block.timestamp);
+  });
+
   it("keeps the first non-empty runtime payload when later runtime evidence conflicts", () => {
     const first = reduce(
       streamingBlock(),

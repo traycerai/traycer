@@ -1407,7 +1407,35 @@ export function accumulateEvent(
         // terminal facts (`clearInterviewSettlement`) and synthesize a fresh
         // request. The predicate is the shared union rule, so this agrees with
         // host hydration and notification reconciliation by construction.
-        if (isInterviewBlockSettled(existing)) return blocks;
+        if (isInterviewBlockSettled(existing)) {
+          // A settlement can be observed before its request (resume/replay or
+          // transport reordering), producing a terminal synthetic block with
+          // no framing. A late request must never REOPEN or rewrite that fact,
+          // but it is authoritative framing evidence. Fill only fields that
+          // are still absent, preserving terminal timestamp and every
+          // settlement-owned field byte-for-value.
+          const enriched = {
+            ...existing,
+            toolName: existing.toolName ?? event.toolName,
+            title: existing.title ?? nullableString(event.title),
+            description:
+              existing.description ?? nullableString(event.description),
+            questions:
+              existing.questions.length === 0 && event.questions.length > 0
+                ? [...event.questions]
+                : existing.questions,
+            metadata: existing.metadata ?? nullableMetadata(event.metadata),
+          };
+          const framingUnchanged =
+            enriched.toolName === existing.toolName &&
+            enriched.title === existing.title &&
+            enriched.description === existing.description &&
+            enriched.questions === existing.questions &&
+            enriched.metadata === existing.metadata;
+          return framingUnchanged
+            ? blocks
+            : replaceBlock(blocks, event.blockId, enriched);
+        }
         const updated = {
           ...existing,
           status: "streaming" as const,

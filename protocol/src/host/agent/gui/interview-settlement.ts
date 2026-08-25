@@ -524,6 +524,7 @@ export function applyInterviewSettlement(
   // replace non-empty content, cross GUI authority, or change the outcome.
   const fillsEmptyRuntimeAnswers =
     !wins &&
+    !alreadyApplied &&
     block.settlement?.source === "runtime" &&
     block.outcome === "answered" &&
     block.answers.length === 0 &&
