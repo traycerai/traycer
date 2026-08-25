@@ -507,6 +507,8 @@ describe("deriveInterviewReviewModel", () => {
     expect(model.searchableFields.map((field) => field.text)).toContain(
       "Decide after the rollout review",
     );
+    expect(model.savedDraftCount).toBe(1);
+    expect(model.summary).toBe("Interview skipped · 1 draft saved");
   });
 
   it("does not let stale drafts hide submitted evidence for answered history", () => {

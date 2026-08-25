@@ -153,6 +153,34 @@ describe("InterviewSegment", () => {
     expect(screen.queryByRole("button", { name: "A/B Fork" })).toBeNull();
   });
 
+  it("keeps carried settled history open and suppresses fork modes", () => {
+    render(
+      <InterviewTestProviders>
+        <InterviewSegment
+          blockId="interview-carried-settled"
+          status="completed"
+          toolName="AskUserQuestion"
+          title="Need input"
+          description={null}
+          questions={[]}
+          answers={[]}
+          draftAnswers={[]}
+          outcome="answered"
+          settlement={null}
+          error={null}
+          delivery={null}
+          forkedWithoutAnswer
+          interviewDeliveryRetry={null}
+          forkAction={{ enabled: true, pending: false, onFork: vi.fn() }}
+        />
+      </InterviewTestProviders>,
+    );
+
+    expect(screen.getAllByText("Answered 0 questions")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Cross Question" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "A/B Fork" })).toBeNull();
+  });
+
   it("shows both fork modes after the question is skipped", () => {
     const onFork = vi.fn();
     render(

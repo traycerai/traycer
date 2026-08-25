@@ -67,9 +67,11 @@ export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
   const setFindForcedOpen = useSetChatFindForcedOpen();
   const activeFindField = findSearchField(model, activeTargetUnitId);
   const cardRootRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(model.outcome === "carried");
+  const [open, setOpen] = useState(props.reviewInput.forkedWithoutAnswer);
   const [manualPageIndex, setManualPageIndex] = useState(0);
-  const forkAction = model.outcome === "carried" ? null : props.forkAction;
+  const forkAction = props.reviewInput.forkedWithoutAnswer
+    ? null
+    : props.forkAction;
 
   // Find is a transient override, but only a mounted/revealable field may
   // become a real local disclosure choice before the controller releases the

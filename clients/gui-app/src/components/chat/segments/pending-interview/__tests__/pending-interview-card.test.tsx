@@ -153,6 +153,34 @@ describe("draftFromStoredAnswer", () => {
     expect(restored.every((draft) => draft.selectionEvidenceExact)).toBe(true);
   });
 
+  it("preserves content but downgrades evidence across cosmetic framing updates", () => {
+    const original = singleSelect("stable", "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        description: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
   it("does not positionally attach an unmatched modern draft", () => {
     const stored = [
       draftToStoredAnswer(

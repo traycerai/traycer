@@ -478,7 +478,10 @@ function outcomeFor(
 }
 
 function savedDraftCount(drafts: ReadonlyArray<InterviewAnswer>): number {
-  return drafts.filter((answer) => answer.values.length > 0).length;
+  return drafts.filter(
+    (answer) =>
+      answer.values.length > 0 || meaningfulText(answer.notes) !== null,
+  ).length;
 }
 
 function answeredCount(pages: ReadonlyArray<InterviewReviewPage>): number {

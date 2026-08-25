@@ -58,11 +58,35 @@ export function questionIdentity(question: InterviewQuestion): string {
   ]);
 }
 
+function questionAssociationIdentity(question: InterviewQuestion): string {
+  return question.questionId !== null && question.questionId.length > 0
+    ? JSON.stringify(["question-id", question.questionId])
+    : questionIdentity(question);
+}
+
+function storedQuestionAssociationIdentity(identity: string): string {
+  try {
+    const decoded: unknown = JSON.parse(identity);
+    if (
+      Array.isArray(decoded) &&
+      decoded[0] === "question" &&
+      typeof decoded[1] === "string" &&
+      decoded[1].length > 0
+    ) {
+      return JSON.stringify(["question-id", decoded[1]]);
+    }
+  } catch {
+    // A future or corrupt identity cannot prove more than exact string
+    // equality, so retain it as its own association key.
+  }
+  return identity;
+}
+
 export function draftsFromStoredAnswers(
   storedAnswers: ReadonlyArray<StoredInterviewDraftAnswer> | undefined,
   questions: ReadonlyArray<InterviewQuestion>,
 ): ReadonlyArray<DraftAnswer> {
-  const identities = questions.map(questionIdentity);
+  const identities = questions.map(questionAssociationIdentity);
   const currentIdentityCounts = new Map<string, number>();
   for (const identity of identities) {
     currentIdentityCounts.set(
@@ -75,9 +99,13 @@ export function draftsFromStoredAnswers(
     ReadonlyArray<StoredInterviewDraftAnswer>
   >();
   for (const answer of storedAnswers ?? []) {
-    if (answer.questionIdentity === undefined) continue;
-    storedByIdentity.set(answer.questionIdentity, [
-      ...(storedByIdentity.get(answer.questionIdentity) ?? []),
+    const identity =
+      answer.questionIdentity === undefined
+        ? undefined
+        : storedQuestionAssociationIdentity(answer.questionIdentity);
+    if (identity === undefined) continue;
+    storedByIdentity.set(identity, [
+      ...(storedByIdentity.get(identity) ?? []),
       answer,
     ]);
   }

@@ -8,6 +8,7 @@ import { interviewDraftKey, interviewDraftKeyPrefix } from "@/lib/persist";
 
 export interface StoredInterviewDraftAnswer {
   // Stable identity of the question that owned the interaction-time indices.
+  // This full framing snapshot proves whether option indices remain exact.
   // Missing on legacy rows, which may restore labels visibly but cannot prove
   // exact selection.
   readonly questionIdentity?: string;
