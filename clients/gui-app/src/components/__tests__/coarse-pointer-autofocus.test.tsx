@@ -126,9 +126,9 @@ async function openExistingWorktreeSearch(): Promise<HTMLElement> {
     button: 0,
     ctrlKey: false,
   });
-  const existingWorktree = await screen.findByTestId(
-    "folder-location-existing",
-  );
+  const existingWorktree = await screen.findByRole("menuitem", {
+    name: "Existing worktree",
+  });
   existingWorktree.focus();
   fireEvent.keyDown(existingWorktree, { key: "ArrowRight" });
   return screen.findByRole("textbox", { name: "Search worktrees" });
@@ -153,6 +153,8 @@ describe("existing-worktree submenu search", () => {
     // reclaim-on-blur loop standing down alongside the autofocus, stays there.
     // A row is a valid destination inside the submenu; the body is not.
     expect(document.activeElement?.getAttribute("role")).toBe("menuitem");
+    // The scroller holding the worktree rows is a plain layout div with no
+    // accessible role of its own, so its test id is the only handle on it.
     expect(
       screen
         .getByTestId("folder-location-existing-list")

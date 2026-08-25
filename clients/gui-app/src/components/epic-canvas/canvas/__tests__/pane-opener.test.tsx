@@ -221,14 +221,12 @@ describe("PaneOpener", () => {
   // width - a desktop window snapped narrow still types with hardware.
   it("leaves the search alone on a coarse pointer", () => {
     stubCoarsePointer(true);
-    const { container } = render(
+    render(
       <PaneOpener epicId="epic-1" tabId="tab-c" groupId="group-c" active />,
     );
     stubCoarsePointer(false);
 
-    const input = container.querySelector('input[data-slot="command-input"]');
-    expect(input).not.toBeNull();
-    expect(document.activeElement).not.toBe(input);
+    expect(document.activeElement).not.toBe(searchInput());
     // The opener is inline chrome, not a Radix layer, so nothing was going to
     // be focused on its behalf and focus is left exactly where it was.
     expect(document.activeElement).toBe(document.body);
