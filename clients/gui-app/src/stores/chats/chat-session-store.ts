@@ -2036,6 +2036,24 @@ export function createChatSessionStoreWithNotificationDependencies(
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
       },
+      // ─── The windowed line, not bound yet ────────────────────────────────
+      //
+      // `chatSubscribeV17` is not registered, so this store can never
+      // negotiate the windowed line and none of these can fire: negotiation
+      // declares this client's own canonical minor whenever the host's is
+      // newer, so a `1.7` host still negotiates `1.6` here.
+      //
+      // They are stubs rather than absent because `ChatStreamCallbacks`
+      // requires them - which is the point. Binding `TranscriptWindow` into
+      // `ChatSessionState` is its own ticket, and these five bodies are the
+      // list of what that ticket has to fill in. Registering `1.7` while they
+      // are still empty would render a chat that never fills in, so the two
+      // must land together.
+      onWindowedSnapshot: () => undefined,
+      onSkeletonChunk: () => undefined,
+      onIndexChanged: () => undefined,
+      onRange: () => undefined,
+      onAccumulatedChanges: () => undefined,
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -2759,6 +2777,29 @@ export function createChatSessionStoreWithNotificationDependencies(
       onHeldUpdatesChanged: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;
         callbacks.onHeldUpdatesChanged(frame);
+      },
+      // Guarded like every frame above rather than passed through: whatever
+      // binds these must not apply a hydration response from a stream
+      // generation this store has already replaced.
+      onWindowedSnapshot: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onWindowedSnapshot(frame);
+      },
+      onSkeletonChunk: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onSkeletonChunk(frame);
+      },
+      onIndexChanged: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onIndexChanged(frame);
+      },
+      onRange: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onRange(frame);
+      },
+      onAccumulatedChanges: (frame) => {
+        if (!isCurrentStream(streamGeneration)) return;
+        callbacks.onAccumulatedChanges(frame);
       },
       onActionAck: (frame) => {
         if (!isCurrentStream(streamGeneration)) return;

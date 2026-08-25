@@ -2,9 +2,12 @@ import {
   chatSubscribeFullSnapshotSchemaVersion,
   chatSubscribeServerFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchema,
+  chatSubscribeWindowedServerFrameSchema,
   type ChatSubscribeClientFrame,
   type ChatSubscribeServerFrame,
+  type ChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -134,6 +137,53 @@ export interface ChatStreamCallbacks {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ) => void;
+
+  // ─── The windowed line (`chat.subscribe@1.7`) ─────────────────────────────
+  //
+  // REQUIRED, not optional, and that is the point. These fire only on a
+  // negotiated windowed line, which no released peer has yet - so a consumer
+  // that omitted them would compile today and, the day `chatSubscribeV17` is
+  // registered, silently drop every hydration response and render a chat that
+  // never fills in. A required member turns that into a compile error at the
+  // one moment it can still be cheap to fix.
+
+  /**
+   * The BOUNDED snapshot. A different shape from `onSnapshot`'s, not a variant
+   * of it: it has no `chat.messages`/`chat.events` at all, and it carries the
+   * `transcriptEpoch` / `rowCount` / `tail` / `derived` the legacy one does
+   * not. Kept as its own callback so the legacy consumer's type stays exact
+   * rather than becoming a union both sides have to narrow.
+   */
+  readonly onWindowedSnapshot: (
+    frame: Extract<
+      ChatSubscribeWindowedServerFrame,
+      { readonly kind: "snapshot" }
+    >,
+  ) => void;
+  readonly onSkeletonChunk: (
+    frame: Extract<
+      ChatSubscribeWindowedServerFrame,
+      { readonly kind: "skeletonChunk" }
+    >,
+  ) => void;
+  readonly onIndexChanged: (
+    frame: Extract<
+      ChatSubscribeWindowedServerFrame,
+      { readonly kind: "indexChanged" }
+    >,
+  ) => void;
+  readonly onRange: (
+    frame: Extract<
+      ChatSubscribeWindowedServerFrame,
+      { readonly kind: "range" }
+    >,
+  ) => void;
+  readonly onAccumulatedChanges: (
+    frame: Extract<
+      ChatSubscribeWindowedServerFrame,
+      { readonly kind: "accumulatedChanges" }
+    >,
+  ) => void;
 }
 
 export interface ChatStreamClientOptions {
@@ -153,10 +203,14 @@ export interface ChatStreamClientOptions {
 export class ChatStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatStreamCallbacks;
+  private readonly epicId: string;
+  private readonly chatId: string;
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {
     this.callbacks = options.callbacks;
+    this.epicId = options.epicId;
+    this.chatId = options.chatId;
     this.closed = false;
     this.session = options.wsStreamClient.subscribe("chat.subscribe", {
       epicId: options.epicId,
@@ -196,10 +250,202 @@ export class ChatStreamClient {
     return version !== null && version.major === 1 && version.minor >= 5;
   }
 
+  /**
+   * Ask for a span of bodies. No-op off the windowed line.
+   *
+   * A READ, so it deliberately does not go through `sendAction`: it carries no
+   * `clientActionId`, is never acked, and must not be gated on ownership - a
+   * viewer scrolling a chat they do not own still has to hydrate what they are
+   * looking at.
+   */
+  requestTranscriptRange(request: ChatLoadRangeRequest): void {
+    if (this.closed || !this.isOnWindowedLine()) return;
+    this.session.sendClientFrame(
+      {
+        kind: "loadRange",
+        hasBinaryPayload: false,
+        epicId: this.epicId,
+        chatId: this.chatId,
+        request,
+      },
+      null,
+    );
+  }
+
+  /**
+   * Re-base from scratch: a fresh bounded snapshot and a fresh skeleton.
+   *
+   * The recovery path for the cases where the client's own index cannot be
+   * trusted - an epoch it never saw the `indexChanged` for, a `reindexed`
+   * change, a skeleton that finished short. Those are the states where a
+   * `loadRange` is exactly the wrong move, because it would seat bodies
+   * against a coordinate space the client has already left.
+   */
+  requestResnapshot(): void {
+    if (this.closed || !this.isOnWindowedLine()) return;
+    this.session.sendClientFrame(
+      {
+        kind: "resnapshot",
+        hasBinaryPayload: false,
+        epicId: this.epicId,
+        chatId: this.chatId,
+      },
+      null,
+    );
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.session.close();
+  }
+
+  /**
+   * Whether THIS session negotiated the windowed transcript line.
+   *
+   * Unlike its siblings above this is not a field-level capability gate - it
+   * selects which UNION the incoming envelope is parsed against, so it cannot
+   * be "try both". The two lines share the `snapshot` kind and disagree about
+   * its shape, so a legacy snapshot fails the windowed parse and a windowed
+   * one fails the legacy parse. Guessing wrong silently drops every snapshot.
+   *
+   * `>= 7` mirrors the host's `chatSubscribeSupportsWindowedTranscript` rather
+   * than pinning `1.7` exactly, so the two sides state one rule. Note it can
+   * only ever be true AT `1.7` in this build - negotiation picks the highest
+   * minor both peers know, and this client knows no higher - so a future `1.8`
+   * with its own union must revisit the parse below, not just this predicate.
+   */
+  private isOnWindowedLine(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor >= 7;
+  }
+
+  /**
+   * Dispatch one frame off the windowed line.
+   *
+   * The shared frames (`blockDelta`, `turnStateChanged`, the approval and
+   * restore families, …) reach the SAME callbacks the legacy line uses,
+   * because they are the same schemas - `chatSubscribeSharedServerFrameSchemas`
+   * builds both unions' members. Only the five transcript frames are new, and
+   * only the `snapshot` differs in shape between the lines.
+   */
+  private handleWindowedFrame(envelope: StreamFrameEnvelope): void {
+    const parsed = chatSubscribeWindowedServerFrameSchema.safeParse(envelope);
+    if (!parsed.success) return;
+    const frame: ChatSubscribeWindowedServerFrame = parsed.data;
+    switch (frame.kind) {
+      case "snapshot": {
+        this.callbacks.onWindowedSnapshot(frame);
+        return;
+      }
+      case "skeletonChunk": {
+        this.callbacks.onSkeletonChunk(frame);
+        return;
+      }
+      case "indexChanged": {
+        this.callbacks.onIndexChanged(frame);
+        return;
+      }
+      case "range": {
+        this.callbacks.onRange(frame);
+        return;
+      }
+      case "accumulatedChanges": {
+        this.callbacks.onAccumulatedChanges(frame);
+        return;
+      }
+      case "actionAck": {
+        this.callbacks.onActionAck(frame);
+        return;
+      }
+      case "messageAccepted": {
+        this.callbacks.onMessageAccepted(frame);
+        return;
+      }
+      case "queueChanged": {
+        this.callbacks.onQueueChanged(frame);
+        return;
+      }
+      case "turnStateChanged": {
+        this.callbacks.onTurnStateChanged(frame);
+        return;
+      }
+      case "blockDelta": {
+        this.callbacks.onBlockDelta(frame);
+        return;
+      }
+      case "approvalRequested": {
+        this.callbacks.onApprovalRequested(frame);
+        return;
+      }
+      case "approvalResolved": {
+        this.callbacks.onApprovalResolved(frame);
+        return;
+      }
+      case "fileEditApprovalRequested": {
+        this.callbacks.onFileEditApprovalRequested(frame);
+        return;
+      }
+      case "fileEditApprovalResolved": {
+        this.callbacks.onFileEditApprovalResolved(frame);
+        return;
+      }
+      case "interviewRequested": {
+        this.callbacks.onInterviewRequested(frame);
+        return;
+      }
+      case "interviewAnswered": {
+        this.callbacks.onInterviewAnswered(frame);
+        return;
+      }
+      case "interviewErrored": {
+        this.callbacks.onInterviewErrored(frame);
+        return;
+      }
+      case "eventAppended": {
+        this.callbacks.onEventAppended(frame);
+        return;
+      }
+      case "restoreStarted": {
+        this.callbacks.onRestoreStarted(frame);
+        return;
+      }
+      case "restoreProgress": {
+        this.callbacks.onRestoreProgress(frame);
+        return;
+      }
+      case "restoreCompleted": {
+        this.callbacks.onRestoreCompleted(frame);
+        return;
+      }
+      case "errorNotice": {
+        this.callbacks.onErrorNotice(frame);
+        return;
+      }
+      case "worktreeStateChanged": {
+        this.callbacks.onWorktreeStateChanged(frame);
+        return;
+      }
+      case "managedCommandsChanged": {
+        this.callbacks.onManagedCommandsChanged(frame);
+        return;
+      }
+      case "heldUpdatesChanged": {
+        this.callbacks.onHeldUpdatesChanged(frame);
+        return;
+      }
+      case "pong": {
+        return;
+      }
+      default: {
+        // Same exhaustiveness contract the legacy switch below carries, and it
+        // has to be its own: the two unions are siblings, so a kind added to
+        // the windowed one is invisible to that check.
+        const _exhaustive: never = frame;
+        void _exhaustive;
+        return;
+      }
+    }
   }
 
   /**
@@ -223,6 +469,15 @@ export class ChatStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (binaryPayload !== null) return;
+    // The line fork comes FIRST, before either legacy path. A windowed peer's
+    // frames are a different union, and two of the kinds it can send
+    // (`snapshot`, and the four transcript frames) either fail the legacy parse
+    // or - worse - would take the shallow branch below, which exists to skip a
+    // deep walk over transcript arrays a windowed snapshot does not have.
+    if (this.isOnWindowedLine()) {
+      this.handleWindowedFrame(envelope);
+      return;
+    }
     if (envelope.kind === "snapshot" && this.isOnFullSnapshotSchemaLine()) {
       // Snapshots are the one frame whose size scales with chat history
       // (10s-100s of MB under full-chat-on-subscribe); a deep zod parse over

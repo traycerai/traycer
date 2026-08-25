@@ -20,6 +20,13 @@ import type {
   StreamWebSocketMessageEvent,
 } from "../ws-stream-factory";
 import { WsStreamClient } from "../ws-stream-client";
+import type { IStreamClient } from "../i-stream-client";
+import type {
+  IStreamSession,
+  ServerFrameHandler,
+  StreamFrameEnvelope,
+} from "../i-stream-session";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   ChatStreamClient,
   type ChatStreamCallbacks,
@@ -242,6 +249,7 @@ describe("ChatStreamClient", () => {
     const managedCommandSets: string[][] = [];
     const heldUpdateSets: string[][] = [];
     const callbacks: ChatStreamCallbacks = {
+      ...NOOP_WINDOWED_CALLBACKS,
       onSnapshot: (frame) => {
         snapshots.push(frame.snapshot.chat.id);
       },
@@ -548,11 +556,32 @@ describe("ChatStreamClient", () => {
   });
 });
 
+/**
+ * The five windowed callbacks as no-ops, for the tests that are not about
+ * them. Spread rather than repeated so adding a sixth is one edit here, not
+ * one per literal.
+ */
+const NOOP_WINDOWED_CALLBACKS = {
+  onWindowedSnapshot: () => undefined,
+  onSkeletonChunk: () => undefined,
+  onIndexChanged: () => undefined,
+  onRange: () => undefined,
+  onAccumulatedChanges: () => undefined,
+} satisfies Pick<
+  ChatStreamCallbacks,
+  | "onWindowedSnapshot"
+  | "onSkeletonChunk"
+  | "onIndexChanged"
+  | "onRange"
+  | "onAccumulatedChanges"
+>;
+
 describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
   function makeNoopCallbacks(
     onSnapshot: ChatStreamCallbacks["onSnapshot"],
   ): ChatStreamCallbacks {
     return {
+      ...NOOP_WINDOWED_CALLBACKS,
       onSnapshot,
       onActionAck: () => undefined,
       onMessageAccepted: () => undefined,
@@ -639,5 +668,372 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     expect(assistant).toMatchObject({ messageId: "assistant-1" });
 
     client.close();
+  });
+});
+
+/**
+ * # Driving the windowed line before it is negotiable
+ *
+ * These tests inject the session rather than handshaking through
+ * `WsStreamClient`, and the reason is structural rather than convenience.
+ *
+ * `prepareStreamSubscribeRequest` declares MY canonical version whenever the
+ * peer's is newer (`myCanonical.minor <= theirCanonical.minor` →
+ * `onWireVersion: myCanonical`), and that value is what the session reports as
+ * negotiated. `chatSubscribeV17` is deliberately not in the registry, so this
+ * client's canonical `chat.subscribe` is `1.6` — which means a host advertising
+ * `1.7` negotiates **1.6**, and no handshake this test can perform will ever
+ * make `getNegotiatedSchemaVersion()` return `1.7`. That is correct negotiation
+ * and it is exactly why the windowed producer is unreachable today; it also
+ * means a handshake-driven test of this path is not merely awkward but
+ * impossible until the switch is thrown.
+ *
+ * `IStreamClient` is the documented seam for standing a different transport in
+ * (`RemoteStreamClient` does), so a stub here tests the unit at a boundary that
+ * already exists rather than one invented for the test.
+ */
+class StubStreamSession implements IStreamSession {
+  private serverFrameHandler: ServerFrameHandler | null = null;
+  readonly sentFrames: StreamFrameEnvelope[] = [];
+  closed = false;
+
+  constructor(private readonly version: SchemaVersion | null) {}
+
+  sendClientFrame(
+    envelope: StreamFrameEnvelope,
+    binaryPayload: Uint8Array | null,
+  ): void {
+    void binaryPayload;
+    this.sentFrames.push(envelope);
+  }
+
+  onServerFrame(handler: ServerFrameHandler): void {
+    this.serverFrameHandler = handler;
+  }
+
+  onStatusChange(): void {}
+
+  requestReconnect(): void {}
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.version;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  deliver(envelope: StreamFrameEnvelope): void {
+    this.serverFrameHandler?.(envelope, null);
+  }
+}
+
+function stubClientAtVersion(version: SchemaVersion | null): {
+  readonly wsStreamClient: IStreamClient<typeof hostStreamRpcRegistry>;
+  readonly session: StubStreamSession;
+} {
+  const session = new StubStreamSession(version);
+  const wsStreamClient: IStreamClient<typeof hostStreamRpcRegistry> = {
+    subscribe: () => session,
+    subscribeWithParamsProvider: () => session,
+    getMethodSchemaVersion: () => version,
+  };
+  return { wsStreamClient, session };
+}
+
+interface RecordedWindowedFrames {
+  readonly snapshots: unknown[];
+  readonly skeletonChunks: unknown[];
+  readonly indexChanges: unknown[];
+  readonly ranges: unknown[];
+  readonly accumulatedChanges: unknown[];
+  readonly legacySnapshots: unknown[];
+  readonly blockDeltas: unknown[];
+}
+
+function recordingCallbacks(): {
+  readonly callbacks: ChatStreamCallbacks;
+  readonly recorded: RecordedWindowedFrames;
+} {
+  const recorded: RecordedWindowedFrames = {
+    snapshots: [],
+    skeletonChunks: [],
+    indexChanges: [],
+    ranges: [],
+    accumulatedChanges: [],
+    legacySnapshots: [],
+    blockDeltas: [],
+  };
+  const callbacks: ChatStreamCallbacks = {
+    onSnapshot: (frame) => {
+      recorded.legacySnapshots.push(frame.snapshot.chat.id);
+    },
+    onWindowedSnapshot: (frame) => {
+      recorded.snapshots.push(frame.snapshot.transcriptEpoch);
+    },
+    onSkeletonChunk: (frame) => {
+      recorded.skeletonChunks.push(frame.chunk.fromOrdinal);
+    },
+    onIndexChanged: (frame) => {
+      recorded.indexChanges.push(frame.rowCount);
+    },
+    onRange: (frame) => {
+      recorded.ranges.push(frame.range.requestId);
+    },
+    onAccumulatedChanges: (frame) => {
+      recorded.accumulatedChanges.push(frame.chunk.fromIndex);
+    },
+    onActionAck: () => undefined,
+    onMessageAccepted: () => undefined,
+    onQueueChanged: () => undefined,
+    onTurnStateChanged: () => undefined,
+    onBlockDelta: (frame) => {
+      recorded.blockDeltas.push(frame.event.type);
+    },
+    onApprovalRequested: () => undefined,
+    onApprovalResolved: () => undefined,
+    onFileEditApprovalRequested: () => undefined,
+    onFileEditApprovalResolved: () => undefined,
+    onInterviewRequested: () => undefined,
+    onInterviewAnswered: () => undefined,
+    onInterviewErrored: () => undefined,
+    onEventAppended: () => undefined,
+    onRestoreStarted: () => undefined,
+    onRestoreProgress: () => undefined,
+    onRestoreCompleted: () => undefined,
+    onErrorNotice: () => undefined,
+    onWorktreeStateChanged: () => undefined,
+    onManagedCommandsChanged: () => undefined,
+    onHeldUpdatesChanged: () => undefined,
+    onConnectionStatus: () => undefined,
+  };
+  return { callbacks, recorded };
+}
+
+const WINDOWED_VERSION: SchemaVersion = { major: 1, minor: 7 };
+
+function windowedChatRecord(): Record<string, unknown> {
+  return {
+    id: "chat-1",
+    parentId: null,
+    userId: "owner-1",
+    hostId: "test-host",
+    title: "Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    sessionRef: null,
+    settings: null,
+    archivedAt: null,
+    lastDeliveredRolesDigest: null,
+  };
+}
+
+function windowedSnapshotFrame(): StreamFrameEnvelope {
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    snapshot: {
+      chat: windowedChatRecord(),
+      access: { role: "owner", ownerUserId: "owner-1", canAct: true },
+      queue: { status: "idle", items: [] },
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChangeCount: 0,
+      managedCommands: [],
+      heldUpdates: [],
+      transcriptEpoch: 3,
+      rowCount: 0,
+      tail: { fromOrdinal: 0, messages: [], events: [] },
+      derived: {
+        latestAssistantUsage: null,
+        // `pinnedTodo`, singular - the fold's single result, not a list. It is
+        // nullable but NOT optional, so a fixture that omits it fails the
+        // parse, which is what caught the name here.
+        pinnedTodo: null,
+        latestForkableAssistantMessageId: null,
+        restorableSetupInterruption: null,
+      },
+    },
+  };
+}
+
+describe("ChatStreamClient windowed line", () => {
+  it("routes all five windowed frames, and shared frames to their existing callbacks", () => {
+    const { wsStreamClient, session } = stubClientAtVersion(WINDOWED_VERSION);
+    const { callbacks, recorded } = recordingCallbacks();
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks,
+    });
+
+    session.deliver(windowedSnapshotFrame());
+    session.deliver({
+      kind: "skeletonChunk",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chunk: { epoch: 3, fromOrdinal: 12, entries: [], isFinal: true },
+    });
+    session.deliver({
+      kind: "indexChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      epoch: 3,
+      rowCount: 41,
+      changes: [{ type: "reindexed" }],
+    });
+    session.deliver({
+      kind: "range",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "req-7",
+        epoch: 3,
+        fromOrdinal: 0,
+        rowIds: [],
+        messages: [],
+        events: [],
+        reachedStart: true,
+        reachedEnd: false,
+      },
+    });
+    session.deliver({
+      kind: "accumulatedChanges",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chunk: { epoch: 3, fromIndex: 5, summaries: [], isFinal: true },
+    });
+    // A shared frame: same schema on both lines, so it must reach the callback
+    // the legacy line already uses rather than needing a windowed twin.
+    session.deliver({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      event: {
+        type: "text.delta",
+        blockId: "block-1",
+        timestamp: 1,
+        delta: "hi",
+      },
+    });
+
+    expect(recorded.snapshots).toEqual([3]);
+    expect(recorded.skeletonChunks).toEqual([12]);
+    expect(recorded.indexChanges).toEqual([41]);
+    expect(recorded.ranges).toEqual(["req-7"]);
+    expect(recorded.accumulatedChanges).toEqual([5]);
+    expect(recorded.blockDeltas).toEqual(["text.delta"]);
+    // The windowed snapshot went to its OWN callback. Routing it to
+    // `onSnapshot` would hand a consumer typed for `chat.messages` a record
+    // that has no such key.
+    expect(recorded.legacySnapshots).toEqual([]);
+
+    client.close();
+  });
+
+  it("does not take the windowed parse path off the windowed line", () => {
+    // The two lines share the `snapshot` kind and disagree about its shape, so
+    // this is not a tidiness gate: parsing a legacy snapshot against the
+    // windowed union fails, and the frame would be dropped silently.
+    const { wsStreamClient, session } = stubClientAtVersion({
+      major: 1,
+      minor: 6,
+    });
+    const { callbacks, recorded } = recordingCallbacks();
+    const client = new ChatStreamClient({
+      wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks,
+    });
+
+    session.deliver(windowedSnapshotFrame());
+    session.deliver({
+      kind: "skeletonChunk",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chunk: { epoch: 3, fromOrdinal: 0, entries: [], isFinal: true },
+    });
+
+    expect(recorded.snapshots).toEqual([]);
+    expect(recorded.skeletonChunks).toEqual([]);
+    // And it did not leak into the legacy callback either: a windowed snapshot
+    // has no `chat.messages`, so it fails the legacy parse as well.
+    expect(recorded.legacySnapshots).toEqual([]);
+
+    client.close();
+  });
+
+  it("sends loadRange and resnapshot only on the windowed line", () => {
+    const windowed = stubClientAtVersion(WINDOWED_VERSION);
+    const windowedClient = new ChatStreamClient({
+      wsStreamClient: windowed.wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+    windowedClient.requestTranscriptRange({
+      requestId: "req-1",
+      epoch: 3,
+      fromOrdinal: 0,
+      toOrdinal: 20,
+      maxBytes: 65536,
+    });
+    windowedClient.requestResnapshot();
+    expect(windowed.session.sentFrames.map((frame) => frame.kind)).toEqual([
+      "loadRange",
+      "resnapshot",
+    ]);
+
+    // A `1.6` host's client-frame union has no case for either, so the frame
+    // would fail its parse and be dropped. Not sending it is the same outcome
+    // without the round trip - and without a client that believes it asked.
+    const legacy = stubClientAtVersion({ major: 1, minor: 6 });
+    const legacyClient = new ChatStreamClient({
+      wsStreamClient: legacy.wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+    legacyClient.requestTranscriptRange({
+      requestId: "req-1",
+      epoch: 3,
+      fromOrdinal: 0,
+      toOrdinal: 20,
+      maxBytes: 65536,
+    });
+    legacyClient.requestResnapshot();
+    expect(legacy.session.sentFrames).toEqual([]);
+
+    windowedClient.close();
+    legacyClient.close();
+  });
+
+  it("sends nothing once closed, on either line", () => {
+    const windowed = stubClientAtVersion(WINDOWED_VERSION);
+    const client = new ChatStreamClient({
+      wsStreamClient: windowed.wsStreamClient,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: recordingCallbacks().callbacks,
+    });
+    client.close();
+    client.requestResnapshot();
+    expect(windowed.session.sentFrames).toEqual([]);
   });
 });
