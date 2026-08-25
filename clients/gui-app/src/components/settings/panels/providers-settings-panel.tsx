@@ -842,6 +842,25 @@ function TraycerSubscriptionForProvider({
 
 const ENABLEMENT_FLOOR_HINT = "At least one provider must stay enabled.";
 
+function providerEnablementDisabledReason(input: {
+  readonly enabled: boolean;
+  readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+}): string | null {
+  if (input.enabled && input.enabledProviderCount <= 1) {
+    return ENABLEMENT_FLOOR_HINT;
+  }
+  if (
+    !input.enabled &&
+    input.profileEnablementAvailable &&
+    input.enabledProfileCount === 0
+  ) {
+    return "Enable a profile before enabling this provider.";
+  }
+  return null;
+}
+
 function ProviderEnableSwitch(props: {
   readonly id: string;
   readonly providerId: ProviderCliState["providerId"];
@@ -857,17 +876,7 @@ function ProviderEnableSwitch(props: {
   ) => void;
 }) {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
-  const disablingLast = enabled && props.enabledProviderCount <= 1;
-  const enablingWithoutProfile =
-    !enabled &&
-    props.profileEnablementAvailable &&
-    props.enabledProfileCount === 0;
-  let disabledReason: string | null = null;
-  if (disablingLast) {
-    disabledReason = "At least one provider must stay enabled.";
-  } else if (enablingWithoutProfile) {
-    disabledReason = "Enable a profile before enabling this provider.";
-  }
+  const disabledReason = providerEnablementDisabledReason(props);
   return (
     <TooltipWrapper
       label={disabledReason}
@@ -886,8 +895,7 @@ function ProviderEnableSwitch(props: {
             if (
               isPending ||
               props.profileEnablementPending ||
-              (!next && disablingLast) ||
-              (next && enablingWithoutProfile)
+              disabledReason !== null
             ) {
               return;
             }
@@ -1006,17 +1014,10 @@ function ProviderEnablementControl(props: {
       </div>
     );
   }
-  const blockingDisable = enabled && props.enabledProviderCount <= 1;
-  const blockingEnable =
-    !enabled &&
-    props.profileEnablementAvailable &&
-    props.enabledProfileCount === 0;
+  const guardHint = providerEnablementDisabledReason(props);
+  const blockingDisable = enabled && guardHint !== null;
+  const blockingEnable = !enabled && guardHint !== null;
   const detail = mode === "auto" ? autoEnablementDetail(props.source) : null;
-  let guardHint: string | null = null;
-  if (blockingDisable) guardHint = ENABLEMENT_FLOOR_HINT;
-  if (blockingEnable) {
-    guardHint = "Enable a profile before enabling this provider.";
-  }
   return (
     <div className="flex shrink-0 flex-col items-end gap-1">
       <div className="flex items-center gap-2 text-ui-sm">

@@ -114,11 +114,11 @@ function NestedPickerSurface() {
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
-              profileEnablementAvailable
-              profileEnablementPending={() => false}
-              profileEnablementDisabledReason={() => null}
-              disabledProfilesSelectable={false}
-              onSetProfileEnabled={vi.fn()}
+              eligibilityControls={{
+                pending: () => false,
+                disabledReason: () => null,
+                onSetEnabled: vi.fn(),
+              }}
               admissionByProfileId={null}
             />
           )}
@@ -267,11 +267,11 @@ function OpenProfileDropdownSurface() {
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
-              profileEnablementAvailable
-              profileEnablementPending={() => false}
-              profileEnablementDisabledReason={() => null}
-              disabledProfilesSelectable={false}
-              onSetProfileEnabled={vi.fn()}
+              eligibilityControls={{
+                pending: () => false,
+                disabledReason: () => null,
+                onSetEnabled: vi.fn(),
+              }}
               admissionByProfileId={WORK_LOCKED_ADMISSION}
             />
           )}

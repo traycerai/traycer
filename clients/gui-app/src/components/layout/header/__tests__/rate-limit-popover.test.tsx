@@ -1339,6 +1339,13 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+    const profileSwitch = screen.getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(profileSwitch.dataset.state).toBe("checked");
+    expect(profileSwitch.className).toContain(
+      "data-[state=checked]:bg-primary",
+    );
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
@@ -1465,6 +1472,49 @@ describe("<RateLimitPopover /> rail", () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
     expect(mocks.enqueueBatch).not.toHaveBeenCalled();
     expect(usageQuery.refetch).not.toHaveBeenCalled();
+  });
+
+  it("does not present a disabled authenticated profile as signed out when usage has not been checked", () => {
+    const disabledProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "work-profile",
+        kind: "managed",
+        label: "Work",
+        tier: "Pro 5x",
+        usageUpdatedAt: null,
+      }),
+      enabled: false,
+    };
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [disabledProfile],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+
+    renderPopover();
+
+    expect(screen.getByText("Disabled")).toBeTruthy();
+    expect(screen.getByText("not checked")).toBeTruthy();
+    expect(
+      screen.getByText("Refresh to check usage without enabling this profile."),
+    ).toBeTruthy();
+    expect(screen.queryByText("signed out")).toBeNull();
+    expect(
+      screen.queryByText("Signed out — sign in to refresh usage."),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Refresh Work status and usage limits",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("switch", { name: "Allow agents to use Work" }).dataset
+        .state,
+    ).toBe("unchecked");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {

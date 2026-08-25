@@ -12,10 +12,7 @@ import type {
   ProviderCliState,
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
-import {
-  mapProfileIdAcrossHosts,
-  resolveClonedChatSettings,
-} from "../resolve-cloned-chat-settings";
+import { resolveClonedChatSettings } from "../resolve-cloned-chat-settings";
 
 const BASE_SETTINGS: ChatRunSettings = {
   harnessId: "claude",
@@ -126,42 +123,6 @@ function buildClient(
   );
   return spine.createRequester(mockLocalHostEntry);
 }
-
-describe("mapProfileIdAcrossHosts", () => {
-  it("returns null (ambient) when the source has no accountUuid", () => {
-    expect(
-      mapProfileIdAcrossHosts(null, [
-        profile("work-uuid", "managed", "Work", "acct-1"),
-      ]),
-    ).toBeNull();
-  });
-
-  it("maps to the target's managed profile sharing the same accountUuid", () => {
-    expect(
-      mapProfileIdAcrossHosts("acct-1", [
-        profile("ambient", "ambient", "Terminal account", "acct-9"),
-        profile("target-work-uuid", "managed", "Work", "acct-1"),
-      ]),
-    ).toBe("target-work-uuid");
-  });
-
-  it("maps to null when the matching target profile is itself ambient", () => {
-    expect(
-      mapProfileIdAcrossHosts("acct-1", [
-        profile("ambient", "ambient", "Terminal account", "acct-1"),
-      ]),
-    ).toBeNull();
-  });
-
-  it("returns null when no target profile shares the accountUuid", () => {
-    expect(
-      mapProfileIdAcrossHosts("acct-1", [
-        profile("ambient", "ambient", "Terminal account", "acct-9"),
-        profile("other-uuid", "managed", "Personal", "acct-2"),
-      ]),
-    ).toBeNull();
-  });
-});
 
 describe("resolveClonedChatSettings", () => {
   it("passes ambient settings through untouched when Terminal is enabled", async () => {

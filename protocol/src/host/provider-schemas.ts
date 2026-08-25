@@ -1213,6 +1213,18 @@ export const providerProfileSchema = z.object({
   // Host-wide eligibility. Old supporting decoders treat an omitted legacy
   // field as enabled; older protocol lines omit disabled rows entirely.
   enabled: z.boolean().default(true),
+  // Copyable command for opening this managed account directly in its CLI.
+  // The host owns the absolute config path and shell quoting; ambient rows and
+  // hosts that predate this field omit it. Kept inside v8.0 because that line
+  // is still the unreleased live head opened by profile eligibility.
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
 
@@ -3520,17 +3532,6 @@ function parseProviderStateWithEnabledProfiles(state: unknown) {
       (profile) => profile.enabled !== false,
     ),
   };
-}
-
-export function downgradeProviderCliStateListToV70(
-  states: readonly unknown[],
-): ProviderCliStateV70[] {
-  return states.flatMap((state) => {
-    const current = parseProviderStateWithEnabledProfiles(state);
-    if (current === null) return [];
-    const parsed = providerCliStateSchemaV70.safeParse(current);
-    return parsed.success ? [parsed.data] : [];
-  });
 }
 
 export function downgradeProviderCliStateListToV71(

@@ -43,24 +43,6 @@ function normalizedProfileId(profile: ProviderProfile): string | null {
   return profile.kind === "ambient" ? null : profile.profileId;
 }
 
-/**
- * Profiles are host-local (a managed config dir lives on one machine), so a
- * profileId minted on the source host means nothing on the target - map by
- * the provider's own `accountUuid` identity instead (multi-profile decision
- * log's "Cross-host clone"). Pure: takes both hosts' already-fetched
- * `profiles[]` arrays, no I/O.
- */
-export function mapProfileIdAcrossHosts(
-  sourceAccountUuid: string | null,
-  targetProfiles: ReadonlyArray<ProviderProfile>,
-): string | null {
-  if (sourceAccountUuid === null) return null;
-  const match = targetProfiles.find(
-    (profile) => profile.identity?.accountUuid === sourceAccountUuid,
-  );
-  return match === undefined ? null : normalizedProfileId(match);
-}
-
 function findAccountUuid(
   profiles: ReadonlyArray<ProviderProfile>,
   profileId: string | null,

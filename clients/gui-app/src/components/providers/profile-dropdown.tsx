@@ -10,13 +10,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Kbd } from "@/components/ui/kbd";
 import { Switch } from "@/components/ui/switch";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
   profileCommitId,
   profileDisplayLabel,
+  profileEnablementTooltipText,
   profileAuthStatusText,
   profileRowStatusSuffix,
-  orderProfiles,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
 import {
@@ -36,7 +37,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const PROFILE_DROPDOWN_KEYS = new Set([
   "ArrowDown",
   "ArrowUp",
@@ -55,6 +55,12 @@ export interface ProfileDropdownShortcutHint {
   readonly label: string;
 }
 
+export interface ProfileDropdownEligibilityControls {
+  readonly pending: (profileId: string | null) => boolean;
+  readonly disabledReason: (profile: ProviderProfile) => string | null;
+  readonly onSetEnabled: (profileId: string | null, enabled: boolean) => void;
+}
+
 interface ProfileDropdownProps {
   readonly providerLabel: string;
   /** 2+ selectable profiles - progressive disclosure (no dropdown under 2) is
@@ -62,7 +68,7 @@ interface ProfileDropdownProps {
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly activeProfileId: string | null;
   readonly onSelectProfile: (profileId: string | null) => void;
-  readonly onCreateProfile: () => void;
+  readonly onCreateProfile: (() => void) | null;
   readonly createProfileDisabled: boolean;
   readonly createProfileDisabledReason: string | undefined;
   /** Per-row shortcut hint, or a function that always returns `null` to opt
@@ -84,19 +90,9 @@ interface ProfileDropdownProps {
   /** Picker-only cached usage presentation. Settings passes `null`, which
    *  preserves the identity-only rows and mounts no usage observers/sidecar. */
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
-  /** Whether this provider has a managed profile and therefore supports
-   *  per-profile eligibility controls. Terminal-only providers pass false. */
-  readonly profileEnablementAvailable: boolean;
-  readonly profileEnablementPending: (profileId: string | null) => boolean;
-  readonly profileEnablementDisabledReason: (
-    profileId: string | null,
-  ) => string | null;
-  /** Settings selects disabled rows for maintenance; run-target pickers do not. */
-  readonly disabledProfilesSelectable: boolean;
-  readonly onSetProfileEnabled: (
-    profileId: string | null,
-    enabled: boolean,
-  ) => void;
+  /** Settings passes controls and may select disabled rows for maintenance.
+   *  Run-target pickers pass null, so disabled rows remain unselectable. */
+  readonly eligibilityControls: ProfileDropdownEligibilityControls | null;
   /** Per-row admission override keyed by `profileCommitId` (the TUI continue-
    *  under-another-profile dialog's bulk fork-admission preflight). `null`
    *  for every other caller - no row is overridden, matching today's
@@ -128,26 +124,21 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     contentContainer,
     onCloseAutoFocus,
     usagePresentation,
-    profileEnablementAvailable,
-    profileEnablementPending,
-    profileEnablementDisabledReason,
-    disabledProfilesSelectable,
-    onSetProfileEnabled,
+    eligibilityControls,
     admissionByProfileId,
   } = props;
-  const orderedProfiles = orderProfiles(profiles);
   const rowIdPrefix = useId();
+  const triggerId = `${rowIdPrefix}-trigger`;
   const activeProfile =
-    orderedProfiles.find(
-      (profile) => profileCommitId(profile) === activeProfileId,
-    ) ?? orderedProfiles[0];
+    profiles.find((profile) => profileCommitId(profile) === activeProfileId) ??
+    profiles[0];
   const activeCommitId = profileCommitId(activeProfile);
   const [open, setOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(
     activeCommitId,
   );
   const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
-  const previewProfile = orderedProfiles.find(
+  const previewProfile = profiles.find(
     (profile) => profileCommitId(profile) === previewProfileId,
   );
   const previewEntry = usagePresentation?.entries.get(previewProfileId);
@@ -165,12 +156,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     shortcutHintForIndex,
     usagePresentation,
     admissionByProfileId,
-    profileEnablementAvailable,
-    profileEnablementPending,
-    profileEnablementDisabledReason,
-    disabledProfilesSelectable,
+    eligibilityControls,
     onSelectProfile,
-    onSetProfileEnabled,
   };
 
   return (
@@ -186,32 +173,57 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
         setPreviewProfileId(activeCommitId);
       }}
     >
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
-          className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
-        >
-          <AccentDot
-            profileId={activeProfile.profileId}
-            accentColor={activeProfile.accentColor}
-            label={null}
-            variant="inline"
-            size="default"
-            className={undefined}
-          />
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="min-w-0 truncate text-left font-medium">
-              {profileDisplayLabel(activeProfile)}
+      <div className="relative w-full">
+        <DropdownMenuTrigger asChild>
+          <button
+            id={triggerId}
+            type="button"
+            aria-label={`${providerLabel} profile: ${profileDisplayLabel(activeProfile)}${terminalBadgeSuffix(activeProfile)}${activeProfile.enabled ? "" : ", Disabled"}`}
+            className="flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent px-2.5 text-ui-sm text-foreground outline-none transition-colors hover:bg-input/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 data-open:bg-input/30 dark:bg-input/30 dark:hover:bg-input/50"
+          >
+            <AccentDot
+              profileId={activeProfile.profileId}
+              accentColor={activeProfile.accentColor}
+              label={null}
+              variant="inline"
+              size="default"
+              className={undefined}
+            />
+            <span
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2",
+                eligibilityControls !== null && "pe-12",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate text-left font-medium">
+                {profileDisplayLabel(activeProfile)}
+              </span>
+              {activeProfile.kind === "ambient" ? (
+                <TerminalProfileBadge />
+              ) : null}
+              {!activeProfile.enabled ? (
+                <span className="shrink-0 text-muted-foreground">Disabled</span>
+              ) : null}
             </span>
-            {activeProfile.kind === "ambient" ? <TerminalProfileBadge /> : null}
-            {!activeProfile.enabled ? (
-              <span className="shrink-0 text-muted-foreground">Disabled</span>
-            ) : null}
-          </span>
-          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-        </button>
-      </DropdownMenuTrigger>
+            <ChevronDown
+              data-slot="profile-dropdown-chevron"
+              className="size-4 shrink-0 text-muted-foreground"
+            />
+          </button>
+        </DropdownMenuTrigger>
+        <ProfileEnablementSwitch
+          controls={eligibilityControls}
+          profile={activeProfile}
+          commitId={activeCommitId}
+          label={profileDisplayLabel(activeProfile)}
+          selectionId={triggerId}
+          pending={eligibilityControls?.pending(activeCommitId) ?? false}
+          disabledReason={
+            eligibilityControls?.disabledReason(activeProfile) ?? null
+          }
+          className="absolute end-10 top-1/2 z-10 -translate-y-1/2"
+        />
+      </div>
       <DropdownMenuContent
         align="start"
         sideOffset={4}
@@ -254,43 +266,51 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           void entry.refresh();
         }}
       >
-        {orderedProfiles.map((profile, index) => (
+        {profiles.map((profile, index) => (
           <ProfileDropdownRow
             key={profile.profileId}
             profile={profile}
             index={index}
             shortcutIndex={
-              orderedProfiles
+              profiles
                 .slice(0, index)
                 .filter(
                   (candidate) =>
                     candidate.enabled &&
-                    !profileEnablementPending(profileCommitId(candidate)),
+                    !(
+                      eligibilityControls?.pending(
+                        profileCommitId(candidate),
+                      ) ?? false
+                    ),
                 ).length
             }
             context={rowContext}
           />
         ))}
-        <DropdownMenuSeparator />
-        <TooltipWrapper
-          label={createProfileDisabledReason}
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
-              content's layout child, and a shrink-to-fit one would narrow the
-              row to its text. */}
-          <span className="flex w-full">
-            <DropdownMenuItem
-              disabled={createProfileDisabled}
-              onSelect={onCreateProfile}
+        {onCreateProfile !== null ? (
+          <>
+            <DropdownMenuSeparator />
+            <TooltipWrapper
+              label={createProfileDisabledReason}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <Plus className="size-3.5" />
-              Create new profile
-            </DropdownMenuItem>
-          </span>
-        </TooltipWrapper>
+              {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
+                  content's layout child, and a shrink-to-fit one would narrow
+                  the row to its text. */}
+              <span className="flex w-full">
+                <DropdownMenuItem
+                  disabled={createProfileDisabled}
+                  onSelect={onCreateProfile}
+                >
+                  <Plus className="size-3.5" />
+                  Create new profile
+                </DropdownMenuItem>
+              </span>
+            </TooltipWrapper>
+          </>
+        ) : null}
       </DropdownMenuContent>
       {usagePresentation !== null &&
       open &&
@@ -316,12 +336,8 @@ interface ProfileDropdownRowContext {
   readonly shortcutHintForIndex: ProfileDropdownProps["shortcutHintForIndex"];
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
   readonly admissionByProfileId: ProfileDropdownProps["admissionByProfileId"];
-  readonly profileEnablementAvailable: boolean;
-  readonly profileEnablementPending: ProfileDropdownProps["profileEnablementPending"];
-  readonly profileEnablementDisabledReason: ProfileDropdownProps["profileEnablementDisabledReason"];
-  readonly disabledProfilesSelectable: boolean;
+  readonly eligibilityControls: ProfileDropdownEligibilityControls | null;
   readonly onSelectProfile: ProfileDropdownProps["onSelectProfile"];
-  readonly onSetProfileEnabled: ProfileDropdownProps["onSetProfileEnabled"];
 }
 
 interface ProfileDropdownRowState {
@@ -350,11 +366,10 @@ function ProfileDropdownRow(props: {
     usagePresentation: props.context.usagePresentation,
     admissionByProfileId: props.context.admissionByProfileId,
   });
-  const enablementPending = props.context.profileEnablementPending(
-    state.commitId,
-  );
+  const enablementPending =
+    props.context.eligibilityControls?.pending(state.commitId) ?? false;
   const enablementDisabledReason =
-    props.context.profileEnablementDisabledReason(state.commitId);
+    props.context.eligibilityControls?.disabledReason(props.profile) ?? null;
   const selectionId = `${props.context.rowIdPrefix}-profile-${props.index}`;
   const selection = (
     <ProfileSelectionControl
@@ -377,14 +392,14 @@ function ProfileDropdownRow(props: {
     >
       {admissionTooltipRow(state.admission, selection)}
       <ProfileEnablementSwitch
-        available={props.context.profileEnablementAvailable}
+        controls={props.context.eligibilityControls}
         profile={props.profile}
         commitId={state.commitId}
         label={state.label}
         selectionId={selectionId}
         pending={enablementPending}
         disabledReason={enablementDisabledReason}
-        onSetProfileEnabled={props.context.onSetProfileEnabled}
+        className={undefined}
       />
     </div>
   );
@@ -408,12 +423,15 @@ function ProfileSelectionControl(props: {
         }
       }}
       disabled={state.rowDisabled}
-      aria-disabled={profileSelectionAriaDisabled(
-        profile,
-        state.rowDisabled,
-        context.disabledProfilesSelectable,
-        props.enablementPending,
-      )}
+      aria-disabled={
+        state.rowDisabled ||
+        profileSelectionBlocked(
+          profile,
+          context.eligibilityControls,
+          props.enablementPending,
+        ) ||
+        undefined
+      }
       aria-label={
         props.enablementPending
           ? `${state.accessibleLabel}, Updating`
@@ -436,7 +454,7 @@ function ProfileSelectionControl(props: {
         if (
           profileSelectionBlocked(
             profile,
-            context.disabledProfilesSelectable,
+            context.eligibilityControls,
             props.enablementPending,
           )
         ) {
@@ -479,18 +497,18 @@ function ProfileSelectionContents(props: {
         className={undefined}
       />
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="min-w-0 truncate">{state.label}</span>
+        <span className="min-w-0 flex-1 truncate">{state.label}</span>
         {profile.kind === "ambient" ? <TerminalProfileBadge /> : null}
+        <ProfileEnablementLabel
+          enabled={profile.enabled}
+          pending={props.enablementPending}
+        />
       </span>
       {state.statusSuffix !== null ? (
         <span className="shrink-0 text-muted-foreground">
           {state.statusSuffix}
         </span>
       ) : null}
-      <ProfileEnablementLabel
-        enabled={profile.enabled}
-        pending={props.enablementPending}
-      />
       {state.usageEntry !== undefined ? (
         <ProfileUsageCompactMeter entry={state.usageEntry} />
       ) : null}
@@ -546,39 +564,48 @@ function ProfileShortcut(props: {
 }
 
 function ProfileEnablementSwitch(props: {
-  readonly available: boolean;
+  readonly controls: ProfileDropdownEligibilityControls | null;
   readonly profile: ProviderProfile;
   readonly commitId: string | null;
   readonly label: string;
   readonly selectionId: string;
   readonly pending: boolean;
   readonly disabledReason: string | null;
-  readonly onSetProfileEnabled: ProfileDropdownProps["onSetProfileEnabled"];
+  readonly className: string | undefined;
 }): ReactNode {
-  if (!props.available) return null;
+  const controls = props.controls;
+  if (controls === null) return null;
   return (
     <TooltipWrapper
-      label={props.disabledReason}
+      label={profileEnablementTooltipText(
+        props.profile.enabled,
+        props.disabledReason,
+      )}
       side="right"
       sideOffset={6}
       align={undefined}
     >
-      <Switch
-        aria-label={`Allow agents to use ${props.label}`}
-        checked={props.profile.enabled}
-        disabled={props.pending}
-        aria-disabled={props.disabledReason !== null || undefined}
-        className="relative h-3.5 w-6 transition-colors duration-150 before:absolute before:inset-x-0 before:-inset-y-[5px] before:content-[''] [&>[data-slot=switch-thumb]]:size-3"
-        onKeyDown={(event) => {
-          if (event.key !== "ArrowLeft") return;
-          event.preventDefault();
-          document.getElementById(props.selectionId)?.focus();
-        }}
-        onCheckedChange={(enabled) => {
-          if (props.disabledReason !== null) return;
-          props.onSetProfileEnabled(props.commitId, enabled);
-        }}
-      />
+      {/* Keep Tooltip's `data-state` on this neutral wrapper. Putting its
+          trigger directly on Switch overwrites Switch's own checked state,
+          which removes the checked track fill. */}
+      <span className={cn("inline-flex shrink-0", props.className)}>
+        <Switch
+          aria-label={`Allow agents to use ${props.label}`}
+          checked={props.profile.enabled}
+          disabled={props.pending}
+          aria-disabled={props.disabledReason !== null || undefined}
+          className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft") return;
+            event.preventDefault();
+            document.getElementById(props.selectionId)?.focus();
+          }}
+          onCheckedChange={(enabled) => {
+            if (props.disabledReason !== null) return;
+            controls.onSetEnabled(props.commitId, enabled);
+          }}
+        />
+      </span>
     </TooltipWrapper>
   );
 }
@@ -603,23 +630,14 @@ function visibleProfileDisabledReason(
   return state.admission.reason;
 }
 
-function profileSelectionAriaDisabled(
-  profile: ProviderProfile,
-  rowDisabled: boolean,
-  disabledProfilesSelectable: boolean,
-  enablementPending: boolean,
-): true | undefined {
-  if (rowDisabled || enablementPending) return true;
-  if (!profile.enabled && !disabledProfilesSelectable) return true;
-  return undefined;
-}
-
 function profileSelectionBlocked(
   profile: ProviderProfile,
-  disabledProfilesSelectable: boolean,
+  eligibilityControls: ProfileDropdownEligibilityControls | null,
   enablementPending: boolean,
 ): boolean {
-  return (!profile.enabled && !disabledProfilesSelectable) || enablementPending;
+  return (
+    (!profile.enabled && eligibilityControls === null) || enablementPending
+  );
 }
 
 function focusSiblingProfileSwitch(event: ReactKeyboardEvent<HTMLElement>) {

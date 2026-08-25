@@ -54,12 +54,28 @@ export function profileRowStatusSuffix(
   return null;
 }
 
-// Preserve the host's stable profile order. Eligibility is presentation and
-// admission state, not a reason for a row to jump when the user toggles it.
-export function orderProfiles(
+export function profileEnablementTooltipText(
+  enabled: boolean,
+  disabledReason: string | null,
+): string {
+  if (disabledReason !== null) return disabledReason;
+  return enabled
+    ? "Enabled: agents can use this profile."
+    : "Disabled: agents can’t use this profile.";
+}
+
+export function profileEligibilityToggleDisabledReason(
+  providerEnabled: boolean,
+  profile: ProviderProfile,
   profiles: readonly ProviderProfile[],
-): ReadonlyArray<ProviderProfile> {
-  return profiles;
+): string | null {
+  if (!providerEnabled || !profile.enabled) return null;
+  return profiles.some(
+    (candidate) =>
+      candidate.profileId !== profile.profileId && candidate.enabled,
+  )
+    ? null
+    : "Enable another profile before disabling this one.";
 }
 
 /** The profile a fresh section instance (new provider, or first mount) should
@@ -68,7 +84,7 @@ export function orderProfiles(
 export function defaultSelectedProfileId(
   profiles: readonly ProviderProfile[],
 ): string | null {
-  const first = orderProfiles(profiles).at(0);
+  const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
 

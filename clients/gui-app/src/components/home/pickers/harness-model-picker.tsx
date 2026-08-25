@@ -62,7 +62,6 @@ import {
 } from "@/components/providers/provider-pack-readiness";
 import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
-  orderProfiles,
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
@@ -1189,7 +1188,7 @@ function profilesByHarnessIdFromProviderStates(
   return new Map(
     providers.map((provider) => [
       providerIdToGuiHarnessId(provider.providerId),
-      orderProfiles(provider.profiles),
+      provider.profiles,
     ]),
   );
 }

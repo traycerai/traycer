@@ -229,11 +229,11 @@ function renderDropdown(
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
-      profileEnablementAvailable
-      profileEnablementPending={() => false}
-      profileEnablementDisabledReason={() => null}
-      disabledProfilesSelectable={false}
-      onSetProfileEnabled={vi.fn()}
+      eligibilityControls={{
+        pending: () => false,
+        disabledReason: () => null,
+        onSetEnabled: vi.fn(),
+      }}
       admissionByProfileId={null}
     />,
   );

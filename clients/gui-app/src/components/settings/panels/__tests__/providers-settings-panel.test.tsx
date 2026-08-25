@@ -3461,6 +3461,72 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows a copyable CLI command for a managed profile", () => {
+    const command =
+      "CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/profiles/ambient' codex";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            {
+              ...profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              launchCommand: { command, shell: "posix" },
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByText("Open from terminal")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Run this command on this host to open Codex with this profile.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByLabelText("Codex profile launch command").textContent,
+    ).toBe(command);
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Copy Codex profile launch command",
+      }),
+    ).toBeDefined();
+  });
+
   it("resets the edit draft when reopening the same or a different profile", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const workColor = PROVIDER_PROFILE_ACCENT_COLORS[1];

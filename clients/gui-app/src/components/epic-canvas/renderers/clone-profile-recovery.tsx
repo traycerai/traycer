@@ -9,14 +9,7 @@ import {
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { providerDisplayName } from "@/lib/provider-ordering";
-
-const FINAL_ENABLED_REASON =
-  "Enable another profile before disabling this one.";
 
 export function CloneProfileRecovery(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -39,17 +32,6 @@ export function CloneProfileRecovery(props: {
     (props.resolution.status === "profile-selection-required"
       ? props.resolution.targetProfiles
       : []);
-  const mutation = useProvidersSetProfileEnabledForClient(
-    props.client,
-    props.resolution.providerId,
-  );
-  const profileEnablementPending = useProviderProfileEnablementPending(
-    props.client,
-    props.resolution.providerId,
-  );
-  const enabledProfileCount = profiles.filter(
-    (profile) => profile.enabled,
-  ).length;
   const matchedProfile = profiles.find(
     (profile) =>
       props.resolution.status === "profile-selection-required" &&
@@ -89,7 +71,7 @@ export function CloneProfileRecovery(props: {
       <span className="min-w-0 flex-1">
         {props.resolution.reason === "matching-profile-disabled" &&
         matchedProfile !== undefined
-          ? `${profileDisplayLabel(matchedProfile)} is disabled on ${props.targetHostLabel}. Enable it or choose an enabled profile before cloning.`
+          ? `${profileDisplayLabel(matchedProfile)} is disabled on ${props.targetHostLabel}. Choose an enabled profile or change profile availability in Provider settings before cloning.`
           : `Choose an enabled ${providerDisplayName(props.resolution.providerId)} profile on ${props.targetHostLabel} before cloning.`}
       </span>
       {profiles.length > 0 ? (
@@ -99,44 +81,14 @@ export function CloneProfileRecovery(props: {
             profiles={profiles}
             activeProfileId={activeProfileId}
             onSelectProfile={props.onChooseProfile}
-            onCreateProfile={() => undefined}
+            onCreateProfile={null}
             createProfileDisabled
             createProfileDisabledReason="Add profiles from Settings."
             shortcutHintForIndex={() => null}
             contentContainer={null}
             onCloseAutoFocus={null}
             usagePresentation={null}
-            profileEnablementAvailable={profiles.some(
-              (profile) => profile.kind === "managed",
-            )}
-            profileEnablementPending={profileEnablementPending}
-            profileEnablementDisabledReason={(profileId) => {
-              const row = profiles.find(
-                (profile) => profileCommitId(profile) === profileId,
-              );
-              return provider?.enabled !== false &&
-                row?.enabled === true &&
-                enabledProfileCount <= 1
-                ? FINAL_ENABLED_REASON
-                : null;
-            }}
-            disabledProfilesSelectable={false}
-            onSetProfileEnabled={(profileId, enabled) => {
-              const row = profiles.find(
-                (profile) => profileCommitId(profile) === profileId,
-              );
-              if (
-                row === undefined ||
-                profileEnablementPending(profileCommitId(row))
-              ) {
-                return;
-              }
-              mutation.mutate({
-                providerId: props.resolution.providerId,
-                profileId: row.profileId,
-                enabled,
-              });
-            }}
+            eligibilityControls={null}
             admissionByProfileId={null}
           />
         </div>
@@ -162,6 +114,16 @@ export function CloneProfileRecovery(props: {
           </Button>
         </div>
       )}
+      {profiles.length > 0 ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={props.onOpenProviderSettings}
+        >
+          Open provider settings
+        </Button>
+      ) : null}
     </RecoveryBar>
   );
 }

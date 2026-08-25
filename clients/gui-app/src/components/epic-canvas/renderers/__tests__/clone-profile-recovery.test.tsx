@@ -4,23 +4,44 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { CloneProfileRecovery } from "../clone-profile-recovery";
-
-const recoveryHooks = vi.hoisted(() => ({
-  setEnabled: vi.fn(),
-}));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
-  useProvidersSetProfileEnabledForClient: () => ({
-    mutate: recoveryHooks.setEnabled,
-  }),
   useProviderProfileEnablementPending: () => () => false,
 }));
+
+function managedProfile(
+  profileId: string,
+  label: string,
+  enabled: boolean,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled,
+    kind: "managed",
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+}
 
 function buildClient(): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
@@ -57,7 +78,6 @@ function baseProps() {
 describe("<CloneProfileRecovery /> catalog recovery", () => {
   afterEach(() => {
     cleanup();
-    recoveryHooks.setEnabled.mockClear();
   });
 
   it("keeps target transport failure distinct and exposes Retry and Cancel", () => {
@@ -115,6 +135,42 @@ describe("<CloneProfileRecovery /> catalog recovery", () => {
       screen.getByRole("button", { name: "Open provider settings" }),
     );
     expect(props.onOpenProviderSettings).toHaveBeenCalledTimes(1);
-    expect(recoveryHooks.setEnabled).not.toHaveBeenCalled();
+  });
+
+  it("keeps profile switches out of clone recovery and routes availability changes to Settings", () => {
+    const props = baseProps();
+    render(
+      <CloneProfileRecovery
+        {...props}
+        resolution={{
+          status: "profile-selection-required",
+          providerId: "claude-code",
+          reason: "matching-profile-disabled",
+          matchedProfileId: "work",
+          targetProfiles: [
+            managedProfile("work", "Work", false),
+            managedProfile("personal", "Personal", true),
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: /profile: Work/ }),
+      {
+        button: 0,
+        ctrlKey: false,
+        pointerType: "mouse",
+      },
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen.getByRole("menuitem", { name: /Work.*Disabled/ }),
+    ).toBeDefined();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open provider settings" }),
+    );
+    expect(props.onOpenProviderSettings).toHaveBeenCalledTimes(1);
   });
 });

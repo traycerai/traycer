@@ -37,7 +37,13 @@ function providerState(providerId: string) {
   };
 }
 
-function profileRow(enabled: boolean | undefined) {
+function profileRow(
+  enabled: boolean | undefined,
+  launchCommand: {
+    readonly command: string;
+    readonly shell: "posix";
+  } | null,
+) {
   return {
     profileId: enabled === false ? "disabled" : "enabled",
     kind: "managed" as const,
@@ -56,22 +62,23 @@ function profileRow(enabled: boolean | undefined) {
     duplicateOfProfileId: null,
     ambientDriftNotice: null,
     accentColor: null,
+    launchCommand,
     ...(enabled === undefined ? {} : { enabled }),
   };
 }
 
 describe("profile eligibility protocol compatibility", () => {
   it("defaults omitted profile eligibility to enabled", () => {
-    expect(providerProfileSchema.parse(profileRow(undefined)).enabled).toBe(
+    expect(providerProfileSchema.parse(profileRow(undefined, null)).enabled).toBe(
       true,
     );
-    expect(providerProfileSchemaV70.safeParse(profileRow(false)).success).toBe(
+    expect(providerProfileSchemaV70.safeParse(profileRow(false, null)).success).toBe(
       true,
     );
   });
 
   it("rejects a malformed present profile eligibility value instead of enabling it", () => {
-    const malformed = { ...profileRow(undefined), enabled: "yes" };
+    const malformed = { ...profileRow(undefined, null), enabled: "yes" };
 
     expect(providerProfileSchema.safeParse(malformed).success).toBe(false);
   });
@@ -81,7 +88,7 @@ describe("profile eligibility protocol compatibility", () => {
       providers: [
         {
           ...providerState("claude-code"),
-          profiles: [profileRow(undefined)],
+          profiles: [profileRow(undefined, null)],
         },
       ],
       native: null,
@@ -103,7 +110,13 @@ describe("profile eligibility protocol compatibility", () => {
       providers: [
         providerCliStateSchema.parse({
           ...providerState("claude-code"),
-          profiles: [profileRow(true), profileRow(false)],
+          profiles: [
+            profileRow(true, {
+              command: "CLAUDE_CONFIG_DIR='/profiles/enabled' claude",
+              shell: "posix",
+            }),
+            profileRow(false, null),
+          ],
         }),
       ],
       native: null,
@@ -123,6 +136,9 @@ describe("profile eligibility protocol compatibility", () => {
     expect(
       JSON.stringify(downgraded.value.providers[0]?.profiles),
     ).not.toContain("disabled");
+    expect(downgraded.value.providers[0]?.profiles[0]).not.toHaveProperty(
+      "launchCommand",
+    );
   });
 
   it("keeps profile enablement on its optional RPC instead of released setEnabled@2.1", () => {

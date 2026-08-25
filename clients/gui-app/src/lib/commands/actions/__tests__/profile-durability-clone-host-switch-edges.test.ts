@@ -20,10 +20,7 @@ import {
   cloneChatTitle,
   type CloneChatOnHostSwitchArgs,
 } from "@/lib/commands/actions/clone-chat-on-host-switch";
-import {
-  mapProfileIdAcrossHosts,
-  resolveClonedChatSettings,
-} from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
@@ -201,10 +198,6 @@ describe("resolveClonedChatSettings: additional adversarial edges", () => {
       status: "catalog-unavailable",
       providerId: "claude-code",
     });
-  });
-
-  it("mapProfileIdAcrossHosts treats a genuinely empty target array the same as no-match (not a crash / not a false match)", () => {
-    expect(mapProfileIdAcrossHosts("acct-1", [])).toBeNull();
   });
 });
 
