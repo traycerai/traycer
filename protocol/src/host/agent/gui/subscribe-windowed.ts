@@ -87,6 +87,27 @@ export type PinnedTodoSnapshot = z.infer<typeof pinnedTodoSnapshotSchema>;
  */
 
 /**
+ * Bound on a client-chosen `requestId`.
+ *
+ * The host reserves a FIXED number of bytes for the range frame's envelope when
+ * it budgets a response (`TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES`), and
+ * `requestId` is the only envelope field the client fills in. Without a bound
+ * here that reserve would be a guess about a value the other side controls -
+ * i.e. a way to push the frame past the relay's 1 MiB threshold from outside
+ * the host. 128 is far more than any id generator needs.
+ */
+export const RANGE_REQUEST_ID_MAX_CHARS = 128;
+
+/**
+ * Bound on the host-minted accumulated-change digest.
+ *
+ * Bounded for the same class of reason as `requestId`: it appears once per
+ * summary and the snapshot carries every summary, so an unbounded token would
+ * multiply by the number of files a chat has touched.
+ */
+export const ACCUMULATED_CHANGE_DIGEST_MAX_CHARS = 128;
+
+/**
  * The chat record WITHOUT its transcript.
  *
  * The snapshot's `chat` field used to be the whole persisted record, arrays
@@ -128,10 +149,66 @@ export const chatAccumulatedFileChangeSummarySchema = z.object({
    * plain row rather than offering a diff that would come back empty.
    */
   hasContents: z.boolean(),
+  /**
+   * Which VERSION of this file's accumulated change the summary describes.
+   *
+   * Opaque to the client: echo it verbatim on
+   * {@link chatReadAccumulatedFileChangeRequestSchema}, never parse it. The host
+   * mints it and is free to change how.
+   *
+   * Present because a path is not a version. The client renders the summary
+   * (operation, reason, undoable) at one instant and asks for contents at
+   * another, and the agent can edit the same file in between - so a request
+   * keyed on `{chatId, path}` alone can pair NEWER bodies with the STALE
+   * metadata still on screen, with nothing in either message able to detect it.
+   * The digest makes that a rejected request rather than a wrong diff.
+   */
+  digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
   artifact: checkpointArtifactTagSchema.nullish(),
 });
 export type ChatAccumulatedFileChangeSummary = z.infer<
   typeof chatAccumulatedFileChangeSummarySchema
+>;
+
+/**
+ * The unary fetch behind a summary - `chat.readAccumulatedFileChange`.
+ *
+ * Off-floor (`degrade: {kind: "unsupported"}`), which is what lets the GUI fall
+ * back to its legacy full-contents-in-snapshot path against an older host.
+ *
+ * A body over 1 MiB riding the BULK lane is correct here rather than a hazard:
+ * this is a unary call, ordered against nothing on the delta stream.
+ */
+export const chatReadAccumulatedFileChangeRequestSchema = z.object({
+  chatId: z.string(),
+  filePath: z.string(),
+  /** Copied verbatim from the summary being displayed. */
+  digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
+});
+export type ChatReadAccumulatedFileChangeRequest = z.infer<
+  typeof chatReadAccumulatedFileChangeRequestSchema
+>;
+
+/**
+ * Contents for one accumulated change.
+ *
+ * `stale: true` is the answer when the digest names a version the host no
+ * longer holds - the file was edited again between render and click. It carries
+ * no contents, and the client re-reads the summary rather than showing a diff
+ * whose metadata describes a different edit. Modelled as a normal response
+ * rather than an error because it is an ordinary race, not a fault.
+ */
+export const chatReadAccumulatedFileChangeResponseSchema =
+  z.discriminatedUnion("stale", [
+    z.object({
+      stale: z.literal(false),
+      beforeContent: z.string().nullable(),
+      afterContent: z.string().nullable(),
+    }),
+    z.object({ stale: z.literal(true) }),
+  ]);
+export type ChatReadAccumulatedFileChangeResponse = z.infer<
+  typeof chatReadAccumulatedFileChangeResponseSchema
 >;
 
 /**
@@ -269,12 +346,24 @@ export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
  * from there; it is not an error.
  */
 export const chatRangeResponseSchema = z.object({
-  requestId: z.string(),
+  requestId: z.string().max(RANGE_REQUEST_ID_MAX_CHARS),
   epoch: z.number().int().nonnegative(),
   fromOrdinal: z.number().int().nonnegative(),
-  rowIds: z.array(
-    z.object({ kind: z.enum(["message", "event"]), id: z.string() }),
-  ),
+  /**
+   * One ROW id per served row, in order.
+   *
+   * Not `(kind, messageId | eventId)`: a row can be several records (a folded
+   * assistant turn), several rows can share one record set (that turn's slices
+   * and the steer bubbles between them), and a setup card or a synthesized
+   * stopped row has no single record to name. Record identity cannot address a
+   * row - see `row-projection.ts`.
+   */
+  rowIds: z.array(z.string()),
+  /**
+   * The DEDUPLICATED union of records the served rows render from - not a
+   * parallel array to `rowIds`. A turn's records appear once however many of
+   * its slices are in the span.
+   */
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema),
   reachedStart: z.boolean(),
@@ -313,10 +402,25 @@ export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
  * an `indexChanged` has no such protection and must stay under the ceiling.
  */
 export const chatLoadRangeRequestSchema = z.object({
-  requestId: z.string(),
+  /**
+   * Bounded, because it is the one envelope field a CLIENT chooses and the
+   * host reserves a fixed number of bytes for the envelope when it budgets the
+   * response (`TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES`). An unbounded
+   * `requestId` would make that reserve a guess about a value the client
+   * controls - i.e. a way for a client to push the frame past the relay
+   * threshold from the outside.
+   */
+  requestId: z.string().max(RANGE_REQUEST_ID_MAX_CHARS),
   epoch: z.number().int().nonnegative(),
   fromOrdinal: z.number().int().nonnegative(),
   toOrdinal: z.number().int().nonnegative(),
+  /**
+   * The client's budget. The host CLAMPS this to
+   * `TRANSCRIPT_RANGE_MAX_BYTES` - a client asking for 10 MiB is not a reason
+   * to emit a 10 MiB frame. Positive rather than nonnegative because a zero
+   * budget is a request that can only be answered by the always-serve-one
+   * exception, which is a confusing thing to ask for deliberately.
+   */
   maxBytes: z.number().int().positive(),
 });
 export type ChatLoadRangeRequest = z.infer<typeof chatLoadRangeRequestSchema>;

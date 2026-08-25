@@ -6,6 +6,7 @@ import type {
   TranscriptRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 
 /**
  * # Serving a span of bodies
@@ -34,18 +35,59 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
  * behaviour that keeps a heavily-steered turn from looking unfetchable.
  */
 
+/**
+ * The server-side ceiling on a range response, regardless of what the client
+ * asked for.
+ *
+ * The relay reclassifies any body over 1 MiB onto the BULK QoS lane, so this is
+ * the frame invariant expressed as a number. `maxBytes` on the request is the
+ * client's own budget and is clamped to this - a client asking for 10 MiB is
+ * not a reason to emit a 10 MiB frame, and a host that trusted it would let any
+ * client disable the invariant.
+ */
+export const TRANSCRIPT_RANGE_MAX_BYTES = 1024 * 1024;
+
+/**
+ * Bytes held back from the budget for the parts of the frame that are not
+ * rows.
+ *
+ * The response is not just the records: it also carries `requestId`, `epoch`,
+ * `fromOrdinal`, `reachedStart`, `reachedEnd`, `truncatedAtOrdinal`, and the
+ * field names and brackets around all of it. A cold review measured 4,378 small
+ * rows served under a 1 MiB budget producing a **1,196,401-byte frame** - 148 KB
+ * past the relay threshold with no oversized record anywhere in it, because the
+ * budget counted only `JSON.stringify(record)`.
+ *
+ * The per-row overhead is now charged exactly (see {@link sliceTranscriptRange}),
+ * so this covers only the fixed envelope. 512 is deliberately generous against a
+ * hand-count of roughly 300 - it is 0.05% of the budget, and the failure it
+ * prevents is silent lane reclassification.
+ *
+ * `requestId` is the one envelope field a client controls, which is why the wire
+ * schema bounds its length. Without that bound this reserve would be a guess
+ * about a value the client picks.
+ */
+export const TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES = 512;
+
 /** What a range request asks for. Ordinal bounds are INCLUSIVE at both ends. */
 export interface TranscriptRangeRequest {
   readonly fromOrdinal: number;
   readonly toOrdinal: number;
   /**
-   * Byte budget for the bodies in the response.
+   * The client's byte budget for the response, clamped to
+   * {@link TRANSCRIPT_RANGE_MAX_BYTES}.
    *
    * A CEILING that yields to progress: if the very first row of the span needs
    * more than the whole budget it is served ALONE and over budget, because the
    * alternative is a row that can never be fetched at any budget - a permanent
    * hole in the transcript. Single records reach 1.27 MB in practice, so this
    * is a case that happens rather than a theoretical one.
+   *
+   * That exception is the ONE sanctioned breach of the frame invariant, and it
+   * is safe for a reason that does not generalize: a `range` response is
+   * ordered against nothing (matched by `requestId`, validated by `epoch`,
+   * applied by row identity), so arriving on the BULK lane costs it nothing.
+   * A `snapshot` or an `indexChanged` has no such protection.
    */
   readonly maxBytes: number;
 }
@@ -135,6 +177,14 @@ export function buildTranscriptRecordLookup(
   };
 }
 
+/** The `,` between two elements of a JSON array. */
+const ELEMENT_SEPARATOR_BYTES = 1;
+
+/** A string's cost as one element of a JSON array: its encoding, plus the comma. */
+function encodedElementBytes(value: string): number {
+  return utf8ByteLength(JSON.stringify(value)) + ELEMENT_SEPARATOR_BYTES;
+}
+
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high);
 }
@@ -191,11 +241,23 @@ export function sliceTranscriptRange(
   let spent = 0;
   let truncatedAtOrdinal: number | undefined = undefined;
 
+  // What the frame can actually spend on rows: the client's ask, clamped to the
+  // invariant, less the fixed envelope. Can go non-positive if a caller passes
+  // an absurdly small budget - the always-serve-one rule below still applies,
+  // so the result is one row rather than an empty response that would look like
+  // "there is nothing here".
+  const budget =
+    Math.min(request.maxBytes, TRANSCRIPT_RANGE_MAX_BYTES) -
+    TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES;
+
   for (let ordinal = from; ordinal <= to; ordinal += 1) {
     const needed = rowRecordIds(rows[ordinal].source);
     const freshMessages: Message[] = [];
     const freshEvents: ChatEvent[] = [];
-    let cost = 0;
+    // The row id is a serialized array element too - it costs its JSON string
+    // plus a separator. Charging only the records is what let 4,378 small rows
+    // overshoot a 1 MiB budget by 148 KB.
+    let cost = encodedElementBytes(rows[ordinal].rowId);
     for (const messageId of needed.messageIds) {
       if (seenMessageIds.has(messageId)) continue;
       const message = lookup.messagesById.get(messageId);
@@ -204,17 +266,17 @@ export function sliceTranscriptRange(
       // hole in the ids would shift everything after it.
       if (message === undefined) continue;
       freshMessages.push(message);
-      cost += recordByteLength(message);
+      cost += recordByteLength(message) + ELEMENT_SEPARATOR_BYTES;
     }
     for (const eventId of needed.eventIds) {
       if (seenEventIds.has(eventId)) continue;
       const event = lookup.eventsById.get(eventId);
       if (event === undefined) continue;
       freshEvents.push(event);
-      cost += recordByteLength(event);
+      cost += recordByteLength(event) + ELEMENT_SEPARATOR_BYTES;
     }
     // The first row is always served, whatever it costs - see `maxBytes`.
-    if (rowIds.length > 0 && spent + cost > request.maxBytes) {
+    if (rowIds.length > 0 && spent + cost > budget) {
       truncatedAtOrdinal = ordinal;
       break;
     }
