@@ -31,10 +31,10 @@ const pendingByLifetimeKey = new Map<string, Promise<void>>();
  * silent: the mutation's `onError` raises "Couldn't close the terminal.", so a
  * close that SUCCEEDED reports itself as broken.
  *
- * Callers for the same lifetime therefore share one REQUEST rather than racing,
- * and each still observes the real settlement to clear its tombstone or
- * schedule its own retry. Either settlement releases the key, so a genuine
- * failure can be retried.
+ * Callers for the same lifetime therefore share one REQUEST rather than racing.
+ * Only the caller that owns it may read the settlement as an answer; a joiner
+ * has to leave itself able to send its own close later. Either settlement
+ * releases the key, so the next attempt can own one.
  *
  * They share the request, not a promise object: each caller gets its own
  * promise carrying `owned`, because only the caller whose `close` actually ran
@@ -57,7 +57,12 @@ export interface LandingTerminalCloseOutcome {
    * So a joiner that read its fulfilled promise as "my close succeeded" would
    * clear a tombstone the owner had just decided to retain, leaving the created
    * PTY running with no record that it is owed a kill. Whoever owns the request
-   * owns the tombstone decision; a joiner only waits.
+   * owns the tombstone decision.
+   *
+   * A joiner is therefore in the same position as a caller whose close FAILED:
+   * it has no answer to its own question. Declining to conclude is only half of
+   * that - a joiner that also drops its retry, or sits behind an
+   * already-attempted latch, never sends the close at all.
    */
   readonly owned: boolean;
 }

@@ -572,6 +572,81 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
   });
 
+  it("re-arms the plain close after joining a kill that kept the tombstone", async () => {
+    // Declining to conclude is only HALF of what a joiner owes. It learned
+    // nothing about its own arm, and the drain admits a key on exactly three
+    // things: a drainability edge, FIRST SIGHT of the arm, or a due retry. A
+    // joiner that returned having dropped its retry - while `attemptedRef`
+    // still carried the `plain` mark - produced none of the three, so no close
+    // was ever sent and the PTY the create is about to produce outlived its
+    // tombstone. The test above stops at the settlement and passes either way;
+    // the strand is only visible past it.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-rearm": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "rearm-tab",
+      sessionId: "session-rearm",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "rearm-tab");
+
+    // Someone else owns the in-flight request for this lifetime and settles it
+    // WITHOUT retiring the record - what `terminal.kill` does for a
+    // `pendingCreate` tombstone it answers `killed: false` about.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-b",
+      sessionId: "session-rearm",
+      close: ownerClose,
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(ownerClose).toHaveBeenCalledTimes(1);
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseOwner();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The joined settlement is not this arm's answer, so nothing is concluded
+    // from it and nothing is dispatched off it either.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // The re-arm. The key is free now, so this close is OWNED and may retire
+    // the record on its own settlement.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+  });
+
   it("wakes a plain close when listing freshness returns", async () => {
     // The plain arm's first close rejects while the list stream happens to be
     // stale. No retry can be scheduled for an arm that is undrainable, so the

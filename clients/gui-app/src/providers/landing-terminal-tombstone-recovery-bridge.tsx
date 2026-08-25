@@ -469,8 +469,8 @@ function dispatchCapableClose(args: {
     hostId: args.pending.hostId,
     sessionId: args.pending.sessionId,
     // Joins the panel's fast path when that gesture is still in flight, rather
-    // than racing it to the same terminal. Either way this observes the real
-    // settlement below.
+    // than racing it to the same terminal. A joined settlement belongs to the
+    // OTHER request though, so only the owner may read it as an answer.
     close: () =>
       args.entry.mutations.close
         .mutateAsync({
@@ -488,8 +488,20 @@ function dispatchCapableClose(args: {
         // mutation keeps the tombstone on exactly that answer. Clearing here off
         // a joined promise would overrule the owner and strand the PTY the
         // create is about to produce.
+        //
+        // A joiner also learned NOTHING about its own arm, so it has to leave
+        // the drain able to send one. Merely declining to clear stranded the
+        // tombstone just as thoroughly: the retry was dropped while the `plain`
+        // mark stayed in `attemptedRef`, and the drain admits a key only on a
+        // drainability edge, on FIRST SIGHT of the arm, or on a due retry -
+        // none of which a joined settlement produces. So the newly created PTY
+        // outlived the record with nothing left to send its close.
+        //
+        // This is the backoff a REJECTION earns, for the same reason: no answer
+        // to this arm's question. `scheduleCloseRetry` stands down on its own if
+        // the owner did retire the tombstone.
         if (!outcome.owned) {
-          clearCapableCloseRetry(args.refs.retries.current, args.key);
+          scheduleCloseRetry({ ...args, answered: false, arm: "plain" });
           return;
         }
         useLandingTerminalStore

@@ -515,8 +515,9 @@ export async function reconcileCapableLandingTerminals(args: {
         //
         // Retaining the tombstone here is what opened that window - it used to
         // be cleared on this pass, so it could never survive to be closed
-        // twice. Joining the in-flight promise still observes the real
-        // settlement, so the tombstone below clears on the same evidence.
+        // twice. Joining does NOT stand in for sending it: the settlement
+        // belongs to the request that ran, so the tombstone below clears only
+        // for the owner, and a joiner leaves the record for the next pass.
         const outcome = await requestLandingTerminalClose({
           hostId: pending.hostId,
           sessionId: pending.sessionId,
