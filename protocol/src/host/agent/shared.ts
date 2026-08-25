@@ -68,8 +68,49 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "hermes",
   "omp",
   "huggingface",
+  "reasonix",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
+
+/**
+ * Frozen harness id set as the released `chat.subscribe@1.0–1.6` lines shipped
+ * it - i.e. everything before Reasonix, which first rides `1.7`. (`1.6` looked
+ * unreleased and is not: the committed released-baseline surface advertises it
+ * with exactly these nineteen ids.) Bound by the wire-freeze copies of every released server-frame schema
+ * that carries a harness id (runtime session/plan events, the active turn); a
+ * newer host must not project an id an installed older client's strict enum
+ * cannot decode.
+ *
+ * Deliberately NOT aliased to `guiHarnessIdSchemaV70`, even though the two sets
+ * coincide today: that one pins the `agent.*` RPC **major/minor** axis, this one
+ * pins the `chat.subscribe` **minor** axis. They are independent, and a future
+ * harness admitted to one line but frozen off the other would silently break
+ * whichever schema borrowed the wrong copy. Do NOT add new harnesses here.
+ */
+export const guiHarnessIdSchemaPreReasonix = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdPreReasonix = z.infer<
+  typeof guiHarnessIdSchemaPreReasonix
+>;
 
 /**
  * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
@@ -380,6 +421,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "hermes",
   "omp",
   "huggingface",
+  "reasonix",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -904,6 +946,29 @@ export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV60),
 });
 export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
+
+// ── Frozen protocol-v7.0 agent.list response (with Hugging Face, pre-Reasonix)
+// `agent.list` enumerates every agent in the epic - including Reasonix GUI
+// harness chats a newer client created - so an already-shipped v7.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.2.0` /
+// `host-v1.2.0`, both tagged 2026-08-24), so it is frozen here as actually
+// shipped; the v8.0 line carries Reasonix rows and v8→v7 … v8→v1 bridges drop
+// them for older callers. Do not add new harnesses here - use the existing v8
+// bridge.
+//
+// The row body is hand-frozen off `releasedAgentSummarySchema` plus the
+// `runConfig` field v7.0 shipped, rather than `agentSummarySchema.extend(...)`:
+// pinning only the id over a LIVE body is the half-freeze
+// `guiHarnessOptionBaseShapeV70` had to correct in `gui/unary-schemas.ts`. A
+// field added to `agentSummarySchema` must not widen this released line.
+export const agentSummarySchemaV70 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV70.nullable(),
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
+export const listAgentsResponseSchemaV70 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV70),
+});
+export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

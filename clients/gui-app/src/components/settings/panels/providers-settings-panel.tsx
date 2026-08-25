@@ -211,6 +211,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
   hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
   omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
+  reasonix:
+    "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
 };
 
 function hasPendingProviderProbe(

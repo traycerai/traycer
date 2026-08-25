@@ -10,13 +10,12 @@ import {
 
 /**
  * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a
- * horizontally-scrollable tab bar. Curated to Agents (`chats`), Artifacts, File
- * tree, Git diff, Pull requests, Terminals and Sharing; only Comments is
- * excluded, because it lives inside the artifact tile. `pull-requests` sits
- * directly after `git-diff`, and `sharing` sits last ahead of the excluded
- * Comments, exactly as they do in the desktop rail, so the two surfaces read in
- * the same order. Identity (title + icon) is reused verbatim from
- * `LEFT_PANEL_DEFINITIONS` so mobile never forks the category copy.
+ * horizontally-scrollable tab bar: Agents (`chats`), Artifacts, File tree, Git
+ * diff, Pull requests, Terminals, Sharing and Comments. `pull-requests` sits
+ * directly after `git-diff`, and `comments` sits last behind `sharing`, exactly
+ * as they do in the desktop rail, so the two surfaces read in the same order.
+ * Identity (title + icon) is reused verbatim from `LEFT_PANEL_DEFINITIONS` so
+ * mobile never forks the category copy.
  */
 const CURATED_ORDER: readonly LeftPanelId[] = [
   "chats",
@@ -26,6 +25,7 @@ const CURATED_ORDER: readonly LeftPanelId[] = [
   "pull-requests",
   "terminals",
   "sharing",
+  "comments",
 ];
 
 const DEFINITION_BY_ID = new Map<LeftPanelId, LeftPanelMetadataDefinition>(
@@ -44,17 +44,25 @@ const CURATED_CATEGORY_IDS: ReadonlyArray<LeftPanelId> =
 /**
  * The context each curated definition's `isAutoVisible()` is judged against.
  * Only PR presence varies: every other curated category is unconditionally
- * visible in the registry, and Comments - the one remaining context-dependent
- * panel - is not in the set. The empty override map keeps the switcher on each
- * panel's own rule: the rail's show/hide context menu is a desktop affordance,
- * and the phone switcher's category set is curated here rather than by it.
+ * visible on the bar. The empty override map keeps the switcher on each panel's
+ * own rule: the rail's show/hide context menu is a desktop affordance, and the
+ * phone switcher's category set is curated here rather than by it.
+ *
+ * Comments answers the registry's two reveal gates affirmatively because the
+ * two surfaces have opposite constraints. The desktop rail is a fixed strip
+ * alongside the canvas, so it can afford to hold the tab back until an artifact
+ * tile reveals it. The phone sheet is the ONLY route to a thread list, a
+ * permalink or a reply composer - so a tab that came and went with the shown
+ * tile would leave a tap on a thread anchor with nowhere to land. The tab is
+ * permanent here, and the body names the condition when the shown tile is not
+ * an artifact.
  */
 function switcherAvailability(
   hasPullRequests: boolean,
 ): LeftPanelAvailabilityContext {
   return {
-    commentsPanelRevealed: false,
-    hasActiveCommentableArtifact: false,
+    commentsPanelRevealed: true,
+    hasActiveCommentableArtifact: true,
     hasPullRequests,
     visibilityOverrideById: {},
   };
@@ -94,9 +102,9 @@ export function switcherCategoryTitle(
 /**
  * Clamp a persisted active left-panel id to the categories currently on the
  * bar, so a selection with no tab behind it falls back to Agents rather than
- * leaving the sheet with no matching tab. Two ways that happens: a category
- * mobile never curates (Comments, selected on desktop), and `pull-requests`
- * persisted from an epic that has since stopped reporting any PR.
+ * leaving the sheet with no matching tab. `pull-requests` is the case that
+ * reaches it: persisted from an epic that has since stopped reporting any PR,
+ * or against a host that does not serve the PR stream.
  */
 export function clampToSwitcherCategory(
   id: LeftPanelId,

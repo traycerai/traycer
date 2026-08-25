@@ -74,9 +74,10 @@ History keeps its modal on every viewport.
 Everything above is VIEWPORT (`useIsMobileViewport()`) - it flips when a window
 is resized, and a narrow desktop window gets all of it. A separate, smaller set
 of rows is gated on the BUILD (`isMobileApp()`, the Capacitor bundle), because
-what they need is a capability the shell does not have at any width. Do not
-reach for the viewport hook for these: a narrow desktop window still has a
-power bridge and a hardware keyboard.
+what they need is either a capability the shell does not have at any width or a
+product role that build does not play. Do not reach for the viewport hook for
+these: a narrow desktop window still has a power bridge and a hardware
+keyboard, and is still the end of a pairing that shows the code.
 
 - **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
@@ -88,6 +89,15 @@ power bridge and a hardware keyboard.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
+- **The Link a phone SECTION** - the one entry here that is a PRODUCT call
+  rather than a capability limit, and the distinction is worth keeping. The
+  panel DISPLAYS a QR and a one-time code for another device to read, and in
+  the mobile app that device is the one holding the panel: the phone is the
+  SCANNER (`layout/header/sign-in/link-code-sign-in.tsx` redeems a code this
+  panel mints, and its own copy says "On your desktop, open Settings → Link a
+  phone"). A phone _could_ show the code to a second phone; linking that way is
+  given up knowingly, because a pairing surface that names the wrong end of
+  itself costs more than the case it serves.
 
 Each returns `null` outright rather than rendering disabled with rewritten
 copy: a control the build will never perform is worse than no control.
@@ -100,12 +110,14 @@ resolving one that is not offered. Three surfaces present a choice and so read
 the offered list: the sidebar, the palette's settings sub-page
 (`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
 which indexes positionally and must walk the same list the sidebar badges).
-Three more can arrive holding an id and each resolves it: the route
-(`settings.keybindings.tsx` `beforeLoad` redirects to `/settings/general` with
-`replace`), the modal (falls back to General for any section the build does not
-offer, since its section is persisted across launches), and the palette's
-`help:keybindings` row, which is dropped rather than left as the one entry
-point that routes around the rest.
+Three more can arrive holding an id and each resolves it: the route (each
+omitted section's own `beforeLoad` redirects to `/settings/general` with
+`replace` - `settings.keybindings.tsx`, `settings.link-phone.tsx`), the modal
+(falls back to General for any section the build does not offer, since its
+section is persisted across launches), and the palette's `help:keybindings`
+row, which is dropped rather than left as the one entry point that routes
+around the rest. Only Keybindings needs that last one; nothing navigates
+directly to Link a phone, so it gets no machinery it does not need.
 
 The gate is by SHELL, not by attached hardware: an iPad running the mobile app
 with a keyboard paired loses the section, which is the accepted cost of

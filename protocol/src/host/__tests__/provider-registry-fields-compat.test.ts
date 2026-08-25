@@ -137,7 +137,7 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
     for (const target of [2, 3] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -333,7 +333,7 @@ describe("old-client behavior on the error arm", () => {
     (targetMajor) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         targetMajor,
         providersListResponseSchema.parse({
           providers: [erroredState],
@@ -528,7 +528,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       2,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
@@ -547,7 +547,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       3,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],
@@ -656,7 +656,7 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
     // an older major's table is kept for the record, not consulted.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       6,
       // `native` is required here and absent from the major-6 cases above
       // because the live response shape carries it - v6.0 froze before it
@@ -700,7 +700,7 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
     // cannot reach it.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      7,
+      8,
       5,
       providersListResponseSchema.parse({
         providers: [stateWithRegistryFields],

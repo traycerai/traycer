@@ -30,6 +30,7 @@ import {
   usePointerDragCommit,
   type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
@@ -206,7 +207,14 @@ function dispatchLandingTerminalClose(args: {
         .mutateAsync({ hostId: closed.hostId, terminalId: closed.sessionId })
         .then(() => undefined),
   })
-    .then(() => {
+    .then((outcome) => {
+      // Only the OWNER retires the record. The coordinator keys by the
+      // terminal's lifetime rather than by RPC, so this close can join an
+      // in-flight `terminal.kill`, and that answers an already-gone session with
+      // `killed: false` DATA - the one answer the kill mutation keeps a
+      // `pendingCreate` tombstone for. A joiner that cleared on it would drop
+      // the record in front of the PTY that create is about to produce.
+      if (!outcome.owned) return;
       useLandingTerminalStore
         .getState()
         .clearPendingKill(closed.hostId, closed.sessionId);
@@ -420,17 +428,31 @@ export function LandingTerminalPanel(): ReactNode {
     [],
   );
 
+  // The chooser's field is not why the chooser is on screen: a directory is
+  // picked from the list beneath it, and on a touch pointer focusing the field
+  // covers that list with a software keyboard. Skipping the REQUEST rather
+  // than the endpoint's focus is what keeps the coordinator's bookkeeping
+  // honest - an intent no endpoint will ever satisfy would stay pending.
+  const coarsePointer = useCoarsePointer();
+  const requestDirectoryPickerFocus = useCallback(
+    (requestKey: number): void => {
+      if (coarsePointer) return;
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: requestKey,
+      });
+    },
+    [coarsePointer],
+  );
+
   const replaceDirectoryRequest = useCallback(
     (request: LandingTerminalDirectoryRequest | null): void => {
       writeDirectoryRequest(request);
       if (request !== null && request.selectedTarget === null) {
-        requestPrimaryFocus({
-          kind: "landing-terminal-directory",
-          requestId: request.key,
-        });
+        requestDirectoryPickerFocus(request.key);
       }
     },
-    [writeDirectoryRequest],
+    [requestDirectoryPickerFocus, writeDirectoryRequest],
   );
 
   const setPanelOpen = useCallback(
@@ -594,12 +616,9 @@ export function LandingTerminalPanel(): ReactNode {
         selectedTarget,
         error: null,
       });
-      requestPrimaryFocus({
-        kind: "landing-terminal-directory",
-        requestId: request.key,
-      });
+      requestDirectoryPickerFocus(request.key);
     },
-    [replaceDirectoryRequest, selectWorkspacePath],
+    [replaceDirectoryRequest, requestDirectoryPickerFocus, selectWorkspacePath],
   );
 
   const handleReconciliationError = useCallback(() => {
@@ -616,12 +635,9 @@ export function LandingTerminalPanel(): ReactNode {
       error: "The terminal directory could not be opened.",
     });
     if (ownsFocus) {
-      requestPrimaryFocus({
-        kind: "landing-terminal-directory",
-        requestId: request.key,
-      });
+      requestDirectoryPickerFocus(request.key);
     }
-  }, [writeDirectoryRequest]);
+  }, [requestDirectoryPickerFocus, writeDirectoryRequest]);
 
   const activateTerminalTab = useCallback(
     (instanceId: string) => {

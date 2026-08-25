@@ -48,7 +48,7 @@ export const epicArtifactKindSchema = z.enum([
   "review",
 ]);
 
-export const harnessIdSchema = z.enum([
+export const harnessIdSchemaPreReasonix = z.enum([
   "claude",
   "codex",
   "opencode",
@@ -68,4 +68,9 @@ export const harnessIdSchema = z.enum([
   "hermes",
   "omp",
   "huggingface",
+]);
+
+export const harnessIdSchema = z.enum([
+  ...harnessIdSchemaPreReasonix.options,
+  "reasonix",
 ]);

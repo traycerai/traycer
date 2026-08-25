@@ -21,6 +21,7 @@ import {
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV70Preimage,
+  providersListResponseSchemaV71,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -175,34 +176,45 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("v7.1 is the head and names the canonical response; v7.0 names its freeze", () => {
-    // This assertion has now flipped twice, and the flips ARE the judgement the
-    // freeze rule exists to force. While an unreleased v8.0 sat above v7.0,
-    // v7.0 was pinned; collapsing that major made v7.0 the head and it tracked
-    // live again; opening v7.1 for the auth-aware enablement fields made it a
-    // non-head line once more, so it is pinned again - this time to the REAL
-    // v7.0 freeze (`providersListResponseSchemaV70`), not to the pre-image,
-    // which still backs no contract and remains the v6 -> v7 bridge's
-    // first-pass target.
+  it("v8.0 is the head and names the canonical response; 7.1 and 7.0 name their freezes", () => {
+    // This assertion has now flipped three times, and the flips ARE the
+    // judgement the freeze rule exists to force. While an unreleased v8.0 sat
+    // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
+    // it tracked live again; opening v7.1 for the auth-aware enablement fields
+    // pinned v7.0 to the REAL freeze (`providersListResponseSchemaV70`); and
+    // Reasonix has now pinned 7.1 too and opened a real v8.0.
+    //
+    // 7.1 froze even though no TAG has shipped it, which is the part worth
+    // reading twice. The "an unreleased line may widen in place" allowance is
+    // about a MAJOR: `versioned-rpc.ts` separately refuses a MINOR whose
+    // response grows an enum over its predecessor, and 7.0 is released - so no
+    // minor of major 7 can ever carry a provider id 7.0 lacks, released or not.
     //
     // "A line that has STOPPED being the head still points at live" is the
-    // defect being guarded, so both halves are asserted: the head names live,
-    // and the line below it does not.
+    // defect being guarded, so every half is asserted: the head names live, and
+    // neither line below it does.
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
     const v71 = hostRpcRegistry["providers.list"][7].versions[1].contract;
-    expect(v71.responseSchema).toBe(providersListResponseSchema);
+    const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
+    expect(v80.responseSchema).toBe(providersListResponseSchema);
+    expect(v71.responseSchema).toBe(providersListResponseSchemaV71);
+    expect(v71.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
-    // The REQUEST side did not move: the freeze covered only the response, so
-    // both minors still bind the live request and `providersListRequestSchemaV70`
-    // remains the hand-copy held equal to it by the pin above.
+    // The REQUEST side did not move: the freezes covered only the response, so
+    // all three lines still bind the live request and
+    // `providersListRequestSchemaV70` remains the hand-copy held equal to it by
+    // the pin above. Request-side enum growth is advisory (a released client
+    // never emits a new value), which is why it is allowed to track live here
+    // while the response is not.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
     expect(v71.requestSchema).toBe(providersListRequestSchema);
+    expect(v80.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 
-  it("providerIdSchemaV70 includes huggingface, the sole v7.0-only provider id", () => {
+  it("providerIdSchemaV70 includes huggingface, the newest id major 7 can carry", () => {
     expect(providerIdSchemaV70.options).toContain("huggingface");
   });
 
@@ -216,10 +228,25 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
   // represent. The point is that it must be a DECISION. Adding a harness now
   // fails here until someone states, in this file, which side the new id
   // belongs on.
-  it("the live and frozen provider id sets have not drifted apart", () => {
+  it("every live provider id is either in the v7.0 set or a stated post-v7.0 id", () => {
+    // THE STATED DECISION, which is what this test is for. `reasonix` is the
+    // first id added since the v1.2.0 tags shipped `providers.list@7.0`, and it
+    // belongs on the LIVE side only: a major-7 caller cannot represent it, so
+    // `providersListDowngradeV8ToV7` filters its row out and that caller simply
+    // does not see the provider. Dropping is the right answer here - the
+    // alternative, letting the id ride a released line, is the omp/huggingface
+    // incident - but it has to be a decision recorded here, not a diff nobody
+    // read.
+    //
+    // Add the next id to this list at the same time you add it to
+    // `providerIdSchema`, and only after deciding it cannot ride major 7.
+    const POST_V70_PROVIDER_IDS = ["reasonix"] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
-      [...providerIdSchemaV70.options].sort(),
+      [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
     );
+    for (const id of POST_V70_PROVIDER_IDS) {
+      expect(providerIdSchemaV70.options).not.toContain(id);
+    }
   });
 });
 
@@ -469,7 +496,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     (target) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -489,7 +516,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
       });
       const downgraded = downgradeRequestAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         canonical,
       );
@@ -506,7 +533,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [huggingfaceState],
