@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastServerFrame,
+  BrowserSessionInfo,
+} from "@traycer/protocol/host/browser/contracts";
 import { ElectronTabSurface } from "./agent-browser-tile";
 import { BrowserPeekTile } from "./browser-peek-tile";
 import { BrowserSessionsHostProvider } from "./browser-sessions-provider";
@@ -24,16 +27,21 @@ interface BrowserSessionTileProps {
   readonly epicId: string;
 }
 
+type BrowserScreencastCompleteCause = Extract<
+  BrowserScreencastServerFrame,
+  { readonly kind: "complete" }
+>["cause"];
+
 function resolveSwapState(args: {
   readonly runtimeKind: BrowserSessionInfo["runtime"]["kind"] | undefined;
   readonly bindingRegistrationId: string | null;
   readonly terminalBindingRegistrationId: string | null;
-  readonly castMigrated: boolean;
+  readonly castPlacedInElectron: boolean;
 }): { readonly renderPeek: boolean; readonly holdReason: string | null } {
   const renderPeek =
     args.runtimeKind === "headless" ||
     args.bindingRegistrationId === null ||
-    (args.castMigrated &&
+    (args.castPlacedInElectron &&
       args.bindingRegistrationId === args.terminalBindingRegistrationId);
   if (!renderPeek) return { renderPeek, holdReason: null };
   return {
@@ -53,49 +61,57 @@ function useBrowserSessionSwap(input: {
 }): {
   readonly renderPeek: boolean;
   readonly castGeneration: number;
-  readonly onMigrated: () => void;
+  readonly onComplete: (cause: BrowserScreencastCompleteCause) => void;
 } {
-  const [castMigrated, setCastMigrated] = useState(false);
+  const [castPlacedInElectron, setCastPlacedInElectron] = useState(false);
   const [castGeneration, setCastGeneration] = useState(0);
   const [terminalBindingRegistrationId, setTerminalBindingRegistrationId] =
     useState<string | null>(null);
   const bindingRegistrationIdRef = useRef<string | null>(null);
-  const latestMigrationRevisionRef = useRef(0);
-  const terminalMigrationRevisionRef = useRef(0);
+  const runtimeKindRef = useRef(input.session?.runtime.kind);
+  const latestRuntimeRevisionRef = useRef(0);
+  const terminalRuntimeRevisionRef = useRef(0);
   const swapDecisionSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     bindingRegistrationIdRef.current = input.bindingRegistrationId;
-    latestMigrationRevisionRef.current = input.session?.runtime.revision ?? 0;
-  }, [input.bindingRegistrationId, input.session?.runtime.revision]);
+    runtimeKindRef.current = input.session?.runtime.kind;
+    latestRuntimeRevisionRef.current = input.session?.runtime.revision ?? 0;
+  }, [input.bindingRegistrationId, input.session?.runtime]);
 
-  const onMigrated = useCallback(() => {
+  const onComplete = useCallback((cause: BrowserScreencastCompleteCause) => {
+    if (cause === null) {
+      if (runtimeKindRef.current === "headless") {
+        setCastGeneration((current) => current + 1);
+      }
+      return;
+    }
     setTerminalBindingRegistrationId(bindingRegistrationIdRef.current);
-    terminalMigrationRevisionRef.current = latestMigrationRevisionRef.current;
-    setCastMigrated(true);
+    terminalRuntimeRevisionRef.current = latestRuntimeRevisionRef.current;
+    setCastPlacedInElectron(true);
   }, []);
 
   useEffect(() => {
     if (
-      !castMigrated ||
+      !castPlacedInElectron ||
       input.session?.runtime.kind !== "headless" ||
-      input.session.runtime.revision <= terminalMigrationRevisionRef.current
+      input.session.runtime.revision <= terminalRuntimeRevisionRef.current
     ) {
       return;
     }
-    setCastMigrated(false);
+    setCastPlacedInElectron(false);
     setCastGeneration((current) => current + 1);
-  }, [castMigrated, input.session?.runtime]);
+  }, [castPlacedInElectron, input.session?.runtime]);
 
   const { renderPeek, holdReason } = resolveSwapState({
     runtimeKind: input.session?.runtime.kind,
     bindingRegistrationId: input.bindingRegistrationId,
     terminalBindingRegistrationId,
-    castMigrated,
+    castPlacedInElectron,
   });
 
   useEffect(() => {
-    if (!castMigrated) {
+    if (!castPlacedInElectron) {
       swapDecisionSignatureRef.current = null;
       return;
     }
@@ -121,7 +137,7 @@ function useBrowserSessionSwap(input: {
       holdReason,
     });
   }, [
-    castMigrated,
+    castPlacedInElectron,
     holdReason,
     input.bindingRegistrationId,
     input.session?.runtime.revision,
@@ -134,7 +150,7 @@ function useBrowserSessionSwap(input: {
   return {
     renderPeek,
     castGeneration,
-    onMigrated,
+    onComplete,
   };
 }
 
@@ -144,7 +160,7 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly binding: ElectronTabBinding | null;
   readonly renderPeek: boolean;
   readonly castGeneration: number;
-  readonly onMigrated: () => void;
+  readonly onComplete: (cause: BrowserScreencastCompleteCause) => void;
 }
 
 function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
@@ -175,7 +191,7 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
         node={peek}
         viewTabId={props.viewTabId}
         paneId={props.paneId}
-        onMigrated={props.onMigrated}
+        onComplete={props.onComplete}
       />
     );
   }
@@ -226,7 +242,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     sessions.lifecycle,
     tab,
   ]);
-  const { renderPeek, castGeneration, onMigrated } = useBrowserSessionSwap({
+  const { renderPeek, castGeneration, onComplete } = useBrowserSessionSwap({
     session,
     bindingRegistrationId: binding?.registrationId ?? null,
     sessionId: props.node.sessionId,
@@ -241,7 +257,7 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
       binding={binding}
       renderPeek={renderPeek}
       castGeneration={castGeneration}
-      onMigrated={onMigrated}
+      onComplete={onComplete}
     />
   );
 }

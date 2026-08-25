@@ -107,9 +107,9 @@ describe("browser.screencast@1.0 control frames", () => {
     }
   });
 
-  it("parses pending reverse-migration status on the screencast contract", () => {
+  it("parses pending Electron placement on the screencast contract", () => {
     const pending = {
-      kind: "migrationPending",
+      kind: "electronPlacementPending",
       hasBinaryPayload: false,
       pending: true,
     };

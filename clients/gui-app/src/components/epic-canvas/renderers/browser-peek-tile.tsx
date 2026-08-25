@@ -163,7 +163,7 @@ interface BrowserPeekRenderState {
   readonly image: { readonly src: string; readonly sequence: number } | null;
   readonly lifecycle: PeekLifecycle;
   readonly details: string | null;
-  readonly migrationPending: boolean;
+  readonly electronPlacementPending: boolean;
   readonly frameSize: {
     readonly width: number;
     readonly height: number;
@@ -176,16 +176,21 @@ type BrowserPeekDialog = Extract<
   { readonly kind: "dialogOpened" }
 > & { readonly armEpoch: number };
 
+type BrowserScreencastCompleteCause = Extract<
+  BrowserScreencastServerFrame,
+  { readonly kind: "complete" }
+>["cause"];
+
 export interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekTileRef;
   readonly viewTabId?: string;
   readonly paneId?: string;
-  readonly onMigrated?: () => void;
+  readonly onComplete?: (cause: BrowserScreencastCompleteCause) => void;
 }
 
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
-  const { epicId, node, onMigrated } = props;
+  const { epicId, node, onComplete } = props;
   const tabHostId = useTabHostId();
   const hostEntry = useHostDirectoryEntry(tabHostId);
   const auth = useStreamAuthRevalidator();
@@ -281,7 +286,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       image: null,
       lifecycle: "connecting",
       details: null,
-      migrationPending: false,
+      electronPlacementPending: false,
       frameSize: null,
       navState: EMPTY_SCREENCAST_NAV_STATE,
     }),
@@ -290,7 +295,8 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const image = stateMatchesClient ? streamState.image : null;
   const lifecycle = stateMatchesClient ? streamState.lifecycle : "connecting";
   const details = peekDetailsForRender(stateMatchesClient, streamState, client);
-  const migrationPending = stateMatchesClient && streamState.migrationPending;
+  const electronPlacementPending =
+    stateMatchesClient && streamState.electronPlacementPending;
   const frameSize = stateMatchesClient ? streamState.frameSize : null;
   const navState = stateMatchesClient
     ? streamState.navState
@@ -418,14 +424,14 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           publishSelfPaintedTileFrame(snapshotKey, dataUrl);
         },
       });
-      if (parsed.data.kind === "complete" && parsed.data.cause === "migrated") {
-        onMigrated?.();
+      if (parsed.data.kind === "complete") {
+        onComplete?.(parsed.data.cause);
       }
-      if (parsed.data.kind === "migrationPending") {
+      if (parsed.data.kind === "electronPlacementPending") {
         const pending = parsed.data.pending;
         setStreamState((current) => ({
           ...resetPeekStateForClient(current, client),
-          migrationPending: pending,
+          electronPlacementPending: pending,
         }));
       }
       if (parsed.data.kind === "navState") {
@@ -484,7 +490,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     epicId,
     node.sessionId,
     node.tabId,
-    onMigrated,
+    onComplete,
     setDetails,
     setFrameSize,
     setImage,
@@ -1126,7 +1132,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         loading={navState.loading}
         armed={presentedArmedEpoch !== null}
         status={status}
-        migrationPending={migrationPending}
+        electronPlacementPending={electronPlacementPending}
         onRelease={disarm}
       />
       <div
@@ -1296,7 +1302,7 @@ function ScreencastPeekChromeBar(props: {
   readonly loading: boolean;
   readonly armed: boolean;
   readonly status: BrowserPeekStatus;
-  readonly migrationPending: boolean;
+  readonly electronPlacementPending: boolean;
   readonly onRelease: () => void;
 }) {
   return (
@@ -1355,7 +1361,7 @@ function ScreencastPeekChromeBar(props: {
           </div>
         </div>
       </div>
-      {props.migrationPending ? (
+      {props.electronPlacementPending ? (
         <div
           className="truncate px-2 pb-1 text-ui-xs text-muted-foreground"
           aria-live="polite"
@@ -1476,7 +1482,7 @@ function resetPeekStateForClient(
     image: null,
     lifecycle: "connecting",
     details: client === null ? "Waiting for the host stream." : null,
-    migrationPending: false,
+    electronPlacementPending: false,
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   };
