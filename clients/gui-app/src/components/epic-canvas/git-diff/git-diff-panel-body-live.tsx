@@ -57,7 +57,9 @@ import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { CapabilityGate } from "./capability-gate";
+import { GitDiffPanelInlineActions } from "./git-diff-panel-actions";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
 import { GitBindingsUnreadable } from "./empty-states/git-bindings-unreadable";
 import { GitHostUnreachable } from "./empty-states/git-host-unreachable";
@@ -549,6 +551,7 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const { epicId, onLatchHost } = props;
+  const isMobileViewport = useIsMobileViewport();
 
   const roots: ReadonlyArray<GitDiffRepoSwitcherRootInput> = useMemo(
     () =>
@@ -599,6 +602,12 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
             hostClient={props.client}
           />
         </div>
+        {/* Degraded keeps the overflow menu for the same reason it keeps the
+            picker: desktop's panel header carries it in every state, and the
+            phone has no other home for it. */}
+        {isMobileViewport ? (
+          <GitDiffPanelInlineActions epicId={epicId} />
+        ) : null}
       </div>
       {/* The bodies below are written as `h-full` blocks (they used to be the
           panel's ONLY child). A percentage height needs a definite parent, so
@@ -646,6 +655,11 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
+  // Below md the epic sidebar - and with it this panel's header Actions slot -
+  // is never mounted; the tab switcher shows the body alone. The overflow menu
+  // moves into the body header there so the layout toggle and the manual
+  // refresh stay reachable, and stays out of it wherever the header exists.
+  const isMobileViewport = useIsMobileViewport();
 
   // Live parent status for the active root: drives the nested-snapshot refetch
   // (its fingerprint is the change token) and the immediate pre-snapshot render.
@@ -818,6 +832,9 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
           className={undefined}
           compact={false}
         />
+        {isMobileViewport ? (
+          <GitDiffPanelInlineActions epicId={epicId} />
+        ) : null}
       </div>
       <CapabilityGate
         hostId={selectedRootRow.hostId}
