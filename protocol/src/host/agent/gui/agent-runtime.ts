@@ -1058,6 +1058,37 @@ export type UserMessageAnchorResolvedEvent = z.infer<
   typeof userMessageAnchorResolvedEventSchema
 >;
 
+// Wire-freeze copy for released `chat.subscribe@1.0–1.5` blockDelta frames.
+// Reasonix first rides the unreleased 1.6 line; keeping its discriminant out of
+// this union prevents a newer host from sending an anchor an installed older
+// client cannot decode.
+const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("user_message.anchor_resolved"),
+  messageId: z.string(),
+  anchor: z.discriminatedUnion("harnessId", [
+    claudeUserMessageAnchorResolvedSchema,
+    codexUserMessageAnchorResolvedSchema,
+    openCodeUserMessageAnchorResolvedSchema,
+    cursorUserMessageAnchorResolvedSchema,
+    traycerUserMessageAnchorResolvedSchema,
+    openRouterUserMessageAnchorResolvedSchema,
+    grokUserMessageAnchorResolvedSchema,
+    qwenUserMessageAnchorResolvedSchema,
+    kiroUserMessageAnchorResolvedSchema,
+    droidUserMessageAnchorResolvedSchema,
+    kimiUserMessageAnchorResolvedSchema,
+    copilotUserMessageAnchorResolvedSchema,
+    kilocodeUserMessageAnchorResolvedSchema,
+    ampUserMessageAnchorResolvedSchema,
+    devinUserMessageAnchorResolvedSchema,
+    piUserMessageAnchorResolvedSchema,
+    hermesUserMessageAnchorResolvedSchema,
+    ompUserMessageAnchorResolvedSchema,
+    huggingFaceUserMessageAnchorResolvedSchema,
+  ]),
+});
+
 /**
  * Advances the durable turn-tail on a user message's session anchor while the
  * turn is still streaming (see `turnTailUuid` on the persisted Claude anchor).
@@ -1296,7 +1327,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   sessionCreatedEventSchema,
   sessionResumedEventSchema,
   turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
   turnInterruptedEventSchema,
@@ -1347,7 +1378,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   sessionCreatedEventSchema,
   sessionResumedEventSchema,
   turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
   turnCompletedEventSchema,
   turnStoppedEventSchema,
   turnInterruptedEventSchema,

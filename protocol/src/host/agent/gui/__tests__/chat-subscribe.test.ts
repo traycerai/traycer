@@ -2314,6 +2314,52 @@ describe("chat.subscribe Reasonix anchor versioning", () => {
       message: { sessionAnchor: { harnessId: "reasonix" } },
     });
   });
+
+  const anchorResolvedFrame = {
+    kind: "blockDelta" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event: {
+      type: "user_message.anchor_resolved" as const,
+      blockId: "message-1",
+      timestamp: 1000,
+      messageId: "message-1",
+      anchor: {
+        harnessId: "reasonix" as const,
+        sessionId: "reasonix-session-1",
+        reasonixSessionId: "reasonix-session-1",
+      },
+    },
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+  ])(
+    "keeps a Reasonix anchor-resolved event off released %s frames",
+    (_version, contract) => {
+      expect(
+        contract.serverFrameSchema.safeParse(anchorResolvedFrame).success,
+      ).toBe(false);
+    },
+  );
+
+  it("carries a Reasonix anchor-resolved event on the unreleased 1.6 line", () => {
+    expect(
+      chatSubscribeV16.serverFrameSchema.parse(anchorResolvedFrame),
+    ).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "user_message.anchor_resolved",
+        anchor: { harnessId: "reasonix" },
+      },
+    });
+  });
 });
 
 describe("guiAgentModelCapabilitiesSchema (imageGeneration)", () => {
