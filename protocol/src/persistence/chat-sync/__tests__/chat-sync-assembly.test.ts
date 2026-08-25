@@ -384,7 +384,7 @@ describe("chat assembly fails closed", () => {
     // Content addressing proves the bytes are the ones the head named; this
     // proves they MEAN what the head assumed.
     const foreign = publishShard({
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 2 },
       chatId: "chat-somewhere-else",
       section: "messages",
       messages: [unknownMessage],

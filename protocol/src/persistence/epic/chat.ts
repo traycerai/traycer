@@ -7,6 +7,7 @@ import {
   messageSchema,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
+  messageSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/messages";
 import { activeSessionChainSchema } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
@@ -191,4 +192,34 @@ export const chatSchemaV15 = z.object({
   messages: z.array(messageSchemaPreImage),
   events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),
+});
+
+// Wire-freeze copy of the chat tree as `chat.subscribe@1.6` shipped it in
+// `host-v1.2.0-rc.1`: every field the live `chatSchema` carried at that tag -
+// including `pinnedUserProviderHandle` and `lastDeliveredRolesDigest`, both of
+// which predate the RC - with `messages` pinned to
+// `messageSchemaPreSettlement` so the RC cohort never observes canonical
+// interview settlement or answer selection evidence.
+//
+// Hand-frozen field-for-field; NOT derived from `chatSchema`. `1.6` bound the
+// LIVE chat schema by reference until this freeze, which is exactly the
+// hazard `chatSchemaV14`'s comment describes - every later addition to
+// `chatSchema` would otherwise leak onto a line that has shipped peers.
+export const chatSchemaV16 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  messages: z.array(messageSchemaPreSettlement),
+  events: z.array(chatEventSchema).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
 });

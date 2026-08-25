@@ -25,8 +25,21 @@ import { z } from "zod";
  *
  * A new minor adds new contracts with their own literal here (`z.literal(1)`
  * for 1.1, and so on) alongside their registry entries.
+ *
+ * **1.2** carries canonical interview settlement: the interview content block
+ * gained `outcome`, `draftAnswers`, `settlement`, `diagnostics` and `delivery`,
+ * and each interview answer gained `selection`. Every one of those is
+ * `.default(...)`-ed, so a 1.1 record parses unchanged, and §2/§3 of
+ * `COMPATIBILITY.md` (the passthrough's `raw` re-emission and residual capture)
+ * already make a 1.1 reader's re-publication of a 1.2 chat mechanically
+ * lossless - which is why `CHAT_SYNC_1_1_READER_FLOOR` is NOT raised and a 1.2
+ * head still stamps `minReaderVersion: null`. The bump exists because the
+ * coupled-bump ritual requires the record minor for a `chat.subscribe` field
+ * that also lands in a publication (these rode `chat.subscribe@1.7`), and
+ * because a payload's self-identifying version is what a detached repair
+ * candidate is trusted on.
  */
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 1 } as const;
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 2 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

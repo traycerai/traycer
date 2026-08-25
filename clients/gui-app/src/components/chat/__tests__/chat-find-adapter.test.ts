@@ -225,6 +225,74 @@ describe("chat find adapter", () => {
     expect(activeEntry).toBeUndefined();
   });
 
+  it("clears mounted title/detail highlights on manual dismissal while preserving navigation", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const title = document.createElement("span");
+    title.dataset.unitId = "title-unit";
+    title.textContent = "needle title";
+    const detail = document.createElement("span");
+    detail.dataset.unitId = "detail-unit";
+    detail.textContent = "needle detail";
+    row.append(title, detail);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-dismissal",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: (_messageId, unitId) =>
+        row.querySelector<HTMLElement>(`[data-unit-id="${unitId}"]`),
+    });
+    setRows([
+      testRow("row-1", "title-unit", "needle title"),
+      testRow("row-1", "detail-unit", "needle detail"),
+    ]);
+
+    void adapter.search({ requestId: 12, query: "needle", matchCase: false });
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      activeUnitId: "title-unit",
+      exactHighlight: "painted",
+    });
+    expect(registry.values.size).toBeGreaterThan(0);
+
+    adapter.dismissActiveMatch();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      activeUnitId: null,
+      exactHighlight: "none",
+    });
+    expect(registry.values.size).toBe(0);
+
+    // Passive transcript rescans and virtual-row mount sync are not user
+    // navigation. Neither may resurrect the match the user dismissed.
+    setRows([
+      testRow("row-1", "title-unit", "needle title"),
+      testRow("row-1", "detail-unit", "needle detail"),
+    ]);
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 2,
+      activeUnitId: null,
+      exactHighlight: "none",
+    });
+    expect(registry.values.size).toBe(0);
+
+    void adapter.next();
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      current: 2,
+      total: 2,
+      activeUnitId: "detail-unit",
+      exactHighlight: "painted",
+    });
+  });
+
   it("can degrade a missing unit anchor to message-root paint when reveal falls back", () => {
     const registry = installMockHighlights();
     const row = document.createElement("div");

@@ -16,6 +16,7 @@ import {
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { SwitcherCommentsList } from "@/components/epic-canvas/mobile/switcher-comments-list";
 import { SwitcherPrPresenceProbe } from "@/components/epic-canvas/mobile/switcher-pr-presence-probe";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
@@ -80,9 +81,9 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * The mobile tab switcher: a drag-dismissable `vaul` bottom sheet whose
  * category bar mirrors the desktop left-panel registry and whose content region
  * shows the active category - flat lists for Agents/Terminals/Artifacts, the
- * embedded desktop File-tree / Git-diff / Pull-requests / Sharing panel bodies
- * for the rest. Creating is a row inside the category that owns the kind, not a
- * sheet-level control.
+ * shared comments panel for Comments, and the embedded desktop File-tree /
+ * Git-diff / Pull-requests / Sharing panel bodies for the rest. Creating is a
+ * row inside the category that owns the kind, not a sheet-level control.
  *
  * Opened from the mobile header's switcher trigger. Only meaningful on phones -
  * it is mounted from `MobileEpicTileView`, which itself renders only under the
@@ -243,11 +244,12 @@ interface SwitcherCategoryBodyProps {
 }
 
 /**
- * Content-region registry: flat lists for the row-per-item categories; embedded
- * desktop panel bodies for File tree, Git diff, Pull requests and Sharing. The
- * flat lists call `onClose` on selection; the embeds rely on the sheet's
- * active-tile watcher, and Sharing - which opens no tile - simply keeps the
- * sheet open for as long as the user is granting access.
+ * Content-region registry: flat lists for the row-per-item categories; the
+ * shared comments panel for Comments; embedded desktop panel bodies for File
+ * tree, Git diff, Pull requests and Sharing. The flat lists call `onClose` on
+ * selection; the embeds rely on the sheet's active-tile watcher, and the
+ * categories that open no tile - Sharing, and Comments, where expanding a thread
+ * is reading rather than navigating - simply keep the sheet open.
  */
 function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
   const { categoryId, epicId, tabId, onClose } = props;
@@ -272,6 +274,8 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
           onClose={onClose}
         />
       );
+    case "comments":
+      return <SwitcherCommentsList epicId={epicId} tabId={tabId} />;
     case "file-tree":
       return (
         <Suspense fallback={<SwitcherEmbedFallback />}>

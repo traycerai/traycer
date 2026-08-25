@@ -153,7 +153,7 @@ const INTERVIEW: ChatLowerInterviewState = {
   unanswerable: [],
   unanswerableBusy: false,
   onAnswer: () => null,
-  onError: () => null,
+  onSkip: () => null,
   onFork: null,
 };
 const APPROVALS: ChatLowerApprovalsState = {
