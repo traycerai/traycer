@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
   // fresh identity per render would recompute on every commit. The fleet ITSELF
   // is `entries`, exactly as the bridge reads it.
   const fleetSettled: { current: boolean } = { current: false };
+  const directoryListeners = new Set<() => void>();
   return {
     entries: [] as readonly HostDirectoryEntry[],
     // The bridge's legacy drain now dispatches through `mutateAsync` so a
@@ -32,9 +33,21 @@ const mocks = vi.hoisted(() => {
     probedHostIds: [] as readonly string[],
     /** `false` models a registry nobody has successfully reached yet. */
     fleetSettled,
+    /** Drives the directory's `onChange`, which is how settlement propagates. */
+    emitDirectoryChange: (): void => {
+      for (const listener of directoryListeners) listener();
+    },
     binding: {
       directory: {
         hasSettledFleet: (): boolean => fleetSettled.current,
+        onChange: (listener: () => void): { dispose: () => void } => {
+          directoryListeners.add(listener);
+          return {
+            dispose: () => {
+              directoryListeners.delete(listener);
+            },
+          };
+        },
       },
     },
   };
@@ -765,6 +778,93 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-b", sessionId: "session-solo" },
+    ]);
+  });
+
+  it("dispatches a tombstone recorded while its host was ALREADY drainable", async () => {
+    // No route transition to ride in on, and no retry record yet. The two
+    // conditions the drain gates on would both be false, so without a
+    // first-sight rule this kill waits for the host to flap - and a close under
+    // an unresolved probe dispatches nothing itself, so the bridge is the only
+    // thing that would ever send it.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "first-tab",
+      sessionId: "session-first",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "first-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-first",
+      });
+    });
+
+    // Host stays drainable throughout - only the tombstone set changes.
+    act(() => {
+      useLandingTerminalStore.getState().addTab({
+        instanceId: "second-tab",
+        sessionId: "session-second",
+        hostId: "host-b",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      useLandingTerminalStore.getState().closeTab("landing-page", "second-tab");
+    });
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-second",
+      });
+    });
+  });
+
+  it("rescopes probes when settlement flips without the directory rows changing", async () => {
+    // TanStack's structural sharing hands back the SAME `data` array when a
+    // fetch produces deeply-equal rows - a desktop whose one local host is the
+    // whole snapshot, with an empty remote listing. A derivation keyed on the
+    // rows would never observe the flag move, so settlement is subscribed
+    // through `onChange` instead. `mocks.entries` is deliberately NOT touched
+    // here; only the flag moves.
+    mocks.entries = [localHost];
+    mocks.fleetSettled.current = false;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.probedHostIds).toEqual(["host-gone"]);
+
+    mocks.fleetSettled.current = true;
+    await act(async () => {
+      mocks.emitDirectoryChange();
+      await Promise.resolve();
+    });
+
+    expect(mocks.probedHostIds).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-gone", sessionId: "session-gone" },
     ]);
   });
 });

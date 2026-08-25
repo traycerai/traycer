@@ -277,9 +277,12 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
   const inFlightRef = useRef<ReadonlySet<string>>(new Set());
+  /** Tombstone keys this bridge has already dispatched at least once. */
+  const attemptedRef = useRef<ReadonlySet<string>>(new Set());
   const retriesRef = useRef<Map<string, CapableCloseRetry>>(new Map());
   const mountedRef = useRef(true);
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const [fleetSettled, setFleetSettled] = useState(false);
   const [authorityEntries, setAuthorityEntries] =
     useState<LandingTerminalAuthorityEntries>({});
   const handleAuthorityEntry = useCallback(
@@ -364,16 +367,36 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     const tombstoned = [
       ...new Set(pendingKills.map((pending) => pending.hostId)),
     ];
-    if (binding?.directory.hasSettledFleet() !== true) return tombstoned;
+    if (!fleetSettled) return tombstoned;
     const fleet = new Set(directoryHostIds);
     return tombstoned.filter((hostId) => fleet.has(hostId));
-  }, [binding, directoryHostIds, pendingKills]);
+  }, [directoryHostIds, fleetSettled, pendingKills]);
   const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
   const authorityEntriesRef = useRef(authorityEntries);
 
   useEffect(() => {
     killRef.current = kill;
   }, [kill]);
+
+  // Settlement has to be SUBSCRIBED, not read during render. The flag flips on
+  // a committed listing, and the service emits for exactly that reason - but
+  // the rows it emits can be deeply equal to the previous ones (a desktop whose
+  // one local host is the whole snapshot, with an empty remote listing), and
+  // TanStack's structural sharing then hands back the SAME `data` array. A
+  // derivation keyed on the rows would never see the flag move, and would keep
+  // probing departed hosts for the rest of the session.
+  useEffect(() => {
+    const directoryService = binding?.directory ?? null;
+    if (directoryService === null) return;
+    const syncFleetSettled = (): void => {
+      setFleetSettled(directoryService.hasSettledFleet());
+    };
+    syncFleetSettled();
+    const subscription = directoryService.onChange(syncFleetSettled);
+    return () => {
+      subscription.dispose();
+    };
+  }, [binding]);
 
   useEffect(() => {
     authorityEntriesRef.current = authorityEntries;
@@ -423,6 +446,12 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       pendingKeys,
       drainableByHostId: currentDrainable,
     });
+    // Forget keys that are no longer outstanding, so a session id that is
+    // tombstoned again later is seen fresh rather than inheriting the earlier
+    // close's "already dispatched" mark.
+    attemptedRef.current = new Set(
+      [...attemptedRef.current].filter((key) => pendingKeys.has(key)),
+    );
 
     if (pendingKills.length === 0) return;
 
@@ -431,8 +460,23 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       const key = terminalSessionKey(pending.hostId, pending.sessionId);
       const retry = retriesRef.current.get(key);
       const routeRecovered = previousDialable.get(pending.hostId) !== true;
-      if (!routeRecovered && retry?.due !== true) continue;
+      // A tombstone recorded while its host was ALREADY drainable has no route
+      // transition to ride in on and no retry record yet, so the two conditions
+      // above would skip it until the host happened to flap. That was
+      // survivable while a close could only be recorded against a resolved
+      // authority - the panel's fast path had already sent the kill - but a
+      // close under an unresolved probe records the tombstone and dispatches
+      // nothing, and the bridge is then the only thing that will ever send it.
+      const firstSight = !attemptedRef.current.has(key);
+      if (!routeRecovered && !firstSight && retry?.due !== true) continue;
       if (inFlightRef.current.has(key)) continue;
+      // Reached only where the host is drainable, which already required the
+      // authority entry to be `legacy` or capable+`canMutate` - so this marks a
+      // key that one of the two branches below is about to dispatch, never one
+      // parked waiting for its probe.
+      if (firstSight) {
+        attemptedRef.current = new Set([...attemptedRef.current, key]);
+      }
       const entry = authorityEntries[pending.hostId];
       if (entry?.authority.capability.status === "capable") {
         dispatchCapableClose({
