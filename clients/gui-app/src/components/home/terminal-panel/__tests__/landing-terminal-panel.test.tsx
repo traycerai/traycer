@@ -46,6 +46,20 @@ const mocks = vi.hoisted(() => {
   const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   let plainCollection: PlainTerminalCollection | undefined;
+  // Per-host authority overrides for tests that need a MIX of readiness across
+  // hosts in one render (e.g. "Close All" spanning a ready host and a not-ready
+  // one). A host absent from either map falls back to the two globals below, so
+  // every existing single-authority test is unaffected.
+  //
+  // Declared and annotated here rather than asserted on the literal below: the
+  // lint rule that bans `as` on an object literal auto-strips such a cast, and
+  // a bare `{}` then infers a type whose index access is an error type.
+  // `Partial<Record<…>>` also mirrors the production shape these stand in for
+  // (`LandingTerminalAuthorityEntries`) and is what makes the `??` well-typed.
+  const plainAuthorityStatusByHost: Partial<
+    Record<string, "legacy" | "capable" | "unknown">
+  > = {};
+  const plainCanMutateByHost: Partial<Record<string, boolean>> = {};
   return {
     // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
@@ -66,6 +80,8 @@ const mocks = vi.hoisted(() => {
     killAsync: vi.fn(() => Promise.resolve({ killed: true })),
     plainAuthorityStatus: initialPlainAuthorityStatus(),
     plainCanMutate: false,
+    plainAuthorityStatusByHost,
+    plainCanMutateByHost,
     plainCollection,
     plainCreateAsync: vi.fn(),
     plainEnsureAsync: vi.fn(),
@@ -247,20 +263,25 @@ vi.mock(
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
           hostIds.forEach((hostId) => {
+            const status =
+              mocks.plainAuthorityStatusByHost[hostId] ??
+              mocks.plainAuthorityStatus;
+            const canMutate =
+              mocks.plainCanMutateByHost[hostId] ?? mocks.plainCanMutate;
             onEntry(hostId, {
               authority: {
                 hostId,
                 scope: { kind: "independent" },
                 capability:
-                  mocks.plainAuthorityStatus === "capable"
+                  status === "capable"
                     ? {
                         status: "capable",
                         schemaVersion: { major: 1, minor: 0 },
                       }
-                    : { status: mocks.plainAuthorityStatus },
+                    : { status },
                 collection: mocks.plainCollection,
                 terminals: [],
-                canMutate: mocks.plainCanMutate,
+                canMutate,
                 query: {},
               },
               mutations: {
@@ -565,6 +586,8 @@ describe("<LandingTerminalPanel />", () => {
     mocks.killAsync.mockClear();
     mocks.plainAuthorityStatus = "legacy";
     mocks.plainCanMutate = false;
+    mocks.plainAuthorityStatusByHost = {};
+    mocks.plainCanMutateByHost = {};
     mocks.plainCollection = undefined;
     mocks.plainCreateAsync.mockReset();
     mocks.plainEnsureAsync.mockReset();
@@ -1243,7 +1266,7 @@ describe("<LandingTerminalPanel />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
-  it("blocks capable-host create, rename, and close while authority is stale", async () => {
+  it("blocks capable-host create and rename, but still tombstones a close without dispatching, while authority is stale", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1273,15 +1296,74 @@ describe("<LandingTerminalPanel />", () => {
     const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(plus);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+
+    // Rename gates on the same authority readiness create does - unlike
+    // close, it has no durable fallback.
+    fireEvent.contextMenu(
+      screen.getByTestId("landing-terminal-tab-stale-instance"),
+    );
+    fireEvent.click(await screen.findByText("Rename"));
+    expect(
+      screen.queryByTestId("landing-terminal-tab-input-stale-instance"),
+    ).toBeNull();
+
+    // Close is deliberately NOT gated on authority readiness: the ×
+    // affordance stays enabled, and clicking it still tombstones and
+    // removes the tab even though this host cannot be asked right now. The
+    // fast-path RPC dispatch is skipped - the tombstone recovery bridge
+    // drains it once the host's authority becomes ready.
     const closeButton = screen.getByRole("button", {
       name: "Close Cached title",
     });
     expect(
       closeButton instanceof HTMLButtonElement && closeButton.disabled,
-    ).toBe(true);
+    ).toBe(false);
     fireEvent.click(closeButton);
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-a", sessionId: "terminal-stale" },
+    ]);
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("tombstones and removes a tab without dispatching when the host's capability probe has not answered", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "unknown";
+    const local = {
+      instanceId: "unresolved-instance",
+      sessionId: "terminal-unresolved",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "Unresolved title",
+      titleSource: "default" as const,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const closeButton = await screen.findByRole("button", {
+      name: "Close Unresolved title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(false);
+    fireEvent.click(closeButton);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-a", sessionId: "terminal-unresolved" },
+    ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
   });
@@ -1381,11 +1463,102 @@ describe("<LandingTerminalPanel />", () => {
     // with are drained by the reconciliation that follows, once the host list
     // confirms the sessions are gone - the durable write itself is pinned in
     // the store test.)
-    before.forEach((tab) => {
-      expect(mocks.kill).toHaveBeenCalledWith({
-        hostId: tab.hostId,
-        sessionId: tab.sessionId,
+    // Dispatched through the shared close boundary, which hops a microtask.
+    await waitFor(() => {
+      before.forEach((tab) => {
+        expect(mocks.killAsync).toHaveBeenCalledWith({
+          hostId: tab.hostId,
+          sessionId: tab.sessionId,
+        });
       });
+    });
+  });
+
+  it("closes every tab across a mix of ready and not-ready hosts, dispatching only for the ready one", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.plainAuthorityStatusByHost = { "host-b": "capable" };
+    mocks.plainCanMutateByHost = { "host-b": false };
+    // The ready host's close hangs until resolved below, so the assertions
+    // in between observe the tombstone-first write before either RPC has
+    // had a chance to settle and clear it.
+    let resolveReadyClose: (() => void) | null = null;
+    mocks.plainCloseAsync.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReadyClose = resolve;
+        }),
+    );
+    const readyTab = {
+      instanceId: "ready-instance",
+      sessionId: "terminal-ready",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "Ready title",
+      titleSource: "default" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    const notReadyTab = {
+      instanceId: "not-ready-instance",
+      sessionId: "terminal-not-ready",
+      hostId: "host-b",
+      cwd: "/workspace/other",
+      name: "Not ready title",
+      titleSource: "default" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(readyTab);
+    useLandingTerminalStore.getState().addTab(notReadyTab);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await screen.findByTestId(`landing-terminal-tab-${readyTab.instanceId}`);
+    await screen.findByTestId(`landing-terminal-tab-${notReadyTab.instanceId}`);
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`landing-terminal-tab-${readyTab.instanceId}`),
+    );
+    fireEvent.click(await screen.findByText("Close All"));
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    // Tombstone-first, batched: both refs are durably recorded - the
+    // not-ready host's tombstone is the recovery bridge's only record that a
+    // shell needs killing once that host becomes dialable.
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+      expect.arrayContaining([
+        { hostId: "host-a", sessionId: "terminal-ready" },
+        { hostId: "host-b", sessionId: "terminal-not-ready" },
+      ]),
+    );
+    await waitFor(() => {
+      expect(mocks.plainCloseAsync).toHaveBeenCalledWith({
+        hostId: "host-a",
+        terminalId: "terminal-ready",
+      });
+    });
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "host-b" }),
+    );
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveReadyClose?.();
+      await Promise.resolve();
+    });
+
+    // Only the dispatched (ready-host) tombstone clears on acknowledgement;
+    // the not-ready host's stays until the recovery bridge can ask it.
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+        { hostId: "host-b", sessionId: "terminal-not-ready" },
+      ]);
     });
   });
 
@@ -1547,9 +1720,11 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingTerminalStore.getState().tabs[0].instanceId).toBe(
       first.instanceId,
     );
-    expect(mocks.kill).toHaveBeenCalledWith({
-      hostId: second.hostId,
-      sessionId: second.sessionId,
+    await waitFor(() => {
+      expect(mocks.killAsync).toHaveBeenCalledWith({
+        hostId: second.hostId,
+        sessionId: second.sessionId,
+      });
     });
   });
 

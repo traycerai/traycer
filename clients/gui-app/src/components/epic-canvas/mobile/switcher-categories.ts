@@ -11,10 +11,11 @@ import {
 /**
  * The mobile "Switch tab" sheet exposes the desktop left-panel categories as a
  * horizontally-scrollable tab bar. Curated to Agents (`chats`), Artifacts, File
- * tree, Git diff, Pull requests and Terminals; Sharing is excluded and Comments
- * live inside the artifact tile. `pull-requests` sits directly after `git-diff`
- * exactly as it does in the desktop rail, so the two surfaces read in the same
- * order. Identity (title + icon) is reused verbatim from
+ * tree, Git diff, Pull requests, Terminals and Sharing; only Comments is
+ * excluded, because it lives inside the artifact tile. `pull-requests` sits
+ * directly after `git-diff`, and `sharing` sits last ahead of the excluded
+ * Comments, exactly as they do in the desktop rail, so the two surfaces read in
+ * the same order. Identity (title + icon) is reused verbatim from
  * `LEFT_PANEL_DEFINITIONS` so mobile never forks the category copy.
  */
 const CURATED_ORDER: readonly LeftPanelId[] = [
@@ -24,6 +25,7 @@ const CURATED_ORDER: readonly LeftPanelId[] = [
   "git-diff",
   "pull-requests",
   "terminals",
+  "sharing",
 ];
 
 const DEFINITION_BY_ID = new Map<LeftPanelId, LeftPanelMetadataDefinition>(
@@ -93,7 +95,7 @@ export function switcherCategoryTitle(
  * Clamp a persisted active left-panel id to the categories currently on the
  * bar, so a selection with no tab behind it falls back to Agents rather than
  * leaving the sheet with no matching tab. Two ways that happens: a category
- * mobile never curates (e.g. Sharing, selected on desktop), and `pull-requests`
+ * mobile never curates (Comments, selected on desktop), and `pull-requests`
  * persisted from an epic that has since stopped reporting any PR.
  */
 export function clampToSwitcherCategory(

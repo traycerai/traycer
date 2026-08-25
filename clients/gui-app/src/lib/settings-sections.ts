@@ -14,6 +14,7 @@ import {
   Settings as SettingsIcon,
   TerminalSquare,
 } from "lucide-react";
+import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
@@ -91,9 +92,9 @@ export interface SettingsSection {
 
 /**
  * Order is meaningful twice over: it drives the leader-digit shortcuts
- * (`dispatch.ts` indexes straight into this array) and it groups the sidebar.
- * Entries must stay contiguous per group or the sidebar renders a group
- * heading twice.
+ * (`dispatch.ts` indexes positionally, through `visibleSettingsSections()`
+ * below, which preserves this order) and it groups the sidebar. Entries must
+ * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
  * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now fourteen.
@@ -230,6 +231,53 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "host",
   },
 ];
+
+/**
+ * Sections the installed mobile app does not offer, because the shell cannot
+ * drive them at all.
+ *
+ * Keybindings is one: every chord in it is captured from a `keydown` on
+ * `window` (`chord-capture-core.tsx`), a binding is cleared with Backspace and
+ * committed by the next full chord, so on a touch shell the chip arms to
+ * "Press chord…" and can never resolve — and an existing binding can never be
+ * removed. A section whose every control needs a hardware keyboard is a dead
+ * end on a phone, not a sparse page.
+ */
+const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
+  "keybindings",
+]);
+
+/**
+ * The sections a build OFFERS, as opposed to the ones it can resolve.
+ *
+ * `SETTINGS_SECTIONS` stays whole because it is the compatibility table:
+ * routes, remembered tab paths and titles all resolve an id through it, and an
+ * id that no longer resolves is a broken lookup rather than a hidden row. This
+ * is the list anything that PRESENTS a choice reads instead — the sidebar, the
+ * command palette's settings sub-page, and the leader digits, which index
+ * positionally and so must walk the same list the sidebar badges do.
+ *
+ * Returns `SETTINGS_SECTIONS` itself where nothing is omitted, so a consumer's
+ * identity comparisons and memo dependencies are unaffected.
+ */
+export function visibleSettingsSections(): ReadonlyArray<SettingsSection> {
+  if (!isMobileApp()) return SETTINGS_SECTIONS;
+  return SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
+  );
+}
+
+/**
+ * Whether this build offers `sectionId` at all. A surface holding a REMEMBERED
+ * id (a persisted modal section, a restored tab path) asks this before showing
+ * the panel for it, so a build that dropped a section cannot present a panel
+ * its own navigation has no row for.
+ */
+export function isSettingsSectionVisible(
+  sectionId: SettingsSectionId,
+): boolean {
+  return visibleSettingsSections().some((section) => section.id === sectionId);
+}
 
 // No `HOST_SCOPED_SECTION_IDS` / `isHostScopedSection` helper here. Whether a
 // section is host-scoped is already stated by `group: "host"` in the table

@@ -728,6 +728,14 @@ export interface TraycerDetectedShell {
   readonly isDefault: boolean;
   readonly source: "detected" | "added";
   readonly missing: boolean;
+  /**
+   * Present only on a Windows `wsl.exe` row whose WSL cannot host a terminal:
+   * `"not-installed"` = wsl.exe is just the OS installer stub (spawning it
+   * prints usage and exits), `"no-distro"` = WSL works but no distribution is
+   * registered. Mirrors `DetectedShell.wslHealth`; absent from CLIs predating
+   * the probe.
+   */
+  readonly wslHealth?: "not-installed" | "no-distro";
 }
 
 /**
