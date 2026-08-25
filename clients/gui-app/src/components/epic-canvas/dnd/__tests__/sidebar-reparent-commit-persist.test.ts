@@ -135,7 +135,8 @@ describe("commitSidebarReparentDrop persists an artifact reparent on a live doc"
     });
 
     const childAfter = getArtifactEntry(handle.doc, child);
-    if (childAfter === null) throw new Error("child missing from doc after drop");
+    if (childAfter === null)
+      throw new Error("child missing from doc after drop");
     expect(childAfter.get("parentId")).toBe(parent);
     expect(handle.store.getState().tree.nodeById[child].parentId).toBe(parent);
     expect(seam.request).toHaveBeenCalledTimes(1);

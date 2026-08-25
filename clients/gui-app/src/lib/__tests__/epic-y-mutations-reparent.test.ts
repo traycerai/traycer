@@ -459,9 +459,11 @@ describe("evaluateReparent", () => {
         },
       ],
     });
-    expect(reparentDecision(evaluateReparent(doc, "spec-a", "spec-b"))).toEqual({
-      ok: true,
-    });
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "spec-b"))).toEqual(
+      {
+        ok: true,
+      },
+    );
   });
 
   it("returns ok for a chat under a chat", () => {
@@ -471,9 +473,11 @@ describe("evaluateReparent", () => {
         { id: "chat-2", title: "C2", parentId: null, createdAt: 2 },
       ],
     });
-    expect(reparentDecision(evaluateReparent(doc, "chat-2", "chat-1"))).toEqual({
-      ok: true,
-    });
+    expect(reparentDecision(evaluateReparent(doc, "chat-2", "chat-1"))).toEqual(
+      {
+        ok: true,
+      },
+    );
   });
 
   it("flags missing-node when the node is absent", () => {
@@ -525,12 +529,12 @@ describe("evaluateReparent", () => {
       ],
       chats: [{ id: "chat-1", title: "C", parentId: null, createdAt: 2 }],
     });
-    expect(
-      reparentDecision(evaluateReparent(doc, "spec-a", "chat-1")),
-    ).toEqual({
-      ok: false,
-      reason: "cross-panel",
-    });
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "chat-1"))).toEqual(
+      {
+        ok: false,
+        reason: "cross-panel",
+      },
+    );
   });
 
   it("flags cross-panel when a chat targets an artifact", () => {
@@ -546,12 +550,12 @@ describe("evaluateReparent", () => {
       ],
       chats: [{ id: "chat-1", title: "C", parentId: null, createdAt: 2 }],
     });
-    expect(
-      reparentDecision(evaluateReparent(doc, "chat-1", "spec-a")),
-    ).toEqual({
-      ok: false,
-      reason: "cross-panel",
-    });
+    expect(reparentDecision(evaluateReparent(doc, "chat-1", "spec-a"))).toEqual(
+      {
+        ok: false,
+        reason: "cross-panel",
+      },
+    );
   });
 
   it("flags cycle when target equals the node itself", () => {
@@ -566,12 +570,12 @@ describe("evaluateReparent", () => {
         },
       ],
     });
-    expect(
-      reparentDecision(evaluateReparent(doc, "spec-a", "spec-a")),
-    ).toEqual({
-      ok: false,
-      reason: "cycle",
-    });
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "spec-a"))).toEqual(
+      {
+        ok: false,
+        reason: "cycle",
+      },
+    );
   });
 
   it("flags cycle when target is an artifact descendant", () => {
@@ -706,12 +710,12 @@ describe("evaluateReparent", () => {
     });
     // Re-dropping spec-a back onto chat-1 must report the real cross-family
     // reason, not be masked as a silent same-parent no-op.
-    expect(
-      reparentDecision(evaluateReparent(doc, "spec-a", "chat-1")),
-    ).toEqual({
-      ok: false,
-      reason: "cross-panel",
-    });
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "chat-1"))).toEqual(
+      {
+        ok: false,
+        reason: "cross-panel",
+      },
+    );
   });
 
   // Agreement guard: the test-local `writeReparent` and the live
