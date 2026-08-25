@@ -14,6 +14,7 @@ import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/a
 import type {
   ChatSessionStoreHandle,
   EditUserMessageInput,
+  InterviewDeliveryRetryIdentity,
   SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -99,7 +100,14 @@ export interface ChatActions {
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
   ) => string | null;
-  readonly interviewError: (blockId: string, reason: string) => string | null;
+  readonly interviewSkip: (
+    blockId: string,
+    reason: string,
+    draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+  ) => string | null;
+  readonly interviewDeliveryRetry: (
+    identity: InterviewDeliveryRetryIdentity,
+  ) => string | null;
   readonly ackFailedSendRestoration: (clientActionId: string) => void;
   readonly ackAcceptedAction: (clientActionId: string) => void;
   readonly takeSetupFailedRestoration: (
@@ -282,8 +290,10 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             });
           },
         ),
-      interviewError: (blockId, reason) =>
-        handle.store.getState().interviewError(blockId, reason),
+      interviewSkip: (blockId, reason, draftAnswers) =>
+        handle.store.getState().interviewSkip(blockId, reason, draftAnswers),
+      interviewDeliveryRetry: (identity) =>
+        handle.store.getState().interviewDeliveryRetry(identity),
       ackFailedSendRestoration: (clientActionId) =>
         handle.store.getState().ackFailedSendRestoration(clientActionId),
       ackAcceptedAction: (clientActionId) =>

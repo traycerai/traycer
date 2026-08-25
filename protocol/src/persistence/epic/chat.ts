@@ -10,8 +10,8 @@ import {
 import {
   messageSchema,
   messageSchemaPreImage,
-  messageSchemaPreReasonix,
   messageSchemaPreInReplyTo,
+  messageSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   activeSessionChainSchema,
@@ -136,33 +136,6 @@ export const chatSchema = z.object({
 });
 export type Chat = z.infer<typeof chatSchema>;
 
-// Wire-freeze copy of the LIVE chat record with every harness-bearing leaf
-// pinned to its pre-Reasonix copy, bound to `chat.subscribe@1.6`'s snapshot.
-// `1.6` shipped the full live shape (`pinnedUserProviderHandle`,
-// `lastDeliveredRolesDigest`, image-bearing messages) at 19 harness ids, so
-// unlike `chatSchemaV14`/`V15` this freezes the enum alone, not the shape.
-// Field-for-field hand copy, NOT `.extend()` off the live shape.
-export const chatSchemaV16 = z.object({
-  parentId: z.string().nullable(),
-  id: z.string(),
-  userId: z.string(),
-  hostId: z.string(),
-  title: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
-  activeSessionChain: activeSessionChainSchemaPreReasonix
-    .nullable()
-    .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
-  messages: z.array(messageSchemaPreReasonix),
-  events: z.array(chatEventSchemaPreReasonix).default([]),
-  archivedAt: z.number().nullable().default(null),
-  pinnedUserProviderHandle: z.string().nullable().default(null),
-  lastDeliveredRolesDigest: z.string().nullable().default(null),
-});
-
 // Wire-freeze copy with `messages`/`events` swapped for their pre-`inReplyTo`
 // freezes, bound to `chat.subscribe@1.0–1.3` snapshot serverFrames so those
 // lines match the shipped wire and strip `inReplyTo` for older peers.
@@ -253,4 +226,40 @@ export const chatSchemaV15 = z.object({
   messages: z.array(messageSchemaPreImage),
   events: z.array(chatEventSchemaPreReasonix).default([]),
   archivedAt: z.number().nullable().default(null),
+});
+
+// Wire-freeze copy of the chat tree as `chat.subscribe@1.6` shipped it in
+// `host-v1.2.0-rc.1`: every field the live `chatSchema` carried at that tag -
+// including `pinnedUserProviderHandle` and `lastDeliveredRolesDigest`, both of
+// which predate the RC - with `messages` pinned to
+// `messageSchemaPreSettlement` so the RC cohort never observes canonical
+// interview settlement or answer selection evidence.
+//
+// Hand-frozen field-for-field; NOT derived from `chatSchema`. `1.6` bound the
+// LIVE chat schema by reference until this freeze, which is exactly the
+// hazard `chatSchemaV14`'s comment describes - every later addition to
+// `chatSchema` would otherwise leak onto a line that has shipped peers.
+export const chatSchemaV16 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  // Every harness-bearing leaf additionally takes its pre-Reasonix freeze:
+  // `1.6` is released with a nineteen-id enum, so the settings tuple, the
+  // session chain, a parked wake's held chain, the message tree and the event
+  // actors must all stay on ids that cohort can decode.
+  settings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
+  activeSessionChain: activeSessionChainSchemaPreReasonix
+    .nullable()
+    .default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
+  messages: z.array(messageSchemaPreSettlement),
+  events: z.array(chatEventSchemaPreReasonix).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
 });

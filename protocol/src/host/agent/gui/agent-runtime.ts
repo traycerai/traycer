@@ -16,6 +16,7 @@ import {
 } from "@traycer/protocol/persistence/epic/senders";
 import {
   interviewAnswerSchema,
+  interviewAnswerSchemaPreSettlement,
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -339,6 +340,14 @@ export const runtimeInterviewAnswerSchema = interviewAnswerSchema;
 export type RuntimeInterviewAnswer = z.infer<
   typeof runtimeInterviewAnswerSchema
 >;
+
+// Wire-freeze alias of the answer shape from before selection evidence
+// existed. Bound to every `chat.subscribe` line through `@1.6` - both on the
+// frames that carry answers directly (`interviewAnswered`, the
+// `interviewAnswer` client action) and inside the frozen `blockDelta` event
+// unions below.
+export const runtimeInterviewAnswerSchemaPreSettlement =
+  interviewAnswerSchemaPreSettlement;
 
 const baseRuntimeEventFields = {
   blockId: z.string(),
@@ -707,6 +716,18 @@ export const interviewResolvedEventSchema = z.object({
 export type InterviewResolvedEvent = z.infer<
   typeof interviewResolvedEventSchema
 >;
+
+// Wire-freeze copy of `interview.resolved` from before answers carried
+// selection evidence. Bound to the `blockDelta` frame on every
+// `chat.subscribe` line through `@1.6` via the frozen unions below.
+// Hand-frozen field-for-field; NOT derived from the live shape.
+export const interviewResolvedEventSchemaPreSettlement = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("interview.resolved"),
+  answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
+  output: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 export const interviewErroredEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1400,68 +1421,14 @@ export const runtimeEventSchema = z.discriminatedUnion("type", [
 ]);
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 
-// Wire-freeze copy of the LIVE runtime-event union with every harness-bearing
-// member swapped for its pre-Reasonix copy, bound to `chat.subscribe@1.6`'s
-// `blockDelta` frame. `1.6` shipped the full live event set (image resolution,
-// anchor tail updates) at 19 harness ids, so this freezes the enum alone.
-// Explicitly listed (not derived from the live union) so the freeze cannot
-// silently absorb a future event, and to keep the discriminated-union typing.
-export const runtimeEventSchemaV16 = z.discriminatedUnion("type", [
-  textDeltaEventSchema,
-  textCompletedEventSchema,
-  reasoningDeltaEventSchema,
-  reasoningCompletedEventSchema,
-  toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
-  toolCallErroredEventSchema,
-  toolCallProgressEventSchema,
-  approvalRequestedEventSchema,
-  approvalResolvedEventSchema,
-  todoUpdatedEventSchema,
-  planDeltaEventSchemaPreReasonix,
-  planUpdatedEventSchemaPreReasonix,
-  planCompletedEventSchemaPreReasonix,
-  compactionStartedEventSchema,
-  compactionCompletedEventSchema,
-  compactionErroredEventSchema,
-  interviewRequestedEventSchema,
-  interviewResolvedEventSchema,
-  interviewErroredEventSchema,
-  subAgentStartedEventSchema,
-  subAgentProgressEventSchema,
-  subAgentCompletedEventSchema,
-  fileChangeStartedEventSchema,
-  fileChangeCompletedEventSchema,
-  artifactOperationEventSchema,
-  commandStartedEventSchema,
-  commandCompletedEventSchema,
-  sessionCreatedEventSchemaPreReasonix,
-  sessionResumedEventSchemaPreReasonix,
-  turnStartedEventSchema,
-  userMessageAnchorResolvedEventSchemaPreReasonix,
-  turnCompletedEventSchema,
-  turnStoppedEventSchema,
-  turnInterruptedEventSchema,
-  steerSubmittedEventSchemaPreReasonix,
-  usageUpdatedEventSchema,
-  errorEventSchema,
-  workflowStartedEventSchema,
-  workflowProgressEventSchema,
-  workflowCompletedEventSchema,
-  providerNoticeUpsertEventSchemaPreReasonix,
-  imageResolutionUpdatedEventSchema,
-  // No pre-Reasonix copy: `harnessId` here is `z.literal("claude")`.
-  userMessageAnchorTailUpdatedEventSchema,
-]);
-
 // Wire-freeze copy of the live runtime-event union from before image support
-// existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaV16`):
+// existed (`chat.subscribe@1.4`/`1.5` - `1.6` takes `runtimeEventSchemaPreSettlement`):
 // every live member EXCEPT
 // `image_resolution.updated` (which cannot exist on these lines at all), with
 // `tool_call.completed` swapped for its pre-image freeze
 // (`tool_call.progress` needs no freeze - it carries no image field).
 // Bound to `chat.subscribe@1.4`/`1.5`'s `blockDelta` frame (`1.6` takes
-// `runtimeEventSchemaV16`) - those
+// `runtimeEventSchemaPreSettlement`) - those
 // minors shipped after `inReplyTo` (so they keep the live sender-bearing
 // `steerSubmittedEventSchema`, unlike `runtimeEventSchemaPreInReplyTo`) but
 // before image support. Explicitly listed (not derived from the live union)
@@ -1486,7 +1453,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
   interviewRequestedEventSchema,
-  interviewResolvedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
   subAgentProgressEventSchema,
@@ -1537,7 +1504,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
   interviewRequestedEventSchema,
-  interviewResolvedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
   subAgentProgressEventSchema,
@@ -1565,4 +1532,61 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
   providerNoticeUpsertEventSchemaPreReasonix,
+]);
+
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.6` shipped
+// it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
+// is the minor that added them) with `interview.resolved` swapped for its
+// pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
+// selection evidence - AND every harness-bearing member swapped for its
+// pre-Reasonix copy, since `1.6` is released with a nineteen-id enum and its
+// decoder rejects any frame naming an id outside it. Explicitly listed rather
+// than derived from the live
+// union, for the same reason `runtimeEventSchemaPreImage` is: a future event
+// must not silently join a line that has shipped peers.
+export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
+  textDeltaEventSchema,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchema,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchemaPreReasonix,
+  planUpdatedEventSchemaPreReasonix,
+  planCompletedEventSchemaPreReasonix,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchemaPreReasonix,
+  sessionResumedEventSchemaPreReasonix,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchemaPreReasonix,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchema,
+  steerSubmittedEventSchemaPreReasonix,
+  usageUpdatedEventSchema,
+  errorEventSchema,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchemaPreReasonix,
+  imageResolutionUpdatedEventSchema,
+  userMessageAnchorTailUpdatedEventSchema,
 ]);

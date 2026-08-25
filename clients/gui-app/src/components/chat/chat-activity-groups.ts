@@ -1,7 +1,3 @@
-import type {
-  InterviewAnswer,
-  InterviewQuestion,
-} from "@traycer/protocol/persistence/epic/schemas";
 import {
   isKnownInterviewDisplayToolName,
   toolUseIdFromInterviewBlockId,
@@ -13,7 +9,6 @@ import type {
   ApprovalSegment,
   CommandSegment,
   FileChangeSegment,
-  InterviewSegment,
   MessageSegment,
   ReasoningSegment,
   SubagentSegment,
@@ -66,12 +61,6 @@ export type ChatActivityTimelineItem =
       readonly kind: "activity_group";
       readonly id: string;
       readonly group: ActivityGroupModel;
-    }
-  | {
-      readonly kind: "answered_questions";
-      readonly id: string;
-      readonly segment: InterviewSegment;
-      readonly summary: string;
     }
   | {
       readonly kind: "promoted_subagent";
@@ -305,16 +294,7 @@ function buildChatActivityTimelineImpl(
     }
     if (segment.kind === "interview") {
       flushRun();
-      if (segment.status === "completed") {
-        out.push({
-          kind: "answered_questions",
-          id: `answered:${segment.id}`,
-          segment,
-          summary: answeredQuestionsSummary(segment),
-        });
-      } else {
-        out.push({ kind: "segment", id: segment.id, segment });
-      }
+      out.push({ kind: "segment", id: segment.id, segment });
       continue;
     }
     if (segment.kind === "subagent") {
@@ -359,33 +339,6 @@ function buildChatActivityTimelineImpl(
 
   flushRun();
   return out;
-}
-
-export function answeredQuestionsSummary(segment: InterviewSegment): string {
-  return answeredQuestionsSummaryFromCounts(segment.questions, segment.answers);
-}
-
-export function answeredQuestionsSummaryFromCounts(
-  questions: ReadonlyArray<InterviewQuestion>,
-  answers: ReadonlyArray<InterviewAnswer>,
-): string {
-  const total = questions.length > 0 ? questions.length : answers.length;
-  const answered = answers.filter(answerHasValues).length;
-  return formatAnsweredQuestionsSummary(answered, total);
-}
-
-function answerHasValues(answer: InterviewAnswer): boolean {
-  return answer.values.length > 0;
-}
-
-function formatAnsweredQuestionsSummary(
-  answered: number,
-  total: number,
-): string {
-  if (answered === total) {
-    return `Answered ${answered} ${answered === 1 ? "question" : "questions"}`;
-  }
-  return `Answered ${answered}/${total} questions`;
 }
 
 export function activityGroupSummary(
