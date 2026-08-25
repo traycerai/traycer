@@ -517,7 +517,7 @@ export async function reconcileCapableLandingTerminals(args: {
         // be cleared on this pass, so it could never survive to be closed
         // twice. Joining the in-flight promise still observes the real
         // settlement, so the tombstone below clears on the same evidence.
-        await requestLandingTerminalClose({
+        const outcome = await requestLandingTerminalClose({
           hostId: pending.hostId,
           sessionId: pending.sessionId,
           close: () =>
@@ -525,6 +525,14 @@ export async function reconcileCapableLandingTerminals(args: {
               .closeTerminal({ terminalId: pending.sessionId })
               .then(() => undefined),
         });
+        // Only the OWNER of the request may retire the record. The coordinator
+        // keys by the terminal's lifetime, not by RPC, so this close can join an
+        // in-flight `terminal.kill` - and that kill answers an already-gone
+        // session with `killed: false`, which for a `pendingCreate` record the
+        // kill mutation deliberately treats as "not created YET" and keeps the
+        // tombstone for. Clearing on a joined promise would drop the record in
+        // front of the PTY that create is about to produce.
+        if (!outcome.owned) return;
       } else if (!absentListingProvesDeath(pending)) {
         // The close was never sent and absence proves nothing here - an
         // in-flight create is simply not projected yet, and a legacy session

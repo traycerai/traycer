@@ -331,8 +331,12 @@ describe("capable landing-terminal reconciliation", () => {
 
     expect(bridgeClose).toHaveBeenCalledTimes(1);
     expect(closeTerminal).not.toHaveBeenCalled();
-    // It still observed the real settlement, so the tombstone is retired.
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    // And it does NOT retire the record. The coordinator keys by the terminal's
+    // lifetime rather than by RPC, so a joined promise may belong to a
+    // `terminal.kill` - which answers an already-gone session with
+    // `killed: false` as data, the one answer a `pendingCreate` tombstone is
+    // deliberately kept for. Whoever owns the request owns that decision.
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("joins an in-flight kill on the legacy arm too", async () => {

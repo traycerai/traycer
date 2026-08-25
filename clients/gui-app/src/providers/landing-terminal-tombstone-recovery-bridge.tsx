@@ -480,7 +480,18 @@ function dispatchCapableClose(args: {
         .then(() => undefined),
   })
     .then(
-      () => {
+      (outcome) => {
+        // Only the OWNER retires the record. The coordinator keys by the
+        // terminal's lifetime rather than by RPC, so this close can join an
+        // in-flight `terminal.kill` - which reports an already-gone session as
+        // `killed: false` DATA, and for a `pendingCreate` record the kill
+        // mutation keeps the tombstone on exactly that answer. Clearing here off
+        // a joined promise would overrule the owner and strand the PTY the
+        // create is about to produce.
+        if (!outcome.owned) {
+          clearCapableCloseRetry(args.refs.retries.current, args.key);
+          return;
+        }
         useLandingTerminalStore
           .getState()
           .clearPendingKill(args.pending.hostId, args.pending.sessionId);

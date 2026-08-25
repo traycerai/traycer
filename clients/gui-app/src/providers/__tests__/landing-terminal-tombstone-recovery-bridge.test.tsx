@@ -138,6 +138,7 @@ vi.mock(
 );
 
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 /**
  * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
@@ -511,6 +512,64 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       });
     });
     expect(mocks.closeAsync).not.toHaveBeenCalled();
+  });
+
+  it("leaves a joined close's tombstone to whoever owns the request", async () => {
+    // The coordinator keys by the terminal's LIFETIME, not by RPC, so this
+    // plain close can join an in-flight `terminal.kill` sent by the panel's
+    // fast path. That kill answers an already-gone session with `killed: false`
+    // as data, and for a `pendingCreate` record the kill mutation deliberately
+    // KEEPS the tombstone. Clearing here off the joined promise would overrule
+    // the owner and strand the PTY the create is about to produce.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-joined": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "joined-tab",
+      sessionId: "session-joined",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "joined-tab");
+
+    // Someone else's request is already in flight for this lifetime, and it
+    // settles WITHOUT retiring the record.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-b",
+      sessionId: "session-joined",
+      close: ownerClose,
+    });
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    // It joined rather than sending a second request.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseOwner();
+      await Promise.resolve();
+    });
+
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
   });
 
   it("wakes a plain close when listing freshness returns", async () => {

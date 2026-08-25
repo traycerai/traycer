@@ -580,18 +580,32 @@ function parsePendingKills(
     const key = terminalSessionKey(entry.hostId, entry.sessionId);
     if (seen.has(key)) return [];
     seen.add(key);
-    // Back-compat: a record written before the provenance fields existed parses
-    // to the CONSERVATIVE reading - unknown capability, unacknowledged. That
-    // costs such a record its clear-on-absent-projection shortcut and routes it
-    // through `terminal.kill`, which reports "already gone" as data instead of
-    // rejecting. Defaulting the other way would re-create the leak for exactly
-    // the tombstones written before it was understood.
+    // Back-compat, and the two fields are conservative in OPPOSITE directions.
+    //
+    // `hostAuthorityAcknowledged` is conservative at `false`: it withholds the
+    // clear-on-absent-projection shortcut and routes the record through
+    // `terminal.kill`, which reports "already gone" as data instead of
+    // rejecting.
+    //
+    // `pendingCreate` is conservative at `TRUE`. It is what buys the reprieve on
+    // a `killed: false` answer, so defaulting it to `false` would resolve the
+    // uncertainty in the leaking direction: a record persisted by an older build
+    // while its `terminal.plain.create` was still in flight would be cleared by
+    // the first "already gone" answer after the update, and the create landing
+    // afterwards would leave a live PTY with nothing owed against it.
+    //
+    // So ABSENCE of the field means "possibly pending" while an explicit
+    // `false` is believed. Costing a genuinely dead legacy record the answer
+    // budget (~4.25 minutes of the host saying "no such session") is the safe
+    // side of that trade, and it terminates because the budget is bounded -
+    // which is precisely what makes preserving the uncertainty affordable here.
     return [
       {
         hostId: entry.hostId,
         sessionId: entry.sessionId,
         hostAuthorityAcknowledged: entry.hostAuthorityAcknowledged === true,
-        pendingCreate: entry.pendingCreate === true,
+        pendingCreate:
+          "pendingCreate" in entry ? entry.pendingCreate === true : true,
       },
     ];
   });

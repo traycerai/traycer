@@ -31,25 +31,48 @@ const pendingByLifetimeKey = new Map<string, Promise<void>>();
  * silent: the mutation's `onError` raises "Couldn't close the terminal.", so a
  * close that SUCCEEDED reports itself as broken.
  *
- * Callers for the same lifetime therefore share the exact in-flight promise
- * rather than racing, and each still observes the real settlement to clear its
- * tombstone or schedule its own retry. Either settlement releases the key, so a
- * genuine failure can be retried.
+ * Callers for the same lifetime therefore share one REQUEST rather than racing,
+ * and each still observes the real settlement to clear its tombstone or
+ * schedule its own retry. Either settlement releases the key, so a genuine
+ * failure can be retried.
+ *
+ * They share the request, not a promise object: each caller gets its own
+ * promise carrying `owned`, because only the caller whose `close` actually ran
+ * may act on success as though its own RPC succeeded.
  *
  * Mirrors `epic-terminal-close-coordinator`, which draws the same boundary for
  * the epic surfaces.
  */
+export interface LandingTerminalCloseOutcome {
+  /**
+   * Whether THIS caller's `close` is the request that ran.
+   *
+   * A joiner gets `false`, and that distinction is load-bearing: the key is the
+   * terminal's lifetime, not the RPC, so a `terminal.plain.close` can join an
+   * in-flight `terminal.kill` for the same session. Those two do not mean the
+   * same thing on success - a kill answers an already-gone session with
+   * `killed: false` as DATA, and for a `pendingCreate` record the kill mutation
+   * deliberately KEEPS the tombstone on that answer.
+   *
+   * So a joiner that read its fulfilled promise as "my close succeeded" would
+   * clear a tombstone the owner had just decided to retain, leaving the created
+   * PTY running with no record that it is owed a kill. Whoever owns the request
+   * owns the tombstone decision; a joiner only waits.
+   */
+  readonly owned: boolean;
+}
+
 export function requestLandingTerminalClose(args: {
   readonly hostId: string;
   readonly sessionId: string;
   readonly close: () => Promise<void>;
-}): Promise<void> {
+}): Promise<LandingTerminalCloseOutcome> {
   const key = plainTerminalFleetIdentityKey({
     hostId: args.hostId,
     terminalId: args.sessionId,
   });
   const existing = pendingByLifetimeKey.get(key);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) return existing.then(() => ({ owned: false }));
 
   const pending = Promise.resolve().then(args.close);
   pendingByLifetimeKey.set(key, pending);
@@ -59,5 +82,5 @@ export function requestLandingTerminalClose(args: {
     }
   };
   void pending.then(release, release);
-  return pending;
+  return pending.then(() => ({ owned: true }));
 }

@@ -206,7 +206,14 @@ function dispatchLandingTerminalClose(args: {
         .mutateAsync({ hostId: closed.hostId, terminalId: closed.sessionId })
         .then(() => undefined),
   })
-    .then(() => {
+    .then((outcome) => {
+      // Only the OWNER retires the record. The coordinator keys by the
+      // terminal's lifetime rather than by RPC, so this close can join an
+      // in-flight `terminal.kill`, and that answers an already-gone session with
+      // `killed: false` DATA - the one answer the kill mutation keeps a
+      // `pendingCreate` tombstone for. A joiner that cleared on it would drop
+      // the record in front of the PTY that create is about to produce.
+      if (!outcome.owned) return;
       useLandingTerminalStore
         .getState()
         .clearPendingKill(closed.hostId, closed.sessionId);

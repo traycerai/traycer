@@ -512,14 +512,17 @@ describe("landing terminal lifecycle", () => {
     });
 
     // The persisted record above carries no provenance, so this also pins the
-    // back-compat reading: unacknowledged, which withholds the
-    // clear-on-absent-projection shortcut rather than granting it.
+    // back-compat reading, which is conservative in opposite directions per
+    // field: unacknowledged, withholding the clear-on-absent-projection
+    // shortcut rather than granting it; and possibly mid-create, so a
+    // `killed: false` answer cannot retire it before the bounded reprieve is
+    // spent.
     expect(restored.pendingKills).toEqual([
       {
         hostId: HOST_A,
         sessionId: "session-close",
         hostAuthorityAcknowledged: false,
-        pendingCreate: false,
+        pendingCreate: true,
       },
     ]);
     expect(result.tabs).toEqual([]);
@@ -950,14 +953,32 @@ describe("close tombstone provenance", () => {
     ]);
   });
 
-  it("parses a tombstone written before provenance existed as unacknowledged", () => {
-    // The conservative reading on purpose. Defaulting acknowledgement to `true`
-    // would hand every pre-existing tombstone the clear-on-absent-projection
-    // shortcut this change exists to withdraw.
+  it("parses a tombstone written before provenance existed conservatively on BOTH fields", () => {
+    // The conservative reading on purpose - and the two fields are conservative
+    // in OPPOSITE directions.
+    //
+    // Acknowledgement defaults to `false`: defaulting it to `true` would hand
+    // every pre-existing tombstone the clear-on-absent-projection shortcut this
+    // change exists to withdraw.
+    //
+    // `pendingCreate` defaults to TRUE, because it is what buys the reprieve on
+    // a `killed: false` answer. At `false`, a record persisted by an older build
+    // while its `terminal.plain.create` was still in flight would be cleared by
+    // the first "already gone" answer after the update, and the create landing
+    // afterwards leaves a live PTY with nothing owed against it. Only ABSENCE
+    // means unknown; an explicit `false` is believed.
     const restored = parsePersistedLandingTerminalState({
       tabs: [],
       activeInstanceId: null,
-      pendingKills: [{ hostId: HOST_A, sessionId: "s-old" }],
+      pendingKills: [
+        { hostId: HOST_A, sessionId: "s-old" },
+        {
+          hostId: HOST_A,
+          sessionId: "s-settled",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+      ],
     });
 
     expect(restored.pendingKills).toEqual([
@@ -965,6 +986,12 @@ describe("close tombstone provenance", () => {
         hostId: HOST_A,
         sessionId: "s-old",
         hostAuthorityAcknowledged: false,
+        pendingCreate: true,
+      },
+      {
+        hostId: HOST_A,
+        sessionId: "s-settled",
+        hostAuthorityAcknowledged: true,
         pendingCreate: false,
       },
     ]);
