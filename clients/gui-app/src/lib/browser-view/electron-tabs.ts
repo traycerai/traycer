@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from "react";
-import { z } from "zod";
-import type {
-  BrowserSessionsClientFrame,
-  BrowserSessionsServerFrame,
+import {
+  browserStorageStateSchema,
+  type BrowserSessionsClientFrame,
+  type BrowserSessionsServerFrame,
+  type BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserViewAttachSurface,
@@ -71,7 +72,7 @@ export interface ElectronTabBinding extends BrowserViewNativeTabCapability {
 }
 
 interface ElectronTabDirectoryEntry {
-  readonly owner: object;
+  readonly owner: symbol;
   readonly binding: ElectronTabBinding;
 }
 
@@ -80,7 +81,7 @@ const directoryListeners = new Set<() => void>();
 const pendingHandoffAcks = new Map<
   string,
   {
-    readonly owner: object;
+    readonly owner: symbol;
     readonly promise: Promise<void>;
     readonly resolve: () => void;
     readonly reject: (cause: Error) => void;
@@ -105,8 +106,6 @@ interface ElectronTabBirth {
   lastStatus: BrowserViewNativeTabStatusChange | null;
 }
 
-const electronTabHandoffStorageStateSchema = z.json().nullable();
-
 export interface ElectronTabs {
   handleFrame(frame: BrowserSessionsServerFrame): boolean;
   disconnect(): void;
@@ -124,7 +123,7 @@ export interface ElectronTabSurfaceLease {
  * creation settles first; host acceptance authorizes publication.
  */
 export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
-  const owner = {};
+  const owner = Symbol("electron-tabs");
   let disposed = false;
   let connected = true;
   const birthByRequestId = new Map<string, ElectronTabBirth>();
@@ -452,13 +451,18 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     ensureNativeSubscriptions(native);
 
     let birth: ElectronTabBirth;
+    const seedStorageState = browserStorageStateSchema.safeParse(
+      frame.seedStorageState,
+    );
     const settled = native
       .ensureTab({
         hostId: options.hostId,
         sessionId: frame.sessionId,
         tabId: frame.tabId,
         requestedUrl: frame.requestedUrl,
-        seedStorageState: frame.seedStorageState,
+        seedStorageState: seedStorageState.success
+          ? seedStorageState.data
+          : null,
       })
       .then((provisioned) => {
         if (
@@ -801,7 +805,7 @@ function notifyDirectoryListeners(): void {
   for (const listener of directoryListeners) listener();
 }
 
-function removeOwnedDirectoryEntry(key: string, owner: object): void {
+function removeOwnedDirectoryEntry(key: string, owner: symbol): void {
   if (directory.get(key)?.owner !== owner) return;
   directory.delete(key);
   notifyDirectoryListeners();
@@ -810,7 +814,7 @@ function removeOwnedDirectoryEntry(key: string, owner: object): void {
 function updateOwnedDirectoryBinding(
   birth: ElectronTabBirth,
   options: ElectronTabsOptions,
-  owner: object,
+  owner: symbol,
 ): void {
   if (birth.provisioned === null || birth.lastStatus === null) return;
   const key = nativeTabKey(
@@ -963,11 +967,11 @@ function identityMessage(frame: CreateElectronTabFrame): string {
 }
 
 function jsonPayload(
-  value: unknown,
+  value: BrowserStorageState | null,
 ): Extract<
   BrowserSessionsClientFrame,
   { readonly kind: "electronTabHandoff" }
 >["capturedStorageState"] {
-  const parsed = electronTabHandoffStorageStateSchema.safeParse(value);
+  const parsed = browserStorageStateSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }

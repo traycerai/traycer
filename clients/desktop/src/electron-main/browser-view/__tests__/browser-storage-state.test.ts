@@ -266,35 +266,6 @@ describe("applyBrowserViewStorageStateWithDependencies", () => {
     expect(cookieSets).toEqual([]);
   });
 
-  it("fails malformed storageState before opening the browser partition", async () => {
-    await expect(
-      applyBrowserViewStorageStateWithDependencies(
-        {
-          ...APPLY_CONTEXT,
-          storageState: {
-            cookies: [
-              {
-                name: "sid",
-                value: "abc",
-                domain: "example.test",
-                path: "/",
-                expires: -1,
-                httpOnly: false,
-                secure: false,
-                sameSite: "Invalid",
-              },
-            ],
-            origins: [],
-          },
-        },
-        dependencies(realState, cookieSets, fromPartitionCalls),
-      ),
-    ).rejects.toThrow("sameSite");
-
-    expect(fromPartitionCalls).toEqual([]);
-    expect(cookieSets).toEqual([]);
-  });
-
   it.each([
     ["credentials syntax", "example.test@evil.test"],
     ["port syntax", "example.test:443"],
@@ -410,10 +381,6 @@ describe("captureBrowserViewStorageStateWithDependencies", () => {
 
     const captured = await captureBrowserViewStorageStateWithDependencies(
       {
-        viewTabId: "tab-1",
-        paneId: "pane-1",
-        tileInstanceId: "browser-1",
-        pageSessionId: "page-1",
         origin: "http://localhost:3000",
       },
       webContents,
@@ -439,7 +406,6 @@ describe("captureBrowserViewStorageStateWithDependencies", () => {
             name: "sid",
             value: "cookie",
             domain: "localhost",
-            canonicalDomain: "localhost",
             path: "/",
             expires: -1,
             httpOnly: true,
@@ -474,10 +440,6 @@ describe("captureBrowserViewStorageStateWithDependencies", () => {
     await expect(
       captureBrowserViewStorageStateWithDependencies(
         {
-          viewTabId: "tab-1",
-          paneId: "pane-1",
-          tileInstanceId: "browser-1",
-          pageSessionId: "page-1",
           origin: "https://example.test",
         },
         {
@@ -703,7 +665,6 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
             name: "host-only",
             value: "cookie",
             domain: "example.com",
-            canonicalDomain: "example.com",
             path: "/",
             expires: -1,
             httpOnly: true,
@@ -714,7 +675,6 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
             name: "domain-cookie",
             value: "cookie-domain",
             domain: ".example.com",
-            canonicalDomain: "example.com",
             path: "/",
             expires: -1,
             httpOnly: true,

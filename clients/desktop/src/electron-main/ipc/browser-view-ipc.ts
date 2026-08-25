@@ -9,39 +9,10 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import {
-  parseBrowserViewCdpCommand,
-  readCdpNullableString,
-} from "./browser-view-cdp-payload";
-import {
-  parseBrowserViewAttachSurface,
-  parseBrowserViewDetachSurface,
-  parseBrowserViewElectronTabCdpDispatch,
-  parseBrowserViewElectronTabControl,
-  parseBrowserViewEnsureTab,
-  parseBrowserViewNativeTabCapability,
-  parseBrowserViewReleaseTab,
-} from "./browser-view-native-tab-payload";
-import type {
-  BrowserViewCdpDispatch,
-  BrowserLabsStateUpdate,
-  BrowserViewBounds,
-  BrowserViewBoundsUpdate,
-  BrowserViewCertificateTrust,
-  BrowserViewControlAction,
-  BrowserViewControlGrant,
-  BrowserViewControlRevoke,
-  BrowserViewDownloadCancel,
-  BrowserViewFindRequest,
-  BrowserViewFindStop,
-  BrowserViewOverlayOcclusion,
-  BrowserViewOverlayRelease,
-  BrowserViewStorageStateApply,
-  BrowserViewStorageStateCapture,
-  BrowserViewTileKey,
-  BrowserViewTileUpsert,
-  BrowserViewViewportPresetChange,
-  BrowserViewViewportPresetId,
-} from "../../ipc-contracts/browser-view-types";
+  browserViewIpcPayload,
+  parseReservedChordTokens,
+} from "./browser-view-ipc-payload";
+import type { IpcManagedWindow } from "./runner-ipc-bridge";
 import { setInAppBrowserBetaEnabledMarker } from "../app/browser-labs-state";
 import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
@@ -70,11 +41,6 @@ import {
   captureBrowserViewStorageState,
 } from "../browser-view/browser-storage-state";
 import { trustBrowserCertificate } from "../app/cert-trust";
-import { log } from "../app/logger";
-import type {
-  BrowserAnnotationAttachResultInput,
-  BrowserAnnotationSetTargetChatLabelInput,
-} from "../../ipc-contracts/browser-annotation-types";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 export function registerBrowserViewIpc(
@@ -241,20 +207,20 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewUpsert, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.upsertTile(windowId, parseTileUpsert(payload));
+    manager.upsertTile(windowId, browserViewIpcPayload.tileUpsert.parse(payload));
   });
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
     manager.ensureTab(
       readSenderWindowId(bridge, event),
-      parseBrowserViewEnsureTab(payload),
+      browserViewIpcPayload.ensureTab.parse(payload),
     ),
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewAcceptTab,
     (_event, payload) =>
-      manager.acceptTab(parseBrowserViewNativeTabCapability(payload)),
+      manager.acceptTab(browserViewIpcPayload.nativeTabCapability.parse(payload)),
   );
 
   bridge.handleInvoke(
@@ -262,7 +228,7 @@ export function registerBrowserViewIpc(
     (event, payload) => {
       const attached = manager.attachSurface(
         readSenderWindowId(bridge, event),
-        parseBrowserViewAttachSurface(payload),
+        browserViewIpcPayload.attachSurface.parse(payload),
       );
       if (!attached) throw new Error("Electron browser tab is not available.");
     },
@@ -273,7 +239,7 @@ export function registerBrowserViewIpc(
     (event, payload) => {
       manager.detachSurface(
         readSenderWindowId(bridge, event),
-        parseBrowserViewDetachSurface(payload),
+        browserViewIpcPayload.detachSurface.parse(payload),
       );
     },
   );
@@ -282,7 +248,9 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewReleaseTab,
     (event, payload) => {
       readSenderWindowId(bridge, event);
-      return manager.releaseTab(parseBrowserViewReleaseTab(payload));
+      return manager.releaseTab(
+        browserViewIpcPayload.nativeTabCapability.parse(payload),
+      );
     },
   );
 
@@ -291,7 +259,7 @@ export function registerBrowserViewIpc(
     async (event, payload) => {
       const controlled = await manager.controlElectronTab(
         readSenderWindowId(bridge, event),
-        parseBrowserViewElectronTabControl(payload),
+        browserViewIpcPayload.electronTabControl.parse(payload),
       );
       if (!controlled)
         throw new Error("Electron browser tab is not available.");
@@ -303,7 +271,7 @@ export function registerBrowserViewIpc(
     (event, payload) => {
       readSenderWindowId(bridge, event);
       return manager.dispatchElectronTabCdp(
-        parseBrowserViewElectronTabCdpDispatch(payload),
+        browserViewIpcPayload.electronTabCdpDispatch.parse(payload),
       );
     },
   );
@@ -312,7 +280,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewUpdateBounds,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.updateBounds(windowId, parseBoundsUpdate(payload));
+      manager.updateBounds(
+        windowId,
+        browserViewIpcPayload.boundsUpdate.parse(payload),
+      );
     },
   );
 
@@ -320,13 +291,16 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewSetViewportPreset,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.setViewportPreset(windowId, parseViewportPresetChange(payload));
+      manager.setViewportPreset(
+        windowId,
+        browserViewIpcPayload.viewportPresetChange.parse(payload),
+      );
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewRelease, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.releaseTile(windowId, parseTileKey(payload));
+    manager.releaseTile(windowId, browserViewIpcPayload.tileKey.parse(payload));
   });
 
   // BT-202 flicker fix: renderer confirms the replacement frame is decoded
@@ -334,9 +308,8 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewOverlayPaintAck,
     (_event, payload) => {
-      if (!isRecordValue(payload)) return;
-      if (typeof payload.overlayId !== "string") return;
-      manager.paintAckOverlay(payload.overlayId);
+      const parsed = browserViewIpcPayload.overlayPaintAck.safeParse(payload);
+      if (parsed.success) manager.paintAckOverlay(parsed.data.overlayId);
     },
   );
 
@@ -345,25 +318,25 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewSetReservedChords,
     (_event, payload) => {
-      manager.setReservedChords(readReservedChordTokens(payload));
+      manager.setReservedChords(parseReservedChordTokens(payload));
     },
   );
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewReload, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.reloadTile(windowId, parseTileKey(payload));
+    manager.reloadTile(windowId, browserViewIpcPayload.tileKey.parse(payload));
   });
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewGoBack, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.goBack(windowId, parseTileKey(payload));
+    manager.goBack(windowId, browserViewIpcPayload.tileKey.parse(payload));
   });
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewGoForward,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.goForward(windowId, parseTileKey(payload));
+      manager.goForward(windowId, browserViewIpcPayload.tileKey.parse(payload));
     },
   );
 
@@ -371,7 +344,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewFindInPage,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.findInPage(windowId, parseFindRequest(payload));
+      manager.findInPage(
+        windowId,
+        browserViewIpcPayload.findRequest.parse(payload),
+      );
     },
   );
 
@@ -379,14 +355,19 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewStopFindInPage,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.stopFindInPage(windowId, parseFindStop(payload));
+      manager.stopFindInPage(
+        windowId,
+        browserViewIpcPayload.findStop.parse(payload),
+      );
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewCancelDownload,
     (_event, payload) => {
-      cancelBrowserViewDownload(parseDownloadCancel(payload).downloadId);
+      cancelBrowserViewDownload(
+        browserViewIpcPayload.downloadCancel.parse(payload).downloadId,
+      );
     },
   );
 
@@ -394,7 +375,7 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewTrustCertificate,
     async (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      const input = parseCertificateTrust(payload);
+      const input = browserViewIpcPayload.certificateTrust.parse(payload);
       if (!manager.canTrustCertificateError(windowId, input)) {
         throw new Error(
           "Browser certificate error is not active for this tile",
@@ -414,19 +395,19 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewZoomIn, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.zoomIn(windowId, parseTileKey(payload));
+    manager.zoomIn(windowId, browserViewIpcPayload.tileKey.parse(payload));
   });
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewZoomOut, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.zoomOut(windowId, parseTileKey(payload));
+    manager.zoomOut(windowId, browserViewIpcPayload.tileKey.parse(payload));
   });
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewResetZoom,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.resetZoom(windowId, parseTileKey(payload));
+      manager.resetZoom(windowId, browserViewIpcPayload.tileKey.parse(payload));
     },
   );
 
@@ -436,7 +417,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       return manager.occludeForOverlay(
         windowId,
-        parseOverlayOcclusion(payload),
+        browserViewIpcPayload.overlayOcclusion.parse(payload),
       );
     },
   );
@@ -445,7 +426,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewReleaseOverlay,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.releaseOverlay(windowId, parseOverlayRelease(payload));
+      return manager.releaseOverlay(
+        windowId,
+        browserViewIpcPayload.overlayRelease.parse(payload),
+      );
     },
   );
 
@@ -453,7 +437,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewCapturePage,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.capturePage(windowId, parseTileKey(payload));
+      return manager.capturePage(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
@@ -461,7 +448,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewGetDebugSnapshot,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.getDebugSnapshot(windowId, parseTileKey(payload));
+      return manager.getDebugSnapshot(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
@@ -469,14 +459,19 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewClearDebugEvents,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.clearDebugEvents(windowId, parseTileKey(payload));
+      manager.clearDebugEvents(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewStorageStateApply,
     (_event, payload) =>
-      manager.applyStorageState(parseStorageStateApply(payload)),
+      manager.applyStorageState(
+        browserViewIpcPayload.storageStateApply.parse(payload),
+      ),
   );
 
   bridge.handleInvoke(
@@ -485,7 +480,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       return manager.captureStorageState(
         windowId,
-        parseStorageStateCapture(payload),
+        browserViewIpcPayload.storageStateCapture.parse(payload),
       );
     },
   );
@@ -498,7 +493,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewControlGrant,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.grantControl(windowId, parseControlGrant(payload));
+      return manager.grantControl(
+        windowId,
+        browserViewIpcPayload.controlGrant.parse(payload),
+      );
     },
   );
 
@@ -506,7 +504,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewControlRevoke,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.revokeControl(windowId, parseControlRevoke(payload));
+      manager.revokeControl(
+        windowId,
+        browserViewIpcPayload.controlRevoke.parse(payload),
+      );
     },
   );
 
@@ -516,7 +517,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       return manager.executeControlAction(
         windowId,
-        parseControlAction(payload),
+        browserViewIpcPayload.controlAction.parse(payload),
       );
     },
   );
@@ -525,7 +526,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewStartAnnotation,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.startAnnotation(windowId, parseTileKey(payload));
+      return manager.startAnnotation(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
@@ -533,7 +537,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewCancelAnnotation,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.cancelAnnotation(windowId, parseTileKey(payload));
+      manager.cancelAnnotation(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
@@ -543,7 +550,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       manager.setAnnotationTargetChatLabel(
         windowId,
-        parseAnnotationTargetChatLabel(payload),
+        browserViewIpcPayload.annotationTargetChatLabel.parse(payload),
       );
     },
   );
@@ -554,7 +561,7 @@ export function registerBrowserViewIpc(
       const windowId = readSenderWindowId(bridge, event);
       manager.reportAnnotationAttachResult(
         windowId,
-        parseAnnotationAttachResult(payload),
+        browserViewIpcPayload.annotationAttachResult.parse(payload),
       );
     },
   );
@@ -563,7 +570,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewOpenDevTools,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      manager.openDevTools(windowId, parseTileKey(payload));
+      manager.openDevTools(
+        windowId,
+        browserViewIpcPayload.tileKey.parse(payload),
+      );
     },
   );
 
@@ -574,7 +584,10 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewCdpDispatch,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
-      return manager.dispatchCdp(windowId, parseCdpDispatch(payload));
+      return manager.dispatchCdp(
+        windowId,
+        browserViewIpcPayload.cdpDispatch.parse(payload),
+      );
     },
   );
 
@@ -586,7 +599,8 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewLabsStateSet,
     (_event, payload) =>
       setInAppBrowserBetaEnabledMarker(
-        parseLabsStateUpdate(payload).inAppBrowserBetaEnabled,
+        browserViewIpcPayload.labsStateUpdate.parse(payload)
+          .inAppBrowserBetaEnabled,
       ).then(() => undefined),
   );
 
@@ -638,12 +652,15 @@ function createBrowserDevToolsWindow(
   });
 }
 
-function isElectronBrowserWindow(value: unknown): value is BrowserWindow {
-  if (typeof BrowserWindow !== "function") return false;
+function isElectronBrowserWindow(
+  value: IpcManagedWindow | undefined,
+): value is BrowserWindow {
   return value instanceof BrowserWindow;
 }
 
-function toBrowserViewWindow(value: unknown): BrowserViewWindow | null {
+function toBrowserViewWindow(
+  value: IpcManagedWindow | undefined,
+): BrowserViewWindow | null {
   if (!isElectronBrowserWindow(value)) return null;
   return {
     contentView: {
@@ -674,318 +691,4 @@ function readSenderWindowId(
     throw new Error("Browser view IPC sender window is not registered");
   }
   return windowId;
-}
-
-function parseTileUpsert(value: unknown): BrowserViewTileUpsert {
-  const record = assertRecord(value, "Browser view upsert payload");
-  return {
-    ...parseTileKey(record),
-    url: readString(record.url, "url"),
-    visible: readBoolean(record.visible, "visible"),
-    viewportPreset: readViewportPresetId(record.viewportPreset),
-  };
-}
-
-function parseBoundsUpdate(value: unknown): BrowserViewBoundsUpdate {
-  const record = assertRecord(value, "Browser view bounds payload");
-  return {
-    ...parseTileKey(record),
-    bounds: parseBounds(record.bounds),
-  };
-}
-
-function parseViewportPresetChange(
-  value: unknown,
-): BrowserViewViewportPresetChange {
-  const record = assertRecord(value, "Browser view viewport preset payload");
-  return {
-    ...parseTileKey(record),
-    viewportPreset: readViewportPresetId(record.viewportPreset),
-  };
-}
-
-function parseCdpDispatch(value: unknown): BrowserViewCdpDispatch {
-  const record = assertRecord(value, "Browser view CDP dispatch payload");
-  return {
-    ...parseTileKey(record),
-    sessionId: readCdpNullableString(record.sessionId, "sessionId"),
-    command: parseBrowserViewCdpCommand(record.command),
-  };
-}
-
-function parseTileKey(value: unknown): BrowserViewTileKey {
-  const record = assertRecord(value, "Browser view tile key");
-  return {
-    viewTabId: readString(record.viewTabId, "viewTabId"),
-    paneId: readString(record.paneId, "paneId"),
-    tileInstanceId: readString(record.tileInstanceId, "tileInstanceId"),
-    pageSessionId: readString(record.pageSessionId, "pageSessionId"),
-  };
-}
-
-function parseAnnotationTargetChatLabel(
-  value: unknown,
-): BrowserAnnotationSetTargetChatLabelInput {
-  const record = assertRecord(value, "Annotation target-chat label payload");
-  return {
-    ...parseTileKey(record),
-    targets: Array.isArray(record.targets)
-      ? record.targets.map((value) => {
-          const target = assertRecord(value, "Annotation target chat");
-          return {
-            chatId: readString(target.chatId, "chatId"),
-            label: readString(target.label, "label"),
-          };
-        })
-      : [],
-    defaultChatId:
-      record.defaultChatId === null
-        ? null
-        : readString(record.defaultChatId, "defaultChatId"),
-  };
-}
-
-function parseAnnotationAttachResult(
-  value: unknown,
-): BrowserAnnotationAttachResultInput {
-  const record = assertRecord(value, "Annotation attach-result payload");
-  const status = readString(record.status, "status");
-  if (status !== "attached" && status !== "failed") {
-    throw new Error("Browser view annotation attach result status is invalid");
-  }
-  return {
-    annotationId: readString(record.annotationId, "annotationId"),
-    status,
-  };
-}
-
-function parseFindRequest(value: unknown): BrowserViewFindRequest {
-  const record = assertRecord(value, "Browser view find payload");
-  return {
-    ...parseTileKey(record),
-    requestId: readFiniteNumber(record.requestId, "requestId"),
-    query: readString(record.query, "query"),
-    matchCase: readBoolean(record.matchCase, "matchCase"),
-    forward: readBoolean(record.forward, "forward"),
-    findNext: readBoolean(record.findNext, "findNext"),
-  };
-}
-
-function parseFindStop(value: unknown): BrowserViewFindStop {
-  const record = assertRecord(value, "Browser view find stop payload");
-  return {
-    ...parseTileKey(record),
-    requestId: readFiniteNumber(record.requestId, "requestId"),
-  };
-}
-
-function parseDownloadCancel(value: unknown): BrowserViewDownloadCancel {
-  const record = assertRecord(value, "Browser view download cancel payload");
-  return {
-    downloadId: readString(record.downloadId, "downloadId"),
-  };
-}
-
-function parseCertificateTrust(value: unknown): BrowserViewCertificateTrust {
-  const record = assertRecord(value, "Browser view certificate trust payload");
-  return {
-    ...parseTileKey(record),
-    certificateErrorId: readString(
-      record.certificateErrorId,
-      "certificateErrorId",
-    ),
-  };
-}
-
-function parseOverlayOcclusion(value: unknown): BrowserViewOverlayOcclusion {
-  const record = assertRecord(value, "Browser view overlay occlusion payload");
-  const tilesValue = record.tiles;
-  if (!Array.isArray(tilesValue)) {
-    throw new Error("Browser view overlay tiles must be an array");
-  }
-  return {
-    overlayId: readString(record.overlayId, "overlayId"),
-    tiles: tilesValue.map((tile) => parseTileKey(tile)),
-  };
-}
-
-function parseOverlayRelease(value: unknown): BrowserViewOverlayRelease {
-  const record = assertRecord(value, "Browser view overlay release payload");
-  return {
-    overlayId: readString(record.overlayId, "overlayId"),
-  };
-}
-
-function parseLabsStateUpdate(value: unknown): BrowserLabsStateUpdate {
-  const record = assertRecord(value, "Browser labs state update payload");
-  return {
-    inAppBrowserBetaEnabled: readBoolean(
-      record.inAppBrowserBetaEnabled,
-      "inAppBrowserBetaEnabled",
-    ),
-  };
-}
-
-function parseStorageStateApply(value: unknown): BrowserViewStorageStateApply {
-  const record = assertRecord(value, "Browser storageState apply payload");
-  return {
-    storageState: record.storageState,
-    sessionId: readNullableString(record.sessionId, "sessionId"),
-    tabId: readNullableString(record.tabId, "tabId"),
-    purpose: readStorageStateApplyPurpose(record.purpose),
-  };
-}
-
-function readStorageStateApplyPurpose(
-  value: unknown,
-): BrowserViewStorageStateApply["purpose"] {
-  if (value === "primary-profile-seed" || value === "sync-back") return value;
-  throw new Error("Browser storageState apply purpose is invalid");
-}
-
-function parseStorageStateCapture(
-  value: unknown,
-): BrowserViewStorageStateCapture {
-  const record = assertRecord(value, "Browser storageState capture payload");
-  return {
-    ...parseTileKey(record),
-    origin: readString(record.origin, "origin"),
-  };
-}
-
-function parseControlGrant(value: unknown): BrowserViewControlGrant {
-  const record = assertRecord(value, "Browser view control grant payload");
-  return {
-    ...parseTileKey(record),
-    controlId: readString(record.controlId, "controlId"),
-    chatId: readString(record.chatId, "chatId"),
-    agentRunId: readNullableString(record.agentRunId, "agentRunId"),
-    agentLabel: readString(record.agentLabel, "agentLabel"),
-    origin: readString(record.origin, "origin"),
-    expiresAt: readFiniteNumber(record.expiresAt, "expiresAt"),
-  };
-}
-
-function parseControlRevoke(value: unknown): BrowserViewControlRevoke {
-  const record = assertRecord(value, "Browser view control revoke payload");
-  return {
-    ...parseTileKey(record),
-    controlId: readString(record.controlId, "controlId"),
-    reason: readString(record.reason, "reason"),
-  };
-}
-
-function parseControlAction(value: unknown): BrowserViewControlAction {
-  const record = assertRecord(value, "Browser view control action payload");
-  return {
-    ...parseTileKey(record),
-    controlId: readString(record.controlId, "controlId"),
-    actionId: readString(record.actionId, "actionId"),
-    sensitiveApprovalId: readNullableString(
-      record.sensitiveApprovalId,
-      "sensitiveApprovalId",
-    ),
-    action: readControlActionCommand(record.action),
-  };
-}
-
-function parseBounds(value: unknown): BrowserViewBounds {
-  const record = assertRecord(value, "Browser view bounds");
-  return {
-    x: readFiniteNumber(record.x, "x"),
-    y: readFiniteNumber(record.y, "y"),
-    width: readFiniteNumber(record.width, "width"),
-    height: readFiniteNumber(record.height, "height"),
-  };
-}
-
-function assertRecord(value: unknown, label: string): Record<string, unknown> {
-  if (isRecord(value)) return value;
-  throw new Error(`${label} must be an object`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown, field: string): string {
-  if (typeof value === "string") return value;
-  throw new Error(`Browser view ${field} must be a string`);
-}
-
-function readNonEmptyString(value: unknown, field: string): string {
-  if (typeof value === "string" && value.length > 0) return value;
-  throw new Error(`Browser view ${field} must be a non-empty string`);
-}
-
-function readBoolean(value: unknown, field: string): boolean {
-  if (typeof value === "boolean") return value;
-  throw new Error(`Browser view ${field} must be a boolean`);
-}
-
-function readNullableString(value: unknown, field: string): string | null {
-  if (value === null) return null;
-  if (typeof value === "string") return value;
-  throw new Error(`Browser view ${field} must be a string or null`);
-}
-
-function readControlActionCommand(
-  value: unknown,
-): BrowserViewControlAction["action"] {
-  const record = assertRecord(value, "Browser view control action command");
-  if (record.kind === "click") {
-    return {
-      kind: "click",
-      selector: readString(record.selector, "selector"),
-    };
-  }
-  if (record.kind === "type") {
-    return {
-      kind: "type",
-      selector: readString(record.selector, "selector"),
-      text: readString(record.text, "text"),
-    };
-  }
-  if (record.kind === "scroll") {
-    return {
-      kind: "scroll",
-      deltaX: readFiniteNumber(record.deltaX, "deltaX"),
-      deltaY: readFiniteNumber(record.deltaY, "deltaY"),
-    };
-  }
-  if (record.kind === "navigate") {
-    return {
-      kind: "navigate",
-      url: readString(record.url, "url"),
-    };
-  }
-  throw new Error("Browser view control action kind is not supported");
-}
-
-function readViewportPresetId(value: unknown): BrowserViewViewportPresetId {
-  if (
-    value === "responsive" ||
-    value === "mobile" ||
-    value === "tablet" ||
-    value === "desktop"
-  ) {
-    return value;
-  }
-  throw new Error("Browser view viewportPreset is invalid");
-}
-
-function readFiniteNumber(value: unknown, field: string): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  throw new Error(`Browser view ${field} must be a finite number`);
-}
-
-function readReservedChordTokens(payload: unknown): readonly string[] {
-  if (!isRecordValue(payload)) return [];
-  const raw = payload.tokens;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((token): token is string => typeof token === "string");
-}
-
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { BrowserWindowConstructorOptions } from "electron";
+import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserViewCdpCommand,
   BrowserViewCdpDispatch,
@@ -3592,7 +3593,7 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
     reason: BrowserViewElectronTabHandoffChange["reason"],
     capturedUrl: string,
-  ): Promise<unknown> {
+  ): Promise<BrowserStorageState | null> {
     // A crashed renderer cannot safely run `executeJavaScript` for
     // localStorage, and its webContents state is not trustworthy - honor
     // "no-capture" in the reason literally rather than attempting one.

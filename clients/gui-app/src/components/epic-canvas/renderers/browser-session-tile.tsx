@@ -213,21 +213,18 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     props.node.tabId,
     props.node.hostId,
   );
-  const wasAvailableRef = useRef(false);
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.paneId,
     props.node.instanceId,
   );
   useEffect(() => {
-    if (session !== undefined && tab !== undefined) {
-      wasAvailableRef.current = true;
-      return;
-    }
-    if (!wasAvailableRef.current || sessions.lifecycle !== "live") return;
+    if (session !== undefined && tab !== undefined) return;
+    if (sessions.lifecycle !== "live" || !sessions.inventoryReady) return;
     closeCanvasTile();
   }, [
     closeCanvasTile,
+    sessions.inventoryReady,
     session,
     sessions.lifecycle,
     tab,

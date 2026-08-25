@@ -150,6 +150,7 @@ const sessionsState = vi.hoisted<{
 }>(() => ({
   value: {
     lifecycle: "live",
+    inventoryReady: true,
     items: [],
     errorMessage: null,
     routingChatId: "chat-driver",
@@ -283,6 +284,7 @@ describe("BrowsersPanelBody", () => {
     seedCanvasTab();
     sessionsState.value = {
       lifecycle: "live",
+      inventoryReady: true,
       items: [
         session({
           sessionId: "sess-primary",
@@ -1273,6 +1275,7 @@ describe("BrowsersPanelActions", () => {
     );
     sessionsState.value = {
       lifecycle: "live",
+      inventoryReady: true,
       items: [],
       errorMessage: null,
       routingChatId: null,

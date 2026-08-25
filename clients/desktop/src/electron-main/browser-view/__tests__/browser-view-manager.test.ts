@@ -814,7 +814,7 @@ function createHarnessWithOptions(
           cookies: [],
           origins: origins.map((origin) => ({
             origin: origin.origin,
-            localStorage: origin.localStorage,
+            localStorage: [...origin.localStorage],
           })),
         },
         reason: null,

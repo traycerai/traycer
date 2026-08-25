@@ -63,6 +63,7 @@ function sessionsState(
 ): BrowserSessionsState {
   return {
     lifecycle: "live",
+    inventoryReady: true,
     items,
     errorMessage: null,
     routingChatId: null,

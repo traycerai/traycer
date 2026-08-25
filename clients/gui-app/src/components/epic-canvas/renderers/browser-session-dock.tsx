@@ -9,9 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { Eye, ExternalLink, KeyRound, Radio } from "lucide-react";
-import { z } from "zod";
 import {
   browserSessionsServerFrameSchema,
+  browserStorageStateSchema,
   type BrowserSessionInfo,
   type BrowserSessionsClientFrame,
   type BrowserSessionsServerFrame,
@@ -147,8 +147,6 @@ type PendingCloseRequest = {
   readonly reject: (error: Error) => void;
 };
 
-const browserStorageLendPayloadSchema = z.json();
-
 interface BrowserAuthLendSource {
   readonly id: string;
   readonly label: string;
@@ -167,6 +165,7 @@ interface BrowserSessionsRenderState {
   readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly items: readonly BrowserSessionInfo[];
   readonly lifecycle: BrowserSessionsLifecycle;
+  readonly inventoryReady: boolean;
   readonly errorMessage: string | null;
 }
 
@@ -327,7 +326,9 @@ export function BrowserSessionDock(props: BrowserSessionDockProps) {
             browserView === null
               ? null
               : await browserView.applyStorageState({
-                  storageState: state.storageState,
+                  storageState: browserStorageStateSchema.parse(
+                    state.storageState,
+                  ),
                   sessionId: session.sessionId,
                   tabId: session.tabs[0]?.tabId ?? null,
                   purpose: "sync-back",
@@ -394,7 +395,7 @@ export function BrowserSessionDock(props: BrowserSessionDockProps) {
       .requestLendStorage(
         lendPreview.session.sessionId,
         lendPreview.source.origin,
-        browserStorageLendPayloadSchema.parse(lendPreview.capture.storageState),
+        browserStorageStateSchema.parse(lendPreview.capture.storageState),
       )
       .then((result) => {
         setLendMessage(
@@ -824,6 +825,7 @@ function useBrowserSessions(
       client: null,
       items: [],
       lifecycle: "connecting",
+      inventoryReady: false,
       errorMessage: null,
     }),
   );
@@ -911,6 +913,7 @@ function useBrowserSessions(
         client,
         items: current.client === client ? current.items : [],
         lifecycle,
+        inventoryReady: status === "open" && current.inventoryReady,
         errorMessage: browserSessionsError(status, reason),
       }));
     });
@@ -931,6 +934,9 @@ function useBrowserSessions(
               items: nextItems,
               lifecycle:
                 current.client === client ? current.lifecycle : "connecting",
+              inventoryReady:
+                parsed.data.kind === "snapshot" ||
+                (current.client === client && current.inventoryReady),
               errorMessage:
                 current.client === client ? current.errorMessage : null,
             };
@@ -1088,6 +1094,7 @@ function useBrowserSessions(
 
   return {
     lifecycle,
+    inventoryReady: stateMatchesOwner && streamState.inventoryReady,
     items: stateMatchesOwner ? streamState.items : [],
     errorMessage: stateMatchesOwner ? streamState.errorMessage : null,
     retry,
@@ -1257,7 +1264,7 @@ function handlePrimaryProfileCaptureFrame(args: {
         });
         return;
       }
-      const parsed = z.json().safeParse(result.storageState);
+      const parsed = browserStorageStateSchema.safeParse(result.storageState);
       args.sendClientFrame({
         kind: "primaryProfileCaptured",
         hasBinaryPayload: false,

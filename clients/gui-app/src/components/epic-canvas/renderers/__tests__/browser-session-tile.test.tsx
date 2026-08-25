@@ -10,12 +10,14 @@ const harness = vi.hoisted(() => ({
   binding: null as ElectronTabBinding | null,
   items: [] as BrowserSessionInfo[],
   lifecycle: "live" as "connecting" | "live" | "reconnecting" | "closed",
+  inventoryReady: true,
   closeCanvasTile: vi.fn(),
 }));
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => ({
     lifecycle: harness.lifecycle,
+    inventoryReady: harness.inventoryReady,
     items: harness.items,
     errorMessage: null,
     routingChatId: "chat-route",
@@ -137,6 +139,7 @@ describe("BrowserSessionTile lifecycle projection", () => {
     harness.binding = null;
     harness.items = [session("ready", null)];
     harness.lifecycle = "live";
+    harness.inventoryReady = true;
     harness.closeCanvasTile.mockClear();
   });
 
@@ -201,5 +204,24 @@ describe("BrowserSessionTile lifecycle projection", () => {
     await waitFor(() => {
       expect(harness.closeCanvasTile).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("closes a cold-start orphan after the authoritative snapshot arrives", async () => {
+    harness.items = [];
+
+    renderTile();
+
+    await waitFor(() => {
+      expect(harness.closeCanvasTile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps a pointer while the authoritative inventory is still loading", () => {
+    harness.items = [];
+    harness.inventoryReady = false;
+
+    renderTile();
+
+    expect(harness.closeCanvasTile).not.toHaveBeenCalled();
   });
 });

@@ -93,6 +93,7 @@ export function EpicSurface(props: EpicSurfaceProps) {
 
 const COLD_BROWSER_SESSIONS: BrowserSessionsState = {
   lifecycle: "connecting",
+  inventoryReady: false,
   items: [],
   errorMessage: null,
   routingChatId: null,

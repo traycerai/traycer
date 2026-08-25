@@ -25,6 +25,8 @@ export type BrowserSessionsLifecycle =
 
 export interface BrowserSessionsState {
   readonly lifecycle: BrowserSessionsLifecycle;
+  /** True only after the current stream incarnation supplied its full snapshot. */
+  readonly inventoryReady: boolean;
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
   readonly routingChatId: string | null;

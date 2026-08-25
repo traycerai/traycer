@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   browserSessionsClientFrameSchema,
   browserSessionsServerFrameSchema,
+  browserStorageStateSchema,
 } from "@traycer/protocol/host/browser/contracts";
 
 const CAPTURE_REQUEST = {
@@ -84,6 +85,21 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
         }).success,
       ).toBe(true);
     }
+  });
+
+  it("validates the semantic storage state independently of its opaque frame", () => {
+    expect(
+      browserStorageStateSchema.safeParse(CAPTURED_RESPONSE.storageState)
+        .success,
+    ).toBe(true);
+    expect(
+      browserStorageStateSchema.safeParse({
+        ...CAPTURED_RESPONSE.storageState,
+        cookies: [
+          { ...CAPTURED_RESPONSE.storageState.cookies[0], sameSite: "Invalid" },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects primaryProfileCaptured without status", () => {

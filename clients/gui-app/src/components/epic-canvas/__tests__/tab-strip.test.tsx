@@ -187,6 +187,7 @@ function browserSessionsState(
 ): BrowserSessionsState {
   return {
     lifecycle: "live",
+    inventoryReady: true,
     items,
     errorMessage: null,
     routingChatId: "chat-1",

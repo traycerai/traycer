@@ -3,6 +3,7 @@ import type {
   BrowserCdpError,
   BrowserCdpFrameInfo,
   BrowserCdpResult,
+  BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserAnnotationAttachResultInput,
@@ -35,7 +36,7 @@ export interface BrowserViewNativeTabCapability extends BrowserViewNativeTabKey 
 
 export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
   readonly requestedUrl: string;
-  readonly seedStorageState: unknown | null;
+  readonly seedStorageState: BrowserStorageState | null;
 }
 
 export type BrowserViewProvisionedTab = BrowserViewNativeTabCapability;
@@ -203,7 +204,7 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
 }
 
 export interface BrowserViewStorageStateApply {
-  readonly storageState: unknown;
+  readonly storageState: BrowserStorageState;
   readonly sessionId: string | null;
   readonly tabId: string | null;
   readonly purpose: "primary-profile-seed" | "sync-back";
@@ -214,7 +215,7 @@ export interface BrowserViewStorageStateCapture extends BrowserViewTileKey {
 }
 
 export interface BrowserViewStorageStateCaptureResult {
-  readonly storageState: unknown;
+  readonly storageState: BrowserStorageState;
   readonly cookieCount: number;
   readonly cookieDomains: readonly string[];
   readonly localStorageCount: number;
@@ -222,11 +223,17 @@ export interface BrowserViewStorageStateCaptureResult {
   readonly localStorageReason: string | null;
 }
 
-export interface BrowserPrimaryProfileCaptureResult {
-  readonly status: "captured" | "unavailable";
-  readonly storageState: unknown | null;
-  readonly reason: string | null;
-}
+export type BrowserPrimaryProfileCaptureResult =
+  | {
+      readonly status: "captured";
+      readonly storageState: BrowserStorageState;
+      readonly reason: null;
+    }
+  | {
+      readonly status: "unavailable";
+      readonly storageState: null;
+      readonly reason: string;
+    };
 
 export interface BrowserViewControlGrant extends BrowserViewTileKey {
   readonly controlId: string;
@@ -350,12 +357,12 @@ export interface BrowserViewElectronTabHandoffSibling {
   readonly tabId: string;
   readonly registrationId: string;
   readonly url: string;
-  readonly capturedStorageState: unknown;
+  readonly capturedStorageState: BrowserStorageState | null;
 }
 
 export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTabCapability {
   readonly capturedUrl: string;
-  readonly capturedStorageState: unknown;
+  readonly capturedStorageState: BrowserStorageState | null;
   readonly siblingTabs: readonly BrowserViewElectronTabHandoffSibling[];
   readonly reason: "gui-quit" | "tab-released" | "crash-no-capture";
 }

@@ -1,4 +1,13 @@
 import { session, type Cookie } from "electron";
+import { z } from "zod";
+import {
+  browserStorageCookieSchema as protocolStorageCookieSchema,
+  browserStorageLocalStorageEntrySchema,
+  browserStorageOriginSchema as protocolStorageOriginSchema,
+  browserStorageStateSchema as protocolStorageStateSchema,
+  type BrowserStorageCookie as ProtocolStorageCookie,
+  type BrowserStorageState as ProtocolStorageState,
+} from "@traycer/protocol/host/browser/contracts";
 import type {
   BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
@@ -12,28 +21,33 @@ import { log } from "../app/logger";
 
 type BrowserStorageCookieSameSite = "Strict" | "Lax" | "None";
 
-interface BrowserStorageCookie {
-  // Partitioned cookies are intentionally unsupported: this capture shape has
-  // no partition key, so callers must not claim CHIPS identity preservation.
-  readonly name: string;
-  readonly value: string;
+// The protocol shape deliberately has no partition key, so capture/apply does
+// not claim CHIPS identity preservation.
+const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
+  (cookie) => ({
+    ...cookie,
+    name: readNonEmptyString(cookie.name, "cookie name"),
+    ...readCookieDomain(cookie.domain),
+    path: readCookiePath(cookie.path),
+  }),
+);
+const desktopStorageOriginSchema = protocolStorageOriginSchema.transform(
+  (origin) => ({
+    ...origin,
+    origin: readNonEmptyString(origin.origin, "origin"),
+  }),
+);
+const desktopStorageStateSchema = protocolStorageStateSchema.extend({
+  cookies: z.array(desktopStorageCookieSchema),
+  origins: z.array(desktopStorageOriginSchema),
+});
+
+type BrowserStorageCookie = z.infer<typeof desktopStorageCookieSchema>;
+type DesktopStorageState = z.infer<typeof desktopStorageStateSchema>;
+
+interface BrowserCookieDomain {
   readonly domain: string;
   readonly canonicalDomain: string;
-  readonly path: string;
-  readonly expires: number;
-  readonly httpOnly: boolean;
-  readonly secure: boolean;
-  readonly sameSite: BrowserStorageCookieSameSite;
-}
-
-interface BrowserStorageState {
-  readonly cookies: readonly BrowserStorageCookie[];
-  readonly origins: readonly BrowserStorageOrigin[];
-}
-
-interface BrowserStorageOrigin {
-  readonly origin: string;
-  readonly localStorage: readonly BrowserStorageLocalStorageEntry[];
 }
 
 export interface BrowserStorageLocalStorageEntry {
@@ -126,10 +140,18 @@ export async function captureBrowserPrimaryProfileWithDependencies(
     cache: true,
   });
   await browserSession.cookies.flushStore();
-  const cookies = (await browserSession.cookies.get({})).map(toStorageCookie);
+  const cookies = (await browserSession.cookies.get({}))
+    .map(toStorageCookie)
+    .map(toProtocolStorageCookie);
   return {
     status: "captured",
-    storageState: { cookies, origins },
+    storageState: {
+      cookies,
+      origins: origins.map((origin) => ({
+        origin: origin.origin,
+        localStorage: [...origin.localStorage],
+      })),
+    },
     reason: null,
   };
 }
@@ -143,9 +165,9 @@ export async function captureBrowserOriginLocalStorage(
 }
 
 export function browserLocalStorageSeedScript(
-  storageState: unknown,
+  storageState: ProtocolStorageState | null,
 ): string | null {
-  if (storageState === undefined || storageState === null) return null;
+  if (storageState === null) return null;
   const origins = parseStorageState(storageState).origins;
   if (origins.length === 0) return null;
   return [
@@ -245,7 +267,7 @@ function cookieKey(cookie: BrowserStorageCookie): string {
 }
 
 export async function captureBrowserViewStorageState(
-  input: { readonly origin: string; readonly [key: string]: unknown },
+  input: { readonly origin: string },
   webContents: BrowserStorageCaptureWebContents,
 ): Promise<BrowserViewStorageStateCaptureResult> {
   return captureBrowserViewStorageStateWithDependencies(input, webContents, {
@@ -255,7 +277,7 @@ export async function captureBrowserViewStorageState(
 }
 
 export async function captureBrowserViewStorageStateWithDependencies(
-  input: { readonly origin: string; readonly [key: string]: unknown },
+  input: { readonly origin: string },
   webContents: BrowserStorageCaptureWebContents,
   dependencies: BrowserStorageStateCaptureDependencies,
 ): Promise<BrowserViewStorageStateCaptureResult> {
@@ -267,6 +289,7 @@ export async function captureBrowserViewStorageStateWithDependencies(
   const cookies = (await browserSession.cookies.get({ url: origin })).map(
     toStorageCookie,
   );
+  const capturedCookies = cookies.map(toProtocolStorageCookie);
   const localStorage = await captureLocalStorageForOrigin(origin, webContents);
   // Omit the origin entirely when its localStorage capture was unavailable
   // (e.g. the tile navigated away from `origin` mid-capture) rather than
@@ -274,11 +297,11 @@ export async function captureBrowserViewStorageStateWithDependencies(
   // so a merge downstream cannot mistake it for a genuinely empty origin and
   // erase a good cached value.
   const origins = localStorage.available
-    ? [{ origin, localStorage: localStorage.entries }]
+    ? [{ origin, localStorage: [...localStorage.entries] }]
     : [];
   return {
     storageState: {
-      cookies,
+      cookies: capturedCookies,
       origins,
     },
     cookieCount: cookies.length,
@@ -289,80 +312,26 @@ export async function captureBrowserViewStorageStateWithDependencies(
   };
 }
 
-function parseStorageState(value: unknown): BrowserStorageState {
-  const record = assertRecord(value, "Browser storageState");
-  const cookies = record.cookies;
-  const origins = record.origins;
-  if (!Array.isArray(cookies)) {
-    throw new Error("Browser storageState cookies must be an array");
-  }
-  if (!Array.isArray(origins)) {
-    throw new Error("Browser storageState origins must be an array");
-  }
-  origins.forEach(parseOriginStorageState);
-  return {
-    cookies: cookies.map(parseCookie),
-    origins: origins.map(parseOriginStorageState),
-  };
-}
-
-function parseCookie(value: unknown): BrowserStorageCookie {
-  const record = assertRecord(value, "Browser storageState cookie");
-  const sameSite = record.sameSite;
-  if (!isSameSite(sameSite)) {
-    throw new Error("Browser storageState cookie sameSite is invalid");
-  }
-  return {
-    name: readNonEmptyString(record.name, "cookie name"),
-    value: readString(record.value, "cookie value"),
-    ...readCookieDomain(record.domain),
-    path: readCookiePath(record.path),
-    expires: readFiniteNumber(record.expires, "cookie expires"),
-    httpOnly: readBoolean(record.httpOnly, "cookie httpOnly"),
-    secure: readBoolean(record.secure, "cookie secure"),
-    sameSite,
-  };
-}
-
-function parseOriginStorageState(value: unknown): BrowserStorageOrigin {
-  const record = assertRecord(value, "Browser storageState origin");
-  const origin = readNonEmptyString(record.origin, "origin");
-  const localStorage = record.localStorage;
-  if (!Array.isArray(localStorage)) {
-    throw new Error(
-      "Browser storageState origin localStorage must be an array",
-    );
-  }
-  return {
-    origin,
-    localStorage: localStorage.map(parseLocalStorageEntry),
-  };
-}
-
-function parseLocalStorageEntry(
-  value: unknown,
-): BrowserStorageLocalStorageEntry {
-  const record = assertRecord(value, "localStorage entry");
-  return {
-    name: readString(record.name, "localStorage name"),
-    value: readString(record.value, "localStorage value"),
-  };
+function parseStorageState(value: ProtocolStorageState): DesktopStorageState {
+  return desktopStorageStateSchema.parse(value);
 }
 
 function toCookieSetDetails(
   cookie: BrowserStorageCookie,
 ): BrowserCookieSetDetails {
-  return {
+  const details: BrowserCookieSetDetails = {
     url: cookieUrl(cookie),
     name: cookie.name,
     value: cookie.value,
-    ...(cookie.domain.startsWith(".") ? { domain: cookie.domain } : {}),
     path: cookie.path,
     expirationDate: cookie.expires < 0 ? undefined : cookie.expires,
-    httpOnly: cookie.httpOnly ?? false,
-    secure: cookie.secure ?? false,
+    httpOnly: cookie.httpOnly,
+    secure: cookie.secure,
     sameSite: electronSameSite(cookie.sameSite),
   };
+  return cookie.domain.startsWith(".")
+    ? { ...details, domain: cookie.domain }
+    : details;
 }
 
 function cookieUrl(cookie: BrowserStorageCookie): string {
@@ -394,21 +363,29 @@ function electronSameSite(
 }
 
 function toStorageCookie(cookie: Cookie): BrowserStorageCookie {
+  const domain = z.string().safeParse(cookie.domain);
+  const expirationDate = z.number().safeParse(cookie.expirationDate);
   return {
     name: cookie.name,
     value: cookie.value,
     ...readCookieDomain(
-      cookie.hostOnly === true && typeof cookie.domain === "string"
-        ? cookie.domain.replace(/^\./, "")
+      cookie.hostOnly === true && domain.success
+        ? domain.data.replace(/^\./, "")
         : cookie.domain,
     ),
     path: readCookiePath(cookie.path),
-    expires:
-      typeof cookie.expirationDate === "number" ? cookie.expirationDate : -1,
+    expires: expirationDate.success ? expirationDate.data : -1,
     httpOnly: cookie.httpOnly === true,
     secure: cookie.secure === true,
     sameSite: playwrightSameSite(cookie.sameSite),
   };
+}
+
+function toProtocolStorageCookie(
+  cookie: BrowserStorageCookie,
+): ProtocolStorageCookie {
+  const { canonicalDomain: _canonicalDomain, ...captured } = cookie;
+  return captured;
 }
 
 function playwrightSameSite(
@@ -448,14 +425,8 @@ async function captureLocalStorageForOrigin(
   }
   return {
     entries: result.flatMap((entry): BrowserStorageLocalStorageEntry[] => {
-      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-        return [];
-      }
-      const record = entry as Record<string, unknown>;
-      if (typeof record.name !== "string" || typeof record.value !== "string") {
-        return [];
-      }
-      return [{ name: record.name, value: record.value }];
+      const parsed = browserStorageLocalStorageEntrySchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
     }),
     available: true,
     reason: null,
@@ -481,29 +452,17 @@ function parseCurrentOrigin(value: string): string | null {
   }
 }
 
-function assertRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  throw new Error(`${label} must be an object`);
-}
-
-function readString(value: unknown, field: string): string {
-  if (typeof value === "string") return value;
-  throw new Error(`Browser storageState ${field} must be a string`);
-}
-
-function readNonEmptyString(value: unknown, field: string): string {
-  const text = readString(value, field);
-  if (text.length > 0) return text;
+function readNonEmptyString(value: string, field: string): string {
+  if (value.length > 0) return value;
   throw new Error(`Browser storageState ${field} must be non-empty`);
 }
 
-function readCookieDomain(value: unknown): {
-  readonly domain: string;
-  readonly canonicalDomain: string;
-} {
-  const domain = readNonEmptyString(value, "cookie domain");
+function readCookieDomain(value: string | undefined): BrowserCookieDomain {
+  const parsed = z.string().safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Browser storageState cookie domain must be a string");
+  }
+  const domain = readNonEmptyString(parsed.data, "cookie domain");
   const canonicalDomain = domain.startsWith(".") ? domain.slice(1) : domain;
   if (
     canonicalDomain.length === 0 ||
@@ -519,8 +478,12 @@ function readCookieDomain(value: unknown): {
   return { domain, canonicalDomain };
 }
 
-function readCookiePath(value: unknown): string {
-  const path = readNonEmptyString(value, "cookie path");
+function readCookiePath(value: string | undefined): string {
+  const parsed = z.string().safeParse(value);
+  if (!parsed.success) {
+    throw new Error("Browser storageState cookie path must be a string");
+  }
+  const path = readNonEmptyString(parsed.data, "cookie path");
   if (!path.startsWith("/")) {
     throw new Error("Browser storageState cookie path must start with /");
   }
@@ -528,20 +491,6 @@ function readCookiePath(value: unknown): string {
     throw new Error("Browser storageState cookie path is invalid");
   }
   return path;
-}
-
-function readBoolean(value: unknown, field: string): boolean {
-  if (typeof value === "boolean") return value;
-  throw new Error(`Browser storageState ${field} must be a boolean`);
-}
-
-function readFiniteNumber(value: unknown, field: string): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  throw new Error(`Browser storageState ${field} must be a finite number`);
-}
-
-function isSameSite(value: unknown): value is BrowserStorageCookieSameSite {
-  return value === "Strict" || value === "Lax" || value === "None";
 }
 
 function uniqueSorted(values: readonly string[]): readonly string[] {

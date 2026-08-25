@@ -9,7 +9,7 @@ import type {
   BrowserViewProvisionedTab,
 } from "../../../ipc-contracts/browser-view-types";
 import type { BrowserViewManagerOptions } from "../../browser-view/browser-view-manager";
-import { parseBrowserViewCdpCommand } from "../browser-view-cdp-payload";
+import { browserViewIpcPayload } from "../browser-view-ipc-payload";
 
 type DispatchCdpCall = {
   readonly windowId: string;
@@ -620,47 +620,52 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
     ]);
   });
 
-  describe("parseBrowserViewCdpCommand (shared by agent and borrowed tiles)", () => {
+  describe("canonical CDP command schema", () => {
     it.each(VALID_COMMAND_PAYLOADS)(
       "round-trips every field of $name",
       ({ payload, expected }) => {
-        expect(parseBrowserViewCdpCommand(payload)).toEqual(expected);
+        expect(browserViewIpcPayload.cdpCommand.parse(payload)).toEqual(expected);
       },
     );
 
     it("rejects an unknown command kind rather than coercing", () => {
-      expect(() => parseBrowserViewCdpCommand({ kind: "cdpEval" })).toThrow(
-        /Unknown browser view CDP command kind: cdpEval/,
-      );
+      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
+        kind: "cdpEval",
+      });
+      expect(parsed.success).toBe(false);
+      if (parsed.success) throw new Error("expected command rejection");
+      expect(parsed.error.issues[0]?.path).toEqual(["kind"]);
     });
 
     it("rejects a wrong-typed required field on cdpNavigate.url", () => {
-      expect(() =>
-        parseBrowserViewCdpCommand({
-          kind: "cdpNavigate",
-          url: 42,
-        }),
-      ).toThrow(/command\.url must be a string/);
+      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
+        kind: "cdpNavigate",
+        url: 42,
+      });
+      expect(parsed.success).toBe(false);
+      if (parsed.success) throw new Error("expected command rejection");
+      expect(parsed.error.issues[0]?.path).toEqual(["url"]);
     });
 
     it("rejects an invalid cdpDispatchMouseEvent.type enum value", () => {
-      expect(() =>
-        parseBrowserViewCdpCommand({
-          kind: "cdpDispatchMouseEvent",
-          type: "click",
-          x: 0,
-          y: 0,
-          button: null,
-          clickCount: null,
-          deltaX: null,
-          deltaY: null,
-        }),
-      ).toThrow(/mouse event type is invalid/);
+      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
+        kind: "cdpDispatchMouseEvent",
+        type: "click",
+        x: 0,
+        y: 0,
+        button: null,
+        clickCount: null,
+        deltaX: null,
+        deltaY: null,
+      });
+      expect(parsed.success).toBe(false);
+      if (parsed.success) throw new Error("expected command rejection");
+      expect(parsed.error.issues[0]?.path).toEqual(["type"]);
     });
 
     it("coerces missing cdpCallFunctionOn.argumentsJson to null rather than dropping the field", () => {
       expect(
-        parseBrowserViewCdpCommand({
+        browserViewIpcPayload.cdpCommand.parse({
           kind: "cdpCallFunctionOn",
           objectId: null,
           executionContextId: 1,
@@ -679,7 +684,7 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
 
     it("rejects non-JSON cdpCallFunctionOn arguments at the IPC boundary", () => {
       expect(() =>
-        parseBrowserViewCdpCommand({
+        browserViewIpcPayload.cdpCommand.parse({
           kind: "cdpCallFunctionOn",
           objectId: null,
           executionContextId: 1,

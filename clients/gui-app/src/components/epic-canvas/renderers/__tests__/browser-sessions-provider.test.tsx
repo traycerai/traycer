@@ -5,16 +5,15 @@ import { useState, type ReactNode } from "react";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-session-dock";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { resetElectronTabsForTests } from "@/lib/browser-view/electron-tabs";
-import type { DesktopElectronTabLifecycleBridge } from "@/lib/browser-view/desktop-browser-view";
+import type {
+  BrowserPrimaryProfileCaptureResult,
+  DesktopElectronTabLifecycleBridge,
+} from "@/lib/browser-view/desktop-browser-view";
 
 type StreamConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 type CaptureBridge = {
-  readonly capturePrimaryProfile: () => Promise<{
-    readonly status: "captured" | "unavailable";
-    readonly storageState: unknown;
-    readonly reason: string | null;
-  }>;
+  readonly capturePrimaryProfile: () => Promise<BrowserPrimaryProfileCaptureResult>;
 };
 
 const hookState = vi.hoisted(() => ({
@@ -338,6 +337,9 @@ function Probe(): ReactNode {
   return (
     <div>
       <span data-testid="lifecycle">{sessions.lifecycle}</span>
+      <span data-testid="inventory-ready">
+        {sessions.inventoryReady ? "ready" : "loading"}
+      </span>
       <span data-testid="count">{sessions.items.length}</span>
       <span data-testid="routing">{sessions.routingChatId ?? "null"}</span>
       <span data-testid="close-tab-status">{closeTabStatus}</span>
@@ -413,7 +415,19 @@ function installCaptureBridge(): void {
     Promise.resolve({
       status: "captured" as const,
       storageState: {
-        cookies: [{ name: "t09_auth", value: "signed-in" }],
+        cookies: [
+          {
+            name: "t09_auth",
+            value: "signed-in",
+            domain: "example.test",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax" as const,
+          },
+        ],
+        origins: [],
       },
       reason: null,
     }),
@@ -733,6 +747,31 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         sessionId: "sess-1",
       }),
     );
+  });
+
+  it("makes each stream inventory authoritative only after its snapshot", () => {
+    renderProvider("chat-alpha");
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
+    act(() => {
+      stream.emitStatus("open");
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
+
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("ready");
+
+    act(() => {
+      stream.emitStatus("reconnecting");
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
   });
 
   it("sends closeTab frames and settles them on actionAck", async () => {

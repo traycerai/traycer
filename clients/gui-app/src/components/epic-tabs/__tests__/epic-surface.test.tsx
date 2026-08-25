@@ -85,6 +85,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-session-dock", async () => {
     }) => {
       const value: BrowserSessionsState = {
         lifecycle: "live",
+        inventoryReady: true,
         items: readySessionsState.items,
         errorMessage: null,
         routingChatId: props.routingChatId,

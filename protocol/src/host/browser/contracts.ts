@@ -36,11 +36,8 @@ export const browserSessionStatusSchema = z.enum([
   "navigating",
   "closing",
   "crashed",
-  // Shared-browser-runtime ticket 01: a tab whose backing page has been
-  // suspended (host restart, capacity reclaim) but whose record persists for
-  // on-demand restore - see the persistence-and-lifecycle plan. No driver
-  // reports this today; it is carried on the wire ahead of the ticket that
-  // produces it so consumers can match on it now.
+  // A durable tab whose replaceable native/headless runtime is not currently
+  // attached. Its logical identity remains available for on-demand activation.
   "dormant",
 ]);
 export type BrowserSessionStatus = z.infer<typeof browserSessionStatusSchema>;
@@ -58,9 +55,9 @@ export type BrowserSessionClosedReason = z.infer<
 /**
  * Shared-browser-runtime ticket 01. The identity boundary a session's tabs
  * share: `"primary"` is the one shared, signed-in profile per host;
- * `"isolated"` is a throwaway profile with no carried-over identity. Every
- * session this ticket's consumers construct is `"primary"` - real isolated
- * profiles are the host-runtime-and-discovery plan's job.
+ * `"isolated"` is a private context that never inherits the host's primary
+ * identity. Profile kind controls credential sharing only; both kinds retain
+ * their logical session and tab identity across runtime suspension/restart.
  */
 export const browserSessionProfileKindSchema = z.enum(["primary", "isolated"]);
 export type BrowserSessionProfileKind = z.infer<
@@ -428,139 +425,172 @@ const cdpResultFrameFields = {
 
 export const browserCdpArgumentsJsonSchema = z.json().nullable();
 
+const cdpNavigateCommandSchema = z.object({
+  kind: z.literal("cdpNavigate"),
+  url: z.string().min(1),
+});
+const cdpCaptureScreenshotCommandSchema = z.object({
+  kind: z.literal("cdpCaptureScreenshot"),
+  format: z.enum(["png", "jpeg"]),
+  quality: z.number().int().min(0).max(100).nullable(),
+});
+const cdpGetFrameTreeCommandSchema = z.object({
+  kind: z.literal("cdpGetFrameTree"),
+});
+const cdpCreateIsolatedWorldCommandSchema = z.object({
+  kind: z.literal("cdpCreateIsolatedWorld"),
+  frameId: z.string(),
+  worldName: z.string(),
+  grantUniversalAccess: z.boolean(),
+});
+const cdpEvaluateCommandSchema = z.object({
+  kind: z.literal("cdpEvaluate"),
+  expression: z.string(),
+  awaitPromise: z.boolean(),
+  returnByValue: z.boolean(),
+  // Targets the isolated world from `cdpCreateIsolatedWorld`; null evaluates
+  // in the page's main world (CDP's own default when omitted).
+  contextId: z.number().int().nullable(),
+});
+const cdpCallFunctionOnCommandSchema = z.object({
+  kind: z.literal("cdpCallFunctionOn"),
+  // CDP addresses either a bound object or a free-standing execution context.
+  objectId: z.string().nullable(),
+  executionContextId: z.number().int().nullable(),
+  functionDeclaration: z.string(),
+  argumentsJson: browserCdpArgumentsJsonSchema.default(null),
+  returnByValue: z.boolean(),
+});
+const cdpReleaseObjectCommandSchema = z.object({
+  kind: z.literal("cdpReleaseObject"),
+  objectId: z.string(),
+});
+const cdpDispatchMouseEventCommandSchema = z.object({
+  kind: z.literal("cdpDispatchMouseEvent"),
+  type: z.enum(["mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"]),
+  x: z.number(),
+  y: z.number(),
+  button: z.enum(["left", "right", "middle", "none"]).nullable(),
+  clickCount: z.number().int().nonnegative().nullable(),
+  deltaX: z.number().nullable(),
+  deltaY: z.number().nullable(),
+});
+const cdpInsertTextCommandSchema = z.object({
+  kind: z.literal("cdpInsertText"),
+  text: z.string(),
+});
+const cdpDispatchKeyEventCommandSchema = z.object({
+  kind: z.literal("cdpDispatchKeyEvent"),
+  type: z.enum(["keyDown", "keyUp", "rawKeyDown", "char"]),
+  key: z.string().nullable(),
+  code: z.string().nullable(),
+  text: z.string().nullable(),
+  modifiers: z.number().int().nullable().default(null),
+  unmodifiedText: z.string().nullable().default(null),
+  windowsVirtualKeyCode: z.number().int().nullable().default(null),
+  location: z.number().int().nonnegative().nullable().default(null),
+  isKeypad: z.boolean().nullable().default(null),
+  autoRepeat: z.boolean().nullable().default(null),
+  commands: z.array(z.string()).nullable().default(null),
+});
+const cdpSetDeviceMetricsOverrideCommandSchema = z.object({
+  kind: z.literal("cdpSetDeviceMetricsOverride"),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  deviceScaleFactor: z.number().positive(),
+  mobile: z.boolean(),
+});
+const cdpSetAutoAttachCommandSchema = z.object({
+  kind: z.literal("cdpSetAutoAttach"),
+  autoAttach: z.boolean(),
+  waitForDebuggerOnStart: z.boolean(),
+});
+const cdpDescribeNodeCommandSchema = z.object({
+  kind: z.literal("cdpDescribeNode"),
+  objectId: z.string(),
+  depth: z.number().int().nullable(),
+  pierce: z.boolean(),
+});
+const cdpGetFullAXTreeCommandSchema = z.object({
+  kind: z.literal("cdpGetFullAXTree"),
+  depth: z.number().int().nullable(),
+});
+
+/** Address-free CDP vocabulary shared by every browser runtime. */
+export const browserCdpCommandSchema = z.discriminatedUnion("kind", [
+  cdpNavigateCommandSchema,
+  cdpCaptureScreenshotCommandSchema,
+  cdpGetFrameTreeCommandSchema,
+  cdpCreateIsolatedWorldCommandSchema,
+  cdpEvaluateCommandSchema,
+  cdpCallFunctionOnCommandSchema,
+  cdpReleaseObjectCommandSchema,
+  cdpDispatchMouseEventCommandSchema,
+  cdpInsertTextCommandSchema,
+  cdpDispatchKeyEventCommandSchema,
+  cdpSetDeviceMetricsOverrideCommandSchema,
+  cdpSetAutoAttachCommandSchema,
+  cdpDescribeNodeCommandSchema,
+  cdpGetFullAXTreeCommandSchema,
+]);
+export type BrowserCdpCommand = z.infer<typeof browserCdpCommandSchema>;
+
 const browserSessionsServerFrameSchemaV13 = z.discriminatedUnion("kind", [
   ...browserSessionsServerFrameSchemaV12.def.options,
-  z.object({
-    kind: z.literal("cdpNavigate"),
-    ...cdpRequestFrameFields,
-    url: z.string().min(1),
-  }),
-  z.object({
-    kind: z.literal("cdpCaptureScreenshot"),
-    ...cdpRequestFrameFields,
-    format: z.enum(["png", "jpeg"]),
-    quality: z.number().int().min(0).max(100).nullable(),
-  }),
-  z.object({
-    kind: z.literal("cdpGetFrameTree"),
-    ...cdpRequestFrameFields,
-  }),
-  // Spike step 2: an isolated world INSIDE the observed page (e.g.
-  // `__aside_utility`), distinct from - and unrelated to - wherever ticket
-  // 06 ultimately puts the cell-runner's own blank page. This is needed
-  // regardless of that unresolved decision.
-  z.object({
-    kind: z.literal("cdpCreateIsolatedWorld"),
-    ...cdpRequestFrameFields,
-    frameId: z.string(),
-    worldName: z.string(),
-    grantUniversalAccess: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("cdpEvaluate"),
-    ...cdpRequestFrameFields,
-    expression: z.string(),
-    awaitPromise: z.boolean(),
-    returnByValue: z.boolean(),
-    // Targets the isolated world from `cdpCreateIsolatedWorld`; null
-    // evaluates in the page's main world (CDP's own default when omitted).
-    contextId: z.number().int().nullable(),
-  }),
-  z.object({
-    kind: z.literal("cdpCallFunctionOn"),
-    ...cdpRequestFrameFields,
-    // CDP's `Runtime.callFunctionOn` addresses either a bound object
-    // (`objectId`) or a free-standing execution context
-    // (`executionContextId`) - exactly one of these two must be non-null.
-    // The free-standing form is what step 4 needs: calling
-    // `globalThis.__aside.takeSnapshot` isn't bound to any particular
-    // object, it's a global function inside the isolated world.
-    objectId: z.string().nullable(),
-    executionContextId: z.number().int().nullable(),
-    functionDeclaration: z.string(),
-    // Opaque JSON blob (CDP `CallArgument[]`). Same rationale as
-    // `promoteState.storageState` above: structurally typing every possible
-    // CDP call argument would be breaking to tighten later, and the host and
-    // renderer both validate at their own boundaries.
-    argumentsJson: browserCdpArgumentsJsonSchema,
-    returnByValue: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("cdpReleaseObject"),
-    ...cdpRequestFrameFields,
-    objectId: z.string(),
-  }),
-  z.object({
-    kind: z.literal("cdpDispatchMouseEvent"),
-    ...cdpRequestFrameFields,
-    type: z.enum(["mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"]),
-    x: z.number(),
-    y: z.number(),
-    button: z.enum(["left", "right", "middle", "none"]).nullable(),
-    clickCount: z.number().int().nonnegative().nullable(),
-    deltaX: z.number().nullable(),
-    deltaY: z.number().nullable(),
-  }),
-  z.object({
-    kind: z.literal("cdpInsertText"),
-    ...cdpRequestFrameFields,
-    text: z.string(),
-  }),
-  z.object({
-    kind: z.literal("cdpDispatchKeyEvent"),
-    ...cdpRequestFrameFields,
-    type: z.enum(["keyDown", "keyUp", "rawKeyDown", "char"]),
-    key: z.string().nullable(),
-    code: z.string().nullable(),
-    text: z.string().nullable(),
-    modifiers: z.number().int().nullable().default(null),
-    unmodifiedText: z.string().nullable().default(null),
-    windowsVirtualKeyCode: z.number().int().nullable().default(null),
-    location: z.number().int().nonnegative().nullable().default(null),
-    isKeypad: z.boolean().nullable().default(null),
-    autoRepeat: z.boolean().nullable().default(null),
-    commands: z.array(z.string()).nullable().default(null),
-  }),
-  z.object({
-    kind: z.literal("cdpSetDeviceMetricsOverride"),
-    ...cdpRequestFrameFields,
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
-    deviceScaleFactor: z.number().positive(),
-    mobile: z.boolean(),
-  }),
-  // Session discovery for OOPIF/worker composition (ticket 04, per the
-  // snapshot-serializer spike): `enableAfterCommit` already issues this
-  // automatically for the root session on attach, so this exists for
-  // explicit host-issued control - most concretely, re-arming auto-attach on
-  // a child session so grandchild targets (nested OOPIFs) also flatten in,
-  // which `handleTargetAttached`'s per-child enable of Runtime/Log/Network
-  // does not itself do.
-  z.object({
-    kind: z.literal("cdpSetAutoAttach"),
-    ...cdpRequestFrameFields,
-    autoAttach: z.boolean(),
-    waitForDebuggerOnStart: z.boolean(),
-  }),
-  z.object({
-    kind: z.literal("cdpDescribeNode"),
-    ...cdpRequestFrameFields,
-    objectId: z.string(),
-    // null omits CDP's `depth` param entirely (its own default is 1, i.e.
-    // immediate children only); the frame-composition use case only reads
-    // `frameId` off the root description, so callers rarely need more.
-    depth: z.number().int().nullable(),
-    pierce: z.boolean(),
-  }),
-  // Spike step 7 (ground truth for our own byte-identical-output comparison
-  // tests, e.g. ticket 05's cross-runtime parity assertions) - not part of
-  // the production snapshot path itself.
-  z.object({
-    kind: z.literal("cdpGetFullAXTree"),
-    ...cdpRequestFrameFields,
-    depth: z.number().int().nullable(),
-  }),
+  cdpNavigateCommandSchema.extend(cdpRequestFrameFields),
+  cdpCaptureScreenshotCommandSchema.extend(cdpRequestFrameFields),
+  cdpGetFrameTreeCommandSchema.extend(cdpRequestFrameFields),
+  cdpCreateIsolatedWorldCommandSchema.extend(cdpRequestFrameFields),
+  cdpEvaluateCommandSchema.extend(cdpRequestFrameFields),
+  cdpCallFunctionOnCommandSchema.extend(cdpRequestFrameFields),
+  cdpReleaseObjectCommandSchema.extend(cdpRequestFrameFields),
+  cdpDispatchMouseEventCommandSchema.extend(cdpRequestFrameFields),
+  cdpInsertTextCommandSchema.extend(cdpRequestFrameFields),
+  cdpDispatchKeyEventCommandSchema.extend(cdpRequestFrameFields),
+  cdpSetDeviceMetricsOverrideCommandSchema.extend(cdpRequestFrameFields),
+  cdpSetAutoAttachCommandSchema.extend(cdpRequestFrameFields),
+  cdpDescribeNodeCommandSchema.extend(cdpRequestFrameFields),
+  cdpGetFullAXTreeCommandSchema.extend(cdpRequestFrameFields),
 ]);
+
+/**
+ * Semantic storage-state contract used on both sides of opaque JSON frames.
+ * The wire remains opaque so a malformed capture can degrade independently
+ * without rejecting its lifecycle frame; consumers parse this schema before
+ * using the value. Zod's default unknown-key stripping keeps additive fields
+ * forward-compatible.
+ */
+export const browserStorageCookieSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+  domain: z.string(),
+  path: z.string(),
+  expires: z.number(),
+  httpOnly: z.boolean(),
+  secure: z.boolean(),
+  sameSite: z.enum(["Strict", "Lax", "None"]),
+});
+export type BrowserStorageCookie = z.infer<typeof browserStorageCookieSchema>;
+
+export const browserStorageLocalStorageEntrySchema = z.object({
+  name: z.string(),
+  value: z.string(),
+});
+export type BrowserStorageLocalStorageEntry = z.infer<
+  typeof browserStorageLocalStorageEntrySchema
+>;
+
+export const browserStorageOriginSchema = z.object({
+  origin: z.string(),
+  localStorage: z.array(browserStorageLocalStorageEntrySchema),
+});
+export type BrowserStorageOrigin = z.infer<typeof browserStorageOriginSchema>;
+
+export const browserStorageStateSchema = z.object({
+  cookies: z.array(browserStorageCookieSchema),
+  origins: z.array(browserStorageOriginSchema),
+});
+export type BrowserStorageState = z.infer<typeof browserStorageStateSchema>;
 
 /**
  * Ticket 09 - borrowed-tile attachment (`browser.sessions@1.4`).
@@ -713,86 +743,6 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
 export type BrowserSessionsServerFrame = z.infer<
   typeof browserSessionsServerFrameSchema
 >;
-
-/**
- * Address-free CDP vocabulary shared by every browser runtime. Transport
- * envelopes pair it with either a native tab or a borrowed canvas tile.
- */
-export type BrowserCdpCommand =
-  | { readonly kind: "cdpNavigate"; readonly url: string }
-  | {
-      readonly kind: "cdpCaptureScreenshot";
-      readonly format: "png" | "jpeg";
-      readonly quality: number | null;
-    }
-  | { readonly kind: "cdpGetFrameTree" }
-  | {
-      readonly kind: "cdpCreateIsolatedWorld";
-      readonly frameId: string;
-      readonly worldName: string;
-      readonly grantUniversalAccess: boolean;
-    }
-  | {
-      readonly kind: "cdpEvaluate";
-      readonly expression: string;
-      readonly awaitPromise: boolean;
-      readonly returnByValue: boolean;
-      readonly contextId: number | null;
-    }
-  | {
-      readonly kind: "cdpCallFunctionOn";
-      readonly objectId: string | null;
-      readonly executionContextId: number | null;
-      readonly functionDeclaration: string;
-      readonly argumentsJson: z.infer<typeof browserCdpArgumentsJsonSchema>;
-      readonly returnByValue: boolean;
-    }
-  | { readonly kind: "cdpReleaseObject"; readonly objectId: string }
-  | {
-      readonly kind: "cdpDispatchMouseEvent";
-      readonly type:
-        "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel";
-      readonly x: number;
-      readonly y: number;
-      readonly button: "left" | "right" | "middle" | "none" | null;
-      readonly clickCount: number | null;
-      readonly deltaX: number | null;
-      readonly deltaY: number | null;
-    }
-  | { readonly kind: "cdpInsertText"; readonly text: string }
-  | {
-      readonly kind: "cdpDispatchKeyEvent";
-      readonly type: "keyDown" | "keyUp" | "rawKeyDown" | "char";
-      readonly key: string | null;
-      readonly code: string | null;
-      readonly text: string | null;
-      readonly modifiers: number | null;
-      readonly unmodifiedText: string | null;
-      readonly windowsVirtualKeyCode: number | null;
-      readonly location: number | null;
-      readonly isKeypad: boolean | null;
-      readonly autoRepeat: boolean | null;
-      readonly commands: readonly string[] | null;
-    }
-  | {
-      readonly kind: "cdpSetDeviceMetricsOverride";
-      readonly width: number;
-      readonly height: number;
-      readonly deviceScaleFactor: number;
-      readonly mobile: boolean;
-    }
-  | {
-      readonly kind: "cdpSetAutoAttach";
-      readonly autoAttach: boolean;
-      readonly waitForDebuggerOnStart: boolean;
-    }
-  | {
-      readonly kind: "cdpDescribeNode";
-      readonly objectId: string;
-      readonly depth: number | null;
-      readonly pierce: boolean;
-    }
-  | { readonly kind: "cdpGetFullAXTree"; readonly depth: number | null };
 
 export type BrowserCdpResult =
   | {
