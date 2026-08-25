@@ -298,13 +298,26 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // cause. `null` (nobody has reached the registry, including after a
   // `signed-out` clear while auth settles) skips the pass entirely.
   //
-  // `directoryHostIds` is the TRIGGER, not the input - a committed listing
-  // emits, which invalidates the query and re-runs this.
+  // An ANSWERED empty fleet is knowledge and DOES prune, deliberately - it is
+  // how a single-host account deregisters, and `dropsAsOutsideFleet` in
+  // `selection-authority-engine` documents that asymmetry as the considered
+  // answer: gate on whether the port answered, never on `length === 0`. The
+  // empty-fleet guard belongs to `clearPreferredOutsideFleet`, whose subject is
+  // a PREFERENCE - destroying one on a non-answer is unrecoverable. A tombstone
+  // is evidence, and it prunes with the evidence rule.
+  //
+  // `directoryHostIds` is a TRIGGER, not the input - a committed listing emits,
+  // which invalidates the query and re-runs this. `pendingKills` is the other
+  // trigger: closing a tab whose host had already left the account changes
+  // neither the binding nor the rows, so without it the new tombstone would
+  // wait for an unrelated directory change. Pruning rewrites `pendingKills` and
+  // re-enters once; the second pass finds nothing to drop and
+  // `retainPendingKillsForHosts` returns the same state, so it settles there.
   useEffect(() => {
     const settledFleet = binding?.directory.settledFleetHostIds() ?? null;
     if (settledFleet === null) return;
     useLandingTerminalStore.getState().retainPendingKillsForHosts(settledFleet);
-  }, [binding, directoryHostIds]);
+  }, [binding, directoryHostIds, pendingKills]);
 
   useEffect(() => {
     const entries = directory.data ?? [];

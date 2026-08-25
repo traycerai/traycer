@@ -657,4 +657,59 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
   });
+
+  it("collects a tombstone recorded after the fleet already settled", async () => {
+    // The trigger gap. Closing a tab whose host had already left the account
+    // moves neither the binding nor the directory rows, so a GC keyed on those
+    // alone would leave the tombstone - and the authority probe it keeps
+    // mounted - resting until something unrelated happened to change.
+    mocks.entries = [offlineHost];
+    mocks.settledFleet.current = new Set(["host-b"]);
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      useLandingTerminalStore.getState().addTab({
+        instanceId: "late-tab",
+        sessionId: "session-late",
+        hostId: "host-gone",
+        cwd: "/workspace/project",
+        name: "project",
+        titleSource: "default",
+      });
+      useLandingTerminalStore.getState().closeTab("landing-page", "late-tab");
+    });
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    });
+  });
+
+  it("prunes against an ANSWERED empty fleet, which is how a single-host account deregisters", async () => {
+    // Deliberate, and the asymmetry is documented rather than accidental:
+    // `dropsAsOutsideFleet` gates on whether the port ANSWERED, never on
+    // `length === 0`, because keying on emptiness is precisely what lets the
+    // one-host account that just deregistered keep its evidence alive forever.
+    // The empty-fleet guard belongs to `clearPreferredOutsideFleet`, whose
+    // subject is a preference - destroying one on a non-answer is
+    // unrecoverable. A tombstone is evidence and prunes with the evidence rule.
+    mocks.entries = [];
+    mocks.settledFleet.current = new Set();
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "solo-tab",
+      sessionId: "session-solo",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "solo-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+    });
+  });
 });
