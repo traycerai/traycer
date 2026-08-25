@@ -3947,16 +3947,18 @@ describe("<HarnessModelPicker />", () => {
     it("leaves the search alone on a coarse pointer", async () => {
       stubCoarsePointer(true);
       renderPicker(undefined);
+      // A real pointer press focuses the trigger before the popover opens;
+      // jsdom's synthetic click does not, and the trigger holding focus is
+      // exactly what makes declining safe rather than stranding.
+      screen.getByRole("button", { name: /^GPT-5\.5/ }).focus();
       const input = await openPicker();
 
       expect(document.activeElement).not.toBe(input);
       // Declining strands nothing here: the trigger is a still-mounted button
       // in the composer toolbar, and closing restores the composer's caret.
-      expect(
-        screen.getByRole("button", { name: /^GPT-5\.5/ }).contains(
-          document.activeElement,
-        ) || document.activeElement === document.body,
-      ).toBe(true);
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^GPT-5\.5/ }),
+      );
     });
   });
 });
