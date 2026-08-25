@@ -3472,7 +3472,26 @@ export function createOpenEpicStore(
               // does not strictly exceed what is held is an older version of
               // that row, and overwriting with it would regress a push the
               // client has already shown.
-              if (held !== undefined && row.revision <= held.revision) continue;
+              //
+              // EXCEPT doc-resident over doc-resident, which the test cannot
+              // judge. A doc row has no registry seq to carry, so it ships at
+              // `revision: 0` on EVERY answer - `0 <= 0` would reject each
+              // refresh and freeze that agent at whatever the first answer of
+              // the session said, for the life of the session. Under `@2` that
+              // row is its only source, so the freeze hides a peer-host rename,
+              // reparent and archive alike.
+              //
+              // Narrow, and in one direction only. The guard still applies the
+              // moment either side is registry-backed: a doc row at 0 can never
+              // clobber an adopted registry row (`0 <= n`), and an adopted row
+              // still replaces the frozen copy (`n <= 0` is false). What is
+              // waived is only the comparison between two rows that both carry
+              // a placeholder, where the later answer is newer by construction
+              // because it is a fresher read of the same map.
+              if (held !== undefined) {
+                const bothDocResident = held.docResident && row.docResident;
+                if (!bothDocResident && row.revision <= held.revision) continue;
+              }
               tuiAgentRecordRows.set(id, row);
               tuiAgentIngestSeq += 1;
               tuiAgentRowSeq.set(id, tuiAgentIngestSeq);

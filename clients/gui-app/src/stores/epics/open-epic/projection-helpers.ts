@@ -767,6 +767,28 @@ export function unionChatsSlice(
   return { byId, allIds };
 }
 
+/**
+ * Whether this build projects an epic-doc replica at all - i.e. whether
+ * {@link projectTerminalAgentsSlice} below has a document to read.
+ *
+ * `true` for as long as the renderer subscribes at `epic.subscribe@1`, which
+ * is every build up to and including the one that lands the `@2` client.
+ *
+ * It is a REQUEST FIELD, not a local detail: `epic.listTuiAgents@1.1` serves
+ * the doc-resident remainder only to a caller that declares `false`, because a
+ * caller with a replica already holds those entries live and a second
+ * poll-stale copy only gives its union a conflict to resolve. The host cannot
+ * derive this - `epic.subscribe`'s major is negotiated independently of
+ * `epic.listTuiAgents`' minor - so this constant is the whole answer.
+ *
+ * FLIP IT IN THE SAME CHANGE THAT DELETES THE DOC ARM. Leaving it `true` past
+ * that point costs the doc-resident agents their only remaining source (the
+ * `@1` behaviour this minor exists to replace); flipping it early costs the
+ * duplicate-row conflict. `true` is the safe end of that trade, which is why
+ * it is the value that ships until the doc arm is actually gone.
+ */
+export const GUI_PROJECTS_EPIC_DOC_REPLICA = true;
+
 function projectTerminalAgentsSlice(
   doc: Y.Doc,
   currentUserId: string | null,
@@ -902,6 +924,22 @@ export function terminalAgentSlicesEq(
  * entries), so an overlap means the doc's copy is a frozen pre-migration
  * mirror. There is no `settings`-style doc-only field to preserve: the row
  * carries the full record.
+ *
+ * ## `@1.1` nearly broke that, and record-wins is only safe because it does not
+ *
+ * `epic.listTuiAgents@1.1` serves the doc-resident remainder as ROWS. Were
+ * those rows to reach a client that still projects a doc, the overlap would be
+ * DELIBERATE and the premise above would invert: the record is the host's
+ * poll-time re-read, while this client's doc entry is the live one it just
+ * wrote to. Record-wins would then discard the fresher side, and a reparent of
+ * such an agent would snap back to its old parent on the next projection.
+ *
+ * That cannot happen, and not by luck: the caller declares
+ * `hasDocReplica` on the request (see `GUI_PROJECTS_EPIC_DOC_REPLICA`) and the
+ * host serves the remainder only when it is `false` - i.e. only to a client
+ * with no doc arm for these rows to collide with. Keep that request field
+ * honest and record-wins stays correct; set it to `false` while still
+ * projecting a doc and this function is where the damage lands.
  *
  * NO display filter here, unlike the chats' union: the host serves the
  * CALLER'S OWN rows only (structurally owner-private, per the contract), and

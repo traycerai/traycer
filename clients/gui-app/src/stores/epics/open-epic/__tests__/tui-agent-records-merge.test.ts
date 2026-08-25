@@ -287,6 +287,131 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     );
   });
 
+  it("refreshes a doc-resident row on a later answer at the same revision: 0", () => {
+    // H1: `tuiAgentRecordSummaryOfDocEntry` hardcodes every doc-resident row to
+    // `revision: 0` on EVERY answer, because a doc entry has no registry seq
+    // to report. The ordinary revision guard ("apply only when strictly
+    // greater") would then reject every refresh of a doc-resident row against
+    // itself - `0 <= 0` - freezing it at whatever the session's first answer
+    // said, for the life of the session (H1 in the cold review). The two
+    // titles below are the only way to observe the freeze: an unfixed guard
+    // keeps "First poll" forever.
+    //
+    // Ablation: drop the `bothDocResident` waiver back to a bare
+    // `row.revision <= held.revision` and this fails - the second answer's
+    // title never lands.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: true,
+          revision: 0,
+          title: "First poll",
+        }),
+      ],
+      null,
+    );
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
+      "First poll",
+    );
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: true,
+          revision: 0,
+          title: "Second poll",
+        }),
+      ],
+      null,
+    );
+    expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
+      "Second poll",
+    );
+  });
+
+  it("still blocks a doc-resident row at revision 0 from clobbering a held registry row", () => {
+    // The H1 waiver is narrow: it applies ONLY when both the held row and the
+    // incoming row are doc-resident. A held REGISTRY row (revision >= 1) must
+    // still win against a doc row at revision 0 - the ordinary guard, not the
+    // waiver, governs this pair.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: false,
+          revision: 3,
+          title: "Registry row",
+        }),
+      ],
+      null,
+    );
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: true,
+          revision: 0,
+          title: "Stale doc copy",
+        }),
+      ],
+      null,
+    );
+
+    const held = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(held.title).toBe("Registry row");
+    expect(held.docResident).toBe(false);
+  });
+
+  it("still lets adoption replace a held doc-resident row at revision 0 with a real registry row", () => {
+    // The other direction the waiver must not break: the adoption path
+    // (`converges a frozen doc-resident row...` below) is a registry row
+    // (revision >= 1) replacing a held DOC row at 0 - that must keep working,
+    // since it is not a doc-over-doc comparison and the ordinary guard
+    // (`0 <= n` is false) already lets it through.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: true,
+          revision: 0,
+          title: "Frozen (doc-resident)",
+        }),
+      ],
+      null,
+    );
+
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: false,
+          revision: 1,
+          title: "Adopted (registry)",
+        }),
+      ],
+      null,
+    );
+
+    const held = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(held.title).toBe("Adopted (registry)");
+    expect(held.docResident).toBe(false);
+  });
+
   it("keeps a retraction absorbing across the merge", () => {
     // `tuiRemove` is the explicit deletion signal and outranks every later
     // answer for the session - the merge must not become a way back in.

@@ -54,10 +54,25 @@ import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/workt
  * simply stop existing for the user. `@1.1` is that union: registry rows plus
  * the doc-resident remainder, each row saying which side it came from.
  *
- * Emission is gated on the NEGOTIATED version, never post-filtered: a `@1.0`
- * caller gets byte-identical `@1.0` behaviour, because it still has a doc and
- * sending it doc rows would be both redundant and indistinguishable from
- * registry rows once `docResident` is stripped.
+ * ## The gate is the CALLER'S declaration, not its version
+ *
+ * Serving the remainder is correct for a caller that has no doc replica and
+ * WRONG for one that does - it duplicates rows the caller already holds, and
+ * the client's union then has to choose between its live doc entry and this
+ * host's poll-time copy of the same entry. That choice has no good answer.
+ *
+ * The first cut gated on `epic.listTuiAgents`' own negotiated minor, which
+ * CANNOT ANSWER THE QUESTION: whether a caller holds a replica is decided by
+ * `epic.subscribe`'s negotiated MAJOR, a different method negotiated
+ * independently on the same connection. A renderer that speaks
+ * `listTuiAgents@1.1` while still subscribing at `@1` is not hypothetical - it
+ * is every build between this change and the `@2` client landing, and it took
+ * both halves of a cold review to see it.
+ *
+ * So `@1.1` grows its REQUEST instead: the caller states whether it has a doc
+ * replica, and the host serves the remainder only when it does not. The client
+ * is the only party that knows, and a fact it declares cannot drift out of
+ * step with a version it negotiated elsewhere.
  */
 export const listTuiAgentsRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -163,19 +178,52 @@ export type ListTuiAgentsResponseV11 = z.infer<
   typeof listTuiAgentsResponseV11Schema
 >;
 
+/**
+ * The `@1.1` request: the `@1.0` request plus the caller's own answer to the
+ * only question that decides what this method should serve.
+ *
+ * `hasDocReplica: true` means the caller still holds a live epic-doc replica
+ * (it subscribed at `epic.subscribe@1`) and therefore already sees every
+ * doc-resident entry, continuously, without this method's help. It gets
+ * registry rows only - exactly `@1.0` content.
+ *
+ * `false` means it has no replica (`epic.subscribe@2`), so the doc-resident
+ * remainder reaches it here or nowhere.
+ *
+ * REQUIRED, not optional: a `@1.1` caller always knows this about itself, and
+ * an absent field would have to be given a default - which is precisely the
+ * host-side guess this field exists to remove.
+ */
+export const listTuiAgentsRequestV11Schema = listTuiAgentsRequestSchema.extend({
+  hasDocReplica: z.boolean(),
+});
+export type ListTuiAgentsRequestV11 = z.infer<
+  typeof listTuiAgentsRequestV11Schema
+>;
+
 export const epicListTuiAgentsV11 = defineRpcContract({
   method: "epic.listTuiAgents",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: listTuiAgentsRequestSchema,
+  requestSchema: listTuiAgentsRequestV11Schema,
   responseSchema: listTuiAgentsResponseV11Schema,
 });
 
 /**
- * `false` is the only correct fill, and it is a fact rather than a default: a
- * host serving `@1.0` returns REGISTRY ROWS ONLY by construction, so every row
- * an older host can produce is registry-backed. A `@1.1` client reading an
- * older host still has to union that host's doc map itself - the upgrade path
- * cannot invent rows the wire never carried, and must not pretend it did.
+ * Both fills are FACTS about a `@1.0` peer, not defaults - which is what makes
+ * the upgraded value safe to act on rather than merely well-typed.
+ *
+ * REQUEST, `hasDocReplica: true`: a caller that speaks only `@1.0` predates
+ * `epic.subscribe@2` entirely - `@1.1` and the `@2` stream line ship in the
+ * same `@traycer/protocol`, so there is no build that has one without the
+ * other. It therefore holds a doc replica, and the host must serve it registry
+ * rows only. A wrong guess here would hand the oldest clients in the fleet the
+ * duplicate-row conflict this whole minor exists to avoid.
+ *
+ * RESPONSE, `docResident: false`: a host serving `@1.0` returns REGISTRY ROWS
+ * ONLY by construction, so every row an older host can produce is
+ * registry-backed. A `@1.1` client reading an older host still has to union
+ * that host's doc map itself - the upgrade path cannot invent rows the wire
+ * never carried, and must not pretend it did.
  */
 export const epicListTuiAgentsUpgradeV10ToV11 = defineUpgradePath<
   typeof epicListTuiAgentsV10,
@@ -183,7 +231,7 @@ export const epicListTuiAgentsUpgradeV10ToV11 = defineUpgradePath<
 >({
   from: epicListTuiAgentsV10.schemaVersion,
   to: epicListTuiAgentsV11.schemaVersion,
-  upgradeRequest: (request) => request,
+  upgradeRequest: (request) => ({ ...request, hasDocReplica: true }),
   upgradeResponse: (response) => ({
     ...response,
     tuiAgents: response.tuiAgents.map((row) => ({

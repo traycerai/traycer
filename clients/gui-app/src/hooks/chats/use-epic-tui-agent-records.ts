@@ -6,6 +6,7 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projection-helpers";
 import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 
 /**
@@ -63,7 +64,14 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // yet) gates the query off through `useHostQuery`'s own null handling.
   const client = useEpicSessionHostClient();
   const handle = useMaybeOpenEpicHandle();
-  const params = useMemo(() => ({ epicId }), [epicId]);
+  // `hasDocReplica` decides whether the host serves the doc-resident
+  // remainder - see `GUI_PROJECTS_EPIC_DOC_REPLICA`. Declared by us because
+  // only we know it: the host would have to infer it from `epic.subscribe`'s
+  // negotiated major, which this method's own version cannot see.
+  const params = useMemo(
+    () => ({ epicId, hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA }),
+    [epicId],
+  );
   // Viewer-scoped: the response is one identity's own terminal agents, so two
   // users on one installation must never share a cache slot.
   const viewerUserId = useCloudChatViewerId();

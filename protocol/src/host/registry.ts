@@ -6240,18 +6240,29 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: epicListTuiAgentsV11,
           upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV10ToV11,
-          // NO `responseGrowthProjectionGated` here, and the reason is worth
-          // stating because the instinct to add it is strong: 1.1 does return
-          // MORE ROWS than 1.0 (the doc-resident remainder), and that growth
-          // IS emission-gated on the negotiated version in the resolver.
+          // 1.1 grows BOTH halves, and only the request half needs anything
+          // from this table.
+          //
+          // REQUEST: `hasDocReplica` is required at 1.1, and the upgrade path
+          // fills it for a 1.0 caller. That fill is load-bearing rather than
+          // cosmetic - it is what decides whether the caller is served the
+          // doc-resident rows at all - and it is safe because the dispatcher
+          // validates params against the NEGOTIATED contract and hands the
+          // resolver the upgraded value, so a 1.0 peer can neither send the
+          // field nor be read as having sent one. Same shape as
+          // `epic.subscribe@1.3`'s `seedOffer`.
+          //
+          // RESPONSE: NO `responseGrowthProjectionGated`, and the reason is
+          // worth stating because the instinct to add it is strong: 1.1 does
+          // return MORE ROWS than 1.0 (the doc-resident remainder).
           //
           // But that annotation is not about rows. It covers response VALUE
           // growth an older peer's schema would actively REFUSE - a new enum
           // member, a new union arm. `docResident` is a plain added object
           // key, which zod strips unconditionally, so 1.0 is safe with no
           // gate to declare. Row COUNT is not something the validator can see
-          // at all; the resolver's `ctx.schemaVersion.minor < 1` early return
-          // is the entire mechanism, and it needs no registry annotation.
+          // at all; the resolver's request-driven gate is the entire
+          // mechanism, and it needs no registry annotation.
           //
           // Declaring it anyway is not inert: `assertSchemaCompatibility`
           // rejects an annotation it cannot justify, and it runs at MODULE
