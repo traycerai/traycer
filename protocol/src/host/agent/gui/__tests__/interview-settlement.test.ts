@@ -841,6 +841,41 @@ describe("payload ownership", () => {
     expect(runtime.block.outcome).toBe("answered");
   });
 
+  it("lets later runtime evidence fill an empty runtime settlement without replacing its authority", () => {
+    const empty = reduce(
+      streamingBlock(),
+      runtimeAnswered("runtime-empty", [], 10),
+    );
+    const filled = reduce(
+      empty.block,
+      runtimeAnswered("runtime-filled", [makeAnswer(["lodash"])], 20),
+    );
+
+    expect(filled.block.answers).toEqual([makeAnswer(["lodash"])]);
+    expect(filled.block.settlement).toEqual({
+      settlementId: "runtime-empty",
+      source: "runtime",
+    });
+    expect(filled.block.outcome).toBe("answered");
+  });
+
+  it("keeps the first non-empty runtime payload when later runtime evidence conflicts", () => {
+    const first = reduce(
+      streamingBlock(),
+      runtimeAnswered("runtime-first", [makeAnswer(["date-fns"])], 10),
+    );
+    const conflicting = reduce(
+      first.block,
+      runtimeAnswered("runtime-second", [makeAnswer(["lodash"])], 20),
+    );
+
+    expect(conflicting.block.answers).toEqual([makeAnswer(["date-fns"])]);
+    expect(conflicting.block.settlement).toEqual({
+      settlementId: "runtime-first",
+      source: "runtime",
+    });
+  });
+
   it("is a strict no-op when the same settlementId is replayed with an altered payload", () => {
     const first = reduce(streamingBlock(), guiAnswered(10));
     const replay = applyInterviewSettlement(first.block, {

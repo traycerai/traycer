@@ -50,7 +50,7 @@ export function draftFromStoredAnswer(
   if (stored === undefined) return emptyDraft();
   const storedIndices = stored.selectedOptionIndices;
   const exactIndices =
-    storedIndices === undefined
+    storedIndices === undefined || stored.questionId !== question.questionId
       ? null
       : (() => {
           const indices = [...new Set(storedIndices)].filter(
@@ -98,6 +98,9 @@ export function draftToStoredAnswer(
   question: InterviewQuestion,
 ): StoredInterviewDraftAnswer {
   return {
+    ...(question.questionId === null
+      ? {}
+      : { questionId: question.questionId }),
     selected: [...draft.selected].flatMap((index) => {
       const option = question.options.at(index);
       return option === undefined ? [] : [option.label];

@@ -31,6 +31,7 @@ describe("draftFromStoredAnswer", () => {
   it("falls back to saved labels when option indices now name different labels", () => {
     const restored = draftFromStoredAnswer(
       {
+        questionId: "q1",
         selected: ["Alpha"],
         selectedOptionIndices: [0],
         otherSelected: false,
@@ -40,6 +41,22 @@ describe("draftFromStoredAnswer", () => {
     );
 
     expect([...restored.selected]).toEqual([1]);
+  });
+
+  it("does not treat indices from a different question as exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        questionId: "original-question",
+        selected: ["Yes"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("replacement-question", "Different prompt", ["Yes", "No"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
   });
 });
 
@@ -720,12 +737,14 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
+            questionId: "q1",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: true,
           },
           {
+            questionId: "q2",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
@@ -783,6 +802,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
+            questionId: "only",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
@@ -922,12 +942,14 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 0,
         answers: [
           {
+            questionId: "q1",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: false,
           },
           {
+            questionId: "q2",
             selected: ["Gamma"],
             selectedOptionIndices: [0],
             otherText: "",
@@ -994,18 +1016,21 @@ describe("PendingInterviewCard keyboard navigation", () => {
         pageIndex: 2,
         answers: [
           {
+            questionId: "q1",
             selected: ["Alpha"],
             selectedOptionIndices: [0],
             otherText: "",
             otherSelected: false,
           },
           {
+            questionId: "q2",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",
             otherSelected: false,
           },
           {
+            questionId: "q3",
             selected: [],
             selectedOptionIndices: [],
             otherText: "",

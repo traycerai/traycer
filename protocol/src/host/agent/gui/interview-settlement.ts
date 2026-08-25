@@ -518,6 +518,19 @@ export function applyInterviewSettlement(
   // for adapter noise.
   const wins = !alreadyApplied && settlementWins(block, settlement);
 
+  // Runtime adapters may first emit a structurally valid but empty resolution
+  // and later provide the actual answers. Preserve the first settlement's
+  // authority/identity, but allow this one monotone payload repair. It cannot
+  // replace non-empty content, cross GUI authority, or change the outcome.
+  const fillsEmptyRuntimeAnswers =
+    !wins &&
+    block.settlement?.source === "runtime" &&
+    block.outcome === "answered" &&
+    block.answers.length === 0 &&
+    settlement.source === "runtime" &&
+    settlement.outcome === "answered" &&
+    incomingAnswers.length > 0;
+
   // WHO OWNS THE PAYLOAD. Answers and drafts are user content, so writing them
   // is gated on winning the canonical slot - not merely on being non-empty.
   //
@@ -545,11 +558,13 @@ export function applyInterviewSettlement(
   // `interview.resolved` whose answers are empty (its question tool's output
   // is an unparseable English sentence). Without it the card regresses to
   // "No answer".
-  const answersSource = wins
-    ? incomingAnswers.length > 0
-      ? incomingAnswers
-      : block.answers
-    : block.answers;
+  const answersSource = fillsEmptyRuntimeAnswers
+    ? incomingAnswers
+    : wins
+      ? incomingAnswers.length > 0
+        ? incomingAnswers
+        : block.answers
+      : block.answers;
   const outcome = wins ? settlement.outcome : block.outcome;
 
   // Drafts are normalized against the EFFECTIVE outcome on every write, not
