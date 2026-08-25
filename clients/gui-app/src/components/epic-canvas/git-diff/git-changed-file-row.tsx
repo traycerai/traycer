@@ -168,7 +168,14 @@ function PanelRowContent(props: {
       {props.showStats ? (
         <GitChangedFileStats
           file={props.file}
-          className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex"
+          className={cn(
+            "pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-background/95 px-1 py-0.5 shadow-sm group-hover:flex group-focus-visible:flex",
+            // A coarse pointer never hovers, so the overlay above would never
+            // appear and the row's +/- counts would be mobile-only invisible.
+            // Render them in flow at the end of the row instead: nothing is
+            // covered, and the directory name simply truncates sooner.
+            "pointer-coarse:static pointer-coarse:flex pointer-coarse:translate-y-0 pointer-coarse:bg-transparent pointer-coarse:px-0 pointer-coarse:shadow-none",
+          )}
         />
       ) : null}
     </>
@@ -184,6 +191,10 @@ function gitChangedFileRowClassName(args: {
 }): string {
   return cn(
     "group relative flex w-full items-center text-left text-ui-sm",
+    // The 24/28px densities below are mouse densities. On touch the row is the
+    // tap target that opens the diff (or collapses the bundle section), so it
+    // takes the 44px guideline height; the fine-pointer list is untouched.
+    "pointer-coarse:min-h-11",
     args.isPanel && args.nested && "min-h-6 gap-1.5 py-0.5 pl-10 pr-3",
     args.isPanel && !args.nested && "min-h-6 gap-1.5 px-3 py-0.5",
     !args.isPanel && "min-h-7 gap-2 px-2 py-1",

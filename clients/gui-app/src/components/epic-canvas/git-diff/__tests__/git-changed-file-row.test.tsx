@@ -296,6 +296,37 @@ describe("GitChangedFileRow panel density", () => {
     expect(row.className).toContain("text-accent-foreground");
   });
 
+  it("reveals the counts in flow on a coarse pointer, where hover never fires", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    const stats = screen.getByText("+3").parentElement;
+    expect(stats?.className).toContain("group-hover:flex");
+    expect(stats?.className).toContain("pointer-coarse:flex");
+    // In flow, not the hover overlay: nothing may cover the row's tail on a
+    // surface where the overlay can never be dismissed by moving a cursor away.
+    expect(stats?.className).toContain("pointer-coarse:static");
+  });
+
+  it("gives touch rows the 44px tap target without changing mouse density", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "panel",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    const row = screen.getByRole("button", {
+      name: "Modified app.tsx in src",
+    });
+    expect(row.className).toContain("min-h-6");
+    expect(row.className).toContain("pointer-coarse:min-h-11");
+  });
+
   it("leaves inactive rows without aria-current", () => {
     renderRow({
       file: makeFile({ path: "src/app.tsx", previousPath: null }),
