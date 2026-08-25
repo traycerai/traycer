@@ -67,6 +67,7 @@ import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-sco
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
 import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useResourceMonitorHostScope } from "@/hooks/resources/use-resource-monitor-host-scope";
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -1774,9 +1775,17 @@ function ResourceSearchInput(props: {
   readonly onChange: (value: string) => void;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // The popover declines Radix's open-autofocus so this field can take it; on
+  // a touch pointer that is a software keyboard over a panel opened to READ
+  // CPU and memory, and the search is optional on the way there. Standing down
+  // leaves focus where the popover put it - the trigger chip, still mounted -
+  // so nothing is stranded. The pointer decides, not the viewport and not the
+  // build: a narrow desktop window still types with hardware.
+  const coarsePointer = useCoarsePointer();
   useLayoutEffect(() => {
+    if (coarsePointer) return;
     inputRef.current?.focus();
-  }, []);
+  }, [coarsePointer]);
 
   return (
     <InputGroup className="mt-3 h-7">
