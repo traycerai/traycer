@@ -106,7 +106,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
     // value so 2.1 callers are never fed a fabricated default.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["agent.gui.listHarnesses"],
-      7,
+      8,
       2,
       { harnesses: [harnessRow("claude", false)] },
     );
@@ -125,7 +125,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
   it("latest → major-1 downgrade strips both fields before the frozen 1.0 parse", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["agent.gui.listHarnesses"],
-      7,
+      8,
       1,
       { harnesses: [harnessRow("claude", false)] },
     );

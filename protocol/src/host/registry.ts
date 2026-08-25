@@ -45,12 +45,20 @@ import {
   agentListDowngradeV7ToV4,
   agentListDowngradeV7ToV5,
   agentListDowngradeV7ToV6,
+  agentListDowngradeV8ToV1,
+  agentListDowngradeV8ToV2,
+  agentListDowngradeV8ToV3,
+  agentListDowngradeV8ToV4,
+  agentListDowngradeV8ToV5,
+  agentListDowngradeV8ToV6,
+  agentListDowngradeV8ToV7,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
   agentListUpgradeV4ToV5,
   agentListUpgradeV5ToV6,
   agentListUpgradeV6ToV7,
+  agentListUpgradeV7ToV8,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -58,6 +66,7 @@ import {
   agentListV50,
   agentListV60,
   agentListV70,
+  agentListV80,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -74,39 +83,57 @@ import {
   agentConfigureDowngradeV40ToV10,
   agentConfigureDowngradeV40ToV20,
   agentConfigureDowngradeV40ToV30,
+  agentConfigureDowngradeV50ToV10,
+  agentConfigureDowngradeV50ToV20,
+  agentConfigureDowngradeV50ToV30,
+  agentConfigureDowngradeV50ToV40,
   agentConfigureV10,
   agentConfigureV20,
   agentConfigureV30,
   agentConfigureV40,
+  agentConfigureV50,
   agentConfigureUpgradeV10ToV20,
   agentConfigureUpgradeV20ToV30,
   agentConfigureUpgradeV30ToV40,
+  agentConfigureUpgradeV40ToV50,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV10,
   agentGetProviderProfileRateLimitsDowngradeV30ToV20,
   agentGetProviderProfileRateLimitsDowngradeV40ToV10,
   agentGetProviderProfileRateLimitsDowngradeV40ToV20,
   agentGetProviderProfileRateLimitsDowngradeV40ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+  agentGetProviderProfileRateLimitsDowngradeV50ToV40,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
   agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsV40,
+  agentGetProviderProfileRateLimitsV50,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsUpgradeV30ToV40,
+  agentGetProviderProfileRateLimitsUpgradeV40ToV50,
   agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesDowngradeV30ToV10,
   agentListProviderProfilesDowngradeV30ToV20,
   agentListProviderProfilesDowngradeV40ToV10,
   agentListProviderProfilesDowngradeV40ToV20,
   agentListProviderProfilesDowngradeV40ToV30,
+  agentListProviderProfilesDowngradeV50ToV10,
+  agentListProviderProfilesDowngradeV50ToV20,
+  agentListProviderProfilesDowngradeV50ToV30,
+  agentListProviderProfilesDowngradeV50ToV40,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
   agentListProviderProfilesV30,
   agentListProviderProfilesV40,
+  agentListProviderProfilesV50,
   agentListProviderProfilesUpgradeV10ToV20,
   agentListProviderProfilesUpgradeV20ToV30,
   agentListProviderProfilesUpgradeV30ToV40,
+  agentListProviderProfilesUpgradeV40ToV50,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxAckV10,
@@ -156,6 +183,13 @@ import {
   agentGuiListHarnessesDowngradeV7ToV4,
   agentGuiListHarnessesDowngradeV7ToV5,
   agentGuiListHarnessesDowngradeV7ToV6,
+  agentGuiListHarnessesDowngradeV8ToV1,
+  agentGuiListHarnessesDowngradeV8ToV2,
+  agentGuiListHarnessesDowngradeV8ToV3,
+  agentGuiListHarnessesDowngradeV8ToV4,
+  agentGuiListHarnessesDowngradeV8ToV5,
+  agentGuiListHarnessesDowngradeV8ToV6,
+  agentGuiListHarnessesDowngradeV8ToV7,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
@@ -164,6 +198,7 @@ import {
   agentGuiListHarnessesUpgradeV5ToV6,
   agentGuiListHarnessesUpgradeV6ToV7,
   agentGuiListHarnessesUpgradeV70ToV71,
+  agentGuiListHarnessesUpgradeV71ToV80,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -173,6 +208,7 @@ import {
   agentGuiListHarnessesV60,
   agentGuiListHarnessesV70,
   agentGuiListHarnessesV71,
+  agentGuiListHarnessesV80,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -316,7 +352,10 @@ import {
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
   epicListChatRecordsV10,
+  epicGetChatRunSettingsDowngradeV20ToV10,
+  epicGetChatRunSettingsUpgradeV10ToV20,
   epicGetChatRunSettingsV10,
+  epicGetChatRunSettingsV20,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -659,6 +698,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV71,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
   providersModelProviderAuthRequestSchema,
@@ -674,6 +714,7 @@ import {
   downgradeProviderCliStateListToV40,
   downgradeProviderCliStateListToV50,
   downgradeProviderCliStateListToV60,
+  downgradeProviderCliStateListToV71,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -1735,7 +1776,58 @@ export const providersListV71 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 1 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen at the v7.0 PROVIDER ID SET, not the live one - see
+  // `providersListResponseSchemaV71`'s comment. v7.0 is released, and a minor
+  // may not grow a response enum over its predecessor, so no minor of major 7
+  // can carry a provider id v7.0 lacks. The REQUEST stays live for the reason
+  // v7.0's does.
+  responseSchema: providersListResponseSchemaV71,
+});
+
+export const providersListV80 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 8, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV71ToV80 = defineUpgradePath<
+  typeof providersListV71,
+  typeof providersListV80
+>({
+  from: { major: 7, minor: 1 },
+  to: { major: 8, minor: 0 },
+  // Request shape is identical (both bind the live request), and a v7.1
+  // response without Reasonix is a valid v8.0 response - purely additive, so
+  // both upgrades are identity. Nothing is filled: 8.0 adds no field, only the
+  // wider provider enum.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV8ToV7 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV71
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 7, minor: 1 },
+  // Both lines bind the live request (v7.x is the only line whose request
+  // models `native`), so the request passes through unchanged - unlike every
+  // bridge below, which has to re-parse it onto
+  // `providersListRequestSchemaBeforeV70`.
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop post-v7.0 providers (`reasonix`) so a major-7 caller's strict decode
+  // never sees one. Nothing to strip: v7.1 and the live shape carry the same
+  // keys at this cut. Lands on 7.1, major 7's latest installed minor; a
+  // frozen-7.0 caller's own contract parse then strips the 7.1-only
+  // `enablementMode` / `enablementSource`.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV71.parse({
+      providers: downgradeProviderCliStateListToV71(response.providers),
+      native: response.native,
+    }),
+  }),
 });
 
 export const providersListUpgradeV5ToV6 = defineUpgradePath<
@@ -1942,6 +2034,30 @@ export const providersListDowngradeV6ToV1 = defineDowngradePath<
   }),
 });
 
+export const providersListDowngradeV8ToV6 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV60
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 6, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: downgradeProviderCliStateListToV60(response.providers),
+    }),
+  }),
+});
+
 export const providersListDowngradeV7ToV6 = defineDowngradePath<
   typeof providersListV71,
   typeof providersListV60
@@ -1972,6 +2088,30 @@ export const providersListDowngradeV7ToV6 = defineDowngradePath<
   }),
 });
 
+export const providersListDowngradeV8ToV5 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV50
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 5, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
 export const providersListDowngradeV7ToV5 = defineDowngradePath<
   typeof providersListV71,
   typeof providersListV50
@@ -1992,6 +2132,30 @@ export const providersListDowngradeV7ToV5 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV50.parse({
       providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV8ToV4 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV40
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 4, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
     }),
   }),
 });
@@ -2020,6 +2184,30 @@ export const providersListDowngradeV7ToV4 = defineDowngradePath<
   }),
 });
 
+export const providersListDowngradeV8ToV3 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV30
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
 export const providersListDowngradeV7ToV3 = defineDowngradePath<
   typeof providersListV71,
   typeof providersListV30
@@ -2044,6 +2232,30 @@ export const providersListDowngradeV7ToV3 = defineDowngradePath<
   }),
 });
 
+export const providersListDowngradeV8ToV2 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV20
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
 export const providersListDowngradeV7ToV2 = defineDowngradePath<
   typeof providersListV71,
   typeof providersListV20
@@ -2064,6 +2276,30 @@ export const providersListDowngradeV7ToV2 = defineDowngradePath<
     ok: true,
     value: providersListResponseSchemaV20.parse({
       providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV8ToV1 = defineDowngradePath<
+  typeof providersListV80,
+  typeof providersListV10
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 1, minor: 0 },
+  // v7.x is the only line whose request models `native`; every target below
+  // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
+  // field rather than passed through, so the carrier can never reach a peer
+  // whose schema does not model it.
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersListRequestSchemaBeforeV70.parse({
+      forceAuthRefresh: request.forceAuthRefresh,
+    }),
+  }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
     }),
   }),
 });
@@ -4684,6 +4920,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         6: agentGuiListHarnessesDowngradeV7ToV6,
       },
     },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV80,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV71ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV8ToV1,
+        2: agentGuiListHarnessesDowngradeV8ToV2,
+        3: agentGuiListHarnessesDowngradeV8ToV3,
+        4: agentGuiListHarnessesDowngradeV8ToV4,
+        5: agentGuiListHarnessesDowngradeV8ToV5,
+        6: agentGuiListHarnessesDowngradeV8ToV6,
+        7: agentGuiListHarnessesDowngradeV8ToV7,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -5044,6 +5298,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         4: agentListDowngradeV7ToV4,
         5: agentListDowngradeV7ToV5,
         6: agentListDowngradeV7ToV6,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV80,
+          upgradeFromPreviousVersion: agentListUpgradeV7ToV8,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV8ToV1,
+        2: agentListDowngradeV8ToV2,
+        3: agentListDowngradeV8ToV3,
+        4: agentListDowngradeV8ToV4,
+        5: agentListDowngradeV8ToV5,
+        6: agentListDowngradeV8ToV6,
+        7: agentListDowngradeV8ToV7,
       },
     },
   },
@@ -6257,6 +6529,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    // Major 2 carries the post-v1.2.0 harness ids. v1.0 is frozen at the id set
+    // those tags shipped: its response embeds the PERSISTED harness enum, so it
+    // absorbed every new id silently until the tag-based gate caught it.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatRunSettingsV20,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: epicGetChatRunSettingsDowngradeV20ToV10,
+      },
+    },
     degrade: { kind: "unsupported" },
   },
   // The terminal-agent record read (the TUI eviction). Optional and
@@ -6980,6 +7267,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentListProviderProfilesDowngradeV40ToV30,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV50,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV50ToV10,
+        2: agentListProviderProfilesDowngradeV50ToV20,
+        3: agentListProviderProfilesDowngradeV50ToV30,
+        4: agentListProviderProfilesDowngradeV50ToV40,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -7035,6 +7337,22 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         3: agentGetProviderProfileRateLimitsDowngradeV40ToV30,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV50,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV50ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV50ToV20,
+        3: agentGetProviderProfileRateLimitsDowngradeV50ToV30,
+        4: agentGetProviderProfileRateLimitsDowngradeV50ToV40,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -7083,6 +7401,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: agentConfigureDowngradeV40ToV10,
         2: agentConfigureDowngradeV40ToV20,
         3: agentConfigureDowngradeV40ToV30,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV50,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV40ToV50,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV50ToV10,
+        2: agentConfigureDowngradeV50ToV20,
+        3: agentConfigureDowngradeV50ToV30,
+        4: agentConfigureDowngradeV50ToV40,
       },
     },
   },
@@ -7285,6 +7618,24 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
         4: providersListDowngradeV7ToV4,
         5: providersListDowngradeV7ToV5,
         6: providersListDowngradeV7ToV6,
+      },
+    },
+    8: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV80,
+          upgradeFromPreviousVersion: providersListUpgradeV71ToV80,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV8ToV1,
+        2: providersListDowngradeV8ToV2,
+        3: providersListDowngradeV8ToV3,
+        4: providersListDowngradeV8ToV4,
+        5: providersListDowngradeV8ToV5,
+        6: providersListDowngradeV8ToV6,
+        7: providersListDowngradeV8ToV7,
       },
     },
   },

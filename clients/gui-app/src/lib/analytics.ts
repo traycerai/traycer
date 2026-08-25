@@ -109,6 +109,7 @@ export type AnalyticsHarness =
   | "openrouter"
   | "pi"
   | "qwen"
+  | "reasonix"
   | "traycer";
 
 /** Product vocabulary only - never the internal host/app-local/global source
@@ -204,6 +205,7 @@ export type AnalyticsProvider =
   | "openrouter"
   | "pi"
   | "qwen"
+  | "reasonix"
   | "traycer";
 
 export type AnalyticsRole = "editor" | "owner" | "viewer";
@@ -984,6 +986,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "openrouter",
   "pi",
   "qwen",
+  "reasonix",
   "traycer",
 ]);
 
@@ -1006,6 +1009,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "openrouter",
   "pi",
   "qwen",
+  "reasonix",
   "traycer",
 ]);
 
