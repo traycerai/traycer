@@ -35,6 +35,7 @@ import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
 import { MobileTerminalKeyBar } from "@/components/epic-canvas/mobile/mobile-terminal-key-bar";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 import {
   getPlainTerminal,
   selectPlainTerminalViewModel,
@@ -174,8 +175,22 @@ function dispatchLandingTerminalClose(args: {
     killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
     return;
   }
-  void entry.mutations.close
-    .mutateAsync({ hostId: closed.hostId, terminalId: closed.sessionId })
+  // Through the shared close boundary, not straight at the mutation. The
+  // tombstone this close follows is also watched by
+  // `LandingTerminalTombstoneRecoveryBridge`, which sends the close for any key
+  // it has not dispatched before - so on an already-drainable host both fire for
+  // one gesture, from separate mutation instances that cannot see each other.
+  // The coordinator collapses them onto one request; without it the loser fails
+  // on a terminal the winner already removed and raises "Couldn't close the
+  // terminal." for a close that worked.
+  void requestLandingTerminalClose({
+    hostId: closed.hostId,
+    sessionId: closed.sessionId,
+    close: () =>
+      entry.mutations.close
+        .mutateAsync({ hostId: closed.hostId, terminalId: closed.sessionId })
+        .then(() => undefined),
+  })
     .then(() => {
       useLandingTerminalStore
         .getState()

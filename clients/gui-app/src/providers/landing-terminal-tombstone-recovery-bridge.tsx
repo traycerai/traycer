@@ -27,6 +27,7 @@ import {
 } from "@/components/home/terminal-panel/landing-terminal-authority-fleet";
 import { terminalSessionKey } from "@/stores/home/landing-terminal-store";
 import { getPlainTerminal } from "@/lib/terminals/plain-terminal-authority";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 const CAPABLE_CLOSE_RETRY_MAX_MS = 8_000;
@@ -201,11 +202,20 @@ function dispatchCapableClose(args: {
     ...args.refs.inFlight.current,
     args.key,
   ]);
-  void args.entry.mutations.close
-    .mutateAsync({
-      hostId: args.pending.hostId,
-      terminalId: args.pending.sessionId,
-    })
+  void requestLandingTerminalClose({
+    hostId: args.pending.hostId,
+    sessionId: args.pending.sessionId,
+    // Joins the panel's fast path when that gesture is still in flight, rather
+    // than racing it to the same terminal. Either way this observes the real
+    // settlement below.
+    close: () =>
+      args.entry.mutations.close
+        .mutateAsync({
+          hostId: args.pending.hostId,
+          terminalId: args.pending.sessionId,
+        })
+        .then(() => undefined),
+  })
     .then(
       () => {
         useLandingTerminalStore
