@@ -1029,6 +1029,7 @@ function MarkdownViewModeToggle(props: {
                   "inline-flex h-6 items-center rounded-[3px] px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
                   disabled &&
                     "cursor-not-allowed opacity-45 hover:text-muted-foreground",
+                  // muted-fill-ok: toolbar row on bg-canvas, never inside this file's popover; --canvas never equals --muted
                   active && "bg-muted text-foreground",
                 )}
                 onClick={() => {
