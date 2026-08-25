@@ -167,7 +167,14 @@ export function rowRecordIds(source: TranscriptRowSource): RowRecordIds {
     case "user":
       return { messageIds: [source.messageId], eventIds: NO_IDS };
     case "assistant-slice":
-      return { messageIds: source.messageIds, eventIds: NO_IDS };
+      // The turn's records build the row; its decorating events are what the
+      // renderer folds into the elapsed counter and the restore affordance.
+      // Both must arrive, or hydration succeeds and the row comes back poorer
+      // than the one legacy mode draws.
+      return {
+        messageIds: source.messageIds,
+        eventIds: source.decoratingEventIds,
+      };
     case "steer":
       // The turn's records carry the steer BLOCK (badge, mode, sender); the
       // steered user record, when it survives, carries the message itself.
@@ -404,14 +411,16 @@ export function sliceTranscriptTail(
     spent += cost;
     fromOrdinal = ordinal;
     rowIds.unshift(rows[ordinal].rowId);
-    for (const message of freshMessages) {
-      seenMessageIds.add(message.messageId);
-      messages.unshift(message);
-    }
-    for (const event of freshEvents) {
-      seenEventIds.add(event.eventId);
-      events.unshift(event);
-    }
+    // Unshift each row's fresh records as a BLOCK, not one at a time. Walking
+    // backward and unshifting individually reverses a row's own records, and
+    // record order is load-bearing: the client rebuilds a folded turn by
+    // walking the array and concatenating blocks in that order, so a reversed
+    // multi-record turn renders its content out of order. Caught by a test
+    // written for a different property.
+    for (const message of freshMessages) seenMessageIds.add(message.messageId);
+    messages.unshift(...freshMessages);
+    for (const event of freshEvents) seenEventIds.add(event.eventId);
+    events.unshift(...freshEvents);
   }
 
   return { fromOrdinal, rowIds, messages, events };

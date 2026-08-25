@@ -98,6 +98,24 @@ export type TranscriptRowSource =
       readonly split: boolean;
       /** True for a row synthesized to carry a stopped turn's boundary. */
       readonly synthesizedBoundary: boolean;
+      /**
+       * The turn's events that DECORATE this row rather than produce it.
+       *
+       * A row is not only what it is built from. The renderer folds a turn's
+       * `turn.started` / `turn.completed` / `turn.stopped` / `turn.interrupted`
+       * into its elapsed counter, and its `checkpoint.captured` into the
+       * restore affordance - and it does that by scanning the WHOLE event
+       * array, which a windowed client no longer has.
+       *
+       * So they travel with the row. Without this, a hydration that reported
+       * success renders a turn with no duration and no restore point: the
+       * quietest possible failure, because the row is there and merely poorer
+       * than it was.
+       *
+       * Every slice of one turn names the same ids. That is not waste - the
+       * range reader charges a record once however many rows introduce it.
+       */
+      readonly decoratingEventIds: readonly string[];
     }
   | {
       readonly kind: "steer";
@@ -442,6 +460,54 @@ export interface TurnStoppedInfo {
  * Insertion order is load-bearing: it decides tie order among synthesized
  * stopped rows.
  */
+const EMPTY_EVENT_IDS: readonly string[] = [];
+
+/**
+ * Event types a turn's rows RENDER WITH but are not built from.
+ *
+ * `turn.*` drives the elapsed counter; `checkpoint.captured` drives the restore
+ * affordance. Both are folded by `turnId` in `rendered-messages.ts` over the
+ * whole event array - which is exactly the array a windowed client stops
+ * having, so the ids travel with the row instead.
+ *
+ * `turn.stopped` appears here AND can materialize a row of its own. That is not
+ * a contradiction: the row it synthesizes exists only when the turn wrote no
+ * assistant record, and the marker it stamps on a turn that DID is a different
+ * use of the same event. Listing it in both places is what makes a range serve
+ * it either way.
+ */
+const TURN_DECORATING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+  "turn.started",
+  "turn.completed",
+  "turn.stopped",
+  "turn.interrupted",
+  "checkpoint.captured",
+]);
+
+/**
+ * Decorating event ids per turn, in event order.
+ *
+ * Keyed on `turnId` because that is what the renderer's folds key on. An event
+ * with no `turnId` decorates nothing and is skipped - it is chat-level state,
+ * and chat-level state rides the snapshot rather than a row.
+ */
+export function decoratingEventIdsByTurn(
+  events: readonly ChatEvent[],
+): ReadonlyMap<string, readonly string[]> {
+  const out = new Map<string, string[]>();
+  for (const event of events) {
+    if (event.turnId === null) continue;
+    if (!TURN_DECORATING_EVENT_TYPES.has(event.type)) continue;
+    const held = out.get(event.turnId);
+    if (held === undefined) {
+      out.set(event.turnId, [event.eventId]);
+      continue;
+    }
+    held.push(event.eventId);
+  }
+  return out;
+}
+
 export function turnStoppedInfoByTurnKey(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, TurnStoppedInfo> {
@@ -502,6 +568,7 @@ export function projectTranscriptRows(
   const usersById = userMessagesById(input.messages);
   const nestedSteered = nestedSteeredMessageIds(turns.values(), usersById);
   const stoppedByTurnKey = turnStoppedInfoByTurnKey(input.events);
+  const decoratingEventIdsByTurnKey = decoratingEventIdsByTurn(input.events);
 
   const base: TranscriptRowDescriptor[] = [];
   const emittedTurns = new Set<string>();
@@ -537,6 +604,7 @@ export function projectTranscriptRows(
         lastUserTimestamp,
         activeTurnId: input.activeTurnId,
         stopped: stoppedByTurnKey.get(turnKey) ?? null,
+        decoratingEventIdsByTurnKey,
       }),
     );
   }
@@ -597,6 +665,7 @@ function describeTurnRows(input: {
   readonly lastUserTimestamp: number | null;
   readonly activeTurnId: string | null;
   readonly stopped: TurnStoppedInfo | null;
+  readonly decoratingEventIdsByTurnKey: ReadonlyMap<string, readonly string[]>;
 }): readonly TranscriptRowDescriptor[] {
   const { turn } = input;
   // Every branch of the renderer's timing derivation returns this same anchor;
@@ -608,6 +677,9 @@ function describeTurnRows(input: {
   const turnComplete = input.activeTurnId !== turn.turnKey;
   const blocks = turn.blocks;
   const plan = planAssistantTurnRows(blocks);
+  const decoratingEventIds = input.decoratingEventIdsByTurnKey.get(
+    turn.turnKey,
+  ) ?? EMPTY_EVENT_IDS;
 
   const rows: TranscriptRowDescriptor[] = plan.entries.map((entry) => {
     if (entry.kind === "steer") {
@@ -646,6 +718,7 @@ function describeTurnRows(input: {
         chunkIndex: entry.chunkIndex,
         split: plan.split,
         synthesizedBoundary: false,
+        decoratingEventIds,
       },
     };
   });
@@ -674,6 +747,7 @@ function describeTurnRows(input: {
         chunkIndex: plan.nextChunkIndex,
         split: true,
         synthesizedBoundary: true,
+        decoratingEventIds,
       },
     });
   }

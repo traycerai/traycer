@@ -78,6 +78,7 @@ function baseWindowedSnapshot(): Record<string, unknown> {
       latestAssistantUsage: null,
       pinnedTodo: null,
       latestForkableAssistantMessageId: null,
+      restorableSetupInterruption: null,
     },
   };
 }

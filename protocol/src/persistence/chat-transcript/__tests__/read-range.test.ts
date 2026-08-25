@@ -97,6 +97,7 @@ function sliceRows(
       chunkIndex,
       split: true,
       synthesizedBoundary: false,
+      decoratingEventIds: [],
     },
   }));
 }
@@ -608,5 +609,129 @@ describe("sliceTranscriptTail", () => {
 
     expect(result.rowIds).toEqual([rows[0].rowId, rows[1].rowId]);
     expect(result.messages).toEqual([M0]);
+  });
+});
+
+function makeTurnEvent(fields: {
+  eventId: string;
+  type: ChatEvent["type"];
+  turnId: string | null;
+  timestamp: number;
+}): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: fields.type,
+    timestamp: fields.timestamp,
+    turnId: fields.turnId,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: null,
+  });
+}
+
+/**
+ * A row is not only what it is built from.
+ *
+ * The renderer folds a turn's `turn.*` into its elapsed counter and its
+ * `checkpoint.captured` into the restore affordance, by scanning the WHOLE
+ * event array — which is exactly what a windowed client stops having. So the
+ * ids travel with the row, and the range must actually carry the bodies.
+ *
+ * The failure this prevents is the quietest kind: hydration reports success and
+ * the row renders with no duration and no restore point, looking merely poorer
+ * rather than broken.
+ */
+describe("assistant rows carry the events that decorate them", () => {
+  const TURN_KEY = "turn-1";
+  const STARTED = makeTurnEvent({
+    eventId: "e-started",
+    type: "turn.started",
+    turnId: TURN_KEY,
+    timestamp: 5,
+  });
+  const CHECKPOINT = makeTurnEvent({
+    eventId: "e-checkpoint",
+    type: "checkpoint.captured",
+    turnId: TURN_KEY,
+    timestamp: 7,
+  });
+  const OTHER_TURN = makeTurnEvent({
+    eventId: "e-other",
+    type: "turn.started",
+    turnId: "turn-2",
+    timestamp: 9,
+  });
+
+  function decoratedRows(): readonly TranscriptRowDescriptor[] {
+    return sliceRows(TURN_KEY, [M0.messageId], 10).map((row) => {
+      if (row.source.kind !== "assistant-slice") throw new Error("expected slice");
+      return {
+        ...row,
+        source: {
+          ...row.source,
+          decoratingEventIds: [STARTED.eventId, CHECKPOINT.eventId],
+        },
+      };
+    });
+  }
+
+  it("serves a row's turn-lifecycle and checkpoint events with its records", () => {
+    const rows = decoratedRows();
+
+    const result = slice(rows, [M0], [STARTED, CHECKPOINT, OTHER_TURN], {
+      fromOrdinal: 0,
+      toOrdinal: 0,
+      maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+    });
+
+    expect(result.events.map((event) => event.eventId)).toEqual([
+      "e-started",
+      "e-checkpoint",
+    ]);
+    expect(result.messages.map((message) => message.messageId)).toEqual(["m-0"]);
+  });
+
+  it("does not leak another turn's events into the span", () => {
+    const rows = decoratedRows();
+
+    const result = slice(rows, [M0], [STARTED, CHECKPOINT, OTHER_TURN], {
+      fromOrdinal: 0,
+      toOrdinal: 1,
+      maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+    });
+
+    expect(result.events.map((event) => event.eventId)).not.toContain("e-other");
+  });
+
+  it("charges a turn's decorating events once across its slices", () => {
+    // Both slices name the same ids; the dedup that makes a shared record set
+    // free has to cover events too, or a heavily-split turn looks unfetchable.
+    const rows = decoratedRows();
+
+    const result = slice(rows, [M0], [STARTED, CHECKPOINT], {
+      fromOrdinal: 0,
+      toOrdinal: 1,
+      maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+    });
+
+    expect(result.rowIds).toHaveLength(2);
+    expect(result.events).toHaveLength(2);
+  });
+
+  it("carries them in the snapshot tail too, not only in a range", () => {
+    const rows = decoratedRows();
+
+    const result = tail(rows, [M0], [STARTED, CHECKPOINT], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.events.map((event) => event.eventId)).toEqual([
+      "e-started",
+      "e-checkpoint",
+    ]);
   });
 });

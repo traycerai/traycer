@@ -271,6 +271,28 @@ export type ChatReadAccumulatedFileChangeResponse = z.infer<
  * Moving them here is not only a correctness requirement of windowing - it
  * also deletes per-token O(history) work from the renderer.
  */
+/**
+ * A setup failure or cancellation the composer can put a draft back from.
+ *
+ * Mirrors `RestorableSetupInterruptionSelection`. The fields are exactly what
+ * the composer-restore driver reads - not the whole event - because a wire
+ * shape that carried the event would invite a second consumer to start reading
+ * something else off it, and then this would be a transcript record again.
+ */
+export const restorableSetupInterruptionSchema = z.object({
+  eventType: z.enum(["setup.failed", "setup.cancelled"]),
+  /** `null` for the generic path-less failure - the case that has no card. */
+  workspacePath: z.string().nullable(),
+  terminalSessionId: z.string().nullable(),
+  setupExitCode: z.number().nullable(),
+  clientActionId: z.string().nullable(),
+  /** Never null: an interruption with no triggering send is not restorable. */
+  messageId: z.string(),
+});
+export type RestorableSetupInterruption = z.infer<
+  typeof restorableSetupInterruptionSchema
+>;
+
 export const chatTranscriptDerivedSchema = z.object({
   /**
    * The most recent assistant usage report, for the context chip. Nullable
@@ -300,6 +322,31 @@ export const chatTranscriptDerivedSchema = z.object({
    * which is hydrated by construction.
    */
   latestForkableAssistantMessageId: z.string().nullable(),
+  /**
+   * The setup interruption the composer would restore a draft from.
+   *
+   * Here rather than derived client-side because the event it comes from
+   * OCCUPIES NO ORDINAL. `partitionSetupCardWindows` skips a path-less
+   * `setup.failed` deliberately - it can neither name a workspace nor drive a
+   * retry, so it forms no card - and the host and the renderer agree about that
+   * by sharing the same partition. What neither noticed is that
+   * `selectRestorableSetupInterruption` reads the SAME event straight off the
+   * full array, for a purpose that has nothing to do with rows.
+   *
+   * A row-less event is in no row's record set, so `sliceTranscriptTail` never
+   * includes it and `loadRange` - addressed by ordinal - can never ask for it.
+   * It is not "evicted and refetchable"; on the windowed line it is unreachable
+   * outright, and the composer would silently stop restoring drafts after a
+   * setup failure.
+   *
+   * So it ships as what it always was: chat-level aux state. `null` when there
+   * is no restorable interruption, which is the ordinary case.
+   *
+   * The general rule this settles: **an event the client reads but no row
+   * renders must ride the snapshot.** Ordinals address rows; anything outside
+   * that space needs its own carriage.
+   */
+  restorableSetupInterruption: restorableSetupInterruptionSchema.nullable(),
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 
