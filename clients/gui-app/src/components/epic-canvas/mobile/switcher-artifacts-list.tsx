@@ -102,7 +102,7 @@ function SwitcherArtifactRow(props: {
   const onSelect = useCallback(() => {
     const type = record.type;
     if (!isOpenableEpicNodeKind(type)) return;
-    activate(record.id, () =>
+    activate(() =>
       makeOpenableNodeRef({
         id: record.id,
         instanceId: uuidv4(),
