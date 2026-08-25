@@ -2591,104 +2591,117 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        // Authoritative resolution boundary: the host accepted the answer, so
-        // the retained draft is now safe to discard (the card unmounts as the
-        // interview leaves the pending set). Also drop this block's pending/
-        // accepted actions so their busy gate can never outlive the interview.
-        useInterviewDraftStore
-          .getState()
-          .clearDraft(frame.chatId, frame.blockId);
-        set((state) => {
-          const lifecycle = withInterviewLifecycleState(
-            state.messages,
-            state.liveAssistantMessage,
-            {
-              kind: "answered",
-              blockId: frame.blockId,
-              settlementId: frame.settlementId,
-              settlementSource: frame.settlementSource,
-              resolvedAt: frame.resolvedAt,
-              answers: frame.answers,
-              reason: null,
-              outcome: "answered",
-              draftAnswers: [],
-              delivery: frame.delivery,
-            },
-          );
-          const { messages, liveAssistantMessage } = lifecycle;
-          return {
+        const state = get();
+        const lifecycle = withInterviewLifecycleState(
+          state.messages,
+          state.liveAssistantMessage,
+          {
+            kind: "answered",
+            blockId: frame.blockId,
+            settlementId: frame.settlementId,
+            settlementSource: frame.settlementSource,
+            resolvedAt: frame.resolvedAt,
+            answers: frame.answers,
+            reason: null,
+            outcome: "answered",
+            draftAnswers: [],
+            delivery: frame.delivery,
+          },
+        );
+        const resolvedPendingOwner =
+          lifecycle.resolvedPendingOwner ||
+          (!lifecycle.matchedOwner &&
+            state.pendingInterviews.some(
+              (interview) => interview.blockId === frame.blockId,
+            ));
+        const { messages, liveAssistantMessage } = lifecycle;
+        set({
+          messages,
+          liveAssistantMessage,
+          pendingInterviews: resolvedPendingOwner
+            ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
+            : state.pendingInterviews,
+          pendingActions: resolvedPendingOwner
+            ? withoutInterviewActionsForBlock(
+                state.pendingActions,
+                frame.blockId,
+              )
+            : state.pendingActions,
+          acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
+            resolvedPendingOwner
+              ? withoutInterviewActionsForBlock(
+                  state.acceptedActions,
+                  frame.blockId,
+                )
+              : state.acceptedActions,
             messages,
             liveAssistantMessage,
-            pendingInterviews: withoutPendingInterview(
-              state.pendingInterviews,
-              frame.blockId,
-            ),
-            pendingActions: withoutInterviewActionsForBlock(
-              state.pendingActions,
-              frame.blockId,
-            ),
-            acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
-              withoutInterviewActionsForBlock(
-                state.acceptedActions,
-                frame.blockId,
-              ),
-              messages,
-              liveAssistantMessage,
-              null,
-            ),
-          };
+            null,
+          ),
         });
+        if (resolvedPendingOwner) {
+          useInterviewDraftStore
+            .getState()
+            .clearDraft(frame.chatId, frame.blockId);
+        }
       },
       onInterviewErrored: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        // The interview is resolved (skipped/errored) authoritatively; drop the
-        // retained draft and this block's actions on the same lifecycle
-        // boundary as an accepted answer.
-        useInterviewDraftStore
-          .getState()
-          .clearDraft(frame.chatId, frame.blockId);
-        set((state) => {
-          const lifecycle = withInterviewLifecycleState(
-            state.messages,
-            state.liveAssistantMessage,
-            {
-              kind: "errored",
-              blockId: frame.blockId,
-              settlementId: frame.settlementId,
-              settlementSource: frame.settlementSource,
-              resolvedAt: frame.resolvedAt,
-              answers: [],
-              reason: frame.reason,
-              outcome: frame.outcome,
-              draftAnswers: frame.draftAnswers,
-              delivery: frame.delivery,
-            },
-          );
-          const { messages, liveAssistantMessage } = lifecycle;
-          return {
+        const state = get();
+        const lifecycle = withInterviewLifecycleState(
+          state.messages,
+          state.liveAssistantMessage,
+          {
+            kind: "errored",
+            blockId: frame.blockId,
+            settlementId: frame.settlementId,
+            settlementSource: frame.settlementSource,
+            resolvedAt: frame.resolvedAt,
+            answers: [],
+            reason: frame.reason,
+            outcome: frame.outcome,
+            draftAnswers: frame.draftAnswers,
+            delivery: frame.delivery,
+          },
+        );
+        const resolvedPendingOwner =
+          lifecycle.resolvedPendingOwner ||
+          (!lifecycle.matchedOwner &&
+            state.pendingInterviews.some(
+              (interview) => interview.blockId === frame.blockId,
+            ));
+        const { messages, liveAssistantMessage } = lifecycle;
+        set({
+          messages,
+          liveAssistantMessage,
+          pendingInterviews: resolvedPendingOwner
+            ? withoutPendingInterview(state.pendingInterviews, frame.blockId)
+            : state.pendingInterviews,
+          pendingActions: resolvedPendingOwner
+            ? withoutInterviewActionsForBlock(
+                state.pendingActions,
+                frame.blockId,
+              )
+            : state.pendingActions,
+          acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
+            resolvedPendingOwner
+              ? withoutInterviewActionsForBlock(
+                  state.acceptedActions,
+                  frame.blockId,
+                )
+              : state.acceptedActions,
             messages,
             liveAssistantMessage,
-            pendingInterviews: withoutPendingInterview(
-              state.pendingInterviews,
-              frame.blockId,
-            ),
-            pendingActions: withoutInterviewActionsForBlock(
-              state.pendingActions,
-              frame.blockId,
-            ),
-            acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
-              withoutInterviewActionsForBlock(
-                state.acceptedActions,
-                frame.blockId,
-              ),
-              messages,
-              liveAssistantMessage,
-              null,
-            ),
-          };
+            null,
+          ),
         });
+        if (resolvedPendingOwner) {
+          useInterviewDraftStore
+            .getState()
+            .clearDraft(frame.chatId, frame.blockId);
+        }
       },
       onEventAppended: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -4962,6 +4975,8 @@ function withInterviewLifecycleState(
 ): {
   readonly messages: ReadonlyArray<Message>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
+  readonly matchedOwner: boolean;
+  readonly resolvedPendingOwner: boolean;
 } {
   if (projection.settlementId !== null) {
     const exactMessages = withInterviewLifecycleProjectionPass(
@@ -4970,7 +4985,12 @@ function withInterviewLifecycleState(
       false,
     );
     if (exactMessages.matched) {
-      return { messages: exactMessages.messages, liveAssistantMessage };
+      return {
+        messages: exactMessages.messages,
+        liveAssistantMessage,
+        matchedOwner: true,
+        resolvedPendingOwner: false,
+      };
     }
     if (liveAssistantMessage !== null) {
       const exactLiveMatched =
@@ -4991,6 +5011,8 @@ function withInterviewLifecycleState(
             exactLiveBlocks === liveAssistantMessage.blocks
               ? liveAssistantMessage
               : { ...liveAssistantMessage, blocks: exactLiveBlocks },
+          matchedOwner: true,
+          resolvedPendingOwner: false,
         };
       }
     }
@@ -5014,6 +5036,8 @@ function withInterviewLifecycleState(
           liveBlocks === liveAssistantMessage.blocks
             ? liveAssistantMessage
             : { ...liveAssistantMessage, blocks: liveBlocks },
+        matchedOwner: true,
+        resolvedPendingOwner: true,
       };
     }
   }
@@ -5025,6 +5049,8 @@ function withInterviewLifecycleState(
   return {
     messages: unresolvedMessages.messages,
     liveAssistantMessage,
+    matchedOwner: unresolvedMessages.matched,
+    resolvedPendingOwner: unresolvedMessages.matched,
   };
 }
 
