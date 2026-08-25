@@ -6,7 +6,11 @@ import type {
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import type { UserMessageSender } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  Message,
+  UserMessageSender,
+} from "@traycer/protocol/persistence/epic/schemas";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatMessageEditing } from "@/components/chat/chat-message";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
@@ -684,4 +688,52 @@ export function findUnanswerableInterviews(
   // blocking the chat, so it reads first in the notice.
   unanswerable.sort((left, right) => left.requestedAt - right.requestedAt);
   return unanswerable;
+}
+
+/**
+ * The context chip's usage number.
+ *
+ * `liveTurnUsage` takes precedence over the persisted value so the chip shows
+ * live in-flight numbers during a turn and carries the final usage forward
+ * across the gap between `turn.completed` and the next snapshot.
+ *
+ * The persisted half has two sources, one per line. On the windowed line
+ * `messages` holds what is HYDRATED, not what exists, so the backwards scan
+ * below terminates at the window's edge - and the chip would read blank on
+ * exactly the chats long enough to have been windowed in the first place. The
+ * host ships the whole-transcript fold for that reason.
+ *
+ * The gap-bridging argument survives the swap: the host memoizes `derived` on
+ * the transcript view's identity and re-emits it from all the same
+ * `broadcastSnapshot()` call sites, so `latestAssistantUsage` refreshes at
+ * exactly the moments a legacy peer's `messages` array does.
+ */
+export function selectContextUsage(
+  state: Pick<
+    ChatSessionState,
+    "liveTurnUsage" | "messages" | "transcriptDerived"
+  >,
+): TokenUsage | null {
+  if (state.liveTurnUsage !== null) return state.liveTurnUsage;
+  // Deliberately not `?? findLastAssistantUsage(...)`: `latestAssistantUsage:
+  // null` is the real answer for a chat where no assistant row has reported
+  // usage yet, and the chip's empty form is what that should render. Falling
+  // through would put the O(history) scan back on every fresh chat, and let a
+  // hydrated row contradict the host on a chat where the host can see further.
+  if (state.transcriptDerived !== null) {
+    return state.transcriptDerived.latestAssistantUsage;
+  }
+  return findLastAssistantUsage(state.messages);
+}
+
+function findLastAssistantUsage(
+  messages: ReadonlyArray<Message>,
+): TokenUsage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant" && message.usage !== null) {
+      return message.usage;
+    }
+  }
+  return null;
 }

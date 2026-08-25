@@ -10,6 +10,8 @@ import type {
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type {
   ChatMessage,
   InterviewSegment,
@@ -47,6 +49,7 @@ import {
   findPendingInterview,
   findUnanswerableInterviews,
   resolvedTurnStatus,
+  selectContextUsage,
   shouldGenerateChatTitleForSubmittedMessage,
   showRestoreResultToast,
   type InlineEditState,
@@ -1120,3 +1123,105 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
     ).toBe(true);
   });
 });
+
+const USAGE_A: TokenUsage = {
+  inputTokens: 10,
+  outputTokens: 20,
+  totalTokens: 30,
+};
+
+const USAGE_B: TokenUsage = {
+  inputTokens: 400,
+  outputTokens: 500,
+  totalTokens: 900,
+};
+
+function assistantMessageWithUsage(
+  messageId: string,
+  usage: TokenUsage | null,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet-4",
+      displayName: "Claude Sonnet 4",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: 5,
+    timestamp: 5,
+    turnId: "turn-1",
+    usage,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+describe("selectContextUsage", () => {
+  it("prefers the live turn's usage over both persisted sources", () => {
+    expect(
+      selectContextUsage({
+        liveTurnUsage: USAGE_A,
+        messages: [assistantMessageWithUsage("a-1", USAGE_B)],
+        transcriptDerived: derivedWith(USAGE_B),
+      }),
+    ).toBe(USAGE_A);
+  });
+
+  it("scans backwards for the last usage-bearing assistant row off the windowed line", () => {
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [
+          assistantMessageWithUsage("a-1", USAGE_A),
+          assistantMessageWithUsage("a-2", USAGE_B),
+          // A later row that never reported usage must not blank the chip.
+          assistantMessageWithUsage("a-3", null),
+        ],
+        transcriptDerived: null,
+      }),
+    ).toBe(USAGE_B);
+  });
+
+  it("reads the host's fold on the windowed line, where the scan would find nothing", () => {
+    // The shape the chip is being fixed for: a chat long enough to be windowed
+    // holds no hydrated assistant row at all, so the backwards scan returns
+    // null and the chip reads blank. The host looked at the whole transcript.
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [],
+        transcriptDerived: derivedWith(USAGE_A),
+      }),
+    ).toBe(USAGE_A);
+  });
+
+  it("reports the host's null rather than falling back to a hydrated row", () => {
+    // Not a `??` chain. `latestAssistantUsage: null` is an ANSWER - the chip's
+    // empty form - so a hydrated row must not override the party that can see
+    // the whole transcript. Kills the mutation that writes `?? scan(...)`.
+    expect(
+      selectContextUsage({
+        liveTurnUsage: null,
+        messages: [assistantMessageWithUsage("a-1", USAGE_B)],
+        transcriptDerived: derivedWith(null),
+      }),
+    ).toBeNull();
+  });
+});
+
+function derivedWith(
+  latestAssistantUsage: TokenUsage | null,
+): ChatTranscriptDerived {
+  return {
+    latestAssistantUsage,
+    pinnedTodo: null,
+    latestForkableAssistantMessageId: null,
+    restorableSetupInterruption: null,
+  };
+}

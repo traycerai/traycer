@@ -36,7 +36,20 @@ export type { RestorableSetupInterruption };
  * and `useChatSetupFailureRestoreDriver` read the same way they always have.
  */
 export function selectRestorableSetupInterruption(
-  state: Pick<ChatSessionState, "events">,
+  state: Pick<ChatSessionState, "events" | "transcriptDerived">,
 ): RestorableSetupInterruption | null {
+  // On the windowed line the host has ALREADY answered this, and the scan below
+  // could not answer it at any amount of hydration: the event occupies no
+  // ordinal, so it is in no row's record set and `state.events` never receives
+  // it. This is the one consumer in the sweep with no client-side repair.
+  //
+  // `transcriptDerived !== null` IS the line check, and the reason this is not
+  // a `??` chain: `restorableSetupInterruption: null` INSIDE a derived payload
+  // is a real answer - "nothing to restore", the ordinary case - not a missing
+  // one. Falling through to the scan on it would re-run, on every ordinary
+  // chat, precisely the scan that cannot see the event.
+  if (state.transcriptDerived !== null) {
+    return state.transcriptDerived.restorableSetupInterruption;
+  }
   return protocolSelectRestorableSetupInterruption(state.events);
 }

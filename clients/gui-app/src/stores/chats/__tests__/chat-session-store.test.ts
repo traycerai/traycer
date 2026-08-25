@@ -10129,6 +10129,68 @@ describe("createChatSessionStore", () => {
       clientActionId: "send-cancelled",
     });
   });
+
+  // ─── On the windowed line the host has already answered ─────────────────
+  //
+  // The one consumer in the `state.messages` sweep with NO client-side repair.
+  // The event this comes from occupies no ordinal, so it is in no row's record
+  // set: `sliceTranscriptTail` never carries it and `loadRange` - addressed by
+  // ordinal - cannot ask for it. `state.events` never receives it however much
+  // the client hydrates, so the scan above is not "degraded over a window", it
+  // is permanently blind. It rides the snapshot instead.
+
+  it("takes the host's derived interruption when the events array cannot hold it", () => {
+    expect(
+      selectRestorableSetupInterruption({
+        events: [],
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: {
+            eventType: "setup.failed",
+            eventId: "event-host-derived",
+            workspacePath: "/repo",
+            terminalSessionId: null,
+            setupExitCode: 1,
+            clientActionId: "send-1",
+            messageId: "queued-msg",
+          },
+        },
+      }),
+    ).toMatchObject({
+      eventId: "event-host-derived",
+      messageId: "queued-msg",
+    });
+  });
+
+  it("reports the host's null rather than re-running the scan over a window", () => {
+    // Not a `??` chain. `restorableSetupInterruption: null` inside a derived
+    // payload is an ANSWER - "nothing to restore", the ordinary case - so a
+    // stray hydrated event must not override the party that read the whole
+    // event log. Falling through here would restore a draft the user never
+    // lost, which is the failure this whole selector exists to avoid.
+    expect(
+      selectRestorableSetupInterruption({
+        events: [
+          // Carries a `messageId`, so the scan WOULD return it - without that
+          // the selector skips it anyway and the assertion proves nothing.
+          {
+            ...chatEvent("event-hydrated", "setup.failed", {
+              workspacePath: "/repo",
+            }),
+            messageId: "queued-msg-hydrated",
+          },
+        ],
+        transcriptDerived: {
+          latestAssistantUsage: null,
+          pinnedTodo: null,
+          latestForkableAssistantMessageId: null,
+          restorableSetupInterruption: null,
+        },
+      }),
+    ).toBeNull();
+  });
 });
 
 interface ManualCoordinator {

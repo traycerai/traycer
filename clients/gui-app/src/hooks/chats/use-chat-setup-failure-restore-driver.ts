@@ -39,7 +39,11 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
  * Already-restored events are tracked by `eventId` so a stale snapshot or a
  * `setup.failed` echoed across reconnects does not re-restore a draft the
  * user may have edited. The ref is keyed per `nodeId`/`chatId` so opening
- * the same chat again starts with a fresh dedupe set.
+ * the same chat again starts with a fresh dedupe set. That guard carries more
+ * weight on the windowed line, where the interruption is not an event the
+ * client can watch arrive once but a VALUE re-delivered on every snapshot -
+ * `eventId` is then the only thing distinguishing "a new failure" from "the
+ * same failure, restated".
  */
 interface ChatSetupFailureRestoreDriverOptions {
   readonly handle: ChatSessionStoreHandle;
@@ -51,9 +55,19 @@ export function useChatSetupFailureRestoreDriver(
 ): void {
   const { handle, nodeId } = options;
   const events = useStore(handle.store, (state) => state.events);
+  // Both inputs are subscribed separately and combined in a memo rather than
+  // selected in one `useStore` call, because the selector BUILDS its result on
+  // the legacy path - a fresh object every invocation would fail
+  // `useSyncExternalStore`'s stability requirement and re-render forever. Here
+  // the memo's output is stable while its two inputs are, and on the windowed
+  // line it is a property read off the snapshot's own payload.
+  const transcriptDerived = useStore(
+    handle.store,
+    (state) => state.transcriptDerived,
+  );
   const interruption = useMemo(
-    () => selectRestorableSetupInterruption({ events }),
-    [events],
+    () => selectRestorableSetupInterruption({ events, transcriptDerived }),
+    [events, transcriptDerived],
   );
   const replaceDraft = useComposerDraftStore((state) => state.replaceDraft);
   // Dedupe set is keyed alongside the chat-session handle so opening a

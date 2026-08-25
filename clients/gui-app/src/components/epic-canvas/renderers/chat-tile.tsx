@@ -17,10 +17,8 @@ import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-qu
 import { TombstonedProfileProvider } from "@/components/chat/tombstoned-profile-provider";
 import type {
   InterviewAnswer,
-  Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
-import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   BackgroundItem,
   ChatQueuedPromptItem,
@@ -214,6 +212,7 @@ import {
   findPendingInterview,
   findUnanswerableInterviews,
   latestForkableAssistantMessageId,
+  selectContextUsage,
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
@@ -2514,32 +2513,6 @@ interface ChatSessionMessagesSurfaceProps {
   readonly planActions: ChatPlanActionsContextValue;
   /** Measured height of the overlaid composer/queue/pinned/agents dock. */
   readonly composerOverlayHeight: number;
-}
-
-/**
- * Subscribes directly to the chat store for the chip's two inputs
- * (`liveTurnUsage` and the last assistant message's persisted usage) so
- * that ONLY the chip re-renders on `usage.updated` and streaming text
- * deltas - the surrounding tile (composer, message list, host picker,
- * banners) stays unaffected. liveTurnUsage takes precedence over the
- * persisted fallback so the chip shows live in-flight numbers during a
- * turn and carries the final usage forward across the gap between
- * turn.completed and the next snapshot.
- */
-function selectContextUsage(s: ChatSessionState): TokenUsage | null {
-  return s.liveTurnUsage ?? findLastAssistantUsage(s.messages);
-}
-
-function findLastAssistantUsage(
-  messages: ReadonlyArray<Message>,
-): TokenUsage | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role === "assistant" && message.usage !== null) {
-      return message.usage;
-    }
-  }
-  return null;
 }
 
 function ContextUsageChipForChat(props: {
