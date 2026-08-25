@@ -12,7 +12,11 @@ import {
   diffSourceSchema,
   fileEditReasonSchema,
 } from "@traycer/protocol/persistence/epic/content-blocks";
-import { rowSkeletonEntrySchema } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  rowSkeletonEntrySchema,
+  type RowSkeletonEntry,
+} from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { runtimeTodoStatusSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 /**
@@ -99,6 +103,28 @@ export type PinnedTodoSnapshot = z.infer<typeof pinnedTodoSnapshotSchema>;
 export const RANGE_REQUEST_ID_MAX_CHARS = 128;
 
 /**
+ * And a CHARSET, because a character bound is not a byte bound.
+ *
+ * The reserve is measured in bytes; `z.string().max(128)` counts UTF-16 code
+ * units. `"\u0000".repeat(128)` satisfies that bound and JSON-encodes to 770
+ * bytes - it escapes to six characters each - against 130 for 128 ASCII
+ * characters. That single field can exceed the whole 512-byte reserve on its
+ * own, which is exactly the class of hole the reserve was added to close.
+ *
+ * Restricting the alphabet is better than inflating the reserve: it makes the
+ * worst case EQUAL the bound rather than six times it, and every id generator
+ * anyone would reach for (uuid, nanoid, a counter) already lives inside it.
+ */
+export const RANGE_REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/** A `requestId` bounded in bytes, not just in code units. */
+const rangeRequestIdSchema = z
+  .string()
+  .min(1)
+  .max(RANGE_REQUEST_ID_MAX_CHARS)
+  .regex(RANGE_REQUEST_ID_PATTERN);
+
+/**
  * Bound on the host-minted accumulated-change digest.
  *
  * Bounded for the same class of reason as `requestId`: it appears once per
@@ -164,6 +190,32 @@ export const chatAccumulatedFileChangeSummarySchema = z.object({
    * The digest makes that a rejected request rather than a wrong diff.
    */
   digest: z.string().max(ACCUMULATED_CHANGE_DIGEST_MAX_CHARS),
+  /**
+   * The `+`/`-` the panel shows BEFORE anyone opens a diff.
+   *
+   * Host-computed, because on this line the client has no contents to count
+   * from. The panel derives every row's magnitude and its collapsed header
+   * total from `beforeContent`/`afterContent` today
+   * (`chat-accumulated-changes-panel.tsx`), so a summary without these renders
+   * every file as `+0 / -0` and the header as nothing - a plain regression a
+   * cold review caught, and exactly the kind the zero-regression bar is about.
+   *
+   * `null` when there is nothing to count: a change whose `diffSource` is
+   * `none` has no before/after at all, which the panel must render as a bare
+   * row rather than as a zero-line diff. Distinct from `{0, 0}`, which means
+   * "counted, and the file came back unchanged".
+   *
+   * The active turn is NOT counted here. Its rows carry per-edit streaming
+   * counts the panel already overlays, and the host only recomputes cumulative
+   * contents at turn end - so a host-computed value mid-turn would be the
+   * stale one, and would replace a live number with an older one.
+   */
+  counts: z
+    .object({
+      additions: z.number().int().nonnegative(),
+      deletions: z.number().int().nonnegative(),
+    })
+    .nullable(),
   artifact: checkpointArtifactTagSchema.nullish(),
 });
 export type ChatAccumulatedFileChangeSummary = z.infer<
@@ -346,7 +398,7 @@ export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
  * from there; it is not an error.
  */
 export const chatRangeResponseSchema = z.object({
-  requestId: z.string().max(RANGE_REQUEST_ID_MAX_CHARS),
+  requestId: rangeRequestIdSchema,
   epoch: z.number().int().nonnegative(),
   fromOrdinal: z.number().int().nonnegative(),
   /**
@@ -401,6 +453,106 @@ export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
  * applied by row identity - so arriving late costs it nothing. A `snapshot` or
  * an `indexChanged` has no such protection and must stay under the ceiling.
  */
+/**
+ * # Keeping the invariant real
+ *
+ * `range` responses are budgeted by `sliceTranscriptRange`, and the snapshot's
+ * tail by `sliceTranscriptTail`. The two frames below were left to their
+ * producers' discretion, which is the same mistake `maxBytes` made before it
+ * became a frame ceiling: an invariant every doc comment asserts and no code
+ * enforces holds until the first chat large enough to break it.
+ *
+ * Both budgets are deliberately well under 1 MiB. These frames share the wire
+ * with nothing else, but the relay's threshold is on the ENCODED body, and
+ * leaving headroom is cheaper than discovering the encoder's overhead in
+ * production.
+ */
+export const SKELETON_CHUNK_MAX_BYTES = 256 * 1024;
+export const INDEX_CHANGE_MAX_BYTES = 256 * 1024;
+
+/** A contiguous run of skeleton entries small enough to ship as one frame. */
+export interface RowSkeletonChunkPlan {
+  readonly fromOrdinal: number;
+  readonly entries: readonly RowSkeletonEntry[];
+  readonly isFinal: boolean;
+}
+
+function encodedEntryBytes(entry: RowSkeletonEntry): number {
+  return utf8ByteLength(JSON.stringify(entry)) + 1;
+}
+
+/**
+ * Splits a skeleton into frame-sized chunks.
+ *
+ * Shared rather than left to each producer, for the reason the whole design
+ * rests on: the live host and the publisher must agree about ordinals, and a
+ * chunker that disagreed about boundaries would be two producers disagreeing
+ * about where `fromOrdinal` lands.
+ *
+ * An entry too large for a whole chunk still ships ALONE rather than being
+ * dropped - a skeleton with a hole in it is a transcript that cannot be
+ * navigated, and every entry is bounded by construction anyway
+ * (`ROW_SKELETON_PREVIEW_MAX_CHARS` caps the only free-text field). This is the
+ * opposite call from {@link sliceTranscriptTail}'s, and for the opposite
+ * reason: a tail row the client can refetch is recoverable, a skeleton entry it
+ * can never learn about is not.
+ *
+ * An EMPTY skeleton yields one empty final chunk, not zero chunks. A client
+ * that receives no chunk at all cannot tell "this chat has no rows" from
+ * "chunks were lost".
+ */
+export function chunkRowSkeleton(
+  entries: readonly RowSkeletonEntry[],
+  maxBytes: number,
+): readonly RowSkeletonChunkPlan[] {
+  const budget = Math.min(maxBytes, SKELETON_CHUNK_MAX_BYTES);
+  const chunks: RowSkeletonChunkPlan[] = [];
+  let start = 0;
+  let spent = 0;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const cost = encodedEntryBytes(entries[index]);
+    if (index > start && spent + cost > budget) {
+      chunks.push({
+        fromOrdinal: start,
+        entries: entries.slice(start, index),
+        isFinal: false,
+      });
+      start = index;
+      spent = 0;
+    }
+    spent += cost;
+  }
+
+  chunks.push({
+    fromOrdinal: start,
+    entries: entries.slice(start),
+    isFinal: true,
+  });
+  return chunks;
+}
+
+/**
+ * Whether a delta is small enough to send as one.
+ *
+ * The producer's fallback when this is `false` is **not** to split the delta -
+ * it is to send `{type: "reindexed"}` and let the client re-request. That is
+ * already the honest answer for anything that moves rows, and reusing it here
+ * means the index-change path has exactly one oversized-delta behaviour instead
+ * of a chunking protocol whose edge cases nobody would exercise often enough to
+ * trust.
+ */
+export function indexChangeFits(
+  change: ChatIndexChange,
+  maxBytes: number,
+): boolean {
+  if (change.type === "reindexed") return true;
+  return (
+    utf8ByteLength(JSON.stringify(change)) <
+    Math.min(maxBytes, INDEX_CHANGE_MAX_BYTES)
+  );
+}
+
 export const chatLoadRangeRequestSchema = z.object({
   /**
    * Bounded, because it is the one envelope field a CLIENT chooses and the
@@ -408,9 +560,10 @@ export const chatLoadRangeRequestSchema = z.object({
    * response (`TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES`). An unbounded
    * `requestId` would make that reserve a guess about a value the client
    * controls - i.e. a way for a client to push the frame past the relay
-   * threshold from the outside.
+   * threshold from the outside. Bounded in BYTES via the charset, not merely
+   * in code units - see {@link RANGE_REQUEST_ID_PATTERN}.
    */
-  requestId: z.string().max(RANGE_REQUEST_ID_MAX_CHARS),
+  requestId: rangeRequestIdSchema,
   epoch: z.number().int().nonnegative(),
   fromOrdinal: z.number().int().nonnegative(),
   toOrdinal: z.number().int().nonnegative(),

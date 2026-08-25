@@ -69,6 +69,17 @@ export const TRANSCRIPT_RANGE_MAX_BYTES = 1024 * 1024;
  */
 export const TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES = 512;
 
+/**
+ * The byte budget for the hydrated tail a bounded snapshot ships inline.
+ *
+ * Deliberately a fraction of {@link TRANSCRIPT_RANGE_MAX_BYTES}, because the
+ * tail is only PART of a snapshot - aux state, the derived scalars and the
+ * accumulated-change summaries ride the same frame, and the snapshot has no
+ * sanctioned over-budget exception to fall back on (see
+ * {@link sliceTranscriptTail}).
+ */
+export const TRANSCRIPT_TAIL_MAX_BYTES = 256 * 1024;
+
 /** What a range request asks for. Ordinal bounds are INCLUSIVE at both ends. */
 export interface TranscriptRangeRequest {
   readonly fromOrdinal: number;
@@ -82,6 +93,22 @@ export interface TranscriptRangeRequest {
    * alternative is a row that can never be fetched at any budget - a permanent
    * hole in the transcript. Single records reach 1.27 MB in practice, so this
    * is a case that happens rather than a theoretical one.
+   *
+   * **The exception is per ROW, and a row is not one record.** An earlier
+   * version of this doc said "a single record larger than the budget", which
+   * understated it: an assistant row is a folded turn, so `rowRecordIds` can
+   * introduce every record that turn wrote. Two 700 KiB records sharing one
+   * turn key project to ONE row and are served together, ~1.4 MB - and N of
+   * them make the overshoot unbounded rather than capped near the largest
+   * single record.
+   *
+   * That is still the right call, for the same reason the exception exists at
+   * all: the alternative is a row nothing can ever fetch. But it is a genuinely
+   * unbounded frame, not a slightly-over-budget one, and anything downstream
+   * that assumed "at most one oversized record" was assuming something this
+   * never promised. A hard transport ceiling belongs at the transport, where a
+   * frame too large to send is a connection-level concern, not here where the
+   * only options are "serve it" and "make the transcript unreadable".
    *
    * That exception is the ONE sanctioned breach of the frame invariant, and it
    * is safe for a reason that does not generalize: a `range` response is
@@ -303,4 +330,89 @@ export function sliceTranscriptRange(
     reachedEnd: truncatedAtOrdinal === undefined && to === lastOrdinal,
     truncatedAtOrdinal,
   };
+}
+
+/** The hydrated tail a bounded snapshot ships inline. */
+export interface TranscriptTailSlice {
+  /** Ordinal of the first row in the tail. `rows.length` when the tail is empty. */
+  readonly fromOrdinal: number;
+  readonly rowIds: readonly string[];
+  readonly messages: readonly Message[];
+  readonly events: readonly ChatEvent[];
+}
+
+/**
+ * The last rows that fit in `maxBytes`, walking BACKWARD from the end.
+ *
+ * A separate function rather than a flag on {@link sliceTranscriptRange}, because
+ * the two differ in both direction and policy, and a boolean parameter would
+ * hide the second difference behind the first.
+ *
+ * ## No always-serve-one exception, unlike a range
+ *
+ * `sliceTranscriptRange` serves an over-budget row ALONE rather than leave a row
+ * that can never be fetched at any budget. That exception is safe there for a
+ * reason that does not carry: a `range` response is ordered against nothing, so
+ * the relay bumping it to the BULK lane costs it nothing.
+ *
+ * A snapshot has no such protection. It is ordered against every delta that
+ * follows it, and a re-snapshot (the slow-subscriber backfill, a `resnapshot`)
+ * is not even first on the wire. So the ceiling here is HARD, and a chat whose
+ * final row is one 1.27 MB record gets an EMPTY tail.
+ *
+ * That is the honest trade and it is worth stating plainly: the client paints
+ * one round trip later for that chat, because `loadRange` can serve the row the
+ * snapshot could not. The alternative - an oversized snapshot - trades a rare
+ * paint delay for a rare reordered frame, and a reordered snapshot is a
+ * transcript rendering the wrong thing rather than rendering late.
+ */
+export function sliceTranscriptTail(
+  rows: readonly TranscriptRowDescriptor[],
+  lookup: TranscriptRecordLookup,
+  maxBytes: number,
+): TranscriptTailSlice {
+  const budget = Math.min(maxBytes, TRANSCRIPT_TAIL_MAX_BYTES);
+  const rowIds: string[] = [];
+  const messages: Message[] = [];
+  const events: ChatEvent[] = [];
+  const seenMessageIds = new Set<string>();
+  const seenEventIds = new Set<string>();
+  let spent = 0;
+  let fromOrdinal = rows.length;
+
+  for (let ordinal = rows.length - 1; ordinal >= 0; ordinal -= 1) {
+    const needed = rowRecordIds(rows[ordinal].source);
+    const freshMessages: Message[] = [];
+    const freshEvents: ChatEvent[] = [];
+    let cost = encodedElementBytes(rows[ordinal].rowId);
+    for (const messageId of needed.messageIds) {
+      if (seenMessageIds.has(messageId)) continue;
+      const message = lookup.messagesById.get(messageId);
+      if (message === undefined) continue;
+      freshMessages.push(message);
+      cost += recordByteLength(message) + ELEMENT_SEPARATOR_BYTES;
+    }
+    for (const eventId of needed.eventIds) {
+      if (seenEventIds.has(eventId)) continue;
+      const event = lookup.eventsById.get(eventId);
+      if (event === undefined) continue;
+      freshEvents.push(event);
+      cost += recordByteLength(event) + ELEMENT_SEPARATOR_BYTES;
+    }
+    // Hard ceiling, including for the very first row considered - see above.
+    if (spent + cost > budget) break;
+    spent += cost;
+    fromOrdinal = ordinal;
+    rowIds.unshift(rows[ordinal].rowId);
+    for (const message of freshMessages) {
+      seenMessageIds.add(message.messageId);
+      messages.unshift(message);
+    }
+    for (const event of freshEvents) {
+      seenEventIds.add(event.eventId);
+      events.unshift(event);
+    }
+  }
+
+  return { fromOrdinal, rowIds, messages, events };
 }

@@ -198,9 +198,19 @@ export const chatSchemaV15 = z.object({
 // `1.5` predates. Bound to `chatSnapshotSchemaV16` so the released `1.6` line
 // stays verbatim once `1.7` opens above it.
 //
-// `claudePendingWakes` keeps the pre-deadline wire shape every frozen line
-// uses, NOT the live persisted one - `retryDeadlineStartedAt` / `heldChain`
-// are host-internal recovery state that has never been on this wire.
+// `claudePendingWakes` takes the LIVE `claudePendingWakeSchema`, unlike every
+// frozen line above it. That is not an oversight and it is worth stating why,
+// because the first version of this pin got it wrong: `1.4`/`1.5` bind the
+// pre-deadline copy because those lines genuinely shipped before
+// `retryDeadlineStartedAt`/`heldChain` existed - but `1.6` was bound to the
+// LIVE `chatSchema` when it shipped, so it shipped WITH them. Confirmed
+// against the authoritative artifact: `released-baseline-surface.json`'s
+// `stream["chat.subscribe"].schemas["1.6"]` lists both fields on the wake,
+// and `["1.5"]` does not.
+//
+// Copying `1.5`'s line here NARROWED a released surface - the opposite of what
+// a freeze is for. A frozen line must be transcribed from what shipped, never
+// from the line below it.
 //
 // Hand-frozen, and that is load-bearing rather than stylistic: `chatSchema` is
 // the PERSISTENCE schema, so binding it by reference means every later field
@@ -223,9 +233,7 @@ export const chatSchemaV16 = z.object({
   isTitleEditedByUser: z.boolean(),
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),

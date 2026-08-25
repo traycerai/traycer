@@ -312,8 +312,18 @@ describe("chatSubscribeWindowedClientFrameSchema's frame kinds", () => {
 
 describe("the 1.6 server union does not admit windowed-only frame kinds", () => {
   it("rejects range, indexChanged, and skeletonChunk kinds", () => {
-    const v16ServerKinds = new Set(
-      chatSubscribeServerFrameSchema.options.map(
+    // `Set<string>`, not the inferred `Set<"actionAck" | ...>`, and the reason
+    // is worth keeping: with the narrow element type the compiler REFUSES
+    // `has("range")` outright, because it already knows `1.6` has no such
+    // variant. That is the guard holding at the type level - but a test that
+    // cannot be written is not a test, and the whole point here is to fail
+    // loudly at runtime if someone later widens the union.
+    // Read from `chatSubscribeV16.serverFrameSchema`, NOT from the exported
+    // live union. They are different objects now, and the contract binds the
+    // former - a cold review caught this reading the wrong one, where adding
+    // `skeletonChunk` to the frozen union would have left the test green.
+    const v16ServerKinds = new Set<string>(
+      chatSubscribeV16.serverFrameSchema.options.map(
         (option) => option.shape.kind.value,
       ),
     );
@@ -344,6 +354,35 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
     expect(chatSubscribeV16.serverFrameSchema.safeParse(rangeFrame).success).toBe(
       false,
     );
+  });
+
+  it("rejects skeletonChunk and indexChanged frames at parse time too", () => {
+    // The kind list above is a structural check; these are the runtime half.
+    // Only `range` had one, so a frozen union that gained `skeletonChunk`
+    // would have passed both.
+    const skeletonChunkFrame = {
+      kind: "skeletonChunk",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chunk: { epoch: 0, fromOrdinal: 0, entries: [], isFinal: true },
+    };
+    const indexChangedFrame = {
+      kind: "indexChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      epoch: 1,
+      rowCount: 0,
+      change: { type: "reindexed" },
+    };
+
+    expect(
+      chatSubscribeV16.serverFrameSchema.safeParse(skeletonChunkFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV16.serverFrameSchema.safeParse(indexChangedFrame).success,
+    ).toBe(false);
   });
 });
 
@@ -431,6 +470,10 @@ describe("chatAccumulatedFileChangeSummarySchema's digest bound", () => {
       reason: "snapshot" as const,
       undoable: true,
       hasContents: true,
+      // `null` is the "nothing to count" case (`diffSource: "none"`), and is
+      // deliberately distinct from `{additions: 0, deletions: 0}`, which means
+      // the host counted and the file came back unchanged.
+      counts: null,
     };
   }
 

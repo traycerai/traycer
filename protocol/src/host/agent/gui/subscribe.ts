@@ -1084,45 +1084,6 @@ function isStructuralRecord(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * `snapshot` frame schema with the two unbounded arrays — `chat.messages`
- * and `chat.events` — validated STRUCTURALLY (each element is a plain
- * object) instead of deeply. Snapshots are the one frame whose size scales
- * with chat history (10s–100s of MB under full-chat-on-subscribe), and a
- * deep zod parse over that is seconds of render-thread CPU per snapshot; the
- * arrays' elements live in the same trust domain as the `blockDelta` frames
- * that stream the same content, so validating the envelope + every bounded
- * field deeply and the histories structurally trades no trust for the time.
- * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
- * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
- *
- * ONLY SOUND ON `chatSubscribeFullSnapshotSchemaVersion` (`1.6`). The deep
- * message/event schemas carry compatibility defaults (`imageResolutions`,
- * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
- * objects; the structural check skips them, so a `1.5` assistant message
- * would reach consumers with `imageResolutions` genuinely absent while typed
- * as present. A host serving exactly this line emits fully live `1.6` shapes
- * (its in-memory objects are post-parse normalized and its frame projection is
- * the identity there), so the shallow path is exact — callers MUST fall back to
- * the deep parse for any other negotiated version.
- *
- * The windowed line (`1.7`) does not need this and must not use it: its
- * snapshot carries no transcript arrays, so there is no deep walk to skip.
- * This is why the gate is a named "newest full-snapshot line" constant rather
- * than "the newest line" — see that constant's doc.
- */
-export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
-  kind: z.literal("snapshot"),
-  ...textFrameFields,
-  ...chatReferenceFields,
-  snapshot: chatSnapshotSchema.extend({
-    chat: chatSchema.extend({
-      messages: z.array(z.custom<Message>(isStructuralRecord)),
-      events: z.array(z.custom<ChatEvent>(isStructuralRecord)).default([]),
-    }),
-  }),
-});
-
 export function createImageResolutionUpdatedFrame(input: {
   readonly epicId: string;
   readonly chatId: string;
@@ -2174,6 +2135,56 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  */
 export const chatSubscribeFullSnapshotSchemaVersion =
   chatSubscribeV16.schemaVersion;
+
+/**
+ * `snapshot` frame schema with the two unbounded arrays — `chat.messages`
+ * and `chat.events` — validated STRUCTURALLY (each element is a plain
+ * object) instead of deeply. Snapshots are the one frame whose size scales
+ * with chat history (10s–100s of MB under full-chat-on-subscribe), and a
+ * deep zod parse over that is seconds of render-thread CPU per snapshot; the
+ * arrays' elements live in the same trust domain as the `blockDelta` frames
+ * that stream the same content, so validating the envelope + every bounded
+ * field deeply and the histories structurally trades no trust for the time.
+ * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
+ * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
+ *
+ * ONLY SOUND ON `chatSubscribeFullSnapshotSchemaVersion` (`1.6`). The deep
+ * message/event schemas carry compatibility defaults (`imageResolutions`,
+ * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
+ * objects; the structural check skips them, so a `1.5` assistant message
+ * would reach consumers with `imageResolutions` genuinely absent while typed
+ * as present. A host serving exactly this line emits fully live `1.6` shapes
+ * (its in-memory objects are post-parse normalized and its frame projection is
+ * the identity there), so the shallow path is exact — callers MUST fall back to
+ * the deep parse for any other negotiated version.
+ *
+ * The windowed line (`1.7`) does not need this and must not use it: its
+ * snapshot carries no transcript arrays, so there is no deep walk to skip.
+ * This is why the gate is a named "newest full-snapshot line" constant rather
+ * than "the newest line" — see that constant's doc.
+ *
+ * It binds the FROZEN `V16` schemas, not the live ones, and lives below them
+ * for that reason. A cold review found the latent version of this bug: bound
+ * live, the day `1.8` adds `assistantMessage.foo.default([])` and retro-pins
+ * `V16` to its pre-image, a new GUI negotiating `1.6` with an old host would
+ * still take the shallow path against LIVE-typed schemas — receiving an
+ * assistant message genuinely missing `foo` while typed as having it, and
+ * throwing on the first `foo.map`. The deep parse's compatibility default is
+ * exactly what the structural check skips. Bound to `V16`, the shallow schema
+ * follows the freeze automatically and that divergence cannot open.
+ */
+
+export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16.extend({
+    chat: chatSchemaV16.extend({
+      messages: z.array(z.custom<Message>(isStructuralRecord)),
+      events: z.array(z.custom<ChatEvent>(isStructuralRecord)).default([]),
+    }),
+  }),
+});
 
 // ─── Live `chat.subscribe@1.7` contract — the windowed transcript ──────────
 //

@@ -12,9 +12,12 @@ import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/
 import {
   TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES,
   TRANSCRIPT_RANGE_MAX_BYTES,
+  TRANSCRIPT_TAIL_MAX_BYTES,
   buildTranscriptRecordLookup,
   sliceTranscriptRange,
+  sliceTranscriptTail,
   type TranscriptRangeSlice,
+  type TranscriptTailSlice,
 } from "@traycer/protocol/persistence/chat-transcript/read-range";
 
 /**
@@ -471,5 +474,139 @@ describe("the frame ceiling", () => {
     expect(encodedFrameBytes(result)).toBeGreaterThan(
       TRANSCRIPT_RANGE_MAX_BYTES,
     );
+  });
+});
+
+/**
+ * A tail budget that fits exactly these rows and nothing more.
+ *
+ * No envelope reserve, unlike {@link budgetFor}: the tail does not own a frame,
+ * it is one field of a snapshot, and `TRANSCRIPT_TAIL_MAX_BYTES` is already
+ * only a quarter of the frame ceiling precisely so the rest of the snapshot
+ * has room. Adding a second reserve here would be double-counting.
+ */
+function tailBudgetFor(
+  rows: ReadonlyArray<{ rowId: string; records: readonly Message[] }>,
+): number {
+  return rows.reduce((total, row) => total + rowCost(row.rowId, row.records), 0);
+}
+
+function tail(
+  rows: readonly TranscriptRowDescriptor[],
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+  maxBytes: number,
+): TranscriptTailSlice {
+  return sliceTranscriptTail(
+    rows,
+    buildTranscriptRecordLookup(messages, events),
+    maxBytes,
+  );
+}
+
+/**
+ * The tail is the one budgeted read with a HARD ceiling.
+ *
+ * `sliceTranscriptRange` serves an over-budget row alone rather than leave a
+ * permanent hole, because a `range` response is ordered against nothing. A
+ * snapshot has no such protection - it is ordered against every delta after it,
+ * and a re-snapshot is not even first on the wire - so the tail must be willing
+ * to come back EMPTY and let `loadRange` do the work.
+ */
+describe("sliceTranscriptTail", () => {
+  it("takes the last rows that fit, not the first", () => {
+    const result = tail(THREE_ROWS, THREE, [], tailBudgetFor([
+      { rowId: "m-1", records: [M1] },
+      { rowId: "m-2", records: [M2] },
+    ]));
+
+    expect(result.rowIds).toEqual(["m-1", "m-2"]);
+    expect(result.fromOrdinal).toBe(1);
+    expect(result.messages.map((message) => message.messageId)).toEqual([
+      "m-1",
+      "m-2",
+    ]);
+  });
+
+  it("returns the whole transcript when it fits, anchored at ordinal 0", () => {
+    const result = tail(THREE_ROWS, THREE, [], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.rowIds).toEqual(["m-0", "m-1", "m-2"]);
+    expect(result.fromOrdinal).toBe(0);
+  });
+
+  it("returns an EMPTY tail rather than break the ceiling for one huge row", () => {
+    // The whole reason this is not `sliceTranscriptRange` with a flag. The
+    // client paints one round trip later for this chat; the alternative is an
+    // oversized snapshot the relay can reorder against the deltas that follow.
+    const huge = makeUserMessage({
+      messageId: "m-huge",
+      timestamp: 1,
+      text: "x".repeat(2 * 1024 * 1024),
+    });
+
+    const result = tail([userRow(huge)], [huge], [], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.rowIds).toEqual([]);
+    expect(result.messages).toEqual([]);
+    // `rows.length`, so a client can seat an empty tail against the skeleton
+    // without a special case for "nothing hydrated".
+    expect(result.fromOrdinal).toBe(1);
+  });
+
+  it("still hydrates the rows BEFORE an unfittable last row is reached", () => {
+    // Walking backward, the huge row is hit first and stops the walk - so the
+    // tail is empty even though earlier rows would have fit. That is the
+    // honest consequence of a contiguous tail, and it is pinned here so a
+    // future change to skip-and-continue is a deliberate decision.
+    const huge = makeUserMessage({
+      messageId: "m-huge",
+      timestamp: 40,
+      text: "x".repeat(2 * 1024 * 1024),
+    });
+    const rows = [...THREE_ROWS, userRow(huge)];
+
+    const result = tail(rows, [...THREE, huge], [], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.rowIds).toEqual([]);
+    expect(result.fromOrdinal).toBe(4);
+  });
+
+  it("clamps a caller asking for more than the tail budget", () => {
+    const wide = Array.from({ length: 400 }, (unused, index) =>
+      makeUserMessage({
+        messageId: `w-${index}`,
+        timestamp: index,
+        text: "y".repeat(4_000),
+      }),
+    );
+
+    const result = tail(wide.map(userRow), wide, [], 64 * 1024 * 1024);
+
+    const spent = result.rowIds.reduce(
+      (total, rowId, index) => total + rowCost(rowId, [result.messages[index]]),
+      0,
+    );
+    expect(spent).toBeLessThanOrEqual(TRANSCRIPT_TAIL_MAX_BYTES);
+    expect(result.rowIds.length).toBeLessThan(wide.length);
+  });
+
+  it("is empty for an empty transcript, anchored at 0", () => {
+    const result = tail([], [], [], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.rowIds).toEqual([]);
+    expect(result.fromOrdinal).toBe(0);
+  });
+
+  it("charges a shared record set once across the rows that share it", () => {
+    const rows = sliceRows("turn-1", [M0.messageId], 10);
+
+    const result = tail(rows, [M0], [], tailBudgetFor([
+      { rowId: rows[0].rowId, records: [M0] },
+      { rowId: rows[1].rowId, records: [] },
+    ]));
+
+    expect(result.rowIds).toEqual([rows[0].rowId, rows[1].rowId]);
+    expect(result.messages).toEqual([M0]);
   });
 });
