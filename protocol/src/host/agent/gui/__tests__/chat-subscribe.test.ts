@@ -2271,6 +2271,51 @@ describe("chat.subscribe@1.6 registry membership", () => {
   });
 });
 
+describe("chat.subscribe Reasonix anchor versioning", () => {
+  const reasonixMessage: UserMessage = {
+    ...userMessage,
+    sessionAnchor: {
+      harnessId: "reasonix",
+      hostId: "test-host",
+      sessionId: "reasonix-session-1",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      createdAt: 1000,
+      coveredUntilMessageId: null,
+      profileId: null,
+      profileName: null,
+    },
+  };
+  const frame = {
+    kind: "messageAccepted" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    message: reasonixMessage,
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+  ])("keeps a Reasonix anchor off released %s frames", (_version, contract) => {
+    expect(contract.serverFrameSchema.safeParse(frame).success).toBe(false);
+  });
+
+  it("carries a Reasonix anchor on the unreleased 1.6 line", () => {
+    expect(chatSubscribeV16.serverFrameSchema.parse(frame)).toMatchObject({
+      kind: "messageAccepted",
+      message: { sessionAnchor: { harnessId: "reasonix" } },
+    });
+  });
+});
+
 describe("guiAgentModelCapabilitiesSchema (imageGeneration)", () => {
   it("parses { imageGeneration: true } and defaults omitted imageGeneration to false", () => {
     expect(

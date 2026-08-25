@@ -26,6 +26,7 @@ import {
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
+  userMessageSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   type ChatEvent,
@@ -1018,12 +1019,13 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     action: chatActionSchemaV15,
   });
 
-// Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
-// trees (`inReplyTo` shipped in 1.4) but the pre-union queue, so a released
-// 1.4/1.5 `queueChanged` frame can never carry a managed-command item.
+// Frozen common frames bound to `chat.subscribe@1.4–1.5`: `inReplyTo` shipped
+// in 1.4, but the message anchor remains on the pre-Reasonix union and the
+// queue remains pre-managed-command. Released peers therefore cannot receive
+// either an unknown harness discriminant or a managed-command queue item.
 const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaPreTurnTail,
     queue: chatQueueStateSchemaPreManagedCommand,
     event: chatEventSchema,
     action: chatActionSchemaV15,

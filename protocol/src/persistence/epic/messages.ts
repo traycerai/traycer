@@ -198,7 +198,9 @@ export type Message = z.infer<typeof messageSchema>;
 // match the shipped wire and strip `inReplyTo` for older peers. Field-for-field
 // hand copies, NOT `.omit()`/`.extend()` off the live shape — a future message
 // field must not silently leak onto the frozen wire. Non-sender fields reuse the
-// live sub-schemas (same convention as the frozen `chatSnapshotSchemaV1x`).
+// live sub-schemas except the session anchor: released peers must also stay on
+// the pre-Reasonix anchor union, otherwise a new host can emit a discriminant
+// their installed schema does not know.
 export const userMessageSchemaPreInReplyTo = z
   .object({
     role: z.literal("user"),
@@ -206,7 +208,7 @@ export const userMessageSchemaPreInReplyTo = z
     sender: userMessageSenderSchemaPreInReplyTo,
     message: userMessagePayloadSchema,
     timestamp: z.number(),
-    sessionAnchor: chatSessionAnchorSchema.nullable(),
+    sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
   })
   .superRefine((message, ctx) => {
     if (message.sender.type === message.message.kind) return;
