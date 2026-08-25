@@ -83,6 +83,30 @@ export interface TranscriptWindow {
   readonly skeletonComplete: boolean;
   /** Disjoint and sorted by `fromOrdinal`. */
   readonly spans: readonly HydratedSpan[];
+  /**
+   * Records the client holds that the INDEX has not placed yet.
+   *
+   * The client-side mirror of an asymmetry the host cannot avoid: a
+   * body-bearing frame (`messageAccepted`, `eventAppended`) carries a record
+   * and no ordinal, while an index frame carries an ordinal and no body. The
+   * host emits the first as soon as the append commits and moves the index only
+   * on its next snapshot, so between those two moments a record exists on the
+   * client with nowhere in the ordinal space to live.
+   *
+   * They are held HERE rather than appended to the tail span because a span
+   * entry claims an ordinal and carries a row id, and the client can compute
+   * neither - row ids are the host's projection, and inventing one to satisfy
+   * the identity check is the same as deleting the check. "I have this record
+   * and I do not know where it goes" is the honest statement, and it is what
+   * this field says.
+   *
+   * Superseded rather than merged: once the same record id arrives inside a
+   * span, the authoritative copy wins and this one is pruned. Cleared outright
+   * on a rebase, because a coordinate space the client has left says nothing
+   * about what is real.
+   */
+  readonly liveMessages: readonly Message[];
+  readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
    * The index is void and only a `resnapshot` repairs it.
@@ -131,9 +155,142 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     skeleton: [],
     skeletonComplete: false,
     spans: [],
+    liveMessages: [],
+    liveEvents: [],
     hydratedBytes: 0,
     invalidated: false,
     clock: 0,
+  };
+}
+
+/**
+ * Take a record the client received with no ordinal.
+ *
+ * The write-through half of the decision that `state.messages` is DERIVED on
+ * this line. An applier that wrote to the published array instead would have
+ * its work erased by the next windowed frame of any kind - a skeleton chunk, an
+ * index delta, a range - because that array is rebuilt from this window every
+ * time. Nothing else in the store has that property, which is exactly why it
+ * was easy to miss.
+ *
+ * Already-known records are dropped rather than duplicated, checking BOTH the
+ * live set and the spans: the host re-sends `messageAccepted` for a duplicate
+ * user-message id (a reconnect retransmitting an accepted send), and the
+ * hydrated copy of a record is the one to keep.
+ */
+export function appendLiveRecords(
+  window: TranscriptWindow,
+  input: {
+    readonly messages: readonly Message[];
+    readonly events: readonly ChatEvent[];
+  },
+): TranscriptWindow {
+  const knownMessages = new Set<string>(
+    window.liveMessages.map((message) => message.messageId),
+  );
+  const knownEvents = new Set<string>(
+    window.liveEvents.map((event) => event.eventId),
+  );
+  for (const span of window.spans) {
+    for (const message of span.messages) knownMessages.add(message.messageId);
+    for (const event of span.events) knownEvents.add(event.eventId);
+  }
+  const messages = input.messages.filter(
+    (message) => !knownMessages.has(message.messageId),
+  );
+  const events = input.events.filter(
+    (event) => !knownEvents.has(event.eventId),
+  );
+  if (messages.length === 0 && events.length === 0) return window;
+  return {
+    ...window,
+    liveMessages: [...window.liveMessages, ...messages],
+    liveEvents: [...window.liveEvents, ...events],
+    clock: window.clock + 1,
+  };
+}
+
+/**
+ * Drop live records the spans now carry authoritatively.
+ *
+ * Runs after every span mutation. Without it the live set would grow for the
+ * life of the session, and - worse - a record the host later REWROTE would
+ * still have its original sitting here, ready to reappear the moment its span
+ * is evicted.
+ */
+function pruneSupersededLiveRecords(
+  window: TranscriptWindow,
+): TranscriptWindow {
+  if (window.liveMessages.length === 0 && window.liveEvents.length === 0) {
+    return window;
+  }
+  const spanMessages = new Set<string>();
+  const spanEvents = new Set<string>();
+  for (const span of window.spans) {
+    for (const message of span.messages) spanMessages.add(message.messageId);
+    for (const event of span.events) spanEvents.add(event.eventId);
+  }
+  const liveMessages = window.liveMessages.filter(
+    (message) => !spanMessages.has(message.messageId),
+  );
+  const liveEvents = window.liveEvents.filter(
+    (event) => !spanEvents.has(event.eventId),
+  );
+  if (
+    liveMessages.length === window.liveMessages.length &&
+    liveEvents.length === window.liveEvents.length
+  ) {
+    return window;
+  }
+  return { ...window, liveMessages, liveEvents };
+}
+
+/**
+ * Replace a message wherever the window holds it, live or hydrated.
+ *
+ * The in-place half: an image resolving, a steer split moving blocks, a
+ * detached-subagent event attaching to its owner. `held: false` means the row
+ * is outside the window, which is NOT an error - it is the case the caller
+ * answers by dropping the change and letting the eventual hydration serve the
+ * host's own version.
+ */
+export function updateWindowMessage(
+  window: TranscriptWindow,
+  messageId: string,
+  update: (message: Message) => Message,
+): { readonly window: TranscriptWindow; readonly held: boolean } {
+  const holdsMessage = (messages: readonly Message[]): boolean =>
+    messages.some((message) => message.messageId === messageId);
+  // Computed rather than accumulated in a flag: an assignment inside a `map`
+  // callback is invisible to control-flow narrowing, so a `let held = false`
+  // read afterwards is typed `false` and the guard below reads as dead code.
+  const held =
+    window.spans.some((span) => holdsMessage(span.messages)) ||
+    holdsMessage(window.liveMessages);
+  if (!held) return { window, held: false };
+  const spans = window.spans.map((span) => {
+    if (!holdsMessage(span.messages)) return span;
+    const messages = span.messages.map((message) =>
+      message.messageId === messageId ? update(message) : message,
+    );
+    return {
+      ...span,
+      messages,
+      bytes: recordsByteLength(messages, span.events),
+    };
+  });
+  const liveMessages = window.liveMessages.map((message) =>
+    message.messageId === messageId ? update(message) : message,
+  );
+  return {
+    window: {
+      ...window,
+      spans,
+      liveMessages,
+      hydratedBytes: totalBytes(spans),
+      clock: window.clock + 1,
+    },
+    held: true,
   };
 }
 
@@ -325,7 +482,11 @@ export function applyWindowedSnapshot(
     touchedAt: clock,
   };
   const spans = insertSpan(base.spans, tailSpan);
-  return { ...base, spans, hydratedBytes: totalBytes(spans) };
+  return pruneSupersededLiveRecords({
+    ...base,
+    spans,
+    hydratedBytes: totalBytes(spans),
+  });
 }
 
 /**
@@ -550,7 +711,12 @@ export function applyRangeResponse(
     touchedAt: clock,
   };
   const spans = insertSpan(window.spans, span);
-  return { ...window, spans, hydratedBytes: totalBytes(spans), clock };
+  return pruneSupersededLiveRecords({
+    ...window,
+    spans,
+    hydratedBytes: totalBytes(spans),
+    clock,
+  });
 }
 
 /**
@@ -591,9 +757,20 @@ export function hydratedRecords(window: TranscriptWindow): {
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
 } {
+  // Spans FIRST, live records after, and both facts matter. Chronologically an
+  // unplaced record is the newest thing the client has, so it sorts last
+  // anyway; and the dedupe keeps the first occurrence, so if a copy has already
+  // landed in a span the authoritative one wins here even in the window between
+  // its arrival and the prune.
   return {
-    messages: dedupeMessages(window.spans.map((span) => span.messages)),
-    events: dedupeEvents(window.spans.map((span) => span.events)),
+    messages: dedupeMessages([
+      ...window.spans.map((span) => span.messages),
+      window.liveMessages,
+    ]),
+    events: dedupeEvents([
+      ...window.spans.map((span) => span.events),
+      window.liveEvents,
+    ]),
   };
 }
 

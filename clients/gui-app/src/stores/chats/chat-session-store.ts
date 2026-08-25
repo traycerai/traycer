@@ -37,6 +37,7 @@ import {
   applyRangeResponse,
   applySkeletonChunk,
   applyWindowedSnapshot,
+  appendLiveRecords,
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
   hydratedRecords,
@@ -2107,6 +2108,28 @@ export function createChatSessionStoreWithNotificationDependencies(
      */
     let deferredWindowedSnapshot: ChatWindowedSnapshotFrame | null = null;
 
+    /**
+     * Whether this session negotiated the windowed line.
+     *
+     * Set by the first windowed snapshot rather than read from the transport,
+     * because it is the SHAPE of what arrived that the appliers below have to
+     * branch on, and that shape is what the frame proves. A session never
+     * changes lines mid-life - the negotiated minor is fixed for a connection,
+     * and a reconnect rebuilds this closure.
+     */
+    let windowedLine = false;
+
+    /**
+     * Route a record that arrived with no ordinal into the window.
+     *
+     * The write-through half of "state.messages is DERIVED on this line". An
+     * applier that appended to the published array instead would have its work
+     * erased by the very next windowed frame - a skeleton chunk, an index
+     * delta, a range - because that array is rebuilt from the window each time.
+     * The legacy line has the same shape and does not notice, because there the
+     * only rebuild is a snapshot, which carries the record anyway.
+     */
+
     /** Ask for whatever the window says is missing, if anything. */
     const requestPlannedHydration = (): void => {
       const client = streamClient;
@@ -2147,6 +2170,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         messages: records.messages,
         events: records.events,
       });
+    };
+
+    const takeLiveRecords = (input: {
+      readonly messages: readonly Message[];
+      readonly events: readonly ChatEvent[];
+    }): void => {
+      publishWindowedTranscript(
+        appendLiveRecords(get().transcriptWindow, input),
+      );
     };
 
     /**
@@ -2251,6 +2283,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        windowedLine = true;
         // Before the fold, exactly as the legacy path flushes: a queued delta
         // applied after an authoritative snapshot would re-add a block the
         // snapshot already carries.
@@ -2547,7 +2580,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.acceptedActions,
             frame.message.messageId,
           );
-          if (messageExists(state.messages, frame.message.messageId)) {
+          // On the windowed line the record goes into the WINDOW instead (see
+          // `takeLiveRecords`), and `messages` is republished from there - so
+          // the existence check moves with it, because `state.messages` here
+          // holds only what is hydrated. `appendLiveRecords` runs the same
+          // check against the live set AND the spans.
+          if (
+            windowedLine ||
+            messageExists(state.messages, frame.message.messageId)
+          ) {
             return {
               acceptedActions,
               pendingUserMessages,
@@ -2567,6 +2608,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             ),
           };
         });
+        if (windowedLine) {
+          takeLiveRecords({ messages: [frame.message], events: [] });
+        }
       },
       onQueueChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2908,6 +2952,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       onEventAppended: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        if (windowedLine) {
+          takeLiveRecords({ messages: [], events: [frame.event] });
           return;
         }
         set((state) => ({

@@ -7,15 +7,18 @@ import type {
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
+  appendLiveRecords,
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
   applyWindowedSnapshot,
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
+  hydratedRecords,
   planTranscriptHydration,
   selectHydratedRecords,
   transcriptHydrationGaps,
+  updateWindowMessage,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
@@ -658,5 +661,72 @@ describe("eviction", () => {
       read.window.hydratedBytes - 1,
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 28]);
+  });
+});
+
+describe("records the index has not placed yet", () => {
+  it("holds them, reports them last, and drops duplicates of what a span already has", () => {
+    const window = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+    );
+    const withLive = appendLiveRecords(window, {
+      // `m-0` is already hydrated; the host re-sends it on a reconnect
+      // retransmitting an accepted send. The placed copy is the one to keep.
+      messages: [userMessage("m-0", 0), userMessage("m-live", 9)],
+      events: [event("e-live", 9)],
+    });
+
+    expect(withLive.liveMessages.map((m) => m.messageId)).toEqual(["m-live"]);
+    const records = hydratedRecords(withLive);
+    // Spans first, unplaced last - which is also chronological, since an
+    // unplaced record is the newest thing the client has.
+    expect(records.messages.map((m) => m.messageId)).toEqual(["m-0", "m-live"]);
+    expect(records.events.map((e) => e.eventId)).toEqual(["e-live"]);
+  });
+
+  it("updates a message wherever it lives, and says so when it lives nowhere", () => {
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("m-0", 0)],
+      }),
+    );
+    const window = appendLiveRecords(seeded, {
+      messages: [userMessage("m-live", 9)],
+      events: [],
+    });
+
+    const hydrated = updateWindowMessage(window, "m-0", (message) => ({
+      ...message,
+      timestamp: 111,
+    }));
+    expect(hydrated.held).toBe(true);
+    expect(hydrated.window.spans[0].messages[0].timestamp).toBe(111);
+
+    const live = updateWindowMessage(hydrated.window, "m-live", (message) => ({
+      ...message,
+      timestamp: 222,
+    }));
+    expect(live.held).toBe(true);
+    expect(live.window.liveMessages[0].timestamp).toBe(222);
+
+    // Outside the window entirely. `held: false` is not an error - it is the
+    // case the caller answers by dropping the change and letting hydration
+    // serve the host's own version.
+    const absent = updateWindowMessage(live.window, "m-nowhere", (message) => ({
+      ...message,
+      timestamp: 333,
+    }));
+    expect(absent.held).toBe(false);
+    expect(absent.window).toBe(live.window);
   });
 });

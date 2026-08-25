@@ -41,6 +41,30 @@ const CONTENT: JsonContent = {
   content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
 };
 
+/**
+ * The `messageAccepted` frame's own message type. NOT the `Message` below: the
+ * two are structurally identical and nominally distinct (the frame's resolves
+ * through the subscribe union's schema instance), so a fixture typed as one
+ * cannot be passed where the other is expected.
+ */
+type AcceptedMessage = Parameters<
+  ChatStreamCallbacks["onMessageAccepted"]
+>[0]["message"];
+
+function acceptedMessage(
+  messageId: string,
+  timestamp: number,
+): AcceptedMessage {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: OWNER_ID },
+    message: { kind: "user", content: CONTENT },
+    timestamp,
+    sessionAnchor: null,
+  };
+}
+
 function userMessage(messageId: string, timestamp: number): Message {
   return {
     role: "user",
@@ -411,6 +435,229 @@ describe("accumulated-change chunks", () => {
           .getState()
           .accumulatedFileChangeSummaries.map((entry) => entry.filePath),
       ).toEqual(["z.ts"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+describe("a record that arrives with no ordinal", () => {
+  /**
+   * The host emits `messageAccepted` / `eventAppended` the moment the append
+   * commits, and moves the INDEX only on its next snapshot - verified against
+   * `chat-session-manager.ts`, where the accept path broadcasts the body and
+   * calls no `broadcastSnapshot`. So a record genuinely exists on the client
+   * with nowhere in the ordinal space to live, and it has to survive every
+   * windowed frame that arrives before the index catches up.
+   */
+  function seatHydratedSnapshot(harness: WindowedHarness): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 4,
+        rowCount: 1,
+        tailFromOrdinal: 0,
+        tailMessages: [userMessage("m-0", 0)],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+  }
+
+  it("survives a skeleton chunk, which is what the old code got wrong", () => {
+    // Before write-through, `onMessageAccepted` appended to `state.messages`
+    // and the next `publishWindowedTranscript` - triggered by ANY windowed
+    // frame - rebuilt that array from the window and dropped it.
+    const harness = createWindowedHarness();
+    try {
+      seatHydratedSnapshot(harness);
+      harness.callbacks().onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        message: acceptedMessage("m-live", 9),
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .messages.map((message) => message.messageId),
+      ).toEqual(["m-0", "m-live"]);
+
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromOrdinal: 0,
+          entries: [
+            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
+          ],
+          isFinal: true,
+        },
+      });
+
+      expect(
+        harness.handle.store
+          .getState()
+          .messages.map((message) => message.messageId),
+      ).toEqual(["m-0", "m-live"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("routes an appended EVENT the same way", () => {
+    // Same defect class as the message above, and it needs its own case: the
+    // two appliers are separate branches, so a fix to one leaves the other
+    // writing into an array the next frame rebuilds.
+    const harness = createWindowedHarness();
+    try {
+      seatHydratedSnapshot(harness);
+      harness.callbacks().onEventAppended({
+        kind: "eventAppended",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          eventId: "e-live",
+          type: "turn.completed",
+          timestamp: 9,
+          clientActionId: null,
+          actor: null,
+          message: null,
+          turnId: "turn-1",
+          messageId: null,
+          queueItemId: null,
+          approvalId: null,
+          blockId: null,
+          severity: "info",
+          metadata: null,
+        },
+      });
+      expect(
+        harness.handle.store.getState().events.map((event) => event.eventId),
+      ).toEqual(["e-live"]);
+
+      harness.callbacks().onSkeletonChunk({
+        kind: "skeletonChunk",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        chunk: {
+          epoch: 4,
+          fromOrdinal: 0,
+          entries: [
+            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
+          ],
+          isFinal: true,
+        },
+      });
+
+      expect(
+        harness.handle.store.getState().events.map((event) => event.eventId),
+      ).toEqual(["e-live"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("is superseded, not duplicated, once a range brings the placed copy", () => {
+    const harness = createWindowedHarness();
+    try {
+      seatHydratedSnapshot(harness);
+      harness.callbacks().onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        message: acceptedMessage("m-live", 9),
+      });
+
+      // The host's own copy, now with an ordinal.
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: "req-1",
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-live", 9)],
+          events: [],
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      const state = harness.handle.store.getState();
+      expect(state.messages.map((message) => message.messageId)).toEqual([
+        "m-0",
+        "m-live",
+      ]);
+      // Pruned rather than kept alongside: a live copy that outlived its
+      // hydration would reappear the moment its span was evicted.
+      expect(state.transcriptWindow.liveMessages).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("is dropped on a rebase, because the coordinate space changed", () => {
+    const harness = createWindowedHarness();
+    try {
+      seatHydratedSnapshot(harness);
+      harness.callbacks().onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        message: acceptedMessage("m-live", 9),
+      });
+      expect(
+        harness.handle.store.getState().transcriptWindow.liveMessages,
+      ).toHaveLength(1);
+
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 5,
+        rowCount: 1,
+        changes: [{ type: "reindexed" }],
+      });
+
+      // A `reindexed` says every ordinal now names a different row. Anything
+      // the client was holding unplaced says nothing about the new space, and
+      // the resnapshot re-delivers whatever is real.
+      expect(
+        harness.handle.store.getState().transcriptWindow.liveMessages,
+      ).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not take the window path on the legacy line", () => {
+    // No windowed snapshot ever arrived, so `messageAccepted` must still
+    // append to `state.messages` exactly as it always has.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onMessageAccepted({
+        kind: "messageAccepted",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        message: acceptedMessage("m-legacy", 1),
+      });
+      const state = harness.handle.store.getState();
+      expect(state.messages.map((message) => message.messageId)).toEqual([
+        "m-legacy",
+      ]);
+      expect(state.transcriptWindow.liveMessages).toEqual([]);
     } finally {
       harness.handle.dispose();
     }
