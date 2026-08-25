@@ -1931,11 +1931,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         return true;
       }
       const expectedTitle = state.chat?.title ?? node.name;
+      // Read whole from the store rather than from the tile's `useShallow`
+      // selection. The transcript window changes on every windowed frame, so
+      // subscribing the tile to it would widen a hot render path for a value
+      // only this handler reads - and reading it at SUBMIT time is what the
+      // question is about anyway.
+      const titleState = handle.store.getState();
       const shouldMarkTitlePending = shouldGenerateChatTitleForSubmittedMessage(
         {
-          chat: state.chat,
-          messages: state.messages,
-          pendingUserMessages: state.pendingUserMessages,
+          chat: titleState.chat,
+          messages: titleState.messages,
+          pendingUserMessages: titleState.pendingUserMessages,
+          transcriptWindow: titleState.transcriptWindow,
+          transcriptDerived: titleState.transcriptDerived,
           content: input.content,
         },
       );
@@ -1958,12 +1966,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       canAct,
       chatActions,
       dispatchUi,
+      handle.store,
       node.id,
       node.name,
       profile,
       state.chat,
-      state.messages,
-      state.pendingUserMessages,
     ],
   );
   const canSendNextStep =

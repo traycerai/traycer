@@ -19,6 +19,7 @@ import {
   type ChatSessionState,
   type PendingChatAction,
 } from "@/stores/chats/chat-session-store";
+import { userRowPresence } from "@/stores/chats/transcript-window";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { containsImageAtoms } from "@/lib/composer/image-atoms";
@@ -376,17 +377,42 @@ export function canModifyChatMessages(input: {
   );
 }
 
+/**
+ * Is this send the FIRST thing a person has said in this chat, and therefore
+ * the one a generated title should come from?
+ *
+ * The transcript half of that question cannot be answered from `messages` on
+ * the windowed line: it holds what is HYDRATED, so a chat long enough to have
+ * been windowed can present no user row and re-trigger title generation on a
+ * chat that has had a title for weeks. The SKELETON describes every row, which
+ * is what a whole-transcript question needs.
+ *
+ * Both sources are consulted rather than one replacing the other. The hydrated
+ * rows are checked first because they are authoritative and always available -
+ * including on the legacy line, where there is no skeleton at all - and the
+ * skeleton then answers the case they cannot.
+ *
+ * `unknown` (a skeleton still streaming) is folded into "do not generate",
+ * deliberately. The two failures are not symmetric: re-titling an established
+ * chat rewrites something the user has been reading for weeks, while a missed
+ * title needs `rowCount > 0` on a mid-stream skeleton - which a genuinely new
+ * chat, whose `rowCount` is 0, never has.
+ */
 export function shouldGenerateChatTitleForSubmittedMessage(input: {
   readonly chat: ChatSessionState["chat"];
   readonly messages: ChatSessionState["messages"];
   readonly pendingUserMessages: ChatSessionState["pendingUserMessages"];
+  readonly transcriptWindow: ChatSessionState["transcriptWindow"];
+  readonly transcriptDerived: ChatSessionState["transcriptDerived"];
   readonly content: JsonContent;
 }): boolean {
   if (input.chat?.isTitleEditedByUser === true) return false;
   const text = extractPlainTextFromComposerJSONContent(input.content).trim();
   if (text.length === 0) return false;
   if (input.pendingUserMessages.length > 0) return false;
-  return !input.messages.some((message) => message.role === "user");
+  if (input.messages.some((message) => message.role === "user")) return false;
+  if (!isWindowedTranscript(input)) return true;
+  return userRowPresence(input.transcriptWindow) === "absent";
 }
 
 export function showRestoreResultToast(

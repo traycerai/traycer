@@ -12,6 +12,11 @@ import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { ChatTranscriptDerived } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  emptyTranscriptWindow,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import type {
   ChatMessage,
   InterviewSegment,
@@ -1055,6 +1060,48 @@ function pendingUserMessage(clientActionId: string): PendingUserMessage {
   };
 }
 
+/**
+ * Off the windowed line there is no window and no derived payload, which is
+ * what makes `state.messages` the whole transcript there.
+ */
+const LEGACY_LINE = {
+  transcriptWindow: emptyTranscriptWindow(),
+  transcriptDerived: null,
+} as const;
+
+/** A windowed session holding `rowCount` rows, with the skeleton described. */
+function windowedLine(input: {
+  readonly rowCount: number;
+  readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
+  readonly skeletonComplete: boolean;
+}): {
+  readonly transcriptWindow: TranscriptWindow;
+  readonly transcriptDerived: ChatTranscriptDerived;
+} {
+  return {
+    transcriptWindow: {
+      ...emptyTranscriptWindow(),
+      epoch: 1,
+      rowCount: input.rowCount,
+      skeleton: input.skeleton,
+      skeletonComplete: input.skeletonComplete,
+    },
+    transcriptDerived: {
+      latestAssistantUsage: null,
+      pinnedTodo: null,
+      latestForkableAssistantMessageId: null,
+      restorableSetupInterruption: null,
+    },
+  };
+}
+
+function skeletonEntry(
+  rowId: string,
+  role: RowSkeletonEntry["role"],
+): RowSkeletonEntry {
+  return { rowId, createdAt: 0, role, byteLength: 10 };
+}
+
 describe("shouldGenerateChatTitleForSubmittedMessage", () => {
   it("generates a title for the first message on a fresh, unedited chat", () => {
     expect(
@@ -1062,6 +1109,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: chatRecord(false),
         messages: [],
         pendingUserMessages: [],
+        ...LEGACY_LINE,
         content: CONTENT,
       }),
     ).toBe(true);
@@ -1073,6 +1121,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: chatRecord(true),
         messages: [],
         pendingUserMessages: [],
+        ...LEGACY_LINE,
         content: CONTENT,
       }),
     ).toBe(false);
@@ -1085,6 +1134,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: chatRecord(false),
         messages: [],
         pendingUserMessages: [],
+        ...LEGACY_LINE,
         content: empty,
       }),
     ).toBe(false);
@@ -1096,6 +1146,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: chatRecord(false),
         messages: [],
         pendingUserMessages: [pendingUserMessage("action-1")],
+        ...LEGACY_LINE,
         content: CONTENT,
       }),
     ).toBe(false);
@@ -1107,6 +1158,7 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: chatRecord(false),
         messages: [persistedUserMessage("m1")],
         pendingUserMessages: [],
+        ...LEGACY_LINE,
         content: CONTENT,
       }),
     ).toBe(false);
@@ -1118,9 +1170,107 @@ describe("shouldGenerateChatTitleForSubmittedMessage", () => {
         chat: null,
         messages: [],
         pendingUserMessages: [],
+        ...LEGACY_LINE,
         content: CONTENT,
       }),
     ).toBe(true);
+  });
+
+  // ─── The windowed line, where `messages` stops being the transcript ──────
+
+  it("does not re-title an established chat whose user rows are all unhydrated", () => {
+    // The failure this fixes. `messages` is empty because nothing in the
+    // window is hydrated - not because nobody has ever spoken. The skeleton
+    // knows better.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 2,
+          skeleton: [
+            skeletonEntry("row-0", "user"),
+            skeletonEntry("row-1", "assistant"),
+          ],
+          skeletonComplete: true,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("still titles a brand-new windowed chat, whose skeleton is empty AND incomplete", () => {
+    // `rowCount === 0` has to be checked before completeness: no chunk is ever
+    // sent for an empty transcript, so its skeleton never becomes `complete`
+    // and this chat would otherwise read as unknown and never be titled.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 0,
+          skeleton: [],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("holds off while the skeleton is still streaming and has shown no user row", () => {
+    // `unknown`. Folded into "do not generate" because the two failures are
+    // not symmetric - re-titling rewrites what the user has been reading.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 4,
+          skeleton: [undefined, skeletonEntry("row-1", "assistant")],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
+  });
+
+  it("titles a chat whose complete skeleton holds only system rows", () => {
+    // A setup card renders as `system` and is not a person speaking, so a
+    // chat that has only ever shown one is still awaiting its first message.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 1,
+          skeleton: [skeletonEntry("row-0", "system")],
+          skeletonComplete: true,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(true);
+  });
+
+  it("answers from a PARTIAL skeleton the moment one user row is delivered", () => {
+    // Chunks add entries and never retract one, so a delivered `user` entry
+    // is decisive however much of the skeleton is still outstanding.
+    expect(
+      shouldGenerateChatTitleForSubmittedMessage({
+        chat: chatRecord(false),
+        messages: [],
+        pendingUserMessages: [],
+        ...windowedLine({
+          rowCount: 40,
+          skeleton: [undefined, skeletonEntry("row-1", "user")],
+          skeletonComplete: false,
+        }),
+        content: CONTENT,
+      }),
+    ).toBe(false);
   });
 });
 

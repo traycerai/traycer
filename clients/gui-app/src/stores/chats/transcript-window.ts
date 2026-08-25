@@ -830,6 +830,44 @@ export function applyRangeResponse(
  * An empty transcript is trivially hydrated: there is no tail to wait for, and
  * blocking on one would strand a brand-new chat forever.
  */
+/**
+ * Three-state because "not found" is not an answer on this line.
+ *
+ * The whole `state.messages` sweep is this distinction, and a boolean would
+ * force every caller to pick a side of it silently.
+ */
+export type WindowRowPresence = "present" | "absent" | "unknown";
+
+/**
+ * Does this transcript hold a row that RENDERS as `user`?
+ *
+ * Answered from the SKELETON, which describes every row rather than the
+ * hydrated ones - so it can say "yes" about a row whose body the client has
+ * never held, which is exactly what a whole-transcript question needs.
+ *
+ * `role` is the row's RENDERED role, not a record's: a steer bubble renders as
+ * `user` and so counts, while a setup card renders as `system` and does not.
+ * That is the right reading here - "has a person already spoken in this chat"
+ * is a question about rows.
+ *
+ * The three states, and why the order matters:
+ *
+ * - `rowCount === 0` is `absent` and must be checked FIRST. An empty
+ *   transcript has an empty skeleton, and an empty skeleton is not `complete`
+ *   (no chunk is ever sent for it) - so without this guard a brand-new chat
+ *   would report `unknown` and never be answered.
+ * - a delivered entry rendering as `user` is `present`, whatever else has yet
+ *   to arrive. Chunks add entries; they never retract one.
+ * - otherwise the answer turns on whether the skeleton is COMPLETE. A hole is
+ *   "not delivered yet", never "no such row", so a partial skeleton with no
+ *   user entry genuinely does not know.
+ */
+export function userRowPresence(window: TranscriptWindow): WindowRowPresence {
+  if (window.rowCount === 0) return "absent";
+  if (window.skeleton.some((entry) => entry?.role === "user")) return "present";
+  return window.skeletonComplete ? "absent" : "unknown";
+}
+
 export function isTailHydrated(window: TranscriptWindow): boolean {
   if (window.rowCount === 0) return true;
   const last = window.rowCount - 1;
