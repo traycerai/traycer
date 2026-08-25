@@ -27,15 +27,46 @@ describe("requestLandingTerminalClose", () => {
       close,
     });
 
-    // Both callers get the same promise synchronously; the request itself is
-    // dispatched on a microtask, so let it run before counting.
-    expect(fromBridge).toBe(fromPanel);
+    // Both callers share one REQUEST - not one promise object. They settle
+    // together, and each is told whether it owned the request, because the key
+    // is the terminal's lifetime rather than the RPC: a `terminal.plain.close`
+    // can join an in-flight `terminal.kill`, and those do not mean the same
+    // thing on success. Only the owner may retire the tombstone.
     await Promise.resolve();
     expect(close).toHaveBeenCalledTimes(1);
 
     resolveClose();
-    await expect(fromPanel).resolves.toBeUndefined();
-    await expect(fromBridge).resolves.toBeUndefined();
+    await expect(fromPanel).resolves.toEqual({ owned: true });
+    await expect(fromBridge).resolves.toEqual({ owned: false });
+  });
+
+  it("reports a joiner as unowned even when the owner rejects", async () => {
+    // The joiner must not read a rejection as its own failure either - it
+    // schedules retries off this, and the owner is the one that will retry.
+    let rejectClose = (): void => undefined;
+    const close = vi.fn(
+      (): Promise<void> =>
+        new Promise<void>((_resolve, reject) => {
+          rejectClose = () => reject(new Error("transient"));
+        }),
+    );
+
+    const owner = requestLandingTerminalClose({
+      hostId: "host-a",
+      sessionId: "session-shared-failure",
+      close,
+    });
+    const joiner = requestLandingTerminalClose({
+      hostId: "host-a",
+      sessionId: "session-shared-failure",
+      close,
+    });
+    await Promise.resolve();
+    rejectClose();
+
+    await expect(owner).rejects.toThrow("transient");
+    await expect(joiner).rejects.toThrow("transient");
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("keeps separate lifetimes independent", async () => {
@@ -85,7 +116,7 @@ describe("requestLandingTerminalClose", () => {
         sessionId: "session-retry",
         close,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ owned: true });
     expect(close).toHaveBeenCalledTimes(2);
   });
 });
