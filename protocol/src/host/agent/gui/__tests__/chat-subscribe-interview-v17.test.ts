@@ -204,6 +204,7 @@ function interviewAnsweredFrame(): Record<string, unknown> {
     blockId: "iv-1",
     answers: [ENHANCED_ANSWER],
     resolvedAt: 20,
+    settlementId: "gui-1",
     delivery: {
       deliveryId: "del-1",
       status: "delivered",
@@ -221,6 +222,7 @@ function interviewErroredFrame(): Record<string, unknown> {
     blockId: "iv-1",
     reason: "Not now",
     resolvedAt: 20,
+    settlementId: "gui-1",
     outcome: "skipped",
     draftAnswers: [DRAFT_ANSWER],
     delivery: {

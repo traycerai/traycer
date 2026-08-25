@@ -1729,6 +1729,7 @@ describe("<ChatTile />", () => {
         blockId: "question-1",
         reason: "interrupted",
         resolvedAt: 4,
+        settlementId: null,
         outcome: null,
         draftAnswers: [],
         delivery: null,

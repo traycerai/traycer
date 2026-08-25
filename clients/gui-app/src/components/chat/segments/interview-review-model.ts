@@ -217,7 +217,10 @@ function selectionCanTargetQuestion(
     return false;
   }
   return (
-    answer.questionId === null || answer.questionId === question.questionId
+    (answer.questionId === null || answer.questionId === question.questionId) &&
+    (answer.questionId !== null ||
+      answer.question === null ||
+      answer.question === question.question)
   );
 }
 
@@ -273,18 +276,14 @@ function associateAnswers(
       continue;
     }
 
-    // A duplicated question label establishes the collision group, but not a
-    // particular page. Surface the value neutrally on every member rather than
-    // selecting a control or silently dropping useful history.
+    // A duplicated question label establishes a collision group, but not a
+    // particular page. Keep the one answer once in the neutral fallback;
+    // copying it to every member would fabricate both answers and progress.
     if (
       answer.question !== null &&
       (questionTextCounts.get(answer.question) ?? 0) > 1
     ) {
-      questions.forEach((question, index) => {
-        if (question.question === answer.question) {
-          byPage[index]?.push({ answer, association: "collision" });
-        }
-      });
+      unassociated.push(answer);
       continue;
     }
 
@@ -763,20 +762,23 @@ function progressFor(input: {
 export function deriveInterviewReviewModel(
   input: InterviewReviewInput,
 ): InterviewReviewModel {
+  const outcome = outcomeFor(input);
   const submitted = associateAnswers(input.questions, input.answers);
   const drafts = associateAnswers(input.questions, input.draftAnswers);
   const pages = input.questions.map((question, index) => {
     const draftForPage = drafts.pages[index] ?? [];
     const submittedForPage = submitted.pages[index] ?? [];
-    return draftForPage.some(({ answer }) => answer.values.length > 0)
+    return outcome === "skipped" &&
+      draftForPage.some(({ answer }) => answer.values.length > 0)
       ? pageFromAnswers(question, index, draftForPage, true)
       : pageFromAnswers(question, index, submittedForPage, false);
   });
   const fallback = [
     ...fallbackAnswers(submitted.unassociated, false),
-    ...fallbackAnswers(drafts.unassociated, true),
+    ...(outcome === "skipped"
+      ? fallbackAnswers(drafts.unassociated, true)
+      : []),
   ];
-  const outcome = outcomeFor(input);
   const draftCount = savedDraftCount(input.draftAnswers);
   const fallbackAnsweredCount = fallback.filter(
     (answer) => !answer.draft && answer.values.length > 0,

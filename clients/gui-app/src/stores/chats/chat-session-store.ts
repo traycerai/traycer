@@ -2586,20 +2586,50 @@ export function createChatSessionStoreWithNotificationDependencies(
         useInterviewDraftStore
           .getState()
           .clearDraft(frame.chatId, frame.blockId);
-        set((state) => ({
-          pendingInterviews: withoutPendingInterview(
-            state.pendingInterviews,
-            frame.blockId,
-          ),
-          pendingActions: withoutInterviewActionsForBlock(
-            state.pendingActions,
-            frame.blockId,
-          ),
-          acceptedActions: withoutInterviewActionsForBlock(
-            state.acceptedActions,
-            frame.blockId,
-          ),
-        }));
+        set((state) => {
+          const messages = withInterviewLifecycleProjection(state.messages, {
+            kind: "answered",
+            blockId: frame.blockId,
+            settlementId: frame.settlementId,
+            answers: frame.answers,
+            reason: null,
+            outcome: "answered",
+            draftAnswers: [],
+            delivery: frame.delivery,
+          });
+          const liveAssistantMessage = withLiveInterviewLifecycleProjection(
+            state.liveAssistantMessage,
+            {
+              kind: "answered",
+              blockId: frame.blockId,
+              settlementId: frame.settlementId,
+              answers: frame.answers,
+              reason: null,
+              outcome: "answered",
+              draftAnswers: [],
+              delivery: frame.delivery,
+            },
+          );
+          return {
+            messages,
+            liveAssistantMessage,
+            pendingInterviews: withoutPendingInterview(
+              state.pendingInterviews,
+              frame.blockId,
+            ),
+            pendingActions: withoutInterviewActionsForBlock(
+              state.pendingActions,
+              frame.blockId,
+            ),
+            acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
+              withoutInterviewActionsForBlock(
+                state.acceptedActions,
+                frame.blockId,
+              ),
+              messages,
+            ),
+          };
+        });
       },
       onInterviewErrored: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -2611,20 +2641,50 @@ export function createChatSessionStoreWithNotificationDependencies(
         useInterviewDraftStore
           .getState()
           .clearDraft(frame.chatId, frame.blockId);
-        set((state) => ({
-          pendingInterviews: withoutPendingInterview(
-            state.pendingInterviews,
-            frame.blockId,
-          ),
-          pendingActions: withoutInterviewActionsForBlock(
-            state.pendingActions,
-            frame.blockId,
-          ),
-          acceptedActions: withoutInterviewActionsForBlock(
-            state.acceptedActions,
-            frame.blockId,
-          ),
-        }));
+        set((state) => {
+          const messages = withInterviewLifecycleProjection(state.messages, {
+            kind: "errored",
+            blockId: frame.blockId,
+            settlementId: frame.settlementId,
+            answers: [],
+            reason: frame.reason,
+            outcome: frame.outcome,
+            draftAnswers: frame.draftAnswers,
+            delivery: frame.delivery,
+          });
+          const liveAssistantMessage = withLiveInterviewLifecycleProjection(
+            state.liveAssistantMessage,
+            {
+              kind: "errored",
+              blockId: frame.blockId,
+              settlementId: frame.settlementId,
+              answers: [],
+              reason: frame.reason,
+              outcome: frame.outcome,
+              draftAnswers: frame.draftAnswers,
+              delivery: frame.delivery,
+            },
+          );
+          return {
+            messages,
+            liveAssistantMessage,
+            pendingInterviews: withoutPendingInterview(
+              state.pendingInterviews,
+              frame.blockId,
+            ),
+            pendingActions: withoutInterviewActionsForBlock(
+              state.pendingActions,
+              frame.blockId,
+            ),
+            acceptedActions: withoutSupersededInterviewDeliveryRetryActions(
+              withoutInterviewActionsForBlock(
+                state.acceptedActions,
+                frame.blockId,
+              ),
+              messages,
+            ),
+          };
+        });
       },
       onEventAppended: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -4732,6 +4792,80 @@ function detachedSubagentOwnerTarget(
     return { ownerBlockId: parentBlockId, mandatory: true };
   }
   return null;
+}
+
+type InterviewBlock = Extract<ContentBlock, { readonly type: "interview" }>;
+type InterviewLifecycleProjection = {
+  readonly kind: "answered" | "errored";
+  readonly blockId: string;
+  readonly settlementId: string | null;
+  readonly answers: ReadonlyArray<InterviewAnswer>;
+  readonly reason: string | null;
+  readonly outcome: InterviewBlock["outcome"];
+  readonly draftAnswers: ReadonlyArray<InterviewAnswer>;
+  readonly delivery: InterviewBlock["delivery"];
+};
+
+function withInterviewLifecycleBlocks(
+  blocks: ReadonlyArray<ContentBlock>,
+  projection: InterviewLifecycleProjection,
+): ReadonlyArray<ContentBlock> {
+  const next = blocks.map((block): ContentBlock => {
+    if (block.type !== "interview" || block.blockId !== projection.blockId) {
+      return block;
+    }
+    const delivery =
+      projection.settlementId !== null &&
+      block.settlement?.settlementId === projection.settlementId
+        ? projection.delivery
+        : block.delivery;
+    return projection.kind === "answered"
+      ? {
+          ...block,
+          status: "completed",
+          answers: [...projection.answers],
+          error: null,
+          outcome: "answered",
+          draftAnswers: [],
+          delivery,
+        }
+      : {
+          ...block,
+          status: "errored",
+          error: projection.reason,
+          outcome: projection.outcome,
+          draftAnswers:
+            projection.outcome === "skipped"
+              ? [...projection.draftAnswers]
+              : [],
+          delivery,
+        };
+  });
+  return next.some((block, index) => block !== blocks[index]) ? next : blocks;
+}
+
+function withInterviewLifecycleProjection(
+  messages: ReadonlyArray<Message>,
+  projection: InterviewLifecycleProjection,
+): ReadonlyArray<Message> {
+  const next = messages.map((message): Message => {
+    if (message.role !== "assistant") return message;
+    const blocks = withInterviewLifecycleBlocks(message.blocks, projection);
+    if (blocks === message.blocks) return message;
+    return { ...message, blocks: [...blocks] };
+  });
+  return next.some((message, index) => message !== messages[index])
+    ? next
+    : messages;
+}
+
+function withLiveInterviewLifecycleProjection(
+  message: LiveAssistantMessage | null,
+  projection: InterviewLifecycleProjection,
+): LiveAssistantMessage | null {
+  if (message === null) return null;
+  const blocks = withInterviewLifecycleBlocks(message.blocks, projection);
+  return blocks === message.blocks ? message : { ...message, blocks };
 }
 
 function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {

@@ -52,9 +52,20 @@ export function draftFromStoredAnswer(
   const exactIndices =
     storedIndices === undefined
       ? null
-      : [...new Set(storedIndices)].filter(
-          (index) => index >= 0 && index < question.options.length,
-        );
+      : (() => {
+          const indices = [...new Set(storedIndices)].filter(
+            (index) => index >= 0 && index < question.options.length,
+          );
+          const labelsStillMatch =
+            indices.length === stored.selected.length &&
+            indices.every((index) => {
+              const option = question.options.at(index);
+              return (
+                option !== undefined && stored.selected.includes(option.label)
+              );
+            });
+          return labelsStillMatch ? indices : null;
+        })();
   const legacyIndices = stored.selected.flatMap((label) => {
     const matching = question.options.flatMap((option, index) =>
       option.label === label ? [index] : [],

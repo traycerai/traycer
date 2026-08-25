@@ -889,6 +889,7 @@ describe("projectChatServerFrameForVersion", () => {
       blockId: "iv-1",
       answers: [ENHANCED_ANSWER],
       resolvedAt: 20,
+      settlementId: "gui-1",
       delivery: {
         deliveryId: "del-1",
         status: "delivered",
@@ -1063,6 +1064,7 @@ describe("projectChatServerFrameForVersion", () => {
       const projected = projectChatServerFrameForVersion(frame, version);
       const projectedRecord = asRecord(projected, "projected");
       expect(Object.hasOwn(projectedRecord, "delivery")).toBe(false);
+      expect(Object.hasOwn(projectedRecord, "settlementId")).toBe(false);
       expect(
         Object.hasOwn(firstAnswerRecord(projectedRecord.answers), "selection"),
       ).toBe(false);
@@ -1073,6 +1075,7 @@ describe("projectChatServerFrameForVersion", () => {
       for (const contract of frozenServerContracts()) {
         const parsed = contract.parse(projected);
         expect(Object.hasOwn(parsed, "delivery")).toBe(false);
+        expect(Object.hasOwn(parsed, "settlementId")).toBe(false);
         expect(firstAnswerRecord(parsed.answers)).toEqual(
           firstAnswerRecord(projectedRecord.answers),
         );
@@ -1089,6 +1092,7 @@ describe("projectChatServerFrameForVersion", () => {
       blockId: "iv-1",
       reason: "Not now",
       resolvedAt: 20,
+      settlementId: "gui-1",
       outcome: "skipped",
       draftAnswers: [
         {
@@ -1112,6 +1116,7 @@ describe("projectChatServerFrameForVersion", () => {
       expect(Object.hasOwn(projectedRecord, "outcome")).toBe(false);
       expect(Object.hasOwn(projectedRecord, "draftAnswers")).toBe(false);
       expect(Object.hasOwn(projectedRecord, "delivery")).toBe(false);
+      expect(Object.hasOwn(projectedRecord, "settlementId")).toBe(false);
       expect(projectedRecord.reason).toBe("Not now");
 
       for (const contract of frozenServerContracts()) {
@@ -1119,6 +1124,7 @@ describe("projectChatServerFrameForVersion", () => {
         expect(Object.hasOwn(parsed, "outcome")).toBe(false);
         expect(Object.hasOwn(parsed, "draftAnswers")).toBe(false);
         expect(Object.hasOwn(parsed, "delivery")).toBe(false);
+        expect(Object.hasOwn(parsed, "settlementId")).toBe(false);
         expect(parsed.reason).toBe(projectedRecord.reason);
       }
     }

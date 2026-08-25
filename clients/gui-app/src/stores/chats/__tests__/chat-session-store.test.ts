@@ -1313,6 +1313,65 @@ describe("createChatSessionStore", () => {
     expect(harness.sent).toHaveLength(2);
   });
 
+  it("applies correlated lifecycle delivery updates without waiting for a snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          deliveryId: "delivery-1",
+          status: "pending",
+          retryable: true,
+          generation: 0,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Beta"] }],
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        generation: 1,
+      },
+    });
+  });
+
   it("does not emit an interview delivery retry on a pre-1.7 chat session", () => {
     const harness = createProtocolChainHarness({ major: 1, minor: 6 });
     harness.session.emitStatus("open", null);
@@ -7227,6 +7286,7 @@ describe("createChatSessionStore", () => {
       blockId: "question-snapshot",
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
       delivery: null,
     });
 
@@ -7242,6 +7302,7 @@ describe("createChatSessionStore", () => {
       blockId: "question-live",
       reason: "Skipped",
       resolvedAt: 5,
+      settlementId: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7340,6 +7401,7 @@ describe("createChatSessionStore", () => {
       blockId: "question-skip",
       reason: "Skipped by user",
       resolvedAt: 4,
+      settlementId: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7379,6 +7441,7 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
       delivery: null,
     });
 
@@ -7420,6 +7483,7 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      settlementId: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7616,6 +7680,7 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
       delivery: null,
     });
 
@@ -7669,6 +7734,7 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      settlementId: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,

@@ -263,7 +263,7 @@ describe("deriveInterviewReviewModel", () => {
     });
   });
 
-  it("neutralizes duplicate question labels and duplicate option labels", () => {
+  it("keeps one duplicate-label answer once in the neutral fallback", () => {
     const duplicateQuestions = deriveInterviewReviewModel(
       reviewInput({
         questions: [
@@ -275,9 +275,11 @@ describe("deriveInterviewReviewModel", () => {
     );
 
     expect(duplicateQuestions.pages).toMatchObject([
-      { fidelity: "neutral", selectedOptionIndices: [] },
-      { fidelity: "neutral", selectedOptionIndices: [] },
+      { fidelity: "no-answer", selectedOptionIndices: [] },
+      { fidelity: "no-answer", selectedOptionIndices: [] },
     ]);
+    expect(duplicateQuestions.answeredCount).toBe(0);
+    expect(duplicateQuestions.fallbackAnswers).toHaveLength(1);
 
     const duplicateOptions = deriveInterviewReviewModel(
       reviewInput({
@@ -290,6 +292,28 @@ describe("deriveInterviewReviewModel", () => {
       fidelity: "neutral",
       selectedOptionIndices: [],
     });
+  });
+
+  it("rejects positional exact evidence when the saved question text changed", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        questions: [question(null, "New question", ["Alpha"], undefined)],
+        answers: [
+          answer(["Alpha"], {
+            question: "Old question",
+            selection: {
+              questionIndex: 0,
+              optionIndices: [0],
+              optionLabels: ["Alpha"],
+              customText: null,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(model.pages[0]?.fidelity).toBe("no-answer");
+    expect(model.fallbackAnswers).toHaveLength(1);
   });
 
   it("keeps unmatched answers in a neutral block-level fallback", () => {
@@ -402,6 +426,23 @@ describe("deriveInterviewReviewModel", () => {
       customText: null,
       values: ["Beta"],
     });
+  });
+
+  it("does not let stale drafts hide submitted evidence for answered history", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        outcome: "answered",
+        questions: [question("q1", "Which mode?", undefined, undefined)],
+        answers: [answer(["Alpha"], { questionId: "q1" })],
+        draftAnswers: [answer(["Beta"], { questionId: "q1" })],
+      }),
+    );
+
+    expect(model.pages[0]).toMatchObject({
+      fidelity: "inferred",
+      values: ["Alpha"],
+    });
+    expect(model.fallbackAnswers).toEqual([]);
   });
 
   it("summarizes a canonical skip with no saved answers as skipped", () => {

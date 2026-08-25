@@ -12,6 +12,7 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { draftFromStoredAnswer } from "@/components/chat/segments/pending-interview/interview-draft";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -25,6 +26,22 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 
 // Slightly longer than the card's ~110ms highlight-then-advance window.
 const ADVANCE_MS = 200;
+
+describe("draftFromStoredAnswer", () => {
+  it("falls back to saved labels when option indices now name different labels", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        selected: ["Alpha"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+    );
+
+    expect([...restored.selected]).toEqual([1]);
+  });
+});
 
 function singleSelect(
   id: string,

@@ -341,13 +341,18 @@ export function projectChatServerFrameForVersion(
       };
     }
     case "interviewAnswered": {
-      const { delivery: _delivery, ...rest } = frame;
+      const {
+        delivery: _delivery,
+        settlementId: _settlementId,
+        ...rest
+      } = frame;
       return { ...rest, answers: stripAnswerSelection(frame.answers) };
     }
     case "interviewErrored": {
       const {
         outcome: _outcome,
         draftAnswers: _draftAnswers,
+        settlementId: _settlementId,
         delivery: _delivery,
         ...rest
       } = frame;
