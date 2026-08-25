@@ -73,8 +73,7 @@ export function useChatSetupFailureRestoreDriver(
 
   useEffect(() => {
     if (interruption === null) return;
-    if (interruption.messageId === null) return;
-    const eventId = interruption.event.eventId;
+    const eventId = interruption.eventId;
     if (dedupe.ids.has(eventId)) return;
     dedupe.ids.add(eventId);
     const restored = handle.store
@@ -92,7 +91,7 @@ export function useChatSetupFailureRestoreDriver(
     // re-announce a stale failure. Path-ful failures render an inline failure
     // card, so they need no toast.
     if (
-      interruption.event.type === "setup.failed" &&
+      interruption.eventType === "setup.failed" &&
       (interruption.workspacePath === null ||
         interruption.workspacePath.length === 0)
     ) {

@@ -265,6 +265,7 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
+import { chatReadAccumulatedFileChangeV10 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -4535,6 +4536,28 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: { contract: chatForkGetV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The contents behind an accumulated-change summary on the windowed
+  // `chat.subscribe` line, which ships summaries and leaves the file bodies to
+  // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
+  // to its legacy full-contents-in-snapshot path instead of losing the diff.
+  //
+  // Registered NOW, unlike `chatSubscribeV17`, and the difference is not an
+  // oversight: a stream minor negotiates to the highest the peers share, so
+  // registering that one IS the switch to windowed frames. A unary method
+  // flips no negotiation - a client that never calls it cannot tell it exists.
+  "chat.readAccumulatedFileChange": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: chatReadAccumulatedFileChangeV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },

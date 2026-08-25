@@ -2244,9 +2244,10 @@ export const chatWindowedSnapshotSchema = z.object({
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
   turnInProgress: z.boolean().optional(),
   /**
-   * The epoch every ordinal in this session is relative to. Bumped by the host
-   * on any history mutation; a `range` response carrying a different one is
-   * discarded rather than applied.
+   * The epoch every ordinal in this session is relative to. The host advances
+   * it only when an ordinal no longer names the row it named before; appends
+   * and in-place row updates retain it. A `range` response carrying a different
+   * epoch is discarded rather than applied.
    */
   transcriptEpoch: z.number().int().nonnegative(),
   /**
@@ -2283,11 +2284,23 @@ const chatSubscribeIndexChangedServerFrameSchema = z.object({
   kind: z.literal("indexChanged"),
   ...textFrameFields,
   ...chatReferenceFields,
-  /** The epoch AFTER the change — what subsequent `loadRange`s must carry. */
+  /**
+   * The epoch AFTER the change — what subsequent `loadRange`s must carry.
+   *
+   * Unchanged from the previous frame for an `appended` or `updated` change,
+   * because neither renumbers an ordinal: the epoch versions the COORDINATE
+   * SPACE, not the index's content. It advances on `reindexed`, which is
+   * exactly the case where a client's in-flight `range` must be discarded.
+   */
   epoch: z.number().int().nonnegative(),
   /** Row count after the change, kept in step with the snapshot's field. */
   rowCount: z.number().int().nonnegative(),
-  change: chatIndexChangeSchema,
+  /**
+   * Every change this frame applies, atomically. See
+   * {@link chatIndexChangeSchema} for why a mutation is routinely two of them
+   * and why splitting them across frames is unsafe.
+   */
+  changes: z.array(chatIndexChangeSchema),
 });
 
 const chatSubscribeRangeServerFrameSchema = z.object({

@@ -131,7 +131,7 @@ describe("indexChangeFits", () => {
       entries: [entry("row-1", "hello")],
     };
 
-    expect(indexChangeFits(change, INDEX_CHANGE_MAX_BYTES)).toBe(true);
+    expect(indexChangeFits([change], INDEX_CHANGE_MAX_BYTES)).toBe(true);
   });
 
   it("rejects an append too large for one frame", () => {
@@ -142,7 +142,7 @@ describe("indexChangeFits", () => {
       ),
     };
 
-    expect(indexChangeFits(change, INDEX_CHANGE_MAX_BYTES)).toBe(false);
+    expect(indexChangeFits([change], INDEX_CHANGE_MAX_BYTES)).toBe(false);
   });
 
   it("rejects an updated delta too large for one frame", () => {
@@ -154,13 +154,40 @@ describe("indexChangeFits", () => {
       })),
     };
 
-    expect(indexChangeFits(change, INDEX_CHANGE_MAX_BYTES)).toBe(false);
+    expect(indexChangeFits([change], INDEX_CHANGE_MAX_BYTES)).toBe(false);
+  });
+
+  it("measures the whole frame, not its members one at a time", () => {
+    // The reason this takes an array: a turn finishing sends an `appended` and
+    // an `updated` in ONE frame, and two deltas that each fit on their own can
+    // exceed the threshold together. Measuring per member would pass a frame
+    // the relay then reclassifies onto the BULK lane.
+    const half = Math.ceil(INDEX_CHANGE_MAX_BYTES / 2 / 220);
+    const appended: ChatIndexChange = {
+      type: "appended",
+      entries: Array.from({ length: half }, (unused, index) =>
+        entry(`row-a-${index}`, "x".repeat(200)),
+      ),
+    };
+    const updated: ChatIndexChange = {
+      type: "updated",
+      entries: Array.from({ length: half }, (unused, index) => ({
+        ordinal: index,
+        entry: entry(`row-b-${index}`, "x".repeat(200)),
+      })),
+    };
+
+    expect(indexChangeFits([appended], INDEX_CHANGE_MAX_BYTES)).toBe(true);
+    expect(indexChangeFits([updated], INDEX_CHANGE_MAX_BYTES)).toBe(true);
+    expect(indexChangeFits([appended, updated], INDEX_CHANGE_MAX_BYTES)).toBe(
+      false,
+    );
   });
 
   it("always accepts reindexed, which is the oversized-delta fallback itself", () => {
     // The producer's answer to a `false` above is to send this instead of
     // splitting the delta, so it must never be the thing that does not fit.
-    expect(indexChangeFits({ type: "reindexed" }, 0)).toBe(true);
+    expect(indexChangeFits([{ type: "reindexed" }], 0)).toBe(true);
   });
 
   it("clamps a caller asking for more than the frame budget", () => {
@@ -171,6 +198,6 @@ describe("indexChangeFits", () => {
       ),
     };
 
-    expect(indexChangeFits(change, 64 * 1024 * 1024)).toBe(false);
+    expect(indexChangeFits([change], 64 * 1024 * 1024)).toBe(false);
   });
 });

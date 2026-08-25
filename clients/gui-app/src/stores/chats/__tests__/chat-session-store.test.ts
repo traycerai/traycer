@@ -9886,7 +9886,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating" },
+      eventId: "event-gating",
       messageId: "queued-msg-1",
       clientActionId: "send-1",
     });
@@ -9944,8 +9944,8 @@ describe("createChatSessionStore", () => {
       event: gating,
     });
     expect(
-      selectRestorableSetupInterruption(harness.handle.store.getState())?.event
-        .eventId,
+      selectRestorableSetupInterruption(harness.handle.store.getState())
+        ?.eventId,
     ).toBe("event-gating-1");
 
     callbacks.onEventAppended({
@@ -9981,7 +9981,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-gating-2" },
+      eventId: "event-gating-2",
       messageId: "queued-msg-2",
     });
   });
@@ -10060,7 +10060,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: sent.messageId,
       clientActionId: sent.clientActionId,
       workspacePath: "/repo",
@@ -10109,7 +10109,7 @@ describe("createChatSessionStore", () => {
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),
     ).toMatchObject({
-      event: { eventId: "event-cancelled-gating" },
+      eventId: "event-cancelled-gating",
       messageId: "queued-msg-cancelled",
       clientActionId: "send-cancelled",
     });

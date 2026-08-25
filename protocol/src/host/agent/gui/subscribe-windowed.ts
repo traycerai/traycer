@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 import { chatSchema } from "@traycer/protocol/persistence/epic/chat";
 import { chatEventSchema } from "@traycer/protocol/persistence/epic/chat-events";
 import { messageSchema } from "@traycer/protocol/persistence/epic/messages";
@@ -16,6 +17,11 @@ import {
   rowSkeletonEntrySchema,
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
+import {
+  restorableSetupInterruptionSchema,
+  selectRestorableSetupInterruption,
+  type RestorableSetupInterruption,
+} from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
 import { runtimeTodoStatusSchema } from "@traycer/protocol/host/agent/gui/agent-runtime";
 
@@ -86,7 +92,7 @@ export type PinnedTodoSnapshot = z.infer<typeof pinnedTodoSnapshotSchema>;
  * every frame that names one also names the epoch, and every response carries
  * the row IDS it is answering for. A client that receives a range whose ids do
  * not match its skeleton at that span discards it and refetches. That is what
- * turns a missed epoch bump into a wasted round trip instead of bodies
+ * turns a missed coordinate invalidation into a wasted round trip instead of bodies
  * rendered under the wrong rows.
  */
 
@@ -232,6 +238,13 @@ export type ChatAccumulatedFileChangeSummary = z.infer<
  * this is a unary call, ordered against nothing on the delta stream.
  */
 export const chatReadAccumulatedFileChangeRequestSchema = z.object({
+  /**
+   * Present because a chat id alone does not address a chat on this host: live
+   * sessions are keyed by `(epicId, chatId)`, exactly as every chat-scoped
+   * stream frame is (`chatReferenceFields`). An earlier draft of this schema
+   * carried only `chatId` and there was no way to resolve it.
+   */
+  epicId: z.string(),
   chatId: z.string(),
   filePath: z.string(),
   /** Copied verbatim from the summary being displayed. */
@@ -264,6 +277,22 @@ export type ChatReadAccumulatedFileChangeResponse = z.infer<
 >;
 
 /**
+ * The contents fetch behind an accumulated-change summary.
+ *
+ * Registered `degrade: { kind: "unsupported" }`, which is what lets a GUI fall
+ * back to its legacy full-contents-in-snapshot path against an older host
+ * rather than failing the panel. Safe to register immediately, unlike the
+ * windowed stream line: a unary method flips no negotiation, so a client that
+ * never calls it is unaffected by its presence.
+ */
+export const chatReadAccumulatedFileChangeV10 = defineRpcContract({
+  method: "chat.readAccumulatedFileChange",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatReadAccumulatedFileChangeRequestSchema,
+  responseSchema: chatReadAccumulatedFileChangeResponseSchema,
+});
+
+/**
  * Values the host derives from the WHOLE transcript and the client therefore
  * cannot compute once it only holds a window.
  *
@@ -274,24 +303,19 @@ export type ChatReadAccumulatedFileChangeResponse = z.infer<
 /**
  * A setup failure or cancellation the composer can put a draft back from.
  *
- * Mirrors `RestorableSetupInterruptionSelection`. The fields are exactly what
- * the composer-restore driver reads - not the whole event - because a wire
- * shape that carried the event would invite a second consumer to start reading
- * something else off it, and then this would be a transcript record again.
+ * The shape AND its selection rule live in
+ * `persistence/chat-transcript/setup-interruption.ts`, and both are re-exported
+ * here so this module stays the one place a producer reads the windowed line's
+ * payloads from. The fields are exactly what the composer-restore driver reads
+ * - not the whole event - because a wire shape that carried the event would
+ * invite a second consumer to start reading something else off it, and then
+ * this would be a transcript record again.
  */
-export const restorableSetupInterruptionSchema = z.object({
-  eventType: z.enum(["setup.failed", "setup.cancelled"]),
-  /** `null` for the generic path-less failure - the case that has no card. */
-  workspacePath: z.string().nullable(),
-  terminalSessionId: z.string().nullable(),
-  setupExitCode: z.number().nullable(),
-  clientActionId: z.string().nullable(),
-  /** Never null: an interruption with no triggering send is not restorable. */
-  messageId: z.string(),
-});
-export type RestorableSetupInterruption = z.infer<
-  typeof restorableSetupInterruptionSchema
->;
+export {
+  restorableSetupInterruptionSchema,
+  selectRestorableSetupInterruption,
+  type RestorableSetupInterruption,
+};
 
 export const chatTranscriptDerivedSchema = z.object({
   /**
@@ -395,6 +419,23 @@ export type ChatSkeletonChunk = z.infer<typeof chatSkeletonChunkSchema>;
  * mutation, which is both the cost this feature exists to remove and a
  * violation of the 1 MiB invariant.
  *
+ * ## One frame carries an ARRAY of these
+ *
+ * A single mutation is routinely two of these at once: a turn finishing APPENDS
+ * rows and UPDATES the streaming row that preceded them with its final size and
+ * usage. They ride one `indexChanged` frame together (see that frame's
+ * `changes` field) rather than two frames, because after applying `appended`
+ * alone the client's skeleton LENGTH already equals the frame's `rowCount` - so
+ * a lost or dropped second frame leaves an index that looks complete and is
+ * silently wrong at one entry, which neither side can detect. Same-pump
+ * ordering makes that unlikely, not impossible: backpressure compaction
+ * explicitly drops queued `indexChanged` frames.
+ *
+ * Within one frame the members' ordinals are disjoint by construction -
+ * `appended` names only ordinals at or past the old length, `updated` only
+ * ordinals below it - so they may be applied in either order and the frame is
+ * atomic.
+ *
  * The three cases are not arbitrary - they are what the store can actually do
  * to the row set:
  *
@@ -436,8 +477,8 @@ export type ChatIndexChange = z.infer<typeof chatIndexChangeSchema>;
  * `rowIds` is the identity check and is not optional. The client compares it
  * against its own skeleton at `fromOrdinal` and discards the response on any
  * mismatch. That check is what makes the ordinal coordinate safe: a missed
- * epoch bump anywhere in the host's ~27 emit sites degrades to a wasted round
- * trip instead of bodies rendered under the wrong rows.
+ * coordinate invalidation degrades to a wasted round trip instead of bodies
+ * rendered under the wrong rows.
  *
  * `truncatedAtOrdinal` is present when the host stopped early to respect
  * `maxBytes` - a single message can be over a megabyte, so a range the client
@@ -580,22 +621,27 @@ export function chunkRowSkeleton(
 }
 
 /**
- * Whether a delta is small enough to send as one.
+ * Whether one frame's worth of index changes is small enough to send as one.
+ *
+ * Takes the whole ARRAY the frame carries, not a single change, because that is
+ * the unit whose encoded size the relay threshold applies to - measuring the
+ * members separately would pass a pair that individually fit and together did
+ * not.
  *
  * The producer's fallback when this is `false` is **not** to split the delta -
- * it is to send `{type: "reindexed"}` and let the client re-request. That is
+ * it is to send `[{type: "reindexed"}]` and let the client re-request. That is
  * already the honest answer for anything that moves rows, and reusing it here
  * means the index-change path has exactly one oversized-delta behaviour instead
  * of a chunking protocol whose edge cases nobody would exercise often enough to
  * trust.
  */
 export function indexChangeFits(
-  change: ChatIndexChange,
+  changes: readonly ChatIndexChange[],
   maxBytes: number,
 ): boolean {
-  if (change.type === "reindexed") return true;
+  if (changes.some((change) => change.type === "reindexed")) return true;
   return (
-    utf8ByteLength(JSON.stringify(change)) <
+    utf8ByteLength(JSON.stringify(changes)) <
     Math.min(maxBytes, INDEX_CHANGE_MAX_BYTES)
   );
 }
