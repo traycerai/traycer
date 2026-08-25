@@ -110,7 +110,7 @@ export interface InterviewReviewModel {
 
 interface AssociatedAnswer {
   readonly answer: InterviewAnswer;
-  readonly association: "selection" | "id" | "text" | "collision";
+  readonly association: "selection" | "id" | "text";
 }
 
 interface AnswerAssociationResult {
@@ -279,14 +279,6 @@ function associateAnswers(
     // A duplicated question label establishes a collision group, but not a
     // particular page. Keep the one answer once in the neutral fallback;
     // copying it to every member would fabricate both answers and progress.
-    if (
-      answer.question !== null &&
-      (questionTextCounts.get(answer.question) ?? 0) > 1
-    ) {
-      unassociated.push(answer);
-      continue;
-    }
-
     unassociated.push(answer);
   }
   return { pages: byPage, unassociated };
@@ -424,13 +416,9 @@ function pageFromAnswers(
   const hasSelectionEvidence = associated.some(
     ({ answer }) => answer.selection !== null,
   );
-  const hasCollision = associated.some(
-    ({ association }) => association === "collision",
-  );
-  const inferred =
-    !hasSelectionEvidence && !hasCollision
-      ? inferredOptionIndices(values, question)
-      : null;
+  const inferred = !hasSelectionEvidence
+    ? inferredOptionIndices(values, question)
+    : null;
   if (inferred !== null) {
     return {
       question,
@@ -456,11 +444,14 @@ function fallbackAnswers(
   draft: boolean,
 ): ReadonlyArray<InterviewReviewFallbackAnswer> {
   return answers.flatMap((answer) => {
-    if (answer.values.length === 0) return [];
+    const question = meaningfulText(answer.question);
     const note = meaningfulText(answer.notes);
+    if (answer.values.length === 0 && question === null && note === null) {
+      return [];
+    }
     return [
       {
-        question: meaningfulText(answer.question),
+        question,
         values: answer.values,
         notes: note === null ? [] : [note],
         draft,

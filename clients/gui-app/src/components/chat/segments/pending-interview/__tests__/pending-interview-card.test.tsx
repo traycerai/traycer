@@ -1426,16 +1426,31 @@ describe("PendingInterviewCard keyboard navigation", () => {
     });
     const onSubmit = vi.fn();
     renderCard(
-      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      [
+        multiSelect("q", "Which same label?", ["Same", "Same"]),
+        singleSelect("q2", "Second question?", ["Next"]),
+      ],
       onSubmit,
       null,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"]
+        ?.answers[0]?.selectedOptionIndices,
+    ).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
     fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
 
     expect(onSubmit).toHaveBeenCalledWith("interview-1", [
       expect.objectContaining({
         values: ["Same"],
+        selection: null,
+      }),
+      expect.objectContaining({
+        values: [],
         selection: null,
       }),
     ]);

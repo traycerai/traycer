@@ -15,6 +15,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
 interface DetailItem {
+  readonly kind: "description" | "preview";
   readonly label: string;
   readonly value: string;
 }
@@ -42,8 +43,18 @@ function optionDetails(
   const description = meaningfulText(option.description);
   const preview = meaningfulText(option.preview);
   return [
-    ...(description === null ? [] : [{ label: "Details", value: description }]),
-    ...(preview === null ? [] : [{ label: "Preview", value: preview }]),
+    ...(description === null
+      ? []
+      : [
+          {
+            kind: "description" as const,
+            label: "Details",
+            value: description,
+          },
+        ]),
+    ...(preview === null
+      ? []
+      : [{ kind: "preview" as const, label: "Preview", value: preview }]),
   ];
 }
 
@@ -179,7 +190,7 @@ function OptionDetailsTooltip(props: {
   readonly details: ReadonlyArray<DetailItem>;
 }) {
   return (
-    <div className="flex max-w-[min(80vw,20rem)] flex-col gap-2 text-ui-xs">
+    <div className="flex max-w-[80vw] flex-col gap-2 text-ui-xs">
       {props.details.map((detail) => (
         <div key={detail.label} className="flex flex-col gap-0.5">
           <span className="font-medium text-background/70">{detail.label}</span>
@@ -208,7 +219,7 @@ function InlineOptionDetails(props: {
           <span className="font-medium text-foreground/75">{detail.label}</span>
           <span
             data-chat-find-unit={
-              detail.label === "Details"
+              detail.kind === "description"
                 ? (props.descriptionFindUnitId ?? undefined)
                 : (props.previewFindUnitId ?? undefined)
             }
@@ -375,9 +386,9 @@ function optionDetailRegionId(
 ): string {
   const unitId = props.description ?? props.preview;
   if (unitId === null) {
-    throw new Error("pinned interview option detail is missing a find unit id");
+    return prefix;
   }
-  return `${prefix}-interview-option-detail-${unitId}`;
+  return `${prefix}-interview-option-detail-${encodeURIComponent(unitId)}`;
 }
 
 function optionKey(

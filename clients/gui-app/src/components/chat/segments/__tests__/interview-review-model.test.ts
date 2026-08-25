@@ -368,6 +368,34 @@ describe("deriveInterviewReviewModel", () => {
     ]);
   });
 
+  it("keeps note-only unassociated evidence visible and searchable", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        questions: [question("q1", "Known question", undefined, undefined)],
+        answers: [
+          answer([], {
+            question: "Unknown question",
+            notes: "This constraint still matters",
+          }),
+        ],
+      }),
+    );
+
+    expect(model.fallbackAnswers).toEqual([
+      {
+        question: "Unknown question",
+        values: [],
+        notes: ["This constraint still matters"],
+        draft: false,
+      },
+    ]);
+    expect(model.searchableFields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: "This constraint still matters" }),
+      ]),
+    );
+  });
+
   it("indexes a labelled questionless fallback question as visible searchable text", () => {
     const model = deriveInterviewReviewModel(
       reviewInput({
@@ -513,6 +541,12 @@ describe("deriveInterviewReviewModel", () => {
       {
         question: "Question from an older host",
         values: ["Draft value"],
+        notes: [],
+        draft: true,
+      },
+      {
+        question: "Empty draft",
+        values: [],
         notes: [],
         draft: true,
       },

@@ -1,5 +1,5 @@
 import { ChevronRight, MessageSquareText } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { deriveInterviewCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { queryMountedChatFindUnit } from "@/components/chat/chat-find-highlighter";
 import {
@@ -52,7 +52,10 @@ interface ResolvedInterviewCardProps {
  * details, disclosure, and eligible fork actions remain interactive.
  */
 export function ResolvedInterviewCard(props: ResolvedInterviewCardProps) {
-  const model = deriveInterviewReviewModel(props.reviewInput);
+  const model = useMemo(
+    () => deriveInterviewReviewModel(props.reviewInput),
+    [props.reviewInput],
+  );
   const tileInstanceId = useChatCollapsibleTileInstanceId();
   const collapsibleKey = deriveInterviewCollapsibleKey(
     tileInstanceId,

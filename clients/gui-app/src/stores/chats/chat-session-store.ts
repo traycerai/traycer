@@ -1705,10 +1705,14 @@ export function createChatSessionStoreWithNotificationDependencies(
         const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
           merged.pendingActions,
           merged.messages,
+          merged.liveAssistantMessage,
+          null,
         );
         const acceptedActions = withoutSupersededInterviewDeliveryRetryActions(
           merged.acceptedActions,
           merged.messages,
+          merged.liveAssistantMessage,
+          null,
         );
         return pendingActions === merged.pendingActions &&
           acceptedActions === merged.acceptedActions
@@ -1848,6 +1852,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
             pending.pendingActions,
             messages,
+            state.liveAssistantMessage,
+            null,
           );
           const acceptedActions =
             withoutSupersededInterviewDeliveryRetryActions(
@@ -1871,6 +1877,8 @@ export function createChatSessionStoreWithNotificationDependencies(
                 now,
               ),
               messages,
+              state.liveAssistantMessage,
+              connectionEpoch,
             );
           return {
             chat: {
@@ -2635,6 +2643,8 @@ export function createChatSessionStoreWithNotificationDependencies(
                 frame.blockId,
               ),
               messages,
+              liveAssistantMessage,
+              null,
             ),
           };
         });
@@ -2694,6 +2704,8 @@ export function createChatSessionStoreWithNotificationDependencies(
                 frame.blockId,
               ),
               messages,
+              liveAssistantMessage,
+              null,
             ),
           };
         });
@@ -4239,21 +4251,23 @@ function withoutInterviewActionsForBlock<
 
 function isCurrentRetryableInterviewDelivery(
   messages: ReadonlyArray<Message>,
+  liveAssistantMessage: LiveAssistantMessage | null,
   identity: InterviewDeliveryRetryIdentity,
 ): boolean {
-  return messages.some(
-    (message) =>
-      message.role === "assistant" &&
-      message.blocks.some(
-        (block) =>
-          block.type === "interview" &&
-          block.blockId === identity.blockId &&
-          block.settlement?.settlementId === identity.settlementId &&
-          block.delivery?.deliveryId === identity.deliveryId &&
-          block.delivery.generation === identity.generation &&
-          block.delivery.status === "failed" &&
-          block.delivery.retryable,
-      ),
+  const matchesBlock = (block: ContentBlock): boolean =>
+    block.type === "interview" &&
+    block.blockId === identity.blockId &&
+    block.settlement?.settlementId === identity.settlementId &&
+    block.delivery?.deliveryId === identity.deliveryId &&
+    block.delivery.generation === identity.generation &&
+    block.delivery.status === "failed" &&
+    block.delivery.retryable;
+  return (
+    messages.some(
+      (message) =>
+        message.role === "assistant" && message.blocks.some(matchesBlock),
+    ) ||
+    (liveAssistantMessage?.blocks.some(matchesBlock) ?? false)
   );
 }
 
@@ -4264,18 +4278,25 @@ function isCurrentRetryableInterviewDelivery(
 function withoutSupersededInterviewDeliveryRetryActions<
   T extends {
     readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
+    readonly connectionEpoch: number;
   },
 >(
   actions: Readonly<Record<string, T>>,
   messages: ReadonlyArray<Message>,
+  liveAssistantMessage: LiveAssistantMessage | null,
+  retireBeforeConnectionEpoch: number | null,
 ): Readonly<Record<string, T>> {
   const entries = Object.entries(actions).filter(
     ([, action]) =>
       action.interviewDeliveryRetry === null ||
-      isCurrentRetryableInterviewDelivery(
-        messages,
-        action.interviewDeliveryRetry,
-      ),
+      (retireBeforeConnectionEpoch !== null &&
+      action.connectionEpoch < retireBeforeConnectionEpoch
+        ? false
+        : isCurrentRetryableInterviewDelivery(
+            messages,
+            liveAssistantMessage,
+            action.interviewDeliveryRetry,
+          )),
   );
   if (entries.length === Object.keys(actions).length) return actions;
   return Object.fromEntries(entries);
@@ -4837,12 +4858,13 @@ function withInterviewLifecycleBlocks(
     }
     if (
       projection.settlementId !== null &&
-      projection.settlementSource !== null
+      projection.settlementSource !== null &&
+      projection.outcome !== null
     ) {
       const reduced = applyInterviewSettlement(block, {
         settlementId: projection.settlementId,
         source: projection.settlementSource,
-        outcome: projection.outcome ?? "failed",
+        outcome: projection.outcome,
         answers: [...projection.answers],
         draftAnswers: [...projection.draftAnswers],
         reason: projection.reason,

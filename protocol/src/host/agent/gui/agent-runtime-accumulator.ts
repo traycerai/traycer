@@ -141,6 +141,7 @@ function applyRuntimeInterviewSettlement(
     ...emptyInterviewBlockFacts(),
     type: "interview",
     blockId: event.blockId,
+    parentBlockId: event.parentBlockId,
     status: "streaming",
     timestamp: event.timestamp,
     toolName: null,

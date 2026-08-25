@@ -404,6 +404,8 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        interviewSettlementActionsProtocolSupported: () =>
+          client.interviewSettlementActionsProtocolSupported(),
         close: () => {
           client.close();
         },
@@ -1313,6 +1315,52 @@ describe("createChatSessionStore", () => {
     expect(harness.sent).toHaveLength(2);
   });
 
+  it("retires an accepted retry when a reconnect snapshot leaves the failed tuple unchanged", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const delivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    const snapshot = (): void =>
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [persistedInterviewMessage(delivery)],
+        queue: { status: "idle", items: [] },
+        pendingFileEditApprovals: [],
+      });
+    snapshot();
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    snapshot();
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const retried = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(retried).not.toBeNull();
+    expect(retried).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
   it("applies correlated lifecycle delivery updates without waiting for a snapshot", () => {
     const harness = createHarness();
     const callbacks = harness.callbacks();
@@ -1462,6 +1510,67 @@ describe("createChatSessionStore", () => {
     });
   });
 
+  it("keeps a null lifecycle outcome ambiguous even when provenance is present", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-unknown",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Older host did not classify this result",
+      resolvedAt: 5,
+      settlementId: "settlement-unknown",
+      settlementSource: "runtime",
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "errored",
+      error: "Older host did not classify this result",
+      outcome: null,
+      settlement: null,
+    });
+  });
+
   it("does not emit an interview delivery retry on a pre-1.7 chat session", () => {
     const harness = createProtocolChainHarness({ major: 1, minor: 6 });
     harness.session.emitStatus("open", null);
@@ -1476,6 +1585,15 @@ describe("createChatSessionStore", () => {
     expect(
       harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
     ).toBe(false);
+    harness.handle.dispose();
+  });
+
+  it("enables interview delivery retry from a negotiated 1.7 session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 7 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(true);
     harness.handle.dispose();
   });
 

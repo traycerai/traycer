@@ -102,7 +102,9 @@ export function draftToStoredAnswer(
       const option = question.options.at(index);
       return option === undefined ? [] : [option.label];
     }),
-    selectedOptionIndices: [...draft.selected],
+    ...(draft.selectionEvidenceExact
+      ? { selectedOptionIndices: [...draft.selected] }
+      : {}),
     otherText: draft.otherText,
     otherSelected: draft.otherSelected,
   };

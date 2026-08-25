@@ -14,6 +14,7 @@ import type { RuntimeApprovalDecision } from "@traycer/protocol/host/agent/gui/a
 import type {
   ChatSessionStoreHandle,
   EditUserMessageInput,
+  InterviewDeliveryRetryIdentity,
   SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -104,12 +105,9 @@ export interface ChatActions {
     reason: string,
     draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
   ) => string | null;
-  readonly interviewDeliveryRetry: (identity: {
-    readonly blockId: string;
-    readonly settlementId: string;
-    readonly deliveryId: string;
-    readonly generation: number;
-  }) => string | null;
+  readonly interviewDeliveryRetry: (
+    identity: InterviewDeliveryRetryIdentity,
+  ) => string | null;
   readonly ackFailedSendRestoration: (clientActionId: string) => void;
   readonly ackAcceptedAction: (clientActionId: string) => void;
   readonly takeSetupFailedRestoration: (

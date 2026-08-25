@@ -10,6 +10,7 @@ import {
   normalizeInterviewBlocksInShallowSnapshot,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
+  type ProjectedChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -189,13 +190,16 @@ export class ChatStreamClient {
    */
   sendAction(frame: ChatSubscribeClientFrame): void {
     if (this.closed) return;
-    this.session.sendClientFrame(
-      projectChatClientFrameForVersion(
+    let projected: ProjectedChatSubscribeClientFrame;
+    try {
+      projected = projectChatClientFrameForVersion(
         frame,
         this.session.getNegotiatedSchemaVersion(),
-      ),
-      null,
-    );
+      );
+    } catch {
+      return;
+    }
+    this.session.sendClientFrame(projected, null);
   }
 
   /**

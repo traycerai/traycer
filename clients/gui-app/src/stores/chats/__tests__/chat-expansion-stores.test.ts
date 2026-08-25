@@ -69,6 +69,7 @@ describe("chat expansion stores", () => {
     expect(store.getState().activeTarget?.unitId).toBe("unit-q3");
     store.getState().clearActiveTarget(interviewKey);
     expect(store.getState().activeTarget).toBeNull();
+    expect(store.getState().activeTargetClearEpoch).toBe(1);
 
     store.getState().reconcileActiveTarget({
       key: interviewKey,

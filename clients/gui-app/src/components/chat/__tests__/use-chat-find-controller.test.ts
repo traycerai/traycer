@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -212,7 +213,7 @@ describe("useChatFindController - chain-open on reveal", () => {
   });
 
   it("resumes an offscreen interview detail reveal when virtualization mounts the unit", () => {
-    const restoreHighlights = installMockHighlights();
+    onTestFinished(installMockHighlights());
     const messages = makeTranscriptWithInterviewDetailNeedle();
     const { getAdapter, getController, forceStore } =
       renderController(messages);
@@ -257,7 +258,6 @@ describe("useChatFindController - chain-open on reveal", () => {
       unitId: "interview:interview-find:question:0:answer:value:0",
       key: { kind: "interview", id: "interview-find" },
     });
-    restoreHighlights();
   });
 
   it("clears an interview target when passive reconciliation moves to an ordinary unit", () => {

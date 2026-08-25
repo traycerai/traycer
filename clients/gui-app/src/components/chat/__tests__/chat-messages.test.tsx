@@ -1010,6 +1010,10 @@ describe("ChatMessages scroll policy", () => {
     await waitFor(() => {
       expect(registeredAdapter).not.toBeNull();
     });
+    const getRegisteredAdapter = (): TileFindAdapter => {
+      if (registeredAdapter === null) throw new Error("adapter not registered");
+      return registeredAdapter;
+    };
 
     // The initial bottom-following viewport has recycled the target row out;
     // this search asks the real ChatMessages controller to reveal it. No test
@@ -1022,7 +1026,7 @@ describe("ChatMessages scroll policy", () => {
     const itemSizeChangesBeforeSearch = legendListItemSizeChanges.count;
 
     await act(async () => {
-      await registeredAdapter?.search({
+      await getRegisteredAdapter().search({
         requestId: 1,
         query: "offscreen interview detail",
         matchCase: false,
@@ -1037,7 +1041,7 @@ describe("ChatMessages scroll policy", () => {
           '[data-chat-find-unit="interview:interview-find:question:0:answer:value:0"]',
         ),
       ).not.toBeNull();
-      expect(registeredAdapter?.getSnapshot()).toMatchObject({
+      expect(getRegisteredAdapter().getSnapshot()).toMatchObject({
         activeUnitId: "interview:interview-find:question:0:answer:value:0",
         exactHighlight: "painted",
       });

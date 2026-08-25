@@ -17,7 +17,10 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  InterviewDeliveryRetryIdentity,
+} from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
 import type { ChatSurfaceNode } from "./chat-tile-types";
@@ -355,12 +358,7 @@ export function useChatMessageActions(
       const interviewDeliveryRetry =
         canAct && interviewDeliveryRetryProtocolSupported
           ? {
-              isPending: (identity: {
-                readonly blockId: string;
-                readonly settlementId: string;
-                readonly deliveryId: string;
-                readonly generation: number;
-              }): boolean =>
+              isPending: (identity: InterviewDeliveryRetryIdentity): boolean =>
                 [
                   ...Object.values(pendingActions),
                   ...Object.values(acceptedActions),
@@ -374,12 +372,7 @@ export function useChatMessageActions(
                     pendingIdentity.generation === identity.generation
                   );
                 }),
-              onRetry: (identity: {
-                readonly blockId: string;
-                readonly settlementId: string;
-                readonly deliveryId: string;
-                readonly generation: number;
-              }): void => {
+              onRetry: (identity: InterviewDeliveryRetryIdentity): void => {
                 chatActions.interviewDeliveryRetry(identity);
               },
             }
