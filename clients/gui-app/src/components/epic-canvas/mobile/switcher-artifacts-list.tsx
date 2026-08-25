@@ -121,6 +121,8 @@ function SwitcherArtifactRow(props: {
     <SwitcherListRow
       icon={<SwitcherArtifactIcon type={record.type} status={record.status} />}
       label={record.name}
+      secondaryLabel={null}
+      badge={null}
       active={isActive}
       onSelect={onSelect}
       selectTestId={`switcher-artifact-row-${record.id}`}
