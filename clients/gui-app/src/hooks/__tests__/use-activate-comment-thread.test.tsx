@@ -27,14 +27,20 @@ function activate(): void {
   act(() => result.current(THREAD_ID));
 }
 
-beforeEach(() => {
-  viewport.isMobile = true;
-  useLeftPanelStore.setState({ activePanelIdByTabId: {} });
+/**
+ * Every field the hook writes, back to empty. `setActivePanelIdAndExpand`
+ * touches three slices of the left-panel store and `revealCommentsPanel` a
+ * fourth, so resetting the active-panel map alone would leave a test's expand
+ * and reveal state visible to the next one.
+ */
+function resetStores(): void {
+  useLeftPanelStore.setState({
+    activePanelIdByTabId: {},
+    mainCollapsedByTabId: {},
+    panelSectionCollapsedByPanelId: {},
+    commentsPanelRevealedByTabId: {},
+  });
   useMobileSwitcherStore.setState({ openTabId: null });
-});
-
-afterEach(() => {
-  cleanup();
   useCommentThreadsStore.setState({
     activeByEpicId: {},
     hoverByEpicId: {},
@@ -42,6 +48,16 @@ afterEach(() => {
     draftByEpicId: {},
     artifactByEpicId: {},
   });
+}
+
+beforeEach(() => {
+  viewport.isMobile = true;
+  resetStores();
+});
+
+afterEach(() => {
+  cleanup();
+  resetStores();
 });
 
 describe("useActivateCommentThread", () => {
