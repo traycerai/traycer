@@ -23,11 +23,13 @@ import {
   type PlainTerminalCollection,
 } from "@/lib/terminals/plain-terminal-authority";
 import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
   absentListingProvesDeath,
   terminalSessionKey,
   useLandingTerminalStore,
+  type LandingTerminalPendingKill,
 } from "@/stores/home/landing-terminal-store";
 import {
   reconcileHostAuthoritativeLandingTerminalTabs,
@@ -330,39 +332,11 @@ export function useLandingTerminalReconciliation(
       const listedSessionIds = new Set(
         freshSessions.map((session) => session.sessionId),
       );
-      for (const pending of hostTombstones) {
-        // Absence from the host's own list is only proof of death for a session
-        // it had already acknowledged. A `terminal.plain.create` that has not
-        // settled is not listed YET, and its terminal lands under this exact
-        // session id, so clearing here drops the record in front of the terminal
-        // it was written to kill. Left outstanding, the recovery bridge drains
-        // it on the next dialable edge.
-        if (
-          !listedSessionIds.has(pending.sessionId) &&
-          absentListingProvesDeath(pending)
-        ) {
-          useLandingTerminalStore
-            .getState()
-            .clearPendingKill(pending.hostId, pending.sessionId);
-        }
-      }
-      await Promise.all(
-        hostTombstones
-          .filter((pending) => listedSessionIds.has(pending.sessionId))
-          .map((pending) =>
-            // Variables built explicitly rather than passing the tombstone. The
-            // two shapes were structurally identical until the tombstone grew
-            // provenance, so this type-checked while quietly sending fields the
-            // RPC has no use for.
-            killTerminal({
-              hostId: pending.hostId,
-              sessionId: pending.sessionId,
-            }).then(
-              () => undefined,
-              () => undefined,
-            ),
-          ),
-      );
+      await drainLegacyLandingTombstones({
+        hostTombstones,
+        listedSessionIds,
+        killTerminal,
+      });
       if (
         reconciliationGenerationIsStale(controller.signal, client, activeHostId)
       ) {
@@ -426,6 +400,75 @@ export function useLandingTerminalReconciliation(
 export type CapableLandingTerminalReconciliationOutcome =
   "reconciled" | "snapshot-not-fresh";
 
+/**
+ * The LEGACY arm of the tombstone drain: retire what the host's own list proves
+ * dead, and kill what it still lists.
+ *
+ * Exported for the same reason `reconcileCapableLandingTerminals` is - it is the
+ * half of the reconciliation that has to be driven directly to be tested at all,
+ * and both of its rules are ones a silent regression would leak a PTY over.
+ */
+export async function drainLegacyLandingTombstones(args: {
+  readonly hostTombstones: ReadonlyArray<LandingTerminalPendingKill>;
+  readonly listedSessionIds: ReadonlySet<string>;
+  readonly killTerminal: (variables: {
+    readonly hostId: string;
+    readonly sessionId: string;
+  }) => Promise<unknown>;
+}): Promise<void> {
+  for (const pending of args.hostTombstones) {
+    // Absence from the host's own list is only proof of death for a session it
+    // had already acknowledged. A `terminal.plain.create` that has not settled
+    // is not listed YET, and its terminal lands under this exact session id, so
+    // clearing here drops the record in front of the terminal it was written to
+    // kill. Left outstanding, the recovery bridge drains it on the next dialable
+    // edge.
+    if (
+      !args.listedSessionIds.has(pending.sessionId) &&
+      absentListingProvesDeath(pending)
+    ) {
+      useLandingTerminalStore
+        .getState()
+        .clearPendingKill(pending.hostId, pending.sessionId);
+    }
+  }
+  await Promise.all(
+    args.hostTombstones
+      .filter((pending) => args.listedSessionIds.has(pending.sessionId))
+      .map((pending) =>
+        // Through the shared coordinator, for the same reason the capable arm
+        // and the panel's own legacy fast path use it: the recovery bridge
+        // drains this identical tombstone set and routes an unacknowledged
+        // record to `terminal.kill` too. `terminal.kill` is scheduled `fifo` and
+        // `selectJob` returns null for fifo rather than joining an identical
+        // queued job, so an unmediated duplicate is two real RPCs and two
+        // `terminal.list` invalidations for one gesture - the second answering
+        // `killed: false` about a session the first removed, which for a
+        // `pendingCreate` record is the very answer the reprieve has to keep
+        // treating as ambiguous.
+        //
+        // Variables built explicitly rather than passing the tombstone. The two
+        // shapes were structurally identical until the tombstone grew
+        // provenance, so this type-checked while quietly sending fields the RPC
+        // has no use for.
+        requestLandingTerminalClose({
+          hostId: pending.hostId,
+          sessionId: pending.sessionId,
+          close: () =>
+            args
+              .killTerminal({
+                hostId: pending.hostId,
+                sessionId: pending.sessionId,
+              })
+              .then(() => undefined),
+        }).then(
+          () => undefined,
+          () => undefined,
+        ),
+      ),
+  );
+}
+
 export async function reconcileCapableLandingTerminals(args: {
   readonly activeHostId: string;
   readonly landingPageId: string;
@@ -462,7 +505,26 @@ export async function reconcileCapableLandingTerminals(args: {
         getPlainTerminal(collection, pending.hostId, pending.sessionId) !==
         undefined;
       if (projected) {
-        await args.closeTerminal({ terminalId: pending.sessionId });
+        // Through the shared coordinator, never straight at the mutation. The
+        // recovery bridge watches this same tombstone set and this same
+        // projection, so a retained tombstone whose create lands late wakes
+        // BOTH drains for one terminal. `terminal.plain.close` is fifo rather
+        // than coalescing, so that is two real RPCs: the loser finds a terminal
+        // the winner already removed and the mutation's `onError` raises
+        // "Couldn't close the terminal." for a close that in fact succeeded.
+        //
+        // Retaining the tombstone here is what opened that window - it used to
+        // be cleared on this pass, so it could never survive to be closed
+        // twice. Joining the in-flight promise still observes the real
+        // settlement, so the tombstone below clears on the same evidence.
+        await requestLandingTerminalClose({
+          hostId: pending.hostId,
+          sessionId: pending.sessionId,
+          close: () =>
+            args
+              .closeTerminal({ terminalId: pending.sessionId })
+              .then(() => undefined),
+        });
       } else if (!absentListingProvesDeath(pending)) {
         // The close was never sent and absence proves nothing here - an
         // in-flight create is simply not projected yet, and a legacy session
