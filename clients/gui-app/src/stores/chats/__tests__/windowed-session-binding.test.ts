@@ -958,6 +958,75 @@ describe("a row-targeted delta on the windowed line", () => {
     }
   });
 
+  it("keeps the ACTIVE turn's streamed blocks across an appended event", () => {
+    // Consumer 11a - missed by the sweep, and the worst of the set. This row
+    // is at the tail and hydrated by construction, which is exactly why the
+    // bug reads as impossible: being hydrated is what makes the write LAND,
+    // not what makes it SURVIVE. Every mid-turn event republished `messages`
+    // from the window and took the streamed text with it.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [
+            assistantWithBlocks("a-live", 1, "turn-1", [
+              {
+                type: "text",
+                blockId: "b-live",
+                status: "streaming",
+                timestamp: 1,
+                text: "start",
+                providerNotice: null,
+              },
+            ]),
+          ],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      raiseActiveTurn(harness.callbacks(), "turn-1");
+
+      harness.callbacks().onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "text.delta",
+          blockId: "b-live",
+          timestamp: 4,
+          delta: " and more",
+        },
+      });
+
+      const streamedText = (): string => {
+        const block = blockOf(
+          harness.handle.store
+            .getState()
+            .messages.find((message) => message.messageId === "a-live"),
+          "b-live",
+        );
+        return block?.type === "text" ? block.text : "";
+      };
+      expect(streamedText()).toBe("start and more");
+
+      harness.callbacks().onEventAppended(appendedEvent("e-mid-turn"));
+      expect(streamedText()).toBe("start and more");
+
+      // And it took the DEFERRED charge. Both charge modes are behaviourally
+      // identical - the eager one is simply the wrong cost on a growing row
+      // written per delta - so nothing else here can tell them apart, and a
+      // silent switch back to eager would be an invisible regression.
+      expect(
+        harness.handle.store.getState().transcriptWindow.unsettledByteRowIds,
+      ).toEqual(["a-live"]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   it("lands in the window itself, not only in the published array", () => {
     // The stronger statement, and the one that does not depend on which frame
     // happens to arrive next: the span holding the row carries the resolution.

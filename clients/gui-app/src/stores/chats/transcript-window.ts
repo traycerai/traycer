@@ -109,6 +109,28 @@ export interface TranscriptWindow {
   readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
+   * Rows whose latest rewrite is NOT yet reflected in {@link hydratedBytes}.
+   *
+   * The streaming path's answer to a cost that has no cheap exact form.
+   * `recordByteLength` serializes a whole record, and the active turn's row is
+   * rewritten on every buffered delta while GROWING - so charging it per write
+   * is O(row) per delta, quadratic across a turn, and precisely the per-token
+   * O(history) work this feature exists to delete.
+   *
+   * Deferring is sound because the byte figure has exactly one consumer:
+   * {@link evictTranscriptWindowToBudget}. Nothing renders it and nothing else
+   * branches on it, so it does not need to be right continuously - it needs to
+   * be right when it is READ, which is what {@link settleWindowBytes} makes it.
+   * The cost lands once per eviction instead of once per delta.
+   *
+   * Deliberately not "skip the streaming row's bytes entirely": the tail span
+   * is exempt from eviction, so an under-count would not protect the live turn
+   * (it is already protected) - it would only stop a genuinely huge turn from
+   * evicting the cold scrollback it is competing with, which is the one moment
+   * that budget is for.
+   */
+  readonly unsettledByteRowIds: readonly string[];
+  /**
    * The index is void and only a `resnapshot` repairs it.
    *
    * Set by a `reindexed` change, and by a final skeleton chunk whose assembled
@@ -158,6 +180,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     liveMessages: [],
     liveEvents: [],
     hydratedBytes: 0,
+    unsettledByteRowIds: [],
     invalidated: false,
     clock: 0,
   };
@@ -259,6 +282,57 @@ export function updateWindowMessage(
   messageId: string,
   update: (message: Message) => Message,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
+  return rewriteWindowMessage(window, messageId, update, "now");
+}
+
+/**
+ * The same rewrite, for the ACTIVE TURN's row.
+ *
+ * Identical in every respect except when the bytes are charged: this one defers
+ * (see {@link TranscriptWindow.unsettledByteRowIds}). Separate from
+ * {@link updateWindowMessage} rather than a flag on it, because the choice is
+ * not a caller preference - it follows from how often the caller runs, and a
+ * row-targeted applier that started deferring would be a silent regression in
+ * the accuracy of the budget rather than a visible one.
+ */
+export function streamWindowMessage(
+  window: TranscriptWindow,
+  messageId: string,
+  update: (message: Message) => Message,
+): { readonly window: TranscriptWindow; readonly held: boolean } {
+  return rewriteWindowMessage(window, messageId, update, "deferred");
+}
+
+/**
+ * Bring {@link TranscriptWindow.hydratedBytes} back in line with what the spans
+ * actually hold.
+ *
+ * Re-measures only the spans holding an unsettled row - not the whole window -
+ * so the cost is proportional to what was deferred, not to what is hydrated.
+ * Called wherever the figure is about to be READ.
+ */
+export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
+  if (window.unsettledByteRowIds.length === 0) return window;
+  const unsettled = new Set(window.unsettledByteRowIds);
+  const spans = window.spans.map((span) =>
+    span.messages.some((message) => unsettled.has(message.messageId))
+      ? { ...span, bytes: recordsByteLength(span.messages, span.events) }
+      : span,
+  );
+  return {
+    ...window,
+    spans,
+    hydratedBytes: totalBytes(spans),
+    unsettledByteRowIds: [],
+  };
+}
+
+function rewriteWindowMessage(
+  window: TranscriptWindow,
+  messageId: string,
+  update: (message: Message) => Message,
+  charge: "now" | "deferred",
+): { readonly window: TranscriptWindow; readonly held: boolean } {
   const indexIn = (messages: readonly Message[]): number =>
     messages.findIndex((message) => message.messageId === messageId);
   // Located once and reused below, rather than re-scanned per span. The
@@ -283,14 +357,15 @@ export function updateWindowMessage(
     return {
       ...span,
       messages,
-      // Charged as a DELTA, not by re-measuring the span. Every caller of this
-      // function is a row-targeted delta applier, and two of them (a detached
-      // subagent's card, a carried steer block) run at streaming frequency -
-      // so a whole-span recompute would serialize every record the span holds
-      // once per token, which is the per-token O(history) cost this whole
-      // feature exists to delete. The result is identical: only one record
-      // changed.
-      bytes: span.bytes + recordByteLength(next) - recordByteLength(previous),
+      // Charged as a DELTA, not by re-measuring the span: only one record
+      // changed, so the two are identical and this one does not serialize
+      // every record the span holds. `deferred` skips even that - see
+      // `unsettledByteRowIds` for why the streaming path cannot afford one
+      // serialization of a growing row per delta.
+      bytes:
+        charge === "deferred"
+          ? span.bytes
+          : span.bytes + recordByteLength(next) - recordByteLength(previous),
     };
   });
   const liveMessages =
@@ -305,6 +380,10 @@ export function updateWindowMessage(
       spans,
       liveMessages,
       hydratedBytes: totalBytes(spans),
+      unsettledByteRowIds:
+        charge === "now" || window.unsettledByteRowIds.includes(messageId)
+          ? window.unsettledByteRowIds
+          : [...window.unsettledByteRowIds, messageId],
       clock: window.clock + 1,
     },
     held: true,
@@ -907,9 +986,14 @@ export function planTranscriptHydration(
  * span whose absence is visible immediately.
  */
 export function evictTranscriptWindowToBudget(
-  window: TranscriptWindow,
+  input: TranscriptWindow,
   maxBytes: number,
 ): TranscriptWindow {
+  // The one place the byte figure is READ, and therefore the one place it has
+  // to be true. Settling FIRST rather than after the early return is the whole
+  // point: a window carrying a turn's worth of deferred growth would otherwise
+  // read as under budget and evict nothing.
+  const window = settleWindowBytes(input);
   if (window.hydratedBytes <= maxBytes) return window;
   const protectedSpan = window.spans.find(
     (span) => spanEnd(span) >= window.rowCount && window.rowCount > 0,

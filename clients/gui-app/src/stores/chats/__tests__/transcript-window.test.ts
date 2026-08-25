@@ -18,8 +18,11 @@ import {
   hydratedRecords,
   planTranscriptHydration,
   selectHydratedRecords,
+  settleWindowBytes,
+  streamWindowMessage,
   transcriptHydrationGaps,
   updateWindowMessage,
+  TRANSCRIPT_WINDOW_MAX_BYTES,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 
@@ -770,6 +773,102 @@ describe("records the index has not placed yet", () => {
     expect(shrunk.window.spans[0].bytes).toBeLessThan(
       grown.window.spans[0].bytes,
     );
+  });
+});
+
+describe("the streaming row's byte charge", () => {
+  function windowWithColdAndTail(): TranscriptWindow {
+    let window = windowWithSkeleton(30);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0"],
+        messages: [userMessage("cold", 0)],
+      }),
+    );
+    return applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 29,
+        rowIds: ["row-29"],
+        messages: [userMessage("live", 29)],
+      }),
+    );
+  }
+
+  it("leaves the figure alone while streaming, and names the row it owes", () => {
+    const seeded = windowWithColdAndTail();
+    const streamed = streamWindowMessage(seeded, "live", (message) =>
+      messageWithText(message, "streamed body ".repeat(200)),
+    );
+
+    expect(streamed.held).toBe(true);
+    // The row grew; the figure deliberately did not move.
+    expect(streamed.window.hydratedBytes).toBe(seeded.hydratedBytes);
+    expect(streamed.window.unsettledByteRowIds).toEqual(["live"]);
+  });
+
+  it("settles to the same number an exact charge would have reached", () => {
+    const seeded = windowWithColdAndTail();
+    const text = "streamed body ".repeat(200);
+    const deferred = streamWindowMessage(seeded, "live", (message) =>
+      messageWithText(message, text),
+    );
+    const exact = updateWindowMessage(seeded, "live", (message) =>
+      messageWithText(message, text),
+    );
+
+    const settled = settleWindowBytes(deferred.window);
+    expect(settled.hydratedBytes).toBe(exact.window.hydratedBytes);
+    expect(settled.unsettledByteRowIds).toEqual([]);
+  });
+
+  it("does not name the same row twice across a turn's worth of deltas", () => {
+    let window = windowWithColdAndTail();
+    for (let index = 0; index < 50; index += 1) {
+      window = streamWindowMessage(window, "live", (message) =>
+        messageWithText(message, `body ${index}`),
+      ).window;
+    }
+    expect(window.unsettledByteRowIds).toEqual(["live"]);
+  });
+
+  it("evicts on the settled figure, not the stale one", () => {
+    // The whole design rests on this. Eviction is the ONLY reader of the byte
+    // figure, so deferring is sound exactly as long as eviction settles first.
+    // A window carrying a turn's worth of deferred growth must not read as
+    // under budget and evict nothing.
+    const seeded = windowWithColdAndTail();
+    const budget = seeded.hydratedBytes + 100;
+    const streamed = streamWindowMessage(seeded, "live", (message) =>
+      messageWithText(message, "streamed body ".repeat(200)),
+    ).window;
+
+    // Under the STALE figure this window fits, so nothing would be dropped.
+    expect(streamed.hydratedBytes).toBeLessThan(budget);
+
+    const evicted = evictTranscriptWindowToBudget(streamed, budget);
+    // The tail is exempt, so the cold span is what has to go.
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([29]);
+  });
+
+  it("still reports being under budget when the settled figure fits", () => {
+    // The other half: settling must not become a reason to evict. A row that
+    // grew by a little stays inside a budget that accommodates it.
+    const seeded = windowWithColdAndTail();
+    const streamed = streamWindowMessage(seeded, "live", (message) =>
+      messageWithText(message, "a bit more"),
+    ).window;
+    const evicted = evictTranscriptWindowToBudget(
+      streamed,
+      TRANSCRIPT_WINDOW_MAX_BYTES,
+    );
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
+    // Settled on the way through, so the next read costs nothing.
+    expect(evicted.unsettledByteRowIds).toEqual([]);
   });
 });
 

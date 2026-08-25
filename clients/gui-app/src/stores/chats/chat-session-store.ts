@@ -43,6 +43,7 @@ import {
   hydratedRecords,
   isTailHydrated,
   planTranscriptHydration,
+  streamWindowMessage,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type TranscriptWindow,
@@ -4856,8 +4857,12 @@ function applyImageResolutionDelta(
   // decided this event belongs to a persisted row rather than the live one, so
   // falling back would re-run that decision with a worse answer.
   return (
-    rewriteMessageInPlace(state, message.messageId, (target) =>
-      target.role === "assistant" ? { ...target, imageResolutions } : target,
+    rewriteMessageInPlace(
+      state,
+      message.messageId,
+      (target) =>
+        target.role === "assistant" ? { ...target, imageResolutions } : target,
+      "now",
     ) ?? {}
   );
 }
@@ -5013,11 +5018,18 @@ export function isWindowedTranscript<
  * `loadRange` that eventually hydrates that ordinal serves a body that already
  * contains it. Dropping loses nothing; applying to a copy the next frame
  * overwrites loses the same thing while looking like it worked.
+ *
+ * `charge` says when the window's byte figure is brought back in line, and it
+ * follows from how often the caller runs rather than from what it wants. The
+ * row-targeted appliers pass `"now"`. The ACTIVE TURN's streaming row passes
+ * `"deferred"`, because charging it exactly would serialize a growing record
+ * on every buffered delta - see `unsettledByteRowIds` in `transcript-window`.
  */
 function rewriteMessageInPlace(
   state: ChatSessionState,
   messageId: string,
   update: (message: Message) => Message,
+  charge: "now" | "deferred",
 ): Partial<ChatSessionState> | null {
   if (!isWindowedTranscript(state)) {
     const index = state.messages.findIndex(
@@ -5028,11 +5040,10 @@ function rewriteMessageInPlace(
     messages[index] = update(state.messages[index]);
     return { messages };
   }
-  const applied = updateWindowMessage(
-    state.transcriptWindow,
-    messageId,
-    update,
-  );
+  const applied =
+    charge === "deferred"
+      ? streamWindowMessage(state.transcriptWindow, messageId, update)
+      : updateWindowMessage(state.transcriptWindow, messageId, update);
   if (!applied.held) return null;
   return {
     transcriptWindow: applied.window,
@@ -5087,16 +5098,20 @@ function applySteerSplitCarryoverEvent(
   // row - which is the duplicate-card outcome this function exists to prevent.
   // A sibling we found but cannot write to is still a carryover.
   return (
-    rewriteMessageInPlace(state, sibling.messageId, (target) =>
-      target.role === "assistant"
-        ? {
-            ...target,
-            blocks: content.blocks,
-            ...(target.blocksVersion === undefined
-              ? {}
-              : { blocksVersion: content.blocksVersion }),
-          }
-        : target,
+    rewriteMessageInPlace(
+      state,
+      sibling.messageId,
+      (target) =>
+        target.role === "assistant"
+          ? {
+              ...target,
+              blocks: content.blocks,
+              ...(target.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+            }
+          : target,
+      "now",
     ) ?? {}
   );
 }
@@ -5153,21 +5168,25 @@ function applyEventToOwningMessage(
   );
   if (content.blocks === target.blocks) return {};
   return (
-    rewriteMessageInPlace(state, target.messageId, (message) =>
-      message.role !== "assistant"
-        ? message
-        : {
-            ...message,
-            blocks: content.blocks,
-            ...(message.blocksVersion === undefined
-              ? {}
-              : { blocksVersion: content.blocksVersion }),
-            // Preserve the settled row's `timestamp` (its completed-at). A
-            // detached subagent's later activity must NOT advance the turn's
-            // completed-at / cache token - the host detached writer only
-            // replaces blocks/blocksVersion, and this mirrors it so the turn
-            // doesn't appear to "complete later".
-          },
+    rewriteMessageInPlace(
+      state,
+      target.messageId,
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : {
+              ...message,
+              blocks: content.blocks,
+              ...(message.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+              // Preserve the settled row's `timestamp` (its completed-at). A
+              // detached subagent's later activity must NOT advance the turn's
+              // completed-at / cache token - the host detached writer only
+              // replaces blocks/blocksVersion, and this mirrors it so the turn
+              // doesn't appear to "complete later".
+            },
+      "now",
     ) ?? {}
   );
 }
@@ -5229,10 +5248,17 @@ function applyContentBlockDelta(
     if (target.role !== "assistant") {
       return { liveAssistantMessage: null };
     }
-    // Index-targeted update: copy the messages array once (slice is O(N)
-    // but allocates only the spine, not the elements) and replace exactly
-    // the streaming row. Avoids the prior `.map` which re-creates every
-    // unchanged element on every text delta.
+    // The ACTIVE TURN's row - the highest-frequency writer in the store, and
+    // the one the consumer sweep missed. It goes through the same window
+    // write-through as the row-targeted appliers: `state.messages` is DERIVED
+    // on the windowed line, so accumulating into it alone meant the next
+    // appended event republished from the window and erased everything
+    // streamed since the last snapshot. The row is at the tail and hydrated by
+    // construction, which is why this reads as "always worked" - being
+    // hydrated is what makes the write land, not what makes it survive.
+    //
+    // `deferred` because this runs per buffered delta on a GROWING row; the
+    // byte figure is trued up before eviction reads it.
     const content = accumulateTurnContent(
       {
         blocks: target.blocks,
@@ -5241,17 +5267,24 @@ function applyContentBlockDelta(
       event,
     );
     if (content.blocks === target.blocks) return state;
-    const next = state.messages.slice();
-    next[assistantIndex] = {
-      ...target,
-      blocks: content.blocks,
-      ...(target.blocksVersion === undefined
-        ? {}
-        : { blocksVersion: content.blocksVersion }),
-      timestamp: event.timestamp,
-    };
+    const streamed = rewriteMessageInPlace(
+      state,
+      target.messageId,
+      (message) =>
+        message.role !== "assistant"
+          ? message
+          : {
+              ...message,
+              blocks: content.blocks,
+              ...(message.blocksVersion === undefined
+                ? {}
+                : { blocksVersion: content.blocksVersion }),
+              timestamp: event.timestamp,
+            },
+      "deferred",
+    );
     return {
-      messages: next,
+      ...(streamed ?? {}),
       liveAssistantMessage: null,
     };
   }
