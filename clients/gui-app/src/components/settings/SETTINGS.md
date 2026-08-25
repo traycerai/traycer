@@ -69,6 +69,49 @@ entry point (user menu, deep-links, the palette/keybinding bridge) - gates on
 (`/settings/<section>` when a section is requested, else `/settings`).
 History keeps its modal on every viewport.
 
+### Two different mobile questions
+
+Everything above is VIEWPORT (`useIsMobileViewport()`) - it flips when a window
+is resized, and a narrow desktop window gets all of it. A separate, smaller set
+of rows is gated on the BUILD (`isMobileApp()`, the Capacitor bundle), because
+what they need is a capability the shell does not have at any width. Do not
+reach for the viewport hook for these: a narrow desktop window still has a
+power bridge and a hardware keyboard.
+
+- **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
+- **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
+  setting's only consumer, `PreventSleepController`, holds an OS power-save
+  blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
+  returns null there. Extracted from `general-settings-panel.tsx` for exactly
+  this reason; the Running-agents group keeps two other rows, so it never
+  empties.
+- **The Keybindings SECTION** - chord capture is `window` `keydown` only
+  (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
+  can commit it, and a binding clears only with Backspace.
+
+Each returns `null` outright rather than rendering disabled with rewritten
+copy: a control the build will never perform is worse than no control.
+
+A whole section needs more than hiding its row, because a section id is
+addressable. `visibleSettingsSections()` (`lib/settings-sections.ts`) is the
+OFFERED list and `SETTINGS_SECTIONS` stays the whole RESOLVER table - ids are a
+compatibility surface, so a route, a remembered tab path and a title must keep
+resolving one that is not offered. Three surfaces present a choice and so read
+the offered list: the sidebar, the palette's settings sub-page
+(`navigation.source.ts`), and the leader digits (`keybindings/dispatch.ts`,
+which indexes positionally and must walk the same list the sidebar badges).
+Three more can arrive holding an id and each resolves it: the route
+(`settings.keybindings.tsx` `beforeLoad` redirects to `/settings/general` with
+`replace`), the modal (falls back to General for any section the build does not
+offer, since its section is persisted across launches), and the palette's
+`help:keybindings` row, which is dropped rather than left as the one entry
+point that routes around the rest.
+
+The gate is by SHELL, not by attached hardware: an iPad running the mobile app
+with a keyboard paired loses the section, which is the accepted cost of
+matching the Voice precedent. A capability signal (`IRunnerHost` fields) is
+what a finer rule would be built on.
+
 Supporting pieces, all viewport-agnostic where possible:
 
 - `settings-row-layout.ts` (`SETTINGS_ROW_STACK`) holds the narrow-width half
@@ -439,9 +482,11 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
-  - **Running agents**: Prevent sleep while running, Show global resources
-    button, Show navigator resource stats (these stay out of Appearance -
-    they change information visibility, not styling).
+  - **Running agents**: Prevent sleep while running
+    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
+    "Two different mobile questions"), Show global resources button, Show
+    navigator resource stats (these stay out of Appearance - they change
+    information visibility, not styling).
   - **Setup & migration**: Product tour (replay onboarding), Data migration
     (retry moving local SQLite tasks/epics to cloud - stays out of
     Diagnostics, which is support capture, not user data recovery).
