@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/input-group";
 import { PopoverContent } from "@/components/ui/popover";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
-import { useDeclineOpenAutoFocusOnCoarsePointer } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { cn } from "@/lib/utils";
 import {
   PickerActionButton,
@@ -60,10 +60,10 @@ export function WorktreeBranchPickerContent(
   // Typing to narrow a long branch list is a hardware-keyboard convenience.
   // On a touch pointer the same focus raises a software keyboard over the very
   // list the popover exists to show, so the search stands down and the popover
-  // opens on its rows. Focus stays on the still-mounted trigger, so declining
-  // strands nothing.
+  // opens on its rows.
   const coarsePointer = useCoarsePointer();
-  const declineOpenAutoFocus = useDeclineOpenAutoFocusOnCoarsePointer();
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
 
   useEffect(() => {
     if (!open || coarsePointer) return;
@@ -122,10 +122,11 @@ export function WorktreeBranchPickerContent(
         "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0 data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
+      ref={contentRef}
       // The search field is the first tabbable descendant, so Radix's own
       // open-autofocus takes it whether or not the effect above runs. Both
       // halves have to move together or the gate is a no-op.
-      onOpenAutoFocus={declineOpenAutoFocus}
+      onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={handleContentKeyDown}
       onEscapeKeyDown={(event) => {
         if (!hasQuery) return;

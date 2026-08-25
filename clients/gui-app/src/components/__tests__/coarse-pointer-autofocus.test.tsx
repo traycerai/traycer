@@ -164,19 +164,24 @@ describe("existing-worktree submenu search", () => {
 });
 
 describe("settings theme preset picker", () => {
-  function openPicker(): { readonly trigger: HTMLElement } {
+  /**
+   * `focusTrigger` is the engine difference this hook turns on. Chromium
+   * focuses a button on pointer activation; WebKit does not, and the shipping
+   * mobile shell is a WKWebView. Both are exercised because declining is only
+   * safe in the first case.
+   */
+  function openPicker(focusTrigger: boolean): {
+    readonly trigger: HTMLElement;
+  } {
     render(<ThemePresetPicker value="neutral" onChange={() => undefined} />);
     const trigger = screen.getByRole("button");
-    // A real pointer press focuses the trigger before the popover opens;
-    // jsdom's synthetic click does not, and the trigger being focused is
-    // exactly what makes declining safe here.
-    trigger.focus();
+    if (focusTrigger) trigger.focus();
     fireEvent.click(trigger);
     return { trigger };
   }
 
   it("focuses the preset search when a fine pointer is driving", () => {
-    openPicker();
+    openPicker(true);
 
     expect(document.activeElement).toBe(
       screen.getByLabelText("Search theme presets"),
@@ -185,7 +190,7 @@ describe("settings theme preset picker", () => {
 
   it("leaves the preset search alone on a coarse pointer", () => {
     stubCoarsePointer(true);
-    const { trigger } = openPicker();
+    const { trigger } = openPicker(true);
 
     expect(document.activeElement).not.toBe(
       screen.getByLabelText("Search theme presets"),
@@ -193,10 +198,28 @@ describe("settings theme preset picker", () => {
     // Focus stayed on the still-mounted popover trigger, not on the body.
     expect(document.activeElement).toBe(trigger);
   });
+
+  // The WebKit arm. Declining alone would leave focus on `body`, standing the
+  // popover up with focus outside it - no screen-reader announcement and
+  // nothing for the focus scope to hold. Focus moves onto the content instead.
+  it("moves focus into the popover when the trigger never took it", () => {
+    stubCoarsePointer(true);
+    openPicker(false);
+
+    expect(document.activeElement).not.toBe(
+      screen.getByLabelText("Search theme presets"),
+    );
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-slot="popover-content"]'),
+    );
+  });
 });
 
 describe("settings font picker", () => {
-  function openPicker(): { readonly trigger: HTMLElement } {
+  function openPicker(focusTrigger: boolean): {
+    readonly trigger: HTMLElement;
+  } {
     render(
       <FontPicker
         value={null}
@@ -208,13 +231,13 @@ describe("settings font picker", () => {
       />,
     );
     const trigger = screen.getByLabelText("UI font");
-    trigger.focus();
+    if (focusTrigger) trigger.focus();
     fireEvent.click(trigger);
     return { trigger };
   }
 
   it("focuses the font search when a fine pointer is driving", () => {
-    openPicker();
+    openPicker(true);
 
     expect(document.activeElement).toBe(
       screen.getByLabelText("Search ui font"),
@@ -223,7 +246,7 @@ describe("settings font picker", () => {
 
   it("leaves the font search alone on a coarse pointer", () => {
     stubCoarsePointer(true);
-    const { trigger } = openPicker();
+    const { trigger } = openPicker(true);
 
     expect(document.activeElement).not.toBe(
       screen.getByLabelText("Search ui font"),
