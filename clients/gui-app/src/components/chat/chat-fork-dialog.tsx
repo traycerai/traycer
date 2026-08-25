@@ -782,7 +782,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]"
+        // Capped and split into header / scroller / footer, the shape every
+        // dialog with a form taller than a phone uses. The cap is what keeps
+        // Fork reachable once a soft keyboard is up: both mobile shells shrink
+        // the layout viewport for the keyboard (the app resizes the web view
+        // natively, Android Chrome honours `interactive-widget=resizes-content`),
+        // so `dvh` already resolves against what is left uncovered.
+        className="grid max-h-[min(86dvh,calc(100dvh-2rem))] w-[min(94vw,32rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,34rem)]"
         // Same portal rule as the worktree pickers: the host switcher's list
         // mounts outside this dialog, so a click in it reads as an interaction
         // from outside. Dismissing on that would throw away the form someone is
@@ -802,10 +808,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         {capabilityProbeEntries.map((entry) => (
           <ChatForkHostCapabilityProbe key={entry.hostId} entry={entry} />
         ))}
-        <DialogHeader>
+        <DialogHeader className="px-4 pt-4 pr-12 pb-2">
           <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
-        <div className="flex min-w-0 flex-col gap-2">
+        <div
+          className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto px-4 pb-2"
+          data-testid="chat-fork-dialog-scroller"
+        >
           <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
             <span className="px-0 py-0 font-sans text-overline font-medium uppercase text-muted-foreground/70">
               Title
@@ -869,7 +878,9 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             publicationNotice={publicationNotice}
           />
         </div>
-        <DialogFooter>
+        {/* `mx-0 mb-0`: the footer's own negative margins bleed it into a
+            `p-4` content, and this one is `p-0`. */}
+        <DialogFooter className="mx-0 mb-0 px-4 py-3">
           <Button
             type="button"
             variant="outline"
