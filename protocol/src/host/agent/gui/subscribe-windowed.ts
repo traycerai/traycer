@@ -624,10 +624,6 @@ export interface RowSkeletonChunkPlan {
   readonly isFinal: boolean;
 }
 
-function encodedEntryBytes(entry: RowSkeletonEntry): number {
-  return utf8ByteLength(JSON.stringify(entry)) + 1;
-}
-
 /**
  * Splits a skeleton into frame-sized chunks.
  *
