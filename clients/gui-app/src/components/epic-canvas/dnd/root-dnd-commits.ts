@@ -68,6 +68,7 @@ import {
   type ProjectedReparentNode,
 } from "@/lib/reparent-projection-rules";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { appLogger } from "@/lib/logger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
@@ -654,8 +655,7 @@ function isDocOnlyTerminalAgent(
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
  * `acquire`), RE-RUNS `canReparent` against the projected tree (Decision D:
- * this closes the drag-over→drag-end TOCTOU and keeps the throwing store
- * action unreachable), then persists:
+ * this closes the drag-over→drag-end TOCTOU), then persists:
  *   - registry-backed agents → `epic.reparentChat` only
  *   - artifacts → local `reparentArtifact` (Y stream) **and**
  *     `epic.reparentArtifact` (host cloud-sync / the persist path that
@@ -665,6 +665,12 @@ function isDocOnlyTerminalAgent(
  *   - doc-only terminal agents → local `reparentArtifact` only (Q1)
  * Silent no-op when the session is gone or the re-check fails - matching
  * the "invalid drop = silent cancel" rule.
+ *
+ * The projected re-check does NOT make the throwing store action unreachable,
+ * and this used to claim it did. The two evaluators read different sources and
+ * disagree for one live pairing; see the doc-write branch below. The throw is
+ * handled there, and `handleDragEnd` additionally ends the drag in a `finally`
+ * so no future escape from this function can strand the session.
  */
 export function commitSidebarReparentDrop(
   input: SidebarReparentDropInput,
@@ -741,9 +747,50 @@ export function commitSidebarReparentDrop(
     // `epic.reparentArtifact` so persist does not depend on that arm.
     // Doc-only TUI stays Y-only until listTuiAgents is on the floor (Q1):
     // this RPC names an artifact id, not a tuiAgents map entry.
-    const mutated = handle.store
-      .getState()
-      .reparentArtifact(input.sourceNodeId, input.newParentId);
+    // `reparentArtifact` VALIDATES AGAINST THE DOC and THROWS on rejection,
+    // while the gate above validated against the PROJECTED TREE. The header
+    // claims that gate "keeps the throwing store action unreachable"; it does
+    // not, and there is one live pairing where the two evaluators genuinely
+    // disagree:
+    //
+    //   a doc-only terminal agent  ->  dropped onto a RECORD-BACKED chat
+    //
+    // Both nodes are in the projected tree, same family, no cycle - so
+    // `canReparentProjected` says yes. The parent has no DOC entry, so the doc
+    // evaluator calls it `missing-node` and this call throws. Nothing here
+    // caught it, so it escaped `handleDragEnd` before `dragEnded()` ran and
+    // wedged the whole drag session - a dead sidebar until remount, from one
+    // ordinary drop.
+    //
+    // Caught rather than pre-empted, deliberately. Re-deriving "will the doc
+    // evaluator accept this?" here would duplicate `evaluateReparent`'s rules
+    // in a second place and pull the doc back into this file, which the `@2`
+    // work is removing it from. Catching also covers the reasons we have NOT
+    // enumerated, not just this pairing.
+    //
+    // A rejection is logged, never toasted: an invalid drop is a silent cancel
+    // by this file's own rule, and the divergence is an internal invariant
+    // mismatch the user cannot act on. The log is the signal that the doc and
+    // projected evaluators have drifted - which is what task 4.3 retires by
+    // moving the write path onto the projection.
+    let mutated = false;
+    try {
+      mutated = handle.store
+        .getState()
+        .reparentArtifact(input.sourceNodeId, input.newParentId);
+    } catch (error: unknown) {
+      appLogger.error(
+        "[epic-dnd] doc reparent rejected after the projected gate passed",
+        {
+          epicId: input.epicId,
+          sourceNodeId: input.sourceNodeId,
+          newParentId: input.newParentId,
+          nodeType: evaluation.node.type,
+        },
+        error,
+      );
+      return;
+    }
     if (mutated && evaluation.node.family === "artifact") {
       const artifactClient = getEpicSessionHandleHostClient(handle);
       if (artifactClient !== null) {

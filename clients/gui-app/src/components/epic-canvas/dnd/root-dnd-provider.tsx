@@ -111,6 +111,7 @@ import { snapCenterToCursor } from "@dnd-kit/modifiers";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { appLogger } from "@/lib/logger";
 
 /** Keep every root drag preview centered beneath pointer-based activators. */
 const ROOT_DRAG_OVERLAY_MODIFIERS = [snapCenterToCursor];
@@ -618,18 +619,45 @@ export function RootDndProvider(props: RootDndProviderProps) {
       // commit it (with the canReparent re-check inside) and skip the rest.
       const reparent = lastReparentDropRef.current;
       if (reparent !== null) {
-        commitSidebarReparentDrop({
-          epicId: reparent.epicId,
-          sourceNodeId: reparent.sourceNodeId,
-          newParentId: reparent.newParentId,
-          panelId: reparent.panelId,
-          viewTabId: reparent.viewTabId,
-          queryClient,
-        });
-        lastResolvedDropRef.current = null;
-        lastReparentDropRef.current = null;
-        clearLastCollisionPointerPoint();
-        useEpicDndStore.getState().dragEnded();
+        // ENDING THE DRAG IS NOT CONDITIONAL ON THE COMMIT SUCCEEDING. These
+        // four lines used to sit after the call, so a throw out of the commit
+        // skipped every one of them - `dragEnded()` included - and left the
+        // store mid-drag with stale refs: a dead sidebar until the tree
+        // remounted. One ordinary drop did it (a doc-only terminal agent onto
+        // a record-backed chat, where the doc evaluator rejects what the
+        // projected gate allowed).
+        //
+        // The commit handles that pairing itself now. This `finally` is the
+        // structural half: the drag lifecycle belongs to the provider, so no
+        // future throw from anywhere inside the commit can strand a session
+        // again. Rethrowing would defeat the point - the cleanup is exactly
+        // what must survive the failure - so the error is logged and swallowed
+        // here, and the commit's own handler owns anything user-facing.
+        try {
+          commitSidebarReparentDrop({
+            epicId: reparent.epicId,
+            sourceNodeId: reparent.sourceNodeId,
+            newParentId: reparent.newParentId,
+            panelId: reparent.panelId,
+            viewTabId: reparent.viewTabId,
+            queryClient,
+          });
+        } catch (error: unknown) {
+          appLogger.error(
+            "[epic-dnd] sidebar reparent commit threw; ending the drag anyway",
+            {
+              epicId: reparent.epicId,
+              sourceNodeId: reparent.sourceNodeId,
+              newParentId: reparent.newParentId,
+            },
+            error,
+          );
+        } finally {
+          lastResolvedDropRef.current = null;
+          lastReparentDropRef.current = null;
+          clearLastCollisionPointerPoint();
+          useEpicDndStore.getState().dragEnded();
+        }
         return;
       }
       const source = readActiveDragSource(event.active);
