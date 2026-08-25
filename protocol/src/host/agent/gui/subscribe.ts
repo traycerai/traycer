@@ -500,36 +500,6 @@ export const chatQueueStateSchema = z.object({
 });
 export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 
-// Frozen `prompt | managed-command` queue as `chat.subscribe@1.6` shipped
-// it: same union, but the prompt arm cannot declare `browserAnnotations`.
-// Bound to 1.6 snapshot + common frames so that released line stays exact.
-const chatQueuedPromptItemSchemaPreAnnotation = z.object({
-  kind: z.literal("prompt").default("prompt"),
-  queueItemId: z.string(),
-  messageId: z.string(),
-  message: userMessagePayloadSchemaPreAnnotation,
-  sender: userMessageSenderSchema,
-  settings: chatRunSettingsSchema,
-  accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
-  delivery: chatQueueItemDeliverySchema.default("next_turn"),
-  status: chatQueueItemStatusSchema.default("pending"),
-  targetTurnId: z.string().nullable().default(null),
-  steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
-  fallbackReason: z.string().nullable().default(null),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-});
-
-const chatQueuedItemSchemaPreAnnotation = z.union([
-  chatQueuedManagedCommandItemSchema,
-  chatQueuedPromptItemSchemaPreAnnotation,
-]);
-
-const chatQueueStateSchemaPreAnnotation = z.object({
-  status: z.enum(["idle", "running", "paused"]),
-  items: z.array(chatQueuedItemSchemaPreAnnotation),
-});
-
 // Wire-freeze copies with the queue item's `sender` swapped for its
 // pre-`inReplyTo` freeze. Bound to the released `chat.subscribe@1.0–1.3`
 // snapshot + `queueChanged` serverFrames. `message` reuses the live

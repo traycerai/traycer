@@ -118,7 +118,9 @@ const pageMetas = list.filter(
     t.type === "page" &&
     (/^https?:/.test(t.url) || t.url.startsWith("app://renderer")),
 );
-const hostMeta = pageMetas.find((t) => t.url.startsWith("app://renderer") || /localhost:\d+/.test(t.url));
+const hostMeta = pageMetas.find(
+  (t) => t.url.startsWith("app://renderer") || /localhost:\d+/.test(t.url),
+);
 const guestMetas = pageMetas.filter((t) => t !== hostMeta);
 if (!hostMeta || guestMetas.length === 0) {
   console.log("ABORT: need host + ≥1 guest.");
@@ -177,7 +179,12 @@ try {
       r.right > sr.left - 40 && r.left < sr.right + 40);
     return hit ? { x: hit.x, y: hit.y, w: hit.width, h: hit.height } : null;
   })()`);
-  report("T-O0", "viewport-preset trigger found in tile chrome", !!btnRect, JSON.stringify(btnRect));
+  report(
+    "T-O0",
+    "viewport-preset trigger found in tile chrome",
+    !!btnRect,
+    JSON.stringify(btnRect),
+  );
   if (btnRect) {
     const cx = btnRect.x + btnRect.w / 2;
     const cy = btnRect.y + btnRect.h / 2;
@@ -198,8 +205,7 @@ try {
         stale: n.getAttribute("data-stale"),
         imgLen: (n.querySelector("img") && n.querySelector("img").src.length) || 0,
       })))()`);
-      const freshNow =
-        s1.length > 0 && s1.every((s) => s.imgLen > 500);
+      const freshNow = s1.length > 0 && s1.every((s) => s.imgLen > 500);
       await sleep(1500);
       const s2 = await host.eval(`(() => Array.from(
         document.querySelectorAll("[data-browser-view-snapshot]")
@@ -207,8 +213,7 @@ try {
         stale: n.getAttribute("data-stale"),
         imgLen: (n.querySelector("img") && n.querySelector("img").src.length) || 0,
       })))()`);
-      const stillFresh =
-        s2.length > 0 && s2.every((s) => s.imgLen > 500);
+      const stillFresh = s2.length > 0 && s2.every((s) => s.imgLen > 500);
       report(
         "T-O2",
         "occluded snapshot FRESH immediately AND after 1.5s hold (⌘K white-out fix)",
@@ -242,7 +247,12 @@ try {
         Math.abs(r.y + r.h / 2 - (sr.top + sr.height / 2)) < 320 &&
         (Math.abs(r.x - sr.right) < 30 || Math.abs(r.x + r.w - sr.left) < 30));
   })()`);
-  report("T-R1", "resize handle adjacent to tile located", handles.length > 0, JSON.stringify(handles));
+  report(
+    "T-R1",
+    "resize handle adjacent to tile located",
+    handles.length > 0,
+    JSON.stringify(handles),
+  );
   if (handles.length > 0) {
     const sp = handles[0];
     const cx = sp.x + sp.w / 2;
@@ -284,5 +294,6 @@ host.detach();
 guests.forEach((g) => g.detach());
 
 console.log("\n==== SUMMARY ====");
-for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
+for (const r of results)
+  console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
 process.exit(results.some((r) => !r.pass) ? 1 : 0);

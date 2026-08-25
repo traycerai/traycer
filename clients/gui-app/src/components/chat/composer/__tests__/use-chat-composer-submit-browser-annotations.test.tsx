@@ -18,8 +18,8 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 const imageStoreMocks = vi.hoisted(() => ({
   sessionImageBytes: vi.fn<(hash: string) => Uint8Array | null>(() => null),
-  getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(
-    () => Promise.resolve(undefined),
+  getImageBytes: vi.fn<(hash: string) => Promise<Uint8Array | undefined>>(() =>
+    Promise.resolve(undefined),
   ),
 }));
 
@@ -38,7 +38,9 @@ const EMPTY_DOC: JsonContent = {
   content: [{ type: "paragraph" }],
 };
 
-const CROP_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const CROP_BYTES = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+]);
 
 const ANNOTATION_ID = "ann-7f3a";
 const IMAGE_FILE_NAME = `browser-annotation-${ANNOTATION_ID}.png`;
@@ -244,7 +246,9 @@ describe("useChatComposerSubmit browser annotations", () => {
       expect(submit).toHaveBeenCalledTimes(1);
     });
     expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith(IMAGE_HASH);
-    const atoms = collectImageAtoms(submit.mock.calls[0]?.[0]?.content ?? EMPTY_DOC);
+    const atoms = collectImageAtoms(
+      submit.mock.calls[0]?.[0]?.content ?? EMPTY_DOC,
+    );
     expect(atoms[0]?.fileName).toBe(IMAGE_FILE_NAME);
   });
 
@@ -375,15 +379,16 @@ describe("browser annotation image gating", () => {
     expect(draft.result.current.draftHasText).toBe(false);
     expect(draft.result.current.draftHasImages).toBe(true);
 
-    const rejecting = selectedModelRejectsImageAttachments(imageRejectingModel());
+    const rejecting = selectedModelRejectsImageAttachments(
+      imageRejectingModel(),
+    );
     const capable = selectedModelRejectsImageAttachments(imageCapableModel());
     expect(rejecting).toBe(true);
     expect(capable).toBe(false);
 
     // Mirrors chat-composer.tsx imageAttachmentsUnsupported /
     // canSubmitDraft: annotation crops are mandatory images.
-    const imagesUnsupported =
-      draft.result.current.draftHasImages && rejecting;
+    const imagesUnsupported = draft.result.current.draftHasImages && rejecting;
     expect(imagesUnsupported).toBe(true);
     expect(draft.result.current.draftHasImages && capable).toBe(false);
 

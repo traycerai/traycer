@@ -45,7 +45,9 @@ class Target {
           this.pending.delete(msg.id);
           if (msg.error) {
             reject(
-              new Error(`${msg.error.message ?? "CDP error"} (${msg.method ?? ""})`),
+              new Error(
+                `${msg.error.message ?? "CDP error"} (${msg.method ?? ""})`,
+              ),
             );
           } else {
             resolve(msg.result);
@@ -125,7 +127,9 @@ const pageMetas = list.filter(
     t.type === "page" &&
     (/^https?:/.test(t.url) || t.url.startsWith("app://renderer")),
 );
-const hostMeta = pageMetas.find((t) => t.url.startsWith("app://renderer") || /localhost:\d+/.test(t.url));
+const hostMeta = pageMetas.find(
+  (t) => t.url.startsWith("app://renderer") || /localhost:\d+/.test(t.url),
+);
 const guestMetas = pageMetas.filter((t) => t !== hostMeta);
 
 report("T0a", "host renderer target found", !!hostMeta, hostMeta?.url);
@@ -172,7 +176,11 @@ const registered = await host.eval(`(async () => {
   await window.runnerHost.browserView.setReservedChords(["mod+k"]);
   return true;
 })()`);
-report("T0d", "reserved chords pushed through live bridge", registered === true);
+report(
+  "T0d",
+  "reserved chords pushed through live bridge",
+  registered === true,
+);
 
 const MOD = { ctrl: 2, meta: 4 };
 async function sendChordOn(target, key, modName) {
@@ -228,9 +236,16 @@ try {
     await sendChordOn(guest, "k", "ctrl");
     await sleep(500);
     t1 = await paletteVisible();
-    t1note = t1 ? "passed after explicit re-registration" : "failed after re-registration";
+    t1note = t1
+      ? "passed after explicit re-registration"
+      : "failed after re-registration";
   }
-  report("T1", "Ctrl+K on guest opens HOST command palette (intercept+forward)", t1, t1note);
+  report(
+    "T1",
+    "Ctrl+K on guest opens HOST command palette (intercept+forward)",
+    t1,
+    t1note,
+  );
   if (t1) await host.screenshot(`${ART}/t1-palette.png`);
 
   // ---------- T2 white-out regression ----------
@@ -238,14 +253,10 @@ try {
   let t2ev = "";
   if (t1) {
     const s1 = await readSnapshots();
-    const initialOk =
-      s1.length > 0 && s1.every((s) => s.imgLen > 500);
+    const initialOk = s1.length > 0 && s1.every((s) => s.imgLen > 500);
     await sleep(1500);
     const s2 = await readSnapshots();
-    t2pass =
-      initialOk &&
-      s2.length > 0 &&
-      s2.every((s) => s.imgLen > 500);
+    t2pass = initialOk && s2.length > 0 && s2.every((s) => s.imgLen > 500);
     t2ev = JSON.stringify({ initial: s1, after1s5: s2 });
   } else {
     t2ev = "skipped: palette did not open";
@@ -262,7 +273,9 @@ try {
   report(
     "T3",
     "guest received NO ctrl/meta+k (preventDefault before page)",
-    !keys1.some((k) => String(k.key).toLowerCase() === "k" && (k.ctrl || k.meta)),
+    !keys1.some(
+      (k) => String(k.key).toLowerCase() === "k" && (k.ctrl || k.meta),
+    ),
     JSON.stringify(keys1),
   );
 
@@ -294,7 +307,12 @@ try {
 // ---------- T7/T8 resize streaming + overlap guard ----------
 try {
   const tileRect = await host.eval(tileRectExpr);
-  report("T7a", "located browser tile surface in host DOM", !!tileRect, JSON.stringify(tileRect));
+  report(
+    "T7a",
+    "located browser tile surface in host DOM",
+    !!tileRect,
+    JSON.stringify(tileRect),
+  );
   if (tileRect) {
     const splitters = await host.eval(`(() => {
       const ts = ${JSON.stringify(tileRect)};
@@ -348,7 +366,11 @@ try {
       report("T8", "SKIPPED", false);
     }
   } else {
-    report("T7a", "SKIPPED (tile not found — no occluded snapshot present)", false);
+    report(
+      "T7a",
+      "SKIPPED (tile not found — no occluded snapshot present)",
+      false,
+    );
     report("T7b..T8", "SKIPPED", false);
   }
 } catch (err) {
@@ -359,5 +381,6 @@ host.detach();
 guests.forEach((g) => g.detach());
 
 console.log("\n==== SUMMARY ====");
-for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
+for (const r of results)
+  console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
 process.exit(results.some((r) => !r.pass) ? 1 : 0);

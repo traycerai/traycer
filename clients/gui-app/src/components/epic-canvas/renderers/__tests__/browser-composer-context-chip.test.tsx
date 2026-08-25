@@ -414,7 +414,7 @@ function createFakeBridge(): FakeBridge {
     onDebugSnapshotChange: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationEvent: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationAttached: vi.fn(() => ({ dispose: () => undefined })),
-    ensureTab: vi.fn((input) =>
+    ensureTab: vi.fn<BrowserViewBridge["ensureTab"]>((input) =>
       Promise.resolve({
         hostId: input.hostId,
         sessionId: input.sessionId,

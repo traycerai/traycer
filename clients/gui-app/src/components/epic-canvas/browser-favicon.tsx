@@ -8,8 +8,7 @@ export function BrowserFavicon(props: {
   readonly className: string;
 }) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const showImage =
-    props.faviconUrl !== null && loadedSrc === props.faviconUrl;
+  const showImage = props.faviconUrl !== null && loadedSrc === props.faviconUrl;
 
   return (
     <span

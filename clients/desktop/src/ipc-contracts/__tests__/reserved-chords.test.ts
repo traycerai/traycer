@@ -111,7 +111,10 @@ describe("platform resolution + matching", () => {
     const chord = resolveReservedChordForPlatform(parsed, "darwin");
     expect(chord).toMatchObject({ mod: false, ctrl: true });
     expect(
-      reservedChordMatchesEvent(chord, eventFor("m", { control: true }, "darwin")),
+      reservedChordMatchesEvent(
+        chord,
+        eventFor("m", { control: true }, "darwin"),
+      ),
     ).toBe(true);
     expect(
       reservedChordMatchesEvent(chord, eventFor("m", { meta: true }, "darwin")),

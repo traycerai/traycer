@@ -42,7 +42,7 @@ const TARGET_CHAT_ID = "chat-target-1";
 function attachedEvent(
   payload: BrowserAnnotationAttachedIpcEvent["payload"],
   png: Uint8Array<ArrayBuffer>,
-  targetChatId = TARGET_CHAT_ID,
+  targetChatId: string,
 ): BrowserAnnotationAttachedIpcEvent {
   return { ...TILE, targetChatId, payload, pngBytes: png };
 }
@@ -88,10 +88,10 @@ function createBridge(): {
         },
       },
       {
-        get: (target, property) =>
-          Reflect.has(target, property)
-            ? Reflect.get(target, property)
-            : () => undefined,
+        get: (target, property): unknown =>
+          typeof property === "string"
+            ? (target[property] ?? (() => undefined))
+            : undefined,
       },
     ),
   }).browserView;

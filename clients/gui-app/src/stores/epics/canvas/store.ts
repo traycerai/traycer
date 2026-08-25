@@ -2015,11 +2015,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           );
         },
 
-        updateBrowserTileDocumentInTab: (
-          tabId,
-          tileInstanceId,
-          document,
-        ) => {
+        updateBrowserTileDocumentInTab: (tabId, tileInstanceId, document) => {
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateBrowserTileDocument(canvas, tileInstanceId, document),

@@ -1,5 +1,8 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
-import type { TileChromeCapabilities, TileController } from "@/components/epic-canvas/renderers/tile-controller";
+import type {
+  TileChromeCapabilities,
+  TileController,
+} from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-link-routing-core";
 import type {
@@ -31,9 +34,7 @@ interface UseElectronTabChromeArgs {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
-  readonly persistViewportPreset: (
-    preset: BrowserViewViewportPresetId,
-  ) => void;
+  readonly persistViewportPreset: (preset: BrowserViewViewportPresetId) => void;
   readonly initialViewportPreset: BrowserViewViewportPresetId;
   readonly onAttemptedUrl: (url: string) => void;
 }
@@ -155,7 +156,9 @@ export function useElectronTabChrome(
 
   const cancelDownload = (downloadId: string): void => {
     if (surfaceServices === null) return;
-    void surfaceServices.cancelDownload({ downloadId }).catch(ignoreChromeError);
+    void surfaceServices
+      .cancelDownload({ downloadId })
+      .catch(ignoreChromeError);
   };
 
   const proceedCertificate = (): void => {

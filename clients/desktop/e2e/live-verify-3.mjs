@@ -158,8 +158,7 @@ if (adjacentHandle > 0) {
     distinctMid >= 5,
     `distinct=${distinctMid} samples=${samples.join(",")}`,
   );
-  const drift =
-    surfaceAfter === null ? null : Math.abs(surfaceAfter - finalW);
+  const drift = surfaceAfter === null ? null : Math.abs(surfaceAfter - finalW);
   report(
     "R2",
     "settled guest width matches surface (±2px)",
@@ -169,12 +168,18 @@ if (adjacentHandle > 0) {
   // restore exact original
   await browserConn.send("Browser.setWindowBounds", {
     windowId,
-    bounds: { width: orig.width, height: orig.height, left: orig.left, top: orig.top },
+    bounds: {
+      width: orig.width,
+      height: orig.height,
+      left: orig.left,
+      top: orig.top,
+    },
   });
 }
 
 host.detach();
 guest.detach();
 console.log("\n==== SUMMARY ====");
-for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
+for (const r of results)
+  console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.id}  ${r.name}`);
 process.exit(results.some((r) => !r.pass) ? 1 : 0);

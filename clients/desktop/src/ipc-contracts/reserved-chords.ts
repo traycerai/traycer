@@ -88,7 +88,9 @@ function normalizeKeyToken(rawKey: string): string | null {
   return key;
 }
 
-export function normalizeReservedChord(chord: ReservedChord): ReservedChord | null {
+export function normalizeReservedChord(
+  chord: ReservedChord,
+): ReservedChord | null {
   const key = normalizeKeyToken(chord.key);
   if (key === null) return null;
   return {
@@ -117,9 +119,7 @@ export function reservedChordToken(chord: ReservedChord): string {
  * `shift`, `alt`/`option`. Returns null for unparsable or modifier-only
  * input.
  */
-export function parseReservedChordToken(
-  token: string,
-): ReservedChord | null {
+export function parseReservedChordToken(token: string): ReservedChord | null {
   const segments = token
     .split("+")
     .map((segment) => segment.trim().toLowerCase())

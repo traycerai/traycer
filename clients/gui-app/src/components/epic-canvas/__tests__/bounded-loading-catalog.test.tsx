@@ -164,6 +164,7 @@ function renderChatTile() {
                 <ChatTile
                   node={CHAT_ARTIFACT}
                   viewTabId="tab-bounded-loading"
+                  tileId="pane-bounded-loading"
                   isActive
                 />
               </TabHostProvider>

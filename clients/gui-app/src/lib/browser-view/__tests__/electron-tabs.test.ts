@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type {
   BrowserSessionsClientFrame,
@@ -33,6 +33,36 @@ const CREATE: CreateFrame = {
   requestedUrl: "https://example.com/",
   reason: "agent-open",
   seedStorageState: null,
+};
+
+function provisionedTab(
+  registrationId: string,
+): Promise<BrowserViewNativeTabCapability> {
+  return Promise.resolve({
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId,
+  });
+}
+
+type NativeBridge = Omit<
+  BrowserViewBridge,
+  | "acceptTab"
+  | "attachSurface"
+  | "detachSurface"
+  | "releaseTab"
+  | "controlElectronTab"
+  | "dispatchElectronTabCdp"
+> & {
+  readonly acceptTab: Mock<BrowserViewBridge["acceptTab"]>;
+  readonly attachSurface: Mock<BrowserViewBridge["attachSurface"]>;
+  readonly detachSurface: Mock<BrowserViewBridge["detachSurface"]>;
+  readonly releaseTab: Mock<BrowserViewBridge["releaseTab"]>;
+  readonly controlElectronTab: Mock<BrowserViewBridge["controlElectronTab"]>;
+  readonly dispatchElectronTabCdp: Mock<
+    BrowserViewBridge["dispatchElectronTabCdp"]
+  >;
 };
 
 const activeElectronTabs = new Set<ElectronTabs>();
@@ -82,29 +112,28 @@ function deferred<T>(): {
 function nativeWith(
   ensureTab: BrowserViewBridge["ensureTab"],
   onStatusChange: BrowserViewBridge["onNativeTabStatusChange"] | null,
-): BrowserViewBridge {
-  const candidate = new Proxy<Record<string, unknown>>(
-    {
-      ensureTab,
-      acceptTab: vi.fn(async () => {}),
-      attachSurface: vi.fn(async () => {}),
-      detachSurface: vi.fn(async () => {}),
-      releaseTab: vi.fn(async () => true),
-      controlElectronTab: vi.fn(async () => {}),
-      dispatchElectronTabCdp: vi.fn<
-        BrowserViewBridge["dispatchElectronTabCdp"]
-      >(async () => ({ kind: "cdpGetFrameTree", ok: true, frames: [] })),
-      onNativeTabStatusChange:
-        onStatusChange ?? (() => ({ dispose: () => {} })),
-      onElectronTabHandoff: () => ({ dispose: () => {} }),
-    },
-    {
-      get: (target, property) =>
-        Reflect.has(target, property)
-          ? Reflect.get(target, property)
-          : () => undefined,
-    },
-  );
+): NativeBridge {
+  const candidate = {
+    ensureTab,
+    acceptTab: vi.fn<BrowserViewBridge["acceptTab"]>(() => Promise.resolve()),
+    attachSurface: vi.fn<BrowserViewBridge["attachSurface"]>(() =>
+      Promise.resolve(),
+    ),
+    detachSurface: vi.fn<BrowserViewBridge["detachSurface"]>(() =>
+      Promise.resolve(),
+    ),
+    releaseTab: vi.fn<BrowserViewBridge["releaseTab"]>(() =>
+      Promise.resolve(true),
+    ),
+    controlElectronTab: vi.fn<BrowserViewBridge["controlElectronTab"]>(() =>
+      Promise.resolve(),
+    ),
+    dispatchElectronTabCdp: vi.fn<BrowserViewBridge["dispatchElectronTabCdp"]>(
+      () => Promise.resolve({ kind: "cdpGetFrameTree", ok: true, frames: [] }),
+    ),
+    onNativeTabStatusChange: onStatusChange ?? (() => ({ dispose: () => {} })),
+    onElectronTabHandoff: () => ({ dispose: () => {} }),
+  };
   return Object.assign(createFakeRunnerHost({}), {
     browserView: candidate,
   }).browserView;
@@ -112,7 +141,7 @@ function nativeWith(
 
 async function receiveCreate(
   tabs: ElectronTabs,
-  frame: CreateFrame = CREATE,
+  frame: CreateFrame,
 ): Promise<void> {
   expect(tabs.handleFrame(frame)).toBe(true);
   await Promise.resolve();
@@ -232,12 +261,9 @@ describe("ElectronTabs", () => {
   });
 
   it("replays one cached settlement without creating the native tab again", async () => {
-    const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(async () => ({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-    }));
+    const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(() =>
+      provisionedTab("registration-1"),
+    );
     const sent: BrowserSessionsClientFrame[] = [];
     const tabs = trackElectronTabs(
       createElectronTabs({
@@ -248,7 +274,7 @@ describe("ElectronTabs", () => {
       }),
     );
 
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     await receiveCreate(tabs, { ...CREATE });
 
     expect(ensureTab).toHaveBeenCalledTimes(1);
@@ -259,12 +285,9 @@ describe("ElectronTabs", () => {
   });
 
   it("reauthorizes a retained native tab through an explicit restore birth", async () => {
-    const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(async () => ({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-    }));
+    const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(() =>
+      provisionedTab("registration-1"),
+    );
     const sent: BrowserSessionsClientFrame[] = [];
     const tabs = trackElectronTabs(
       createElectronTabs({
@@ -274,7 +297,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -306,15 +329,7 @@ describe("ElectronTabs", () => {
   });
 
   it("releases only the exact native incarnation and makes replay harmless", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -323,7 +338,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
 
     expect(
       tabs.handleFrame({
@@ -358,15 +373,7 @@ describe("ElectronTabs", () => {
   });
 
   it("rolls back a provisioned native guest when its stream disappears before acceptance", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -375,7 +382,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
 
     tabs.disconnect();
 
@@ -388,15 +395,7 @@ describe("ElectronTabs", () => {
   });
 
   it("preserves an accepted native tab when its coordinator is disposed", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -405,7 +404,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -467,17 +466,7 @@ describe("ElectronTabs", () => {
   });
 
   it("binds a UI surface only after the host accepts the provisioned incarnation", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        url: "https://example.com/",
-        title: "Example Domain",
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -486,7 +475,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     const surface = {
       hostId: "host-1",
       sessionId: "session-1",
@@ -502,9 +491,7 @@ describe("ElectronTabs", () => {
       visible: true,
     } as const;
 
-    expect(
-      readElectronTabBinding("session-1", "tab-1", "host-1"),
-    ).toBeNull();
+    expect(readElectronTabBinding("session-1", "tab-1", "host-1")).toBeNull();
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -514,11 +501,7 @@ describe("ElectronTabs", () => {
       registrationId: "registration-1",
     });
 
-    const binding = readElectronTabBinding(
-      "session-1",
-      "tab-1",
-      "host-1",
-    );
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
     if (binding === null) throw new Error("accepted binding missing");
     const lease = await binding.bindSurface({
       bindingId: surface.bindingId,
@@ -547,15 +530,7 @@ describe("ElectronTabs", () => {
   });
 
   it("publishes only accepted bindings and removes them on exact release", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -564,11 +539,9 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
 
-    expect(
-      readElectronTabBinding("session-1", "tab-1", "host-1"),
-    ).toBeNull();
+    expect(readElectronTabBinding("session-1", "tab-1", "host-1")).toBeNull();
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -596,23 +569,11 @@ describe("ElectronTabs", () => {
       }),
     ).toBe(true);
     await vi.waitFor(() => expect(native.releaseTab).toHaveBeenCalledTimes(1));
-    expect(
-      readElectronTabBinding("session-1", "tab-1", "host-1"),
-    ).toBeNull();
+    expect(readElectronTabBinding("session-1", "tab-1", "host-1")).toBeNull();
   });
 
   it("controls an accepted tab by durable identity, independent of its surface", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        url: "https://example.com/",
-        title: null,
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
@@ -621,7 +582,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -630,11 +591,7 @@ describe("ElectronTabs", () => {
       tabId: "tab-1",
       registrationId: "registration-1",
     });
-    const binding = readElectronTabBinding(
-      "session-1",
-      "tab-1",
-      "host-1",
-    );
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
     if (binding === null) throw new Error("accepted binding missing");
 
     await binding.control({
@@ -656,17 +613,7 @@ describe("ElectronTabs", () => {
   });
 
   it("routes Electron CDP by tab identity without requiring a mounted surface", async () => {
-    const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        url: "https://example.com/",
-        title: null,
-      }),
-      null,
-    );
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
     const sent: BrowserSessionsClientFrame[] = [];
     const tabs = trackElectronTabs(
       createElectronTabs({
@@ -676,7 +623,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     sent.length = 0;
 
     expect(
@@ -712,9 +659,10 @@ describe("ElectronTabs", () => {
   });
 
   it("reports a missing Electron route as a tab error, never a tile error", () => {
-    const native = nativeWith(async () => {
-      throw new Error("not used");
-    }, null);
+    const native = nativeWith(
+      () => Promise.reject(new Error("not used")),
+      null,
+    );
     const sent: BrowserSessionsClientFrame[] = [];
     const tabs = trackElectronTabs(
       createElectronTabs({
@@ -760,15 +708,7 @@ describe("ElectronTabs", () => {
       status: null as
         Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0] | null,
     };
-    const base = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-current",
-      }),
-      null,
-    );
+    const base = nativeWith(() => provisionedTab("registration-current"), null);
     const native = {
       ...base,
       onNativeTabStatusChange: (
@@ -787,7 +727,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -830,12 +770,7 @@ describe("ElectronTabs", () => {
         Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0] | null,
     };
     const native = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
+      () => provisionedTab("registration-1"),
       (handler) => {
         status.emit = handler;
         return { dispose: () => {} };
@@ -850,7 +785,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     const emitStatus = status.emit;
     if (emitStatus === null) throw new Error("status subscription missing");
     emitStatus({
@@ -915,11 +850,7 @@ describe("ElectronTabs", () => {
         viewed: false,
       },
     ]);
-    const binding = readElectronTabBinding(
-      "session-1",
-      "tab-1",
-      "host-1",
-    );
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
     if (binding === null) throw new Error("accepted binding missing");
     await binding.bindSurface({
       bindingId: "binding-1",
@@ -967,17 +898,7 @@ describe("ElectronTabs", () => {
       emit: null as
         ((change: BrowserViewElectronTabHandoffChange) => void) | null,
     };
-    const base = nativeWith(
-      async () => ({
-        hostId: "host-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-        url: "https://example.com/",
-        title: null,
-      }),
-      null,
-    );
+    const base = nativeWith(() => provisionedTab("registration-1"), null);
     const native = {
       ...base,
       onElectronTabHandoff: (
@@ -989,14 +910,14 @@ describe("ElectronTabs", () => {
     };
     const sent: BrowserSessionsClientFrame[] = [];
     let failHandoffSend = false;
-    let failedSendDrain: Promise<void> | null = null;
+    const failedSendDrain = { current: null as Promise<void> | null };
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => {
           if (failHandoffSend && frame.kind === "electronTabHandoff") {
-            failedSendDrain = drainElectronTabHandoffs();
+            failedSendDrain.current = drainElectronTabHandoffs();
             throw new Error("handoff stream send failed");
           }
           sent.push(frame);
@@ -1004,7 +925,7 @@ describe("ElectronTabs", () => {
         present: () => {},
       }),
     );
-    await receiveCreate(tabs);
+    await receiveCreate(tabs, CREATE);
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -1139,8 +1060,12 @@ describe("ElectronTabs", () => {
       }),
     ).toThrow("handoff stream send failed");
     failHandoffSend = false;
-    if (failedSendDrain === null) throw new Error("failed send drain missing");
-    await expect(failedSendDrain).rejects.toThrow("handoff stream send failed");
+    if (failedSendDrain.current === null) {
+      throw new Error("failed send drain missing");
+    }
+    await expect(failedSendDrain.current).rejects.toThrow(
+      "handoff stream send failed",
+    );
     await expect(drainElectronTabHandoffs()).resolves.toBeUndefined();
 
     emitHandoff({

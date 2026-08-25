@@ -80,7 +80,12 @@ const directoryEvents = vi.hoisted(() => {
       listeners.clear();
     },
   };
-  return { ...state, directory: { onChange: state.subscribe } };
+  return {
+    ...state,
+    directory: {
+      onChange: (listener: () => void) => state.subscribe(listener),
+    },
+  };
 });
 
 vi.mock("@/lib/host", () => ({

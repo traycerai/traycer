@@ -624,12 +624,7 @@ function useTabRenameControl(args: {
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
       ? terminalControl.displayTitle
       : fallbackDisplayTitle);
-  const canRename =
-    canRenameTabs &&
-    (isOpenableEpicNodeKind(tab.type) || tab.type === "terminal") &&
-    (terminalControl === null ||
-      terminalControl.mode === "legacy" ||
-      (terminalControl.mode === "capable" && terminalControl.canMutate));
+  const canRename = canRenameCanvasTab(tab, canRenameTabs, terminalControl);
   const renameTerminal = useTerminalRenameFor(terminalHostClient);
   const { mutate: renameTerminalMutate } = renameTerminal;
   const handleRename = (next: string) => {
@@ -652,6 +647,21 @@ function useTabRenameControl(args: {
     onCommit: handleRename,
   });
   return { displayTitle, browserPresentation, canRename, rename };
+}
+
+function canRenameCanvasTab(
+  tab: EpicCanvasTileRef,
+  canRenameTabs: boolean,
+  terminalControl: TerminalTabControl | null,
+): boolean {
+  if (!canRenameTabs) return false;
+  if (!isOpenableEpicNodeKind(tab.type) && tab.type !== "terminal") {
+    return false;
+  }
+  if (terminalControl === null || terminalControl.mode === "legacy") {
+    return true;
+  }
+  return terminalControl.mode === "capable" && terminalControl.canMutate;
 }
 
 function TabItemBody(

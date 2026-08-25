@@ -207,9 +207,9 @@ export function QuitInterceptBridge(): null | React.ReactElement {
     const respond = appLifecycle?.respondBrowserHandoffsDrained;
     if (onDrain === undefined || respond === undefined) return;
     const subscription = onDrain((request) => {
-      void drainElectronTabHandoffs().then(() =>
-        respond({ requestId: request.requestId }),
-      ).catch(() => undefined);
+      void drainElectronTabHandoffs()
+        .then(() => respond({ requestId: request.requestId }))
+        .catch(() => undefined);
     });
     return () => {
       subscription.dispose();

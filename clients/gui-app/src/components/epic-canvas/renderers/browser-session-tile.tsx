@@ -66,8 +66,7 @@ function useBrowserSessionSwap(input: {
 
   useEffect(() => {
     bindingRegistrationIdRef.current = input.bindingRegistrationId;
-    latestMigrationRevisionRef.current =
-      input.session?.runtime.revision ?? 0;
+    latestMigrationRevisionRef.current = input.session?.runtime.revision ?? 0;
   }, [input.bindingRegistrationId, input.session?.runtime.revision]);
 
   const onMigrated = useCallback(() => {
@@ -227,13 +226,12 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
     sessions.lifecycle,
     tab,
   ]);
-  const { renderPeek, castGeneration, onMigrated } =
-    useBrowserSessionSwap({
-      session,
-      bindingRegistrationId: binding?.registrationId ?? null,
-      sessionId: props.node.sessionId,
-      tabId: props.node.tabId,
-    });
+  const { renderPeek, castGeneration, onMigrated } = useBrowserSessionSwap({
+    session,
+    bindingRegistrationId: binding?.registrationId ?? null,
+    sessionId: props.node.sessionId,
+    tabId: props.node.tabId,
+  });
 
   return (
     <BrowserSessionTileBody

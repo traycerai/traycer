@@ -102,8 +102,7 @@ export function useScreencastTileChrome(
       setDraft(EMPTY_DRAFT);
     }
   }
-  const addressValue =
-    draft.focused || draft.submitted ? draft.value : liveUrl;
+  const addressValue = draft.focused || draft.submitted ? draft.value : liveUrl;
 
   const onAddressFocusChange = (focused: boolean): void => {
     setDraft((current) => {

@@ -46,10 +46,9 @@ test.describe("browser tile resize + occlusion", () => {
     )) as readonly string[];
     expect(Array.isArray(occluded)).toBe(true);
 
-    const stats = (await readManagerDebug(
-      desktopApp,
-      "frameCacheStats",
-    )) as { attached: number };
+    const stats = (await readManagerDebug(desktopApp, "frameCacheStats")) as {
+      attached: number;
+    };
     expect(stats.attached).toBeGreaterThanOrEqual(0);
   });
 });

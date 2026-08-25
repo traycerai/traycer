@@ -92,8 +92,6 @@ interface UseChatComposerSubmitArgs {
     ((input: ChatComposerSubmitInput) => boolean) | null;
 }
 
-
-
 interface PendingSteerConflict {
   // The submit INTENT only - deliberately NOT the resolved `deliveryPolicy`. The
   // policy is re-resolved from the CURRENT connection/turn state at confirmation
@@ -250,9 +248,8 @@ export function useChatComposerSubmit(
       setAnnotationPreparationPending(true);
       void (async () => {
         try {
-          const annotationImages = await resolveAnnotationImageAtoms(
-            annotationRecords,
-          );
+          const annotationImages =
+            await resolveAnnotationImageAtoms(annotationRecords);
           if (annotationImages === null) {
             reportableErrorToast(
               "Couldn't attach the annotation image.",
@@ -430,16 +427,13 @@ function isEmptyComposerSubmit(input: {
 
 async function resolveAnnotationImageAtoms(
   records: ReadonlyArray<BrowserAnnotationRecord>,
-): Promise<
-  | ReadonlyArray<{
-      readonly id: string;
-      readonly fileName: string;
-      readonly mimeType: string;
-      readonly size: number | null;
-      readonly b64content: string;
-    }>
-  | null
-> {
+): Promise<ReadonlyArray<{
+  readonly id: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly size: number | null;
+  readonly b64content: string;
+}> | null> {
   const atoms: Array<{
     readonly id: string;
     readonly fileName: string;
@@ -449,7 +443,8 @@ async function resolveAnnotationImageAtoms(
   }> = [];
   for (const record of records) {
     const sessionBytes = sessionImageBytes(record.imageHash);
-    const bytes = sessionBytes ?? (await getImageBytes(record.imageHash)) ?? null;
+    const bytes =
+      sessionBytes ?? (await getImageBytes(record.imageHash)) ?? null;
     if (bytes === null) return null;
     atoms.push({
       id: uuidv4(),

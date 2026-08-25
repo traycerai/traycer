@@ -38,7 +38,9 @@ const { existsSync, mkdirSync, rmSync } = require("node:fs");
 const path = require("node:path");
 const esbuild = require("esbuild");
 const { sentryEsbuildPlugin } = require("@sentry/esbuild-plugin");
-const { generate: generateAnnotationOverlay } = require("./bundle-annotation-overlay.cjs");
+const {
+  generate: generateAnnotationOverlay,
+} = require("./bundle-annotation-overlay.cjs");
 
 const workspaceRoot = path.resolve(__dirname, "..");
 const distDir = path.resolve(workspaceRoot, "dist");

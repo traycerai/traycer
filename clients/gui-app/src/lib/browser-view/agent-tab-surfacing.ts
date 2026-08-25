@@ -25,9 +25,7 @@ import {
 type AgentTabSurfacableAction = "float" | "tile" | "suppress";
 
 type AgentTabSuppressReason =
-  | "mode-off"
-  | "manual-pip-active"
-  | "pip-epic-hidden";
+  "mode-off" | "manual-pip-active" | "pip-epic-hidden";
 
 export interface AgentTabDisposition {
   readonly action: AgentTabSurfacableAction;
@@ -189,7 +187,9 @@ function placeTileGroupedBySession(args: {
   let anchorPaneId = args.anchorPaneId;
   if (anchorPaneId === null) {
     anchorPaneId =
-      args.canvas.activePaneId ?? collectPanes(args.canvas.root)[0]?.id ?? null;
+      args.canvas.activePaneId ??
+      collectPanes(args.canvas.root).at(0)?.id ??
+      null;
   }
   if (
     anchorPaneId === null ||
@@ -318,7 +318,9 @@ export function collectNewAgentTabsFromSessionFrame(
   for (const tab of session.tabs) {
     if (seen.has(tab.tabId)) continue;
     seen.add(tab.tabId);
-    if (targetedElectronTabIdsBySession.get(session.sessionId)?.has(tab.tabId)) {
+    if (
+      targetedElectronTabIdsBySession.get(session.sessionId)?.has(tab.tabId)
+    ) {
       continue;
     }
     if (!agentSession) continue;

@@ -86,10 +86,14 @@ function firstEmitted(guest: GuestFixture): (image: TileFrameImage) => void {
   return callback;
 }
 
-function makeHarness(overrides?: {
-  readonly encodeFail?: boolean;
-  readonly maxAttached?: number;
-}): { cache: TileFrameCache; time: { value: number }; evicted: string[] } {
+function makeHarness(
+  overrides:
+    | {
+        readonly encodeFail?: boolean;
+        readonly maxAttached?: number;
+      }
+    | undefined,
+): { cache: TileFrameCache; time: { value: number }; evicted: string[] } {
   const time = { value: 0 };
   const evicted: string[] = [];
   const options: TileFrameCacheOptions = {
@@ -119,7 +123,7 @@ function makeHarness(overrides?: {
 
 describe("TileFrameCache", () => {
   it("accepts the first frame immediately and throttles within the interval", () => {
-    const { cache, time } = makeHarness();
+    const { cache, time } = makeHarness(undefined);
     const guest = makeGuest();
     cache.attach("tile-a", guest.webContents);
     const onFrame = firstEmitted(guest);
@@ -145,7 +149,7 @@ describe("TileFrameCache", () => {
   });
 
   it("treats a slot as fresh only inside the staleness window", () => {
-    const { cache, time } = makeHarness();
+    const { cache, time } = makeHarness(undefined);
     const guest = makeGuest();
     cache.attach("tile-a", guest.webContents);
     const onFrame = firstEmitted(guest);
@@ -185,7 +189,7 @@ describe("TileFrameCache", () => {
   });
 
   it("detaches by unsubscribing exactly once and drops the slot", () => {
-    const { cache } = makeHarness();
+    const { cache } = makeHarness(undefined);
     const guest = makeGuest();
     cache.attach("tile-a", guest.webContents);
     cache.detach("tile-a");
@@ -197,7 +201,7 @@ describe("TileFrameCache", () => {
   });
 
   it("detachAll clears every slot", () => {
-    const { cache } = makeHarness();
+    const { cache } = makeHarness(undefined);
     const a = makeGuest();
     const b = makeGuest();
     cache.attach("tile-a", a.webContents);
@@ -223,9 +227,7 @@ describe("TileFrameCache", () => {
     const untouched = encode(small);
     expect(untouched?.width).toBe(640);
     expect(small.resizeCalls).toBe(0);
-    expect(
-      untouched?.dataUrl.startsWith("data:image/jpeg;base64,"),
-    ).toBe(true);
+    expect(untouched?.dataUrl.startsWith("data:image/jpeg;base64,")).toBe(true);
   });
 
   it("default encoder rejects empty images", () => {

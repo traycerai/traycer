@@ -86,9 +86,7 @@ export class NativeBrowserViewLifecycle {
 
   finishHandoffCapture(promise: Promise<void>, delivered: boolean): void {
     if (this.handoff.kind === "capturing" && this.handoff.promise === promise) {
-      this.handoff = delivered
-        ? { kind: "handed-off" }
-        : { kind: "available" };
+      this.handoff = delivered ? { kind: "handed-off" } : { kind: "available" };
     }
   }
 }

@@ -837,10 +837,7 @@ export class RunnerIpcBridge {
     );
   }
 
-  acknowledgeBrowserHandoffsDrained(
-    windowId: string,
-    requestId: string,
-  ): void {
+  acknowledgeBrowserHandoffsDrained(windowId: string, requestId: string): void {
     const waiter = this.browserHandoffDrainWaiters.get(requestId);
     if (waiter?.windowId !== windowId) return;
     this.browserHandoffDrainWaiters.delete(requestId);
@@ -1279,9 +1276,7 @@ export class RunnerIpcBridge {
     );
     this.rejectBrowserHandoffDrainWaiters(
       (waiter) => !liveWindowIds.has(waiter.windowId),
-      new Error(
-        "Browser handoff window closed before acknowledging the drain",
-      ),
+      new Error("Browser handoff window closed before acknowledging the drain"),
     );
   }
 

@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
@@ -44,62 +45,63 @@ export function BrowserAnnotationCard(props: {
     .join(" · ");
 
   return (
-    <div
-      data-testid="browser-annotation-card"
-      data-annotation-id={record.annotationId}
-      data-annotation-tab={record.tabId}
-      title={title}
-      className="group flex h-10 max-w-[min(70vw,16rem)] shrink-0 items-center gap-2 rounded-lg bg-foreground/5 p-1 pe-1.5"
-    >
+    <TooltipWrapper label={title} side="top" sideOffset={6} align="start">
       <div
-        className={cn(
-          "relative size-8 shrink-0 overflow-hidden rounded bg-foreground/5",
-          src === null && "bg-foreground/8",
-        )}
+        data-testid="browser-annotation-card"
+        data-annotation-id={record.annotationId}
+        data-annotation-tab={record.tabId}
+        className="group flex h-10 max-w-[min(70vw,16rem)] shrink-0 items-center gap-2 rounded-lg bg-foreground/5 p-1 pe-1.5"
       >
-        {src === null ? (
-          <div
-            className="size-full animate-pulse bg-foreground/10"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt=""
-            className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-          />
+        <div
+          className={cn(
+            "relative size-8 shrink-0 overflow-hidden rounded bg-foreground/5",
+            src === null && "bg-foreground/8",
+          )}
+        >
+          {src === null ? (
+            <div
+              className="size-full animate-pulse bg-foreground/10"
+              aria-hidden
+            />
+          ) : (
+            <img
+              src={src}
+              alt=""
+              className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
+            />
+          )}
+        </div>
+        <div className="flex min-w-0 flex-1 items-baseline gap-1">
+          <p className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+            {comment}
+          </p>
+          {secondary.length > 0 ? (
+            <span
+              className={cn(
+                "max-w-24 shrink-0 truncate text-ui-xs text-muted-foreground",
+                staleness !== null && "text-amber-600 dark:text-amber-400",
+              )}
+            >
+              · {secondary}
+            </span>
+          ) : null}
+          {stalenessCopy.length > 0 && countsLine.length > 0 ? (
+            <span className="sr-only">{countsLine}</span>
+          ) : null}
+        </div>
+        {onRemove === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Remove annotation"
+            className="shrink-0 text-muted-foreground opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+            onClick={() => onRemove(record.annotationId)}
+          >
+            <X />
+          </Button>
         )}
       </div>
-      <div className="flex min-w-0 flex-1 items-baseline gap-1">
-        <p className="min-w-0 truncate text-ui-sm font-medium text-foreground">
-          {comment}
-        </p>
-        {secondary.length > 0 ? (
-          <span
-            className={cn(
-              "max-w-24 shrink-0 truncate text-ui-xs text-muted-foreground",
-              staleness !== null && "text-amber-600 dark:text-amber-400",
-            )}
-          >
-            · {secondary}
-          </span>
-        ) : null}
-        {stalenessCopy.length > 0 && countsLine.length > 0 ? (
-          <span className="sr-only">{countsLine}</span>
-        ) : null}
-      </div>
-      {onRemove === null ? null : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Remove annotation"
-          className="shrink-0 text-muted-foreground opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => onRemove(record.annotationId)}
-        >
-          <X />
-        </Button>
-      )}
-    </div>
+    </TooltipWrapper>
   );
 }

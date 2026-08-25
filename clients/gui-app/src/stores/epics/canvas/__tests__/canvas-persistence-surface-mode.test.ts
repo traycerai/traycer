@@ -74,11 +74,13 @@ describe("canvas PiP geometry persistence", () => {
       previewWidth: 320,
       previewHeight: 200,
     });
-    expect(useEpicCanvasStore.getState().pipGeometryByEpicId["epic-1"]).toEqual({
-      anchorX: 360,
-      anchorY: 280,
-      previewWidth: 320,
-      previewHeight: 200,
-    });
+    expect(useEpicCanvasStore.getState().pipGeometryByEpicId["epic-1"]).toEqual(
+      {
+        anchorX: 360,
+        anchorY: 280,
+        previewWidth: 320,
+        previewHeight: 200,
+      },
+    );
   });
 });

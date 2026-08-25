@@ -229,7 +229,8 @@ export class TileFrameCache {
     }
   }
 
-  private handleFrame(key: string, image: TileFrameImage): void {    const slot = this.slots.get(key);
+  private handleFrame(key: string, image: TileFrameImage): void {
+    const slot = this.slots.get(key);
     if (slot === undefined) return;
     if (image.isEmpty()) {
       this.emptyFrames += 1;

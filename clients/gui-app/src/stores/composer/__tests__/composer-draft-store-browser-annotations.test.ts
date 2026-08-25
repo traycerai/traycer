@@ -311,10 +311,7 @@ describe("composer draft store browserAnnotations", () => {
     const shared = draftOf("chat-share").browserAnnotations;
     expect(shared).toHaveLength(2);
     expect(shared[0]?.imageHash).toBe(shared[1]?.imageHash);
-    const sharedHash = shared[0]?.imageHash;
-    if (sharedHash === undefined) {
-      throw new Error("expected shared image hash");
-    }
+    const sharedHash = shared[0].imageHash;
 
     useComposerDraftStore
       .getState()
@@ -573,10 +570,9 @@ describe("composer draft store browserAnnotations", () => {
 
     handle.store.setState({ pendingActions: {} });
     scheduleLandingImageReconcile();
-    await vi.waitFor(async () => {
+    await vi.waitFor(() => {
       expect(hasLandingImageBytes(attached.hash)).toBe(false);
     });
     handle.dispose();
   });
-
 });

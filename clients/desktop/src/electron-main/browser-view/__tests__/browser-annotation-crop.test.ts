@@ -251,7 +251,8 @@ describe("annotation crop helpers", () => {
     expect(result.counts.elements).toBe(delivered.length);
     expect(result.droppedElementCount).toBe(2);
     expect(
-      deliveredAnnotationCounts(marks.slice(2, 3), delivered).droppedElementCount,
+      deliveredAnnotationCounts(marks.slice(2, 3), delivered)
+        .droppedElementCount,
     ).toBe(0);
   });
 });

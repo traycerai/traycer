@@ -51,6 +51,13 @@ interface ElectronTabSurfaceProps {
   readonly paneId: string;
 }
 
+interface SurfaceAttachmentState {
+  readonly bindingId: string;
+  readonly registrationId: string;
+  readonly status: "ready" | "error";
+  readonly error: string | null;
+}
+
 /**
  * Electron tile used for agent-created pages and native session tabs.
  * Host-owned Electron tabs always use the primary browser partition.
@@ -68,8 +75,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [surfaceReady, setSurfaceReady] = useState(false);
-  const [surfaceError, setSurfaceError] = useState<string | null>(null);
+  const [surfaceAttachment, setSurfaceAttachment] =
+    useState<SurfaceAttachmentState | null>(null);
   const surfaceLeaseRef = useRef<ElectronTabSurfaceLease | null>(null);
   useRegisterVisibleBrowserTile({
     hostId,
@@ -107,6 +114,13 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       ),
     [props.paneId, props.node.instanceId, props.viewTabId],
   );
+  const currentSurfaceAttachment = resolveCurrentSurfaceAttachment(
+    surfaceAttachment,
+    bindingId,
+    props.binding.registrationId,
+  );
+  const surfaceReady = currentSurfaceAttachment?.status === "ready";
+  const surfaceError = currentSurfaceAttachment?.error ?? null;
 
   const { status: effectiveStatus, reason: effectiveStatusReason } =
     effectiveAgentTileStatus(
@@ -220,8 +234,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   });
   useEffect(() => {
     let active = true;
-    setSurfaceReady(false);
-    setSurfaceError(null);
     void props.binding
       .bindSurface({
         bindingId,
@@ -234,15 +246,24 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
           return;
         }
         surfaceLeaseRef.current = lease;
-        setSurfaceReady(true);
+        setSurfaceAttachment({
+          bindingId,
+          registrationId: props.binding.registrationId,
+          status: "ready",
+          error: null,
+        });
       })
       .catch((cause: unknown) => {
         if (!active) return;
-        setSurfaceError(
-          cause instanceof Error
-            ? cause.message
-            : "The native browser surface could not be attached.",
-        );
+        setSurfaceAttachment({
+          bindingId,
+          registrationId: props.binding.registrationId,
+          status: "error",
+          error:
+            cause instanceof Error
+              ? cause.message
+              : "The native browser surface could not be attached.",
+        });
       });
     return () => {
       active = false;
@@ -250,12 +271,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
     };
-  }, [
-    bindingId,
-    props.binding.bindSurface,
-    props.binding.registrationId,
-    tileKey,
-  ]);
+  }, [bindingId, props.binding, tileKey]);
 
   useEffect(() => {
     const lease = surfaceLeaseRef.current;
@@ -266,46 +282,45 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         visible,
       })
       .catch((cause: unknown) => {
-        setSurfaceReady(false);
-        setSurfaceError(
-          cause instanceof Error
-            ? cause.message
-            : "The native browser surface could not be updated.",
-        );
+        setSurfaceAttachment({
+          bindingId,
+          registrationId: props.binding.registrationId,
+          status: "error",
+          error:
+            cause instanceof Error
+              ? cause.message
+              : "The native browser surface could not be updated.",
+        });
       });
-  }, [surfaceReady, tileKey, visible]);
+  }, [bindingId, props.binding.registrationId, surfaceReady, tileKey, visible]);
 
   return (
     <div
       className="flex h-full w-full flex-col bg-canvas text-foreground"
       data-testid={`agent-browser-tile-${props.node.instanceId}`}
     >
-      {chrome.controller !== null ? (
-        <BrowserTileFindAdapterBridge
-          browserView={attachedBrowserView}
-          tileKey={tileKey}
-        />
-      ) : null}
-      {chrome.controller !== null ? (
-        <BrowserTileToolbar
-          controller={chrome.controller}
-          pictureInPicture={{
-            disabled: epicId === null,
-            convert: () => {
-              if (epicId === null) return;
-              convertBrowserTabToPip({
-                epicId,
-                hostId: props.binding.hostId,
-                sessionId: props.binding.sessionId,
-                tabId: props.binding.tabId,
-                origin: "manual",
-                onReady: closeCanvasTile,
-                onError: (message) => toast.error(message),
-              });
-            },
-          }}
-        />
-      ) : null}
+      <BrowserTileFindAdapterBridge
+        browserView={attachedBrowserView}
+        tileKey={tileKey}
+      />
+      <BrowserTileToolbar
+        controller={chrome.controller}
+        pictureInPicture={{
+          disabled: epicId === null,
+          convert: () => {
+            if (epicId === null) return;
+            convertBrowserTabToPip({
+              epicId,
+              hostId: props.binding.hostId,
+              sessionId: props.binding.sessionId,
+              tabId: props.binding.tabId,
+              origin: "manual",
+              onReady: closeCanvasTile,
+              onError: (message) => toast.error(message),
+            });
+          },
+        }}
+      />
       <div
         ref={surfaceRef}
         className="relative min-h-0 flex-1 bg-background"
@@ -339,6 +354,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       </div>
     </div>
   );
+}
+
+function resolveCurrentSurfaceAttachment(
+  attachment: SurfaceAttachmentState | null,
+  bindingId: string,
+  registrationId: string,
+): SurfaceAttachmentState | null {
+  if (attachment?.bindingId !== bindingId) return null;
+  if (attachment.registrationId !== registrationId) return null;
+  return attachment;
 }
 
 interface ElectronTabSurfaceStatusProps {

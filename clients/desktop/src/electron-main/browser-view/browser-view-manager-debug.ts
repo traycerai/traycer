@@ -8,7 +8,10 @@
 
 export interface BrowserViewManagerDebug {
   /** Effective bounds per entry key id, as last applied to the view. */
-  readonly boundsByKeyId: () => Record<string, { x: number; y: number; width: number; height: number }>;
+  readonly boundsByKeyId: () => Record<
+    string,
+    { x: number; y: number; width: number; height: number }
+  >;
   /** Entry key ids currently parked under an overlay owner. */
   readonly occludedKeyIds: () => readonly string[];
   /** Frame-cache counters (BT-205). */

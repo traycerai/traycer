@@ -8,9 +8,8 @@ export class FakeStreamSession {
         binaryPayload: Uint8Array | null,
       ) => void)
     | null = null;
-  private statusHandler:
-    | ((status: StreamStatus, reason: null) => void)
-    | null = null;
+  private statusHandler: ((status: StreamStatus, reason: null) => void) | null =
+    null;
   private currentStatus: StreamStatus = "connecting";
   closed = false;
 
@@ -27,9 +26,7 @@ export class FakeStreamSession {
     this.serverHandler = handler;
   }
 
-  onStatusChange(
-    handler: (status: StreamStatus, reason: null) => void,
-  ): void {
+  onStatusChange(handler: (status: StreamStatus, reason: null) => void): void {
     this.statusHandler = handler;
     if (this.currentStatus === "open") handler("open", null);
   }

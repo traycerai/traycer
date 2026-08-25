@@ -44,7 +44,9 @@ export interface TileController {
   readonly onZoomOut: () => void;
   readonly onZoomIn: () => void;
   readonly onResetZoom: () => void;
-  readonly onViewportPresetChange: (preset: BrowserViewViewportPresetId) => void;
+  readonly onViewportPresetChange: (
+    preset: BrowserViewViewportPresetId,
+  ) => void;
   readonly onOpenDevTools: () => void;
 }
 
@@ -100,8 +102,7 @@ export function isolatedTileChromeCapabilitiesFromSurface(surface: {
     zoom: surface.zoomIn && surface.zoomOut && surface.resetZoom,
     viewportPreset: surface.setViewportPreset,
     devtools: surface.openDevTools,
-    find:
-      surface.findInPage && surface.stopFindInPage && surface.onFindChange,
+    find: surface.findInPage && surface.stopFindInPage && surface.onFindChange,
     siteInfo: false,
     annotate: false,
   };

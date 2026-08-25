@@ -206,7 +206,9 @@ export const epicRootCollisionDetection: CollisionDetection = (args) => {
     ]),
   );
   const hits =
-    args.pointerCoordinates === null ? rectIntersection(args) : pointerWithin(args);
+    args.pointerCoordinates === null
+      ? rectIntersection(args)
+      : pointerWithin(args);
   const rankedHits = hits.flatMap((hit) => {
     const kind = kindByContainerId.get(hit.id) ?? null;
     if (kind === null || !compatibleKinds.includes(kind)) return [];

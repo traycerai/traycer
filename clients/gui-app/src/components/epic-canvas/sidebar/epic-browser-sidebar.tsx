@@ -495,9 +495,7 @@ function BrowsersPanelBodyLive(props: {
     const query = searchQuery.trim().toLocaleLowerCase();
     if (query.length === 0) return tabs;
     return tabs.filter(({ identity }) =>
-      `${identity.title} ${identity.url}`
-        .toLocaleLowerCase()
-        .includes(query),
+      `${identity.title} ${identity.url}`.toLocaleLowerCase().includes(query),
     );
   }, [searchQuery, tabs]);
   const navigateNested = useEpicNestedFocusNavigation();
@@ -739,9 +737,7 @@ function BrowsersPanelUnavailableState(props: {
       <div className="space-y-1">
         <p className="text-ui-sm text-foreground/75">Browsers unavailable.</p>
         {props.message === null ? null : (
-          <p className="text-ui-xs text-muted-foreground">
-            {props.message}
-          </p>
+          <p className="text-ui-xs text-muted-foreground">{props.message}</p>
         )}
       </div>
       <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
@@ -874,7 +870,6 @@ function BrowserTabRow(props: BrowserTabRowProps) {
     navigateNested,
     onCloseTab,
     prepareClose,
-    session.hostId,
     session.sessionId,
     tab.tabId,
     tile,
@@ -884,7 +879,8 @@ function BrowserTabRow(props: BrowserTabRowProps) {
   const isActive = useEpicCanvasStore((state) => {
     const canvas = state.canvasByTabId[viewTabId];
     if (canvas === undefined || canvas.activePaneId === null) return false;
-    const activeInstanceId = findPaneById(canvas.root, canvas.activePaneId)?.activeTabId ?? null;
+    const activeInstanceId =
+      findPaneById(canvas.root, canvas.activePaneId)?.activeTabId ?? null;
     if (activeInstanceId === null) return false;
     const active = canvas.tilesByInstanceId[activeInstanceId];
     if (active?.hostId !== session.hostId) return false;

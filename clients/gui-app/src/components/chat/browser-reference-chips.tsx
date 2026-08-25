@@ -80,7 +80,8 @@ function BrowserReferenceChipsLive(props: {
           `${reference.sessionId}:${reference.tabId}`,
         );
         const title = tab === undefined ? "Browser" : resolveTabTitle(tab);
-        const favicon = tab === undefined ? null : browserTabFaviconUrl(tab.url);
+        const favicon =
+          tab === undefined ? null : browserTabFaviconUrl(tab.url);
         return (
           <TooltipWrapper
             key={`${reference.kind}:${reference.sessionId}:${reference.tabId}`}

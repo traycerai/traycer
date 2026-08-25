@@ -173,7 +173,7 @@ function emitJpegFrame(
 }
 
 function loadScreencastImage(): HTMLImageElement {
-  const image = screen.getByAltText("Browser screencast");
+  const image = screen.getByAltText<HTMLImageElement>("Browser screencast");
   vi.spyOn(image, "getBoundingClientRect").mockReturnValue(
     new DOMRect(0, 0, 800, 600),
   );

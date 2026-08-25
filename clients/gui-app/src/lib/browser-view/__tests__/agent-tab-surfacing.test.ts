@@ -26,16 +26,24 @@ import {
   makeBrowserTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type {
+  BrowserSessionTileRef,
+  BrowserTileRef,
+} from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const EPIC = "epic-surface-1";
 const HOST = "host-1";
 const VIEW_TAB_ID = "view-agent-tab-surfacing";
 
-function agentSessionFixture(overrides?: {
-  readonly sessionId?: string;
-  readonly agentRunId?: string | null;
-}): BrowserSessionInfo {
+function agentSessionFixture(
+  overrides:
+    | {
+        readonly sessionId?: string;
+        readonly agentRunId?: string | null;
+      }
+    | undefined,
+): BrowserSessionInfo {
   return {
     sessionId: overrides?.sessionId ?? "session-a",
     epicId: EPIC,
@@ -65,9 +73,7 @@ function agentSessionFixture(overrides?: {
 }
 
 function seedCanvasWithTile(
-  tile:
-    | ReturnType<typeof makeBrowserTileRef>
-    | ReturnType<typeof makeBrowserSessionTileRef>,
+  tile: BrowserTileRef | BrowserSessionTileRef,
 ): string {
   const canvas = createSingleTileCanvas(tile);
   const pane = collectPanes(canvas.root).at(0);
@@ -139,14 +145,14 @@ describe("collectNewAgentTabsFromSessionFrame", () => {
   });
 
   it("seeds on first sight without reporting existing tabs", () => {
-    expect(collectNewAgentTabsFromSessionFrame(agentSessionFixture())).toEqual(
-      [],
-    );
+    expect(
+      collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined)),
+    ).toEqual([]);
   });
 
   it("reports only genuinely new tabs of an agent-created session", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture());
-    const updated = agentSessionFixture();
+    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
+    const updated = agentSessionFixture(undefined);
     const next = {
       ...updated,
       tabs: [
@@ -170,9 +176,9 @@ describe("collectNewAgentTabsFromSessionFrame", () => {
   });
 
   it("does not re-surface a tab whose targeted Electron create owns presentation", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture());
+    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
     rememberElectronTabCreate("session-a", "tab-a2");
-    const updated = agentSessionFixture();
+    const updated = agentSessionFixture(undefined);
 
     expect(
       collectNewAgentTabsFromSessionFrame({
@@ -243,11 +249,11 @@ describe("collectNewAgentTabsFromSessionFrame", () => {
   });
 
   it("re-seeds after the session is forgotten (closed)", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture());
+    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
     forgetSeenAgentTabsForSession("session-a");
-    expect(collectNewAgentTabsFromSessionFrame(agentSessionFixture())).toEqual(
-      [],
-    );
+    expect(
+      collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined)),
+    ).toEqual([]);
   });
 });
 
@@ -315,13 +321,14 @@ describe("canvas placement", () => {
     });
     expect(placed).toBe(true);
 
-    const canvas =
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined || canvas.root === null) {
       throw new Error("expected canvas");
     }
     expect(collectPanes(canvas.root)).toHaveLength(1);
-    expect(findPaneIdHostingSessionTile(canvas, "session-shared")).not.toBeNull();
+    expect(
+      findPaneIdHostingSessionTile(canvas, "session-shared"),
+    ).not.toBeNull();
   });
 
   it("splits right of the anchor pane for a brand-new session", () => {
@@ -342,17 +349,13 @@ describe("canvas placement", () => {
     });
     expect(placed).toBe(true);
 
-    const canvas =
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined || canvas.root === null) {
       throw new Error("expected canvas");
     }
     const panes = collectPanes(canvas.root);
     expect(panes).toHaveLength(2);
-    const hostingPaneId = findPaneIdHostingSessionTile(
-      canvas,
-      "session-fresh",
-    );
+    const hostingPaneId = findPaneIdHostingSessionTile(canvas, "session-fresh");
     expect(hostingPaneId).not.toBeNull();
     expect(hostingPaneId).not.toBe(anchorPaneId);
     const activePane = panes.find((pane) => pane.id === hostingPaneId);
@@ -378,8 +381,7 @@ describe("canvas placement", () => {
     });
     expect(placed).toBe(true);
 
-    const canvas =
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined || canvas.root === null) {
       throw new Error("expected canvas");
     }
@@ -409,7 +411,7 @@ describe("surfaceAgentTabsFromSessionFrame", () => {
   });
 
   function frameWithExtraTab(tabId: string): BrowserSessionInfo {
-    const base = agentSessionFixture();
+    const base = agentSessionFixture(undefined);
     collectNewAgentTabsFromSessionFrame(base);
     return {
       ...base,
@@ -432,13 +434,12 @@ describe("surfaceAgentTabsFromSessionFrame", () => {
     surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-x"));
     expect(getPipSnapshot(EPIC).target).toBeNull();
     expect(getPipSnapshot(EPIC).pendingTarget).toBeNull();
-    const canvas =
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     expect(canvas === undefined || canvas.root === null).toBe(true);
     // A second identical frame reports nothing new.
-    expect(collectNewAgentTabsFromSessionFrame(frameWithExtraTab("tab-x"))).toEqual(
-      [],
-    );
+    expect(
+      collectNewAgentTabsFromSessionFrame(frameWithExtraTab("tab-x")),
+    ).toEqual([]);
   });
 
   it("arms a pending agent PiP in pip mode on a visible epic", () => {
@@ -484,8 +485,7 @@ describe("surfaceAgentTabsFromSessionFrame", () => {
       }),
     );
     surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-tiled"));
-    const canvas =
-      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined || canvas.root === null) {
       throw new Error("expected canvas");
     }

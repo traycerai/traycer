@@ -66,7 +66,9 @@ class T {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const list = await (
-  await fetch(`http://127.0.0.1:${process.env.TRAYCER_CDP_PORT ?? "28960"}/json/list`)
+  await fetch(
+    `http://127.0.0.1:${process.env.TRAYCER_CDP_PORT ?? "28960"}/json/list`,
+  )
 ).json();
 const hostMeta = list.find(
   (t) =>

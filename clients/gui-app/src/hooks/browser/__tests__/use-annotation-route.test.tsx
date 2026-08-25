@@ -48,7 +48,7 @@ function chatProjection(
   id: string,
   title: string,
   archivedAt: number | null,
-  hostId: string | null = HOST_ID,
+  hostId: string | null,
 ): ChatProjection {
   return {
     id,
@@ -89,12 +89,18 @@ describe("useAnnotationRoute", () => {
   it("lists the sidebar roster and prefers the controller over last-focused", () => {
     seedChats(
       {
-        "chat-first": chatProjection("chat-first", "First chat", null),
-        "chat-focused": chatProjection("chat-focused", "Focused chat", null),
+        "chat-first": chatProjection("chat-first", "First chat", null, HOST_ID),
+        "chat-focused": chatProjection(
+          "chat-focused",
+          "Focused chat",
+          null,
+          HOST_ID,
+        ),
         "chat-controller": chatProjection(
           "chat-controller",
           "Controller chat",
           null,
+          HOST_ID,
         ),
       },
       ["chat-first", "chat-focused", "chat-controller"],
@@ -126,8 +132,13 @@ describe("useAnnotationRoute", () => {
   it("uses last-focused when no preferred controller is in the roster", () => {
     seedChats(
       {
-        "chat-first": chatProjection("chat-first", "First chat", null),
-        "chat-focused": chatProjection("chat-focused", "Focused chat", null),
+        "chat-first": chatProjection("chat-first", "First chat", null, HOST_ID),
+        "chat-focused": chatProjection(
+          "chat-focused",
+          "Focused chat",
+          null,
+          HOST_ID,
+        ),
       },
       ["chat-first", "chat-focused"],
     );
@@ -155,8 +166,13 @@ describe("useAnnotationRoute", () => {
   it("defaults to the first roster chat when preferred and last-focused are absent", () => {
     seedChats(
       {
-        "chat-first": chatProjection("chat-first", "First chat", null),
-        "chat-second": chatProjection("chat-second", "Second chat", null),
+        "chat-first": chatProjection("chat-first", "First chat", null, HOST_ID),
+        "chat-second": chatProjection(
+          "chat-second",
+          "Second chat",
+          null,
+          HOST_ID,
+        ),
       },
       ["chat-first", "chat-second"],
     );
@@ -177,8 +193,13 @@ describe("useAnnotationRoute", () => {
   it("omits archived and other-host chats from the roster", () => {
     seedChats(
       {
-        "chat-live": chatProjection("chat-live", "Live chat", null),
-        "chat-archived": chatProjection("chat-archived", "Archived", 1_700),
+        "chat-live": chatProjection("chat-live", "Live chat", null, HOST_ID),
+        "chat-archived": chatProjection(
+          "chat-archived",
+          "Archived",
+          1_700,
+          HOST_ID,
+        ),
         "chat-foreign": chatProjection(
           "chat-foreign",
           "Foreign",
@@ -220,7 +241,12 @@ describe("useAnnotationRoute", () => {
     act(() => {
       seedChats(
         {
-          "chat-later": chatProjection("chat-later", "Later chat", null),
+          "chat-later": chatProjection(
+            "chat-later",
+            "Later chat",
+            null,
+            HOST_ID,
+          ),
         },
         ["chat-later"],
       );
@@ -242,8 +268,14 @@ describe("useAnnotationRoute", () => {
           "chat-controller",
           "Controller chat",
           null,
+          HOST_ID,
         ),
-        "chat-focused": chatProjection("chat-focused", "Focused chat", null),
+        "chat-focused": chatProjection(
+          "chat-focused",
+          "Focused chat",
+          null,
+          HOST_ID,
+        ),
       },
       ["chat-controller", "chat-focused"],
     );

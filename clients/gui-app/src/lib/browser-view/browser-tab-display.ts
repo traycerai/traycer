@@ -186,9 +186,7 @@ function appendDuplicateSuffixes(
       const label = labels.get(key);
       labels.set(
         key,
-        label === null || label === undefined
-          ? suffix
-          : `${label} (${suffix})`,
+        label === null || label === undefined ? suffix : `${label} (${suffix})`,
       );
     }
   }
@@ -253,7 +251,9 @@ function shortestUniqueIdSuffixes(
     minLength,
   );
   while (length <= maxLength) {
-    const next = ids.map((id) => (id.length <= length ? id : id.slice(-length)));
+    const next = ids.map((id) =>
+      id.length <= length ? id : id.slice(-length),
+    );
     if (new Set(next).size === ids.length) {
       ids.forEach((id, index) => {
         suffixes.set(id, next[index] ?? id);

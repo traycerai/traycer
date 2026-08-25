@@ -405,16 +405,20 @@ function UserMessageDisplayView({
         <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
           <UserMessageAttachmentGallery
             attachments={message.attachments}
-            excludeHashes={new Set(
-              (message.browserAnnotations ?? []).map(
-                (annotation) => annotation.imageHash,
-              ),
-            )}
-            excludeFileNames={new Set(
-              (message.browserAnnotations ?? []).map(
-                (annotation) => annotation.imageFileName,
-              ),
-            )}
+            excludeHashes={
+              new Set(
+                (message.browserAnnotations ?? []).map(
+                  (annotation) => annotation.imageHash,
+                ),
+              )
+            }
+            excludeFileNames={
+              new Set(
+                (message.browserAnnotations ?? []).map(
+                  (annotation) => annotation.imageFileName,
+                ),
+              )
+            }
             align="start"
           />
           <BrowserReferenceChips

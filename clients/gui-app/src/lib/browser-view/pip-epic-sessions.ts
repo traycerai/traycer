@@ -14,6 +14,10 @@ import {
   type BrowserSessionsServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type {
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
 import { appLogger } from "@/lib/logger";
 import {
   applyPipCaption,
@@ -131,16 +135,7 @@ export class RemotePipSessionsManager {
       });
       session.onStatusChange((status, reason) => {
         if (closed || slot.generation !== generation) return;
-        const lifecycle: PipHostLifecycle =
-          status === "open"
-            ? "live"
-            : status === "reconnecting"
-              ? "reconnecting"
-              : status === "connecting"
-                ? "connecting"
-                : reason !== null && reason.kind !== "caller"
-                  ? "failed"
-                  : "closed";
+        const lifecycle = pipHostLifecycle(status, reason);
         applyPipHostLifecycle(this.epicId, slot.hostId, lifecycle);
       });
       slot.close = () => {
@@ -229,6 +224,17 @@ export class RemotePipSessionsManager {
     }
     this.onItems(merged);
   }
+}
+
+function pipHostLifecycle(
+  status: StreamConnectionStatus,
+  reason: StreamCloseReason | null,
+): PipHostLifecycle {
+  if (status === "open") return "live";
+  if (status === "reconnecting") return "reconnecting";
+  if (status === "connecting") return "connecting";
+  if (reason !== null && reason.kind !== "caller") return "failed";
+  return "closed";
 }
 
 function tagSession(

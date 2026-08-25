@@ -24,6 +24,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -190,9 +191,18 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
   const visible = useTileBodyVisible();
+  const snapshotKey = useMemo<BrowserViewTileKey>(
+    () => ({
+      viewTabId: props.viewTabId ?? "",
+      paneId: props.paneId ?? "",
+      tileInstanceId: node.instanceId,
+      pageSessionId: node.id,
+    }),
+    [node.id, node.instanceId, props.paneId, props.viewTabId],
+  );
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
-    props.viewTabId ?? "",
-    props.paneId ?? "",
+    snapshotKey.viewTabId,
+    snapshotKey.paneId,
     node.instanceId,
   );
   useRegisterVisibleBrowserTile({
@@ -203,17 +213,12 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   });
   // BT-204: drop this mirror's frame from the shared snapshot store when the
   // tile goes away so nothing can resurrect stale pixels from it.
-  useEffect(() => {
-    const snapshotKey = {
-      viewTabId: props.viewTabId ?? "",
-      paneId: props.paneId ?? "",
-      tileInstanceId: node.instanceId,
-      pageSessionId: node.id,
-    };
-    return () => {
+  useEffect(
+    () => () => {
       clearBrowserViewSnapshot(snapshotKey);
-    };
-  }, [node.id, node.instanceId, props.paneId, props.viewTabId]);
+    },
+    [snapshotKey],
+  );
   const sessionRef = useRef<{
     sendClientFrame: (
       frame: BrowserScreencastClientFrame,
@@ -410,15 +415,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           // BT-204: mirror tiles are DOM-painted and never need hiding, but
           // their latest frame shares the snapshot store with native tiles'
           // cached frames — one pixel source of truth per tile key.
-          publishSelfPaintedTileFrame(
-            {
-              viewTabId: props.viewTabId ?? "",
-              paneId: props.paneId ?? "",
-              tileInstanceId: node.instanceId,
-              pageSessionId: node.id,
-            },
-            dataUrl,
-          );
+          publishSelfPaintedTileFrame(snapshotKey, dataUrl);
         },
       });
       if (parsed.data.kind === "complete" && parsed.data.cause === "migrated") {
@@ -492,6 +489,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     setFrameSize,
     setImage,
     setLifecycle,
+    snapshotKey,
     visible,
   ]);
 

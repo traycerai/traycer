@@ -7,6 +7,7 @@ import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/electron-tabs";
+import type { TileController } from "@/components/epic-canvas/renderers/tile-controller";
 
 const state = vi.hoisted(() => ({
   visible: true,
@@ -63,7 +64,7 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
   useElectronTabChrome: (input: Record<string, unknown>) => {
     state.chromeInputs.push(input);
     return {
-      controller: null,
+      controller: CHROME_CONTROLLER,
       viewportPreset: "responsive",
       downloads: [],
       cancelDownload: vi.fn(),
@@ -73,6 +74,41 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     };
   },
 }));
+
+const CHROME_CONTROLLER: TileController = {
+  capabilities: {
+    navigate: false,
+    back: false,
+    forward: false,
+    reload: false,
+    zoom: false,
+    viewportPreset: false,
+    devtools: false,
+    find: false,
+    siteInfo: false,
+    annotate: false,
+  },
+  url: "https://example.com/",
+  addressValue: "https://example.com/",
+  canGoBack: false,
+  canGoForward: false,
+  zoomPercent: 100,
+  viewportPreset: "responsive",
+  disabled: false,
+  cookieCryptoState: null,
+  zoomLocked: false,
+  annotation: null,
+  onNavigate: () => undefined,
+  onAddressChange: () => undefined,
+  onBack: () => undefined,
+  onForward: () => undefined,
+  onReload: () => undefined,
+  onZoomOut: () => undefined,
+  onZoomIn: () => undefined,
+  onResetZoom: () => undefined,
+  onViewportPresetChange: () => undefined,
+  onOpenDevTools: () => undefined,
+};
 
 interface NativeStatusChange {
   readonly hostId: string;
@@ -101,6 +137,10 @@ class TestBridge {
     return { dispose: () => {} };
   }
 
+  onFindChange(): { dispose: () => void } {
+    return { dispose: () => {} };
+  }
+
   emitStatus(change: NativeStatusChange): void {
     this.statusHandler?.(change);
   }
@@ -124,7 +164,7 @@ function createBinding(
     sessionId: "session-1",
     tabId: "tab-1",
     registrationId: "registration-1",
-    control: vi.fn(async () => {}),
+    control: vi.fn(() => Promise.resolve()),
     bindSurface,
   };
 }
@@ -152,11 +192,13 @@ describe("ElectronTabSurface", () => {
   });
 
   it("attaches the accepted native incarnation before enabling tile chrome", async () => {
+    const update = vi.fn(() => Promise.resolve());
+    const detach = vi.fn(() => Promise.resolve());
     const lease: ElectronTabSurfaceLease = {
-      update: vi.fn(async () => {}),
-      detach: vi.fn(async () => {}),
+      update,
+      detach,
     };
-    const bindSurface = vi.fn(async () => lease);
+    const bindSurface = vi.fn(() => Promise.resolve(lease));
     renderTile(createBinding(bindSurface));
 
     expect(state.chromeInputs.at(0)?.surfaceServices).toBeNull();
@@ -176,26 +218,26 @@ describe("ElectronTabSurface", () => {
   });
 
   it("updates presentation state through the lease and detaches on unmount", async () => {
+    const update = vi.fn(() => Promise.resolve());
+    const detach = vi.fn(() => Promise.resolve());
     const lease: ElectronTabSurfaceLease = {
-      update: vi.fn(async () => {}),
-      detach: vi.fn(async () => {}),
+      update,
+      detach,
     };
-    const view = renderTile(createBinding(async () => lease));
+    const view = renderTile(createBinding(() => Promise.resolve(lease)));
     await waitFor(() => {
-      expect(lease.update).toHaveBeenCalledWith(
+      expect(update).toHaveBeenCalledWith(
         expect.objectContaining({ visible: true }),
       );
     });
 
     view.unmount();
-    expect(lease.detach).toHaveBeenCalledTimes(1);
+    expect(detach).toHaveBeenCalledTimes(1);
   });
 
   it("shows an attach failure without creating or releasing another tab", async () => {
     renderTile(
-      createBinding(async () => {
-        throw new Error("surface attach rejected");
-      }),
+      createBinding(() => Promise.reject(new Error("surface attach rejected"))),
     );
 
     expect(await screen.findByText("Agent browser unavailable")).toBeTruthy();
@@ -206,10 +248,12 @@ describe("ElectronTabSurface", () => {
     const bridge = state.bridge;
     if (bridge === null) throw new Error("bridge missing");
     renderTile(
-      createBinding(async () => ({
-        update: async () => {},
-        detach: async () => {},
-      })),
+      createBinding(() =>
+        Promise.resolve({
+          update: () => Promise.resolve(),
+          detach: () => Promise.resolve(),
+        }),
+      ),
     );
     await waitFor(() => {
       expect(state.chromeInputs.at(-1)?.surfaceServices).toBe(bridge);

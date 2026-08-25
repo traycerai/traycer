@@ -13,11 +13,18 @@ export function captureOverlayElement(el: Element): Record<string, unknown> {
   const truncated = html.length > ELEMENT_PICKER_LIMITS.outerHtml;
   return {
     selector: bounded(selectorPath(el), ELEMENT_PICKER_LIMITS.selector),
-    tagName: bounded(String(el.tagName || "").toLowerCase(), ELEMENT_PICKER_LIMITS.tagName),
-    elementId: el.id ? bounded(el.id, ELEMENT_PICKER_LIMITS.attributeValue) : null,
+    tagName: bounded(
+      String(el.tagName || "").toLowerCase(),
+      ELEMENT_PICKER_LIMITS.tagName,
+    ),
+    elementId: el.id
+      ? bounded(el.id, ELEMENT_PICKER_LIMITS.attributeValue)
+      : null,
     classNames: classNamesOf(el),
     attributes: attributesOf(el),
-    outerHtml: truncated ? html.slice(0, ELEMENT_PICKER_LIMITS.outerHtml) : html,
+    outerHtml: truncated
+      ? html.slice(0, ELEMENT_PICKER_LIMITS.outerHtml)
+      : html,
     outerHtmlTruncated: truncated,
     textPreview: textOf(el),
     ariaRole: roleOf(el),
@@ -62,7 +69,11 @@ function round(n: number): number {
 function classNamesOf(el: Element): string[] {
   const out: string[] = [];
   const list = el.classList ? el.classList : [];
-  for (let i = 0; i < list.length && out.length < ELEMENT_PICKER_LIMITS.classCount; i += 1) {
+  for (
+    let i = 0;
+    i < list.length && out.length < ELEMENT_PICKER_LIMITS.classCount;
+    i += 1
+  ) {
     const name = String(list[i]);
     if (name) out.push(bounded(name, ELEMENT_PICKER_LIMITS.className));
   }
@@ -98,7 +109,8 @@ function stylesOf(el: Element): { property: string; value: string }[] {
   if (!cs) return out;
   for (
     let i = 0;
-    i < ELEMENT_PICKER_STYLE_PROPS.length && out.length < ELEMENT_PICKER_LIMITS.styleCount;
+    i < ELEMENT_PICKER_STYLE_PROPS.length &&
+    out.length < ELEMENT_PICKER_LIMITS.styleCount;
     i += 1
   ) {
     const prop = ELEMENT_PICKER_STYLE_PROPS[i];
@@ -146,7 +158,8 @@ function selectorPath(el: Element): string {
         const kid = kids[i];
         if (kid && kid.tagName === node.tagName) same.push(kid);
       }
-      if (same.length > 1) sel += ":nth-of-type(" + (same.indexOf(node) + 1) + ")";
+      if (same.length > 1)
+        sel += ":nth-of-type(" + (same.indexOf(node) + 1) + ")";
     }
     parts.unshift(sel);
     if (!parent || parent === document.documentElement) break;
@@ -165,7 +178,8 @@ function inputRole(type: string | null): string | null {
   if (t === "radio") return "radio";
   if (t === "range") return "slider";
   if (t === "search") return "searchbox";
-  if (t === "email" || t === "tel" || t === "url" || t === "text") return "textbox";
+  if (t === "email" || t === "tel" || t === "url" || t === "text")
+    return "textbox";
   return null;
 }
 
@@ -173,7 +187,8 @@ function implicitRole(el: Element): string | null {
   const t = String(el.tagName || "").toLowerCase();
   if (t === "a") return el.hasAttribute("href") ? "link" : null;
   if (t === "input") return inputRole(el.getAttribute("type"));
-  if (t === "img") return el.getAttribute("alt") === "" ? "presentation" : "img";
+  if (t === "img")
+    return el.getAttribute("alt") === "" ? "presentation" : "img";
   const map: Record<string, string> = {
     button: "button",
     nav: "navigation",
@@ -226,7 +241,9 @@ function accessibleNameOf(el: Element): string | null {
   if (label && label.trim()) {
     return bounded(label.trim(), ELEMENT_PICKER_LIMITS.accessibleName);
   }
-  const labelledby = el.getAttribute ? el.getAttribute("aria-labelledby") : null;
+  const labelledby = el.getAttribute
+    ? el.getAttribute("aria-labelledby")
+    : null;
   if (labelledby) {
     const names: string[] = [];
     const ids = labelledby.trim().split(/\s+/);

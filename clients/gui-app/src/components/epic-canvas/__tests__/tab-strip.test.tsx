@@ -233,7 +233,7 @@ function renderTabStrip(input: {
   readonly onSplit:
     ((groupId: string, direction: SplitDirection) => void) | undefined;
 }) {
-  renderTabStripForTab(TAB, input);
+  renderTabStripForTab(TAB, input, []);
 }
 
 function renderTabStripForTab(
@@ -246,7 +246,7 @@ function renderTabStripForTab(
     readonly onSplit:
       ((groupId: string, direction: SplitDirection) => void) | undefined;
   },
-  browserSessions: readonly BrowserSessionInfo[] = [],
+  browserSessions: readonly BrowserSessionInfo[],
 ) {
   seedActivePreviewTab(tab);
   const queryClient = createQueryClient();
@@ -411,12 +411,16 @@ describe("<TabStrip />", () => {
   });
 
   it("does not offer the file-path action for non-file tabs", () => {
-    renderTabStripForTab(ARTIFACT_TAB, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      ARTIFACT_TAB,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.contextMenu(
       screen.getByTestId(`tab-item-${ARTIFACT_TAB.instanceId}`),
@@ -441,12 +445,16 @@ describe("<TabStrip />", () => {
         .getState()
         .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
     });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     expect(
       screen.getByTestId(`tab-title-${TERMINAL_TAB.instanceId}`).textContent,
@@ -479,12 +487,16 @@ describe("<TabStrip />", () => {
         .getState()
         .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
     });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
@@ -542,12 +554,16 @@ describe("<TabStrip />", () => {
           .getState()
           .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
       });
-      renderTabStripForTab(tab, {
-        onClose,
-        onPromotePreview: () => undefined,
-        onOpenBlankTab: () => undefined,
-        onSplit: undefined,
-      });
+      renderTabStripForTab(
+        tab,
+        {
+          onClose,
+          onPromotePreview: () => undefined,
+          onOpenBlankTab: () => undefined,
+          onSplit: undefined,
+        },
+        [],
+      );
 
       fireEvent.click(
         screen.getByRole("button", { name: `Close ${tab.name}` }),
@@ -569,13 +585,17 @@ describe("<TabStrip />", () => {
         .getState()
         .closeCanvasTab(VIEW_TAB_ID, groupId, instanceId);
     });
-    renderTabStripForTab(TERMINAL_TAB, {
-      onClose: () => undefined,
-      onMenuClose,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      TERMINAL_TAB,
+      {
+        onClose: () => undefined,
+        onMenuClose,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     fireEvent.contextMenu(
       screen.getByTestId(`tab-item-${TERMINAL_TAB.instanceId}`),
@@ -735,12 +755,16 @@ describe("<TabStrip />", () => {
         repositoryLabel: "traycer",
       },
     });
-    renderTabStripForTab(gitTab, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      gitTab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
 
     const title = screen.getByTestId(`tab-title-${gitTab.instanceId}`);
     expect(title.textContent).toBe("traycer-internal › traycer · Changes");
@@ -809,12 +833,16 @@ describe("<TabStrip /> shell output tabs", () => {
         }),
       ]);
     }
-    renderTabStripForTab(tab, {
-      onClose: () => undefined,
-      onPromotePreview: () => undefined,
-      onOpenBlankTab: () => undefined,
-      onSplit: undefined,
-    });
+    renderTabStripForTab(
+      tab,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
   }
 
   it("draws the shared shell glyph, following the live monitor flag", () => {
@@ -867,6 +895,7 @@ describe("<TabStrip /> shell output tabs", () => {
         onOpenBlankTab: () => undefined,
         onSplit: undefined,
       },
+      [],
     );
 
     expect(document.querySelector("[data-monitor-icon='on']")).toBeNull();

@@ -186,10 +186,7 @@ function applyInitialChatHandoffStep(
       input.replaceDraftContent(input.nodeId, input.step.content, null);
       useComposerDraftStore
         .getState()
-        .restoreBrowserAnnotations(
-          input.nodeId,
-          input.step.browserAnnotations,
-        );
+        .restoreBrowserAnnotations(input.nodeId, input.step.browserAnnotations);
       input.state.ackFailedSendRestoration(input.step.clientActionId);
       return;
     }

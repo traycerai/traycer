@@ -21,15 +21,15 @@ export function useRemotePipSessions(
   const openTransport = useDurableStreamTransportFactory();
   const directory = useHostDirectory();
   const managerRef = useRef<RemotePipSessionsManager | null>(null);
-  const [items, setItems] = useState<readonly BrowserSessionInfo[]>(
-    EMPTY_REMOTE_SESSIONS,
-  );
+  const [published, setPublished] = useState<{
+    readonly epicId: string;
+    readonly items: readonly BrowserSessionInfo[];
+  }>({ epicId, items: EMPTY_REMOTE_SESSIONS });
   const active = hostIds.length > 0;
 
   useEffect(() => {
     if (!active) {
       managerRef.current = null;
-      setItems(EMPTY_REMOTE_SESSIONS);
       return;
     }
     let current = true;
@@ -37,7 +37,7 @@ export function useRemotePipSessions(
       epicId,
       openTransport,
       (nextItems) => {
-        if (current) setItems(nextItems);
+        if (current) setPublished({ epicId, items: nextItems });
       },
     );
     manager.attach();
@@ -60,5 +60,7 @@ export function useRemotePipSessions(
       subscription.dispose();
     };
   }, [active, directory, epicId, hostIds, openTransport]);
-  return items;
+  return active && published.epicId === epicId
+    ? published.items
+    : EMPTY_REMOTE_SESSIONS;
 }

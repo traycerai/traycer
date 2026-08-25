@@ -266,33 +266,37 @@ class FakeDurableTransport {
 }
 
 class FakeBridge {
-  readonly ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(async (input) => ({
-    hostId: input.hostId,
-    sessionId: input.sessionId,
-    tabId: input.tabId,
-    registrationId: `native:${input.tabId}`,
-  }));
-  readonly acceptTab = vi.fn<BrowserViewBridge["acceptTab"]>(async () => {});
-  readonly attachSurface = vi.fn<BrowserViewBridge["attachSurface"]>(
-    async () => {},
+  readonly ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>((input) =>
+    Promise.resolve({
+      hostId: input.hostId,
+      sessionId: input.sessionId,
+      tabId: input.tabId,
+      registrationId: `native:${input.tabId}`,
+    }),
   );
-  readonly detachSurface = vi.fn<BrowserViewBridge["detachSurface"]>(
-    async () => {},
+  readonly acceptTab = vi.fn<BrowserViewBridge["acceptTab"]>(() =>
+    Promise.resolve(),
   );
-  readonly releaseTab = vi.fn<BrowserViewBridge["releaseTab"]>(
-    async () => true,
+  readonly attachSurface = vi.fn<BrowserViewBridge["attachSurface"]>(() =>
+    Promise.resolve(),
+  );
+  readonly detachSurface = vi.fn<BrowserViewBridge["detachSurface"]>(() =>
+    Promise.resolve(),
+  );
+  readonly releaseTab = vi.fn<BrowserViewBridge["releaseTab"]>(() =>
+    Promise.resolve(true),
   );
   readonly controlElectronTab = vi.fn<BrowserViewBridge["controlElectronTab"]>(
-    async () => {},
+    () => Promise.resolve(),
   );
   readonly dispatchElectronTabCdp = vi.fn<
     BrowserViewBridge["dispatchElectronTabCdp"]
-  >(async () => ({ kind: "cdpGetFrameTree", ok: true, frames: [] }));
-  readonly startPipCapture = vi.fn<BrowserViewBridge["startPipCapture"]>(
-    async () => {},
+  >(() => Promise.resolve({ kind: "cdpGetFrameTree", ok: true, frames: [] }));
+  readonly startPipCapture = vi.fn<BrowserViewBridge["startPipCapture"]>(() =>
+    Promise.resolve(),
   );
-  readonly stopPipCapture = vi.fn<BrowserViewBridge["stopPipCapture"]>(
-    async () => {},
+  readonly stopPipCapture = vi.fn<BrowserViewBridge["stopPipCapture"]>(() =>
+    Promise.resolve(),
   );
   readonly onPipCaptureFrame = vi.fn<BrowserViewBridge["onPipCaptureFrame"]>(
     () => ({ dispose: () => {} }),
@@ -305,25 +309,27 @@ class FakeBridge {
   >(() => ({ dispose: () => {} }));
   readonly capturePrimaryProfile = vi.fn<
     BrowserViewBridge["capturePrimaryProfile"]
-  >(async () => ({
-    status: "captured",
-    storageState: {
-      cookies: [
-        {
-          name: "t09_auth",
-          value: "signed-in",
-          domain: "example.test",
-          path: "/",
-          expires: -1,
-          httpOnly: true,
-          secure: true,
-          sameSite: "Lax",
-        },
-      ],
-      origins: [],
-    },
-    reason: null,
-  }));
+  >(() =>
+    Promise.resolve({
+      status: "captured",
+      storageState: {
+        cookies: [
+          {
+            name: "t09_auth",
+            value: "signed-in",
+            domain: "example.test",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+          },
+        ],
+        origins: [],
+      },
+      reason: null,
+    }),
+  );
 }
 const INITIAL_ENDPOINT = "ws://host-a/stream";
 const RESTARTED_ENDPOINT = "ws://host-b/stream";

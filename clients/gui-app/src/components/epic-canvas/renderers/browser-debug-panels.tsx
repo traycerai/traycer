@@ -282,7 +282,9 @@ function BrowserDebugCollapsedRow(props: {
             ? ` · ${props.consoleErrorCount} error${props.consoleErrorCount === 1 ? "" : "s"}`
             : ""}
         </span>
-        <span className={cn(props.networkFailedCount > 0 && "text-destructive")}>
+        <span
+          className={cn(props.networkFailedCount > 0 && "text-destructive")}
+        >
           Network {props.networkCount}
           {props.networkFailedCount > 0
             ? ` · ${props.networkFailedCount} failed`

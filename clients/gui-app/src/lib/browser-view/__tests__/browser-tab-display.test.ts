@@ -30,7 +30,11 @@ describe("browser-tab-display", () => {
     ).toBe("Inbox");
     expect(
       resolveTabTitle(
-        tab({ tabId: "tab-host", url: "https://app.example/path", title: "  " }),
+        tab({
+          tabId: "tab-host",
+          url: "https://app.example/path",
+          title: "  ",
+        }),
       ),
     ).toBe("app.example");
     expect(
@@ -67,9 +71,7 @@ describe("browser-tab-display", () => {
     );
     expect(first.title).toBe("The Capital Grille");
     expect(first.url).toBe("https://thecapitalgrille.com");
-    expect(first.faviconUrl).toBe(
-      "https://thecapitalgrille.com/favicon.ico",
-    );
+    expect(first.faviconUrl).toBe("https://thecapitalgrille.com/favicon.ico");
 
     const navigating = nextSettledTabIdentity(
       first,

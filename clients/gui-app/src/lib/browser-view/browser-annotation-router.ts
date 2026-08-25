@@ -45,6 +45,6 @@ export function resolveAnnotationRoute(
   );
   return {
     targets,
-    defaultChatId: defaultChatId ?? targets[0]?.chatId ?? null,
+    defaultChatId: defaultChatId ?? targets.at(0)?.chatId ?? null,
   };
 }

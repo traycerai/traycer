@@ -4,7 +4,12 @@
 // on machines without Playwright browsers stay green (R12/R13 split: the
 // suite exists, it only exercises itself when explicitly asked).
 
-import { test as base, expect, type ElectronApplication, type Page } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type ElectronApplication,
+  type Page,
+} from "@playwright/test";
 import { _electron as electron } from "playwright-core";
 import path from "node:path";
 
@@ -47,11 +52,11 @@ export const test = base.extend<{ desktopApp: DesktopApp }>({
  * Read one member of the main-process debug surface (BT-501). Returns null
  * when the shell was launched without TRAYCER_E2E=1.
  */
-export async function readManagerDebug<Method extends DebugMethodName>(
+export async function readManagerDebug(
   desktopApp: DesktopApp,
-  method: Method,
-): Promise<ReturnType<BrowserViewManagerDebug[Method]> | null> {
-  return desktopApp.app.evaluate(({ }, ...args: unknown[]) => {
+  method: DebugMethodName,
+): Promise<unknown | null> {
+  return desktopApp.app.evaluate(({}, ...args: unknown[]) => {
     const debug = (
       globalThis as {
         __traycerBrowserViewManagerDebug?: Record<
@@ -62,14 +67,11 @@ export async function readManagerDebug<Method extends DebugMethodName>(
     ).__traycerBrowserViewManagerDebug;
     if (debug === undefined) return null;
     return debug[method]?.(...args) ?? null;
-  }, method) as ReturnType<BrowserViewManagerDebug[Method]> | null;
+  }, method);
 }
 
 type DebugMethodName =
-  | "boundsByKeyId"
-  | "occludedKeyIds"
-  | "frameCacheStats"
-  | "evictedKeyIds";
+  "boundsByKeyId" | "occludedKeyIds" | "frameCacheStats" | "evictedKeyIds";
 
 interface BrowserViewManagerDebug {
   boundsByKeyId(): unknown;

@@ -9,7 +9,7 @@ import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 const harness = vi.hoisted(() => ({
   binding: null as ElectronTabBinding | null,
   items: [] as BrowserSessionInfo[],
-  lifecycle: "live" as "connecting" | "live" | "reconnecting" | "closed",
+  lifecycle: "live",
   inventoryReady: true,
   closeCanvasTile: vi.fn(),
 }));

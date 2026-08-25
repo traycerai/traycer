@@ -453,9 +453,7 @@ describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
   });
 });
 
-function draftAnnotation(
-  annotationId: string,
-): BrowserAnnotationRecord {
+function draftAnnotation(annotationId: string): BrowserAnnotationRecord {
   return {
     kind: "browser-annotation",
     annotationId,

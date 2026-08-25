@@ -1143,8 +1143,6 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   return true;
 }
 
-function isRecordBackedEpicNodeRef(
-  ref: EpicCanvasTileRef,
-): ref is EpicNodeRef {
+function isRecordBackedEpicNodeRef(ref: EpicCanvasTileRef): ref is EpicNodeRef {
   return isTileRefRecordBacked(ref);
 }

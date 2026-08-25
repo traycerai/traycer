@@ -12,7 +12,7 @@ import type {
 const HOST_ID = "host-annotation-router";
 const OTHER_HOST_ID = "host-other";
 
-function chat(title: string, hostId: string | null = HOST_ID): ChatProjection {
+function chat(title: string, hostId: string | null): ChatProjection {
   return {
     id: title,
     title,
@@ -44,8 +44,8 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: null,
       lastFocusedChatId: null,
       chats: {
-        "chat-first": chat("First chat"),
-        "chat-second": chat("Second chat"),
+        "chat-first": chat("First chat", HOST_ID),
+        "chat-second": chat("Second chat", HOST_ID),
       },
       expected: {
         targets: [
@@ -61,9 +61,9 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: "chat-controller",
       lastFocusedChatId: "chat-focused",
       chats: {
-        "chat-first": chat("First chat"),
-        "chat-focused": chat("Focused chat"),
-        "chat-controller": chat("Controller chat"),
+        "chat-first": chat("First chat", HOST_ID),
+        "chat-focused": chat("Focused chat", HOST_ID),
+        "chat-controller": chat("Controller chat", HOST_ID),
       },
       expected: {
         targets: [
@@ -80,8 +80,8 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: null,
       lastFocusedChatId: "chat-focused",
       chats: {
-        "chat-first": chat("First chat"),
-        "chat-focused": chat("Focused chat"),
+        "chat-first": chat("First chat", HOST_ID),
+        "chat-focused": chat("Focused chat", HOST_ID),
       },
       expected: {
         targets: [
@@ -97,8 +97,8 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: "chat-missing",
       lastFocusedChatId: "chat-focused",
       chats: {
-        "chat-first": chat("First chat"),
-        "chat-focused": chat("Focused chat"),
+        "chat-first": chat("First chat", HOST_ID),
+        "chat-focused": chat("Focused chat", HOST_ID),
       },
       expected: {
         targets: [
@@ -114,8 +114,8 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: "chat-gone",
       lastFocusedChatId: "chat-also-gone",
       chats: {
-        "chat-first": chat("First chat"),
-        "chat-second": chat("Second chat"),
+        "chat-first": chat("First chat", HOST_ID),
+        "chat-second": chat("Second chat", HOST_ID),
       },
       expected: {
         targets: [
@@ -130,7 +130,7 @@ describe("resolveAnnotationRoute", () => {
       orderedChatIds: ["chat-untitled"],
       preferredChatId: null,
       lastFocusedChatId: null,
-      chats: { "chat-untitled": chat("") },
+      chats: { "chat-untitled": chat("", HOST_ID) },
       expected: {
         targets: [{ chatId: "chat-untitled", label: "Untitled agent" }],
         defaultChatId: "chat-untitled",
@@ -142,7 +142,7 @@ describe("resolveAnnotationRoute", () => {
       preferredChatId: null,
       lastFocusedChatId: null,
       chats: {
-        "chat-local": chat("Local"),
+        "chat-local": chat("Local", HOST_ID),
         "chat-foreign": chat("Foreign", OTHER_HOST_ID),
         "chat-unbound": chat("Unbound", null),
       },
@@ -170,7 +170,7 @@ describe("resolveAnnotationRoute", () => {
       orderedChatIds: ["chat-live", "chat-missing"],
       preferredChatId: null,
       lastFocusedChatId: "chat-missing",
-      chats: { "chat-live": chat("Live chat") },
+      chats: { "chat-live": chat("Live chat", HOST_ID) },
       expected: {
         targets: [{ chatId: "chat-live", label: "Live chat" }],
         defaultChatId: "chat-live",

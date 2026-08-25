@@ -155,7 +155,9 @@ describe("applyBrowserViewStorageStateWithDependencies", () => {
       },
     );
     expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("abc");
-    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("dark");
+    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain(
+      "dark",
+    );
   });
 
   it("omits host-only cookie domains while preserving dotted domain cookies", async () => {

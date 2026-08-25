@@ -131,23 +131,24 @@ interface Harness {
 function renderBridge(withBridge: boolean): Harness {
   const surface = document.createElement("div");
   document.body.appendChild(surface);
-  vi.spyOn(surface, "getBoundingClientRect").mockReturnValue(
-    domRect(8, 12, 400, 300),
-  );
+  const getBoundingClientRect = vi
+    .spyOn(surface, "getBoundingClientRect")
+    .mockReturnValue(domRect(8, 12, 400, 300));
   const surfaceRef: RefObject<HTMLDivElement | null> = { current: surface };
   const sentBounds: BrowserViewBoundsUpdate[] = [];
   const browserView = Object.assign(createFakeRunnerHost({}), {
     browserView: new Proxy<Record<string, unknown>>(
       {
-        updateBounds: async (input: BrowserViewBoundsUpdate) => {
+        updateBounds: (input: BrowserViewBoundsUpdate) => {
           sentBounds.push(input);
+          return Promise.resolve();
         },
       },
       {
-        get: (target, property) =>
-          Reflect.has(target, property)
-            ? Reflect.get(target, property)
-            : () => undefined,
+        get: (target, property): unknown =>
+          typeof property === "string"
+            ? (target[property] ?? (() => undefined))
+            : undefined,
       },
     ),
   }).browserView;
@@ -164,9 +165,7 @@ function renderBridge(withBridge: boolean): Harness {
   return {
     surface,
     setRect(left, top, width, height) {
-      vi.mocked(surface.getBoundingClientRect).mockReturnValue(
-        domRect(left, top, width, height),
-      );
+      getBoundingClientRect.mockReturnValue(domRect(left, top, width, height));
     },
     sentBounds,
     observer() {

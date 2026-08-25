@@ -406,10 +406,7 @@ describe("BrowsersPanelBody", () => {
     view.rerender(
       wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />),
     );
-    expect(rowIds()).toEqual([
-      ...initial,
-      "epic-browser-sidebar-row-tab-new",
-    ]);
+    expect(rowIds()).toEqual([...initial, "epic-browser-sidebar-row-tab-new"]);
   });
 
   it("registers each row as a browser tile drag source", () => {
@@ -1047,9 +1044,9 @@ describe("BrowsersPanelBody", () => {
       vi.advanceTimersByTime(BROWSER_TAB_AGENT_ACTIVITY_MS);
     });
     expect(
-      screen.getByTestId("epic-browser-sidebar-row-tab-live").querySelector(
-        ".lucide-bot",
-      ),
+      screen
+        .getByTestId("epic-browser-sidebar-row-tab-live")
+        .querySelector(".lucide-bot"),
     ).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
