@@ -4,10 +4,14 @@ import { useSyncExternalStore } from "react";
  * INPUT signal: "is a touch-grade pointer driving this window?"
  *
  * The device counterpart of `useIsMobileViewport()`, which answers a pure
- * layout question. Use this one only for chrome whose CSS is already behind
- * `@media(pointer:fine)` and whose work is worth skipping when it cannot
- * paint - hover affordances that measure. A narrow desktop window is not
- * coarse, and a tablet at desktop width is.
+ * layout question. A narrow desktop window is not coarse, and a tablet at
+ * desktop width is - so this is the signal for anything that turns on the
+ * input hardware rather than on width or on which build is running:
+ *
+ * - chrome whose CSS is already behind `@media(pointer:fine)` and whose work
+ *   is worth skipping when it cannot paint - hover affordances that measure;
+ * - whether an action costs a software keyboard, which is what makes
+ *   auto-focusing a text field free on one device and expensive on another.
  */
 const COARSE_POINTER_QUERY = "(pointer: coarse)";
 

@@ -114,6 +114,7 @@ const CATEGORY_NAMES = [
   "File Tree",
   "Git Diff",
   "Terminals",
+  "Sharing",
 ];
 
 /**
@@ -155,21 +156,18 @@ describe("<TabSwitcherSheet />", () => {
   });
   afterEach(cleanup);
 
-  it("renders exactly the five always-on category tabs when open on mobile", () => {
+  it("renders exactly the six always-on category tabs when open on mobile", () => {
     renderSheet(true, () => {});
     for (const name of CATEGORY_NAMES) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
   });
 
   it("labels the chats category 'Chats' and renders the active tab as an underline, not a box", () => {
     renderSheet(true, () => {});
     const active = screen.getByRole("tab", { name: "Chats" });
     expect(active.getAttribute("data-state")).toBe("active");
-    // The base `data-active:bg-*` fill is neutralised, so the active line tab
-    // never paints a solid fill behind the label.
-    expect(active.className).toContain("data-active:bg-transparent");
     // The visible active indicator is a collision-free `::before` underline. The
     // trigger's single `::after` is claimed by the mobile touch hit-slop, so
     // ui/tabs' `after:bg-foreground` indicator legitimately stays in the class
@@ -178,7 +176,11 @@ describe("<TabSwitcherSheet />", () => {
     // mechanism.
     expect(active.className).toContain("after:bg-foreground");
     expect(active.className).toContain("before:bg-foreground");
-    expect(active.className).toContain("data-active:before:opacity-100");
+    // That the underline actually fires, and that the base fill is neutralised
+    // rather than merely competed with, both hang on the bar spelling its
+    // active-state modifier the way ui/tabs spells its own. Restating that
+    // spelling here would only re-assert what the bar's own source says, so
+    // `switcher-category-tabs.test.tsx` derives it from the primitive instead.
   });
 
   it("forces the mobile touch hit-slop ::after transparent so a merged indicator can't box the tab", () => {
@@ -224,7 +226,7 @@ describe("<TabSwitcherSheet />", () => {
     setPullRequestPresence(true);
     renderSheet(true, () => {});
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(6);
+    expect(tabs).toHaveLength(7);
     expect(tabs.map((tab) => tab.getAttribute("data-testid"))).toEqual([
       "mobile-switcher-tab-chats",
       "mobile-switcher-tab-artifacts",
@@ -232,7 +234,37 @@ describe("<TabSwitcherSheet />", () => {
       "mobile-switcher-tab-git-diff",
       "mobile-switcher-tab-pull-requests",
       "mobile-switcher-tab-terminals",
+      "mobile-switcher-tab-sharing",
     ]);
+  });
+
+  it("shows the embedded desktop sharing panel body when the category is selected", async () => {
+    const user = userEvent.setup();
+    renderSheet(true, () => {});
+    await user.click(screen.getByRole("tab", { name: "Sharing" }));
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "sharing",
+    );
+    const embed = await screen.findByTestId("mock-panel-embed");
+    expect(embed.dataset.category).toBe("sharing");
+  });
+
+  it("opens straight onto a persisted sharing selection instead of clamping it away", async () => {
+    // `sharing` is shared with the desktop rail through this one store, so a
+    // selection made on a desktop lands here on the phone. While the category
+    // was uncurated `clampToSwitcherCategory` sent it back to Chats, which is
+    // the regression this guards: the tab must be the active one on first
+    // paint, with no click to get there.
+    useLeftPanelStore.setState({
+      activePanelIdByTabId: { [TAB_ID]: "sharing" },
+    });
+    renderSheet(true, () => {});
+    expect(
+      screen.getByRole("tab", { name: "Sharing" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.queryByTestId("mock-agents-list")).toBeNull();
+    const embed = await screen.findByTestId("mock-panel-embed");
+    expect(embed.dataset.category).toBe("sharing");
   });
 
   it("shows the embedded desktop PR panel body when the category is selected", async () => {
@@ -282,7 +314,7 @@ describe("<TabSwitcherSheet />", () => {
     streamState.prSupport = "unsupported";
     renderSheet(true, () => {});
     expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(5);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
   });
 
   it("clamps a persisted pull-requests selection when the host lost stream support", () => {

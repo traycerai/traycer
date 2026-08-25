@@ -181,6 +181,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -243,7 +244,9 @@ import {
   configLogLevelsSetV10,
   configShellAddV10,
   configShellGetV10,
+  configShellListDetectedUpgradeV10ToV11,
   configShellListDetectedV10,
+  configShellListDetectedV11,
   configShellProbeV10,
   configShellRemoveV10,
   configShellResetV10,
@@ -3810,11 +3813,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.listDetected": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configShellListDetectedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configShellListDetectedV11,
+          upgradeFromPreviousVersion: configShellListDetectedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8401,7 +8408,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8423,6 +8430,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         6: {
           contract: chatSubscribeV16,
+        },
+        7: {
+          contract: chatSubscribeV17,
         },
       },
     },

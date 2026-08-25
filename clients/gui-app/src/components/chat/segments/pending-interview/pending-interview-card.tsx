@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check } from "lucide-react";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
@@ -11,6 +11,12 @@ import { Kbd } from "@/components/ui/kbd";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
+import {
+  InterviewFraming,
+  InterviewQuestionHeader,
+  InterviewQuestionPager,
+} from "@/components/chat/segments/interview-visuals";
+import { displayInterviewFraming } from "@/components/chat/segments/interview-review-model";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
@@ -39,7 +45,13 @@ interface PendingInterviewCardProps {
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null;
-  onSkip: ((blockId: string, reason: string) => string | null) | null;
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
   /**
    * Opens the fork dialog to branch the chat at this question:
    * `"cross-question"` forks on this chat's own workspace with the question
@@ -55,6 +67,11 @@ interface PendingInterviewCardProps {
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
   const shouldReduceMotion = useReducedMotion();
+  const framing = displayInterviewFraming({
+    toolName: props.toolName,
+    title: props.title,
+    description: props.description,
+  });
   const {
     containerRef,
     total,
@@ -62,7 +79,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     question,
     draft,
     direction,
-    pendingLabel,
+    pendingOptionIndex,
     isLast,
     answeredCount,
     canAdvance,
@@ -94,8 +111,19 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
       tabIndex={-1}
       className="flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none"
     >
+      <InterviewFraming
+        title={framing.title}
+        description={framing.description}
+        titleFindUnitId={null}
+        descriptionFindUnitId={null}
+      />
       {question === null ? (
-        <InterviewQuestionHeader questionText="Input needed" />
+        <InterviewQuestionHeader
+          header={null}
+          questionText="Input needed"
+          headerFindUnitId={null}
+          questionFindUnitId={null}
+        />
       ) : (
         <AnimatePresence mode="wait" initial={false}>
           <m.div
@@ -114,13 +142,18 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
             }
             className="flex flex-col gap-3"
           >
-            <InterviewQuestionHeader questionText={question.question} />
+            <InterviewQuestionHeader
+              header={question.header}
+              questionText={question.question}
+              headerFindUnitId={null}
+              questionFindUnitId={null}
+            />
             <QuestionPage
               question={question}
               draft={draft}
               isActive={props.isActive}
               disabled={props.isBusy}
-              pendingLabel={pendingLabel}
+              pendingOptionIndex={pendingOptionIndex}
               onToggleOption={toggleOption}
               onToggleOther={toggleOther}
               onOtherTextChange={setOtherText}
@@ -136,7 +169,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           too narrow, and Skip/Submit drop to their own right-aligned line. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <QuestionPager
+          <InterviewQuestionPager
             current={safeIndex + 1}
             total={total}
             disabled={props.isBusy}
@@ -195,18 +228,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
   );
 }
 
-interface InterviewQuestionHeaderProps {
-  readonly questionText: string;
-}
-
-function InterviewQuestionHeader(props: InterviewQuestionHeaderProps) {
-  return (
-    <p className="m-0 min-w-0 text-ui font-medium leading-6 text-foreground">
-      {props.questionText}
-    </p>
-  );
-}
-
 interface InterviewProgressProps {
   readonly answeredCount: number;
   readonly total: number;
@@ -217,45 +238,6 @@ function InterviewProgress(props: InterviewProgressProps) {
   return (
     <div className="text-ui-xs text-muted-foreground">
       Answered {props.answeredCount}/{props.total}
-    </div>
-  );
-}
-
-interface QuestionPagerProps {
-  readonly current: number;
-  readonly total: number;
-  readonly disabled: boolean;
-  readonly onPrevious: () => void;
-  readonly onNext: () => void;
-}
-
-function QuestionPager(props: QuestionPagerProps) {
-  if (props.total <= 1) return null;
-  return (
-    <div className="flex shrink-0 items-center gap-1 text-ui-sm text-muted-foreground">
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="ghost"
-        disabled={props.disabled || props.current <= 1}
-        onClick={props.onPrevious}
-        aria-label="Previous question"
-      >
-        <ChevronLeft className="size-3.5" aria-hidden />
-      </Button>
-      <span className="min-w-12 text-center tabular-nums">
-        {props.current} of {props.total}
-      </span>
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="ghost"
-        disabled={props.disabled || props.current >= props.total}
-        onClick={props.onNext}
-        aria-label="Next question"
-      >
-        <ChevronRight className="size-3.5" aria-hidden />
-      </Button>
     </div>
   );
 }

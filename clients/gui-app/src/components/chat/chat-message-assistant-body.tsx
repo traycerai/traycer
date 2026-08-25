@@ -21,6 +21,7 @@ import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-te
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import type { ChatMessageForkAction } from "./chat-message";
+import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { ActivityGroupSegment } from "./segments/activity-group-segment";
 import { ResolvedApprovalSegment } from "./segments/approval-segment";
 import { ArtifactCardSegment } from "./segments/artifact-card-segment";
@@ -98,6 +99,7 @@ interface AssistantBodyProps {
   meta: AssistantTurnMeta | null;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
+  interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
 export function AssistantMessageBody({
@@ -115,6 +117,7 @@ export function AssistantMessageBody({
   meta,
   nextStepActions,
   forkAction,
+  interviewDeliveryRetry,
 }: AssistantBodyProps) {
   const activityTimelineTurnState = runState === null ? "complete" : "active";
   const timeline = useMemo(
@@ -187,24 +190,6 @@ export function AssistantMessageBody({
         if (item.kind === "activity_group") {
           return <ActivityGroupSegment key={item.id} group={item.group} />;
         }
-        if (item.kind === "answered_questions") {
-          return (
-            <InterviewSegment
-              key={item.id}
-              blockId={item.segment.id}
-              findUnitId={chatFindSegmentUnitId(item.segment.id)}
-              status={item.segment.status}
-              toolName={item.segment.toolName}
-              title={item.segment.title}
-              description={item.segment.description}
-              questions={item.segment.questions}
-              answers={item.segment.answers}
-              error={item.segment.error}
-              forkedWithoutAnswer={item.segment.forkedWithoutAnswer}
-              forkAction={forkAction}
-            />
-          );
-        }
         if (item.kind === "promoted_subagent") {
           return (
             <SubagentSegment
@@ -234,6 +219,7 @@ export function AssistantMessageBody({
             backgroundToolBlockIds={backgroundToolBlockIds}
             nextStepActions={nextStepActions}
             forkAction={forkAction}
+            interviewDeliveryRetry={interviewDeliveryRetry}
           />
         );
       })}
@@ -773,6 +759,7 @@ interface AssistantSegmentProps {
   backgroundToolBlockIds: ReadonlySet<string>;
   nextStepActions: NextStepActionHandler | null;
   forkAction: ChatMessageForkAction | null;
+  interviewDeliveryRetry: InterviewDeliveryRetryAction | null;
 }
 
 function ApprovalSegmentCard({
@@ -808,6 +795,7 @@ function AssistantSegment({
   backgroundToolBlockIds,
   nextStepActions,
   forkAction,
+  interviewDeliveryRetry,
 }: AssistantSegmentProps) {
   const findUnitId = chatFindSegmentUnitId(id);
   switch (segment.kind) {
@@ -979,16 +967,20 @@ function AssistantSegment({
       return (
         <InterviewSegment
           blockId={segment.id}
-          findUnitId={findUnitId}
           status={segment.status}
           toolName={segment.toolName}
           title={segment.title}
           description={segment.description}
           questions={segment.questions}
           answers={segment.answers}
+          draftAnswers={segment.draftAnswers}
+          outcome={segment.outcome}
+          settlement={segment.settlement}
           error={segment.error}
+          delivery={segment.delivery}
           forkedWithoutAnswer={segment.forkedWithoutAnswer}
           forkAction={forkAction}
+          interviewDeliveryRetry={interviewDeliveryRetry}
         />
       );
     case "setup-card":

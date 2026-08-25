@@ -79,15 +79,6 @@ export interface LandingTerminalStoreState {
     landingPageId: string,
     instanceId: string,
   ) => LandingTerminalTabRef | null;
-  /**
-   * Atomically tombstones then removes every tab, returning the removed refs so
-   * the caller can dispatch one kill each. Same durability contract as
-   * {@link closeTab}: the tombstones are written before any kill leaves the
-   * renderer, so a reload mid-kill can never re-adopt a closed shell.
-   */
-  readonly closeAllTabs: (
-    landingPageId: string,
-  ) => ReadonlyArray<LandingTerminalTabRef>;
   /** Removes a self-exited tab without asking the host to kill it again. */
   readonly removeExitedTab: (landingPageId: string, instanceId: string) => void;
   readonly applyReconciliation: (
@@ -311,26 +302,6 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               : {}),
           };
         });
-        return closed;
-      },
-      closeAllTabs: (_landingPageId) => {
-        const closed = get().tabs;
-        if (closed.length === 0) return [];
-        set((state) => ({
-          tabs: [],
-          activeInstanceId: null,
-          pendingKills: closed.reduce(
-            (pending: ReadonlyArray<LandingTerminalPendingKill>, tab) =>
-              hasPendingKill(pending, tab.hostId, tab.sessionId)
-                ? pending
-                : [
-                    ...pending,
-                    { hostId: tab.hostId, sessionId: tab.sessionId },
-                  ],
-            state.pendingKills,
-          ),
-          ...collapseLayoutsForEmptyTerminalSet(state),
-        }));
         return closed;
       },
       removeExitedTab: (_landingPageId, instanceId) =>

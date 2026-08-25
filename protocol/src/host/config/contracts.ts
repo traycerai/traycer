@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
@@ -16,6 +19,7 @@ import {
   configShellGetResponseSchema,
   configShellListDetectedRequestSchema,
   configShellListDetectedResponseSchema,
+  configShellListDetectedResponseSchemaV10,
   configShellProbeRequestSchema,
   configShellProbeResponseSchema,
   configShellRemoveRequestSchema,
@@ -76,7 +80,36 @@ export const configShellListDetectedV10 = defineRpcContract({
   method: "config.shell.listDetected",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configShellListDetectedRequestSchema,
+  responseSchema: configShellListDetectedResponseSchemaV10,
+});
+
+// v1.1 adds the optional `wslHealth` annotation to each row (a Windows
+// wsl.exe that cannot host a terminal: the installer stub, or no registered
+// distribution). Shipped as a minor rather than an in-place change to v1.0
+// because cli-v1.2.0 released the v1.0 response shape: a released peer never
+// sends the key, so it may only exist at a version that peer does not
+// negotiate. The extra object key is strippable by the within-major skew
+// handler, so a v1.1 host answering a v1.0 client drops it on the wire. See
+// the RPC backward-compat decision log.
+export const configShellListDetectedV11 = defineRpcContract({
+  method: "config.shell.listDetected",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellListDetectedRequestSchema,
   responseSchema: configShellListDetectedResponseSchema,
+});
+
+// The request is empty either way, and a v1.0 response is already a valid
+// v1.1 response - `wslHealth` is optional and its absence means "no verdict",
+// exactly what a host that never probed should express - so both upgrades are
+// the identity.
+export const configShellListDetectedUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellListDetectedV10,
+  typeof configShellListDetectedV11
+>({
+  from: configShellListDetectedV10.schemaVersion,
+  to: configShellListDetectedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Shell executable probing runs against the connected host's filesystem. */

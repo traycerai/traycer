@@ -87,11 +87,26 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
       // nothing may exceed the list's height: it sizes to its triggers
       // (`h-auto` on the base height's exact modifier so tailwind-merge
       // replaces the fixed `h-8`), and the triggers themselves carry the full
-      // 44px touch height (min-h-11 below), which also collapses the
+      // 44px touch height (min-h-[44px] below), which also collapses the
       // coarse-pointer hit-slop `::after` (`height: max(100%, 44px)` in
       // mobile-shell-touch-targets.css) to an exact fit.
+      //
+      // Every override here has to spell its modifier the way `ui/tabs` spells
+      // its own, and the reason is not style. tailwind-merge only drops the
+      // base utility when both sides carry the IDENTICAL modifier chain; spell
+      // them differently and both ship, at which point the cascade decides -
+      // and the bare shadcn variants (`data-horizontal:`, `data-active:`,
+      // registered in `shadcn/tailwind.css`) compile `:where()`-wrapped, so
+      // they carry ZERO specificity while the `data-[…]` form carries a real
+      // attribute. A bare-variant override is therefore safe only while it is
+      // the sole rule for that property, and loses outright the moment the
+      // primitive states the same property with real specificity. Matching the
+      // spelling is what keeps the base out of the class list entirely, which
+      // is the only version of this that does not depend on winning a fight.
+      // `switcher-category-tabs.test.tsx` derives that coupling from the
+      // primitive rather than restating it.
       className={cn(
-        "no-scrollbar w-full justify-start gap-1 overflow-x-auto px-2 group-data-horizontal/tabs:h-auto",
+        "no-scrollbar w-full justify-start gap-1 overflow-x-auto px-2 group-data-[orientation=horizontal]/tabs:h-auto",
         fadeClassForEdges(edges),
       )}
       aria-label="Tab categories"
@@ -102,12 +117,19 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
           <TabsTrigger
             key={definition.id}
             value={definition.id}
-            // `data-active:bg-transparent`: force the line-variant active state
-            // fill-less (the `:where()`-neutralised line override can't
-            // out-specify the base `data-active:bg-*`; same prefix here, so
-            // tailwind-merge drops it) - otherwise it paints a box wherever the
-            // active `--background` differs from the sheet surface, e.g. a white
-            // box in a light portal.
+            // `min-h-[44px]`, not `min-h-11`: this surface's root font is 15px,
+            // so a rem-based `11` is 41.25px and would leave the 44px hit-slop
+            // `::after` spilling out of the list's exact fit.
+            //
+            // `data-[state=active]:bg-transparent`: force the active state
+            // fill-less, so it paints no box where the active `--background`
+            // differs from the sheet surface - e.g. a white box in a light
+            // portal. `ui/tabs`' line variant already answers this for a
+            // `variant="line"` list, but it answers it by out-specifying the
+            // default fill rather than removing it, so the guarantee lasts only
+            // as long as this list stays on that variant. Stated here in the
+            // primitive's own spelling, tailwind-merge drops the default fill
+            // outright and the outcome stops depending on which rule wins.
             //
             // The active indicator is a `::before` underline, NOT ui/tabs'
             // `::after` one: the mobile-shell hit-slop
@@ -116,7 +138,13 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
             // that `::after` is the (now transparent) slop, not the indicator.
             // `::before` is untouched by both ui/tabs and the slop rule, so it
             // renders the underline cleanly with no shared-pseudo collision.
-            className="min-h-11 flex-none gap-1.5 data-active:bg-transparent dark:data-active:bg-transparent before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-active:before:opacity-100"
+            // ui/tabs' own `::after` still carries a `bottom-[-5px]` offset for
+            // the indicator it thinks it owns, which on a fine pointer - a
+            // narrow desktop window, where this shell also renders and no slop
+            // rule overrides the geometry - hangs 5px below the trigger and
+            // reopens the spill; pinning it flush is the same "nothing exceeds
+            // the list" rule as the height above.
+            className="min-h-[44px] flex-none gap-1.5 data-[state=active]:bg-transparent dark:data-[state=active]:bg-transparent group-data-[orientation=horizontal]/tabs:after:bottom-0 before:pointer-events-none before:absolute before:inset-x-0 before:bottom-0 before:h-0.5 before:rounded-full before:bg-foreground before:opacity-0 before:transition-opacity data-[state=active]:before:opacity-100"
             data-testid={`mobile-switcher-tab-${definition.id}`}
           >
             <Icon className="size-4" />

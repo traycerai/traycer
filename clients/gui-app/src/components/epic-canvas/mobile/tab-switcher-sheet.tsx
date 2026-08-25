@@ -42,9 +42,10 @@ import {
 import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
-// Lazy so the desktop File-tree / Git-diff / Pull-requests bodies - and the
-// heavy epic-sidebar module they pull in - load only when a phone user opens
-// those categories, and never sit in the mobile tile view's eager module graph.
+// Lazy so the desktop File-tree / Git-diff / Pull-requests / Sharing bodies -
+// and the heavy epic-sidebar module they pull in - load only when a phone user
+// opens those categories, and never sit in the mobile tile view's eager module
+// graph.
 const SwitcherPanelEmbed = lazy(() =>
   import("@/components/epic-canvas/mobile/switcher-panel-embed").then((m) => ({
     default: m.SwitcherPanelEmbed,
@@ -79,8 +80,8 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
  * The mobile tab switcher: a drag-dismissable `vaul` bottom sheet whose
  * category bar mirrors the desktop left-panel registry and whose content region
  * shows the active category - flat lists for Agents/Terminals/Artifacts, the
- * embedded desktop File-tree / Git-diff / Pull-requests panel bodies for the
- * rest. Creating is a row inside the category that owns the kind, not a
+ * embedded desktop File-tree / Git-diff / Pull-requests / Sharing panel bodies
+ * for the rest. Creating is a row inside the category that owns the kind, not a
  * sheet-level control.
  *
  * Opened from the mobile header's switcher trigger. Only meaningful on phones -
@@ -243,9 +244,10 @@ interface SwitcherCategoryBodyProps {
 
 /**
  * Content-region registry: flat lists for the row-per-item categories; embedded
- * desktop panel bodies for File tree, Git diff and Pull requests. The flat
- * lists call `onClose` on selection; the embeds rely on the sheet's active-tile
- * watcher.
+ * desktop panel bodies for File tree, Git diff, Pull requests and Sharing. The
+ * flat lists call `onClose` on selection; the embeds rely on the sheet's
+ * active-tile watcher, and Sharing - which opens no tile - simply keeps the
+ * sheet open for as long as the user is granting access.
  */
 function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
   const { categoryId, epicId, tabId, onClose } = props;
@@ -295,6 +297,16 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
         <Suspense fallback={<SwitcherEmbedFallback />}>
           <SwitcherPanelEmbed
             category="pull-requests"
+            epicId={epicId}
+            tabId={tabId}
+          />
+        </Suspense>
+      );
+    case "sharing":
+      return (
+        <Suspense fallback={<SwitcherEmbedFallback />}>
+          <SwitcherPanelEmbed
+            category="sharing"
             epicId={epicId}
             tabId={tabId}
           />

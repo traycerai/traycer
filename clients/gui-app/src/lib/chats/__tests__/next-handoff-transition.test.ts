@@ -103,6 +103,7 @@ describe("nextHandoffTransition", () => {
         "action-1": {
           action: "send",
           interviewBlockId: null,
+          interviewDeliveryRetry: null,
           clientActionId: "action-1",
           messageId: "message-1",
           acceptedAt: 1000,
