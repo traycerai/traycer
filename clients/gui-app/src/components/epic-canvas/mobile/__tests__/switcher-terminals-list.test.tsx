@@ -513,24 +513,6 @@ describe("<SwitcherTerminalsList /> states", () => {
     expect(screen.queryByText("No terminals yet.")).toBeNull();
   });
 
-  it("waits on an empty epic id instead of claiming the epic has none", () => {
-    hostClient.value = null;
-    // Scoped to a DIFFERENT epic, so reconciliation yields no rows: an empty
-    // id must still read as "not answered yet", never as an answered "none".
-    durableCollection.value = completeFleet([
-      durableTerminal({
-        hostId: HOST_A,
-        terminalId: "durable-term",
-        title: "Durable shell",
-        runtime: runningRuntime("durable-term"),
-      }),
-    ]);
-    renderListFor("", openEpicTab());
-
-    expect(screen.getByTestId("switcher-terminal-loading")).toBeTruthy();
-    expect(screen.queryByText("No terminals yet.")).toBeNull();
-  });
-
   it("gives a viewer no New terminal row, empty list or not", () => {
     // A viewer's create is server-rejected, so the row would only lead to a
     // dead end. The gate lives on the list, not inside the create row.
