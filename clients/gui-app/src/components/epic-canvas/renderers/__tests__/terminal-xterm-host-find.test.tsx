@@ -1184,6 +1184,15 @@ describe("<TerminalXtermHost /> terminal find", () => {
     // Genuine input keeps flowing untouched.
     getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
+
+    // The filter matches only the report grammar xterm generates: an OSC
+    // 10/11 QUERY or colour-SET arriving as genuine user input (a paste)
+    // must reach the PTY untouched.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;#112233\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;#112233\x07\x1b[201~",
+    );
   });
 
   it("resets the buffer before replaying a reconnect snapshot", async () => {

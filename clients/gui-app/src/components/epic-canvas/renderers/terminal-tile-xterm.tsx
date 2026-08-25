@@ -107,13 +107,18 @@ interface XtermInitialOptions extends ITerminalOptions {
 
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 
-// xterm's replies to OSC 10/11 default-colour queries (`ESC ] 10|11 ; <spec>
-// BEL|ST`), which surface on `onData` like keystrokes do. Filtered out of the
-// user-input forwarding path: the HOST is the single authority for colour
-// queries (it answers with the session's spawn-time `themeHint`), and a
-// per-viewer reply would race it with a different answer per attached client.
+// xterm's replies to OSC 10/11 default-colour queries, which surface on
+// `onData` like keystrokes do. Filtered out of the user-input forwarding path:
+// the HOST is the single authority for colour queries (it answers with the
+// session's spawn-time `themeHint`), and a per-viewer reply would race it with
+// a different answer per attached client. Deliberately restricted to the exact
+// report grammar xterm generates - `ESC ] 10|11 ; rgb:RRRR/GGGG/BBBB BEL|ST`
+// (16-bit X11 channels, see `toRgbString` in @xterm/xterm) - so a query or
+// colour-SET sequence arriving as genuine user input (a paste) still flows
+// through untouched.
 // eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
-const OSC_COLOR_REPORT_PATTERN = /\x1b\](?:10|11);[^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const OSC_COLOR_REPORT_PATTERN =
+  /\x1b\](?:10|11);rgb:[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
