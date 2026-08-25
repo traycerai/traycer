@@ -30,7 +30,6 @@ import { ProfileUsageCompactMeter } from "@/components/providers/profile-usage-c
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
-  Fragment,
   useId,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -259,7 +258,6 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           <ProfileDropdownRow
             key={profile.profileId}
             profile={profile}
-            previousProfile={orderedProfiles[index - 1]}
             index={index}
             shortcutIndex={
               orderedProfiles
@@ -340,7 +338,6 @@ interface ProfileDropdownRowState {
 
 function ProfileDropdownRow(props: {
   readonly profile: ProviderProfile;
-  readonly previousProfile: ProviderProfile | undefined;
   readonly index: number;
   readonly shortcutIndex: number;
   readonly context: ProfileDropdownRowContext;
@@ -369,32 +366,27 @@ function ProfileDropdownRow(props: {
     />
   );
   return (
-    <Fragment>
-      {startsDisabledProfileGroup(props.profile, props.previousProfile) ? (
-        <DropdownMenuSeparator />
-      ) : null}
-      <div
-        role="group"
-        aria-label={`${state.label} profile controls`}
-        className={cn(
-          "flex w-full items-center gap-1 rounded-sm pr-1",
-          profileRowFaded(props.profile, state, enablementPending) &&
-            "opacity-60",
-        )}
-      >
-        {admissionTooltipRow(state.admission, selection)}
-        <ProfileEnablementSwitch
-          available={props.context.profileEnablementAvailable}
-          profile={props.profile}
-          commitId={state.commitId}
-          label={state.label}
-          selectionId={selectionId}
-          pending={enablementPending}
-          disabledReason={enablementDisabledReason}
-          onSetProfileEnabled={props.context.onSetProfileEnabled}
-        />
-      </div>
-    </Fragment>
+    <div
+      role="group"
+      aria-label={`${state.label} profile controls`}
+      className={cn(
+        "flex w-full items-center gap-1 rounded-sm pr-1",
+        profileRowFaded(props.profile, state, enablementPending) &&
+          "opacity-60",
+      )}
+    >
+      {admissionTooltipRow(state.admission, selection)}
+      <ProfileEnablementSwitch
+        available={props.context.profileEnablementAvailable}
+        profile={props.profile}
+        commitId={state.commitId}
+        label={state.label}
+        selectionId={selectionId}
+        pending={enablementPending}
+        disabledReason={enablementDisabledReason}
+        onSetProfileEnabled={props.context.onSetProfileEnabled}
+      />
+    </div>
   );
 }
 
@@ -576,7 +568,7 @@ function ProfileEnablementSwitch(props: {
         checked={props.profile.enabled}
         disabled={props.pending}
         aria-disabled={props.disabledReason !== null || undefined}
-        className="h-4 w-7 transition-colors duration-150"
+        className="relative h-3.5 w-6 transition-colors duration-150 before:absolute before:inset-x-0 before:-inset-y-[5px] before:content-[''] [&>[data-slot=switch-thumb]]:size-3"
         onKeyDown={(event) => {
           if (event.key !== "ArrowLeft") return;
           event.preventDefault();
@@ -589,13 +581,6 @@ function ProfileEnablementSwitch(props: {
       />
     </TooltipWrapper>
   );
-}
-
-function startsDisabledProfileGroup(
-  profile: ProviderProfile,
-  previousProfile: ProviderProfile | undefined,
-): boolean {
-  return !profile.enabled && previousProfile?.enabled === true;
 }
 
 function profileRowFaded(

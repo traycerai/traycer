@@ -54,21 +54,16 @@ export function profileRowStatusSuffix(
   return null;
 }
 
-// Enabled profiles stay selectable and shortcut-addressable as one contiguous
-// group. Disabled profiles remain visible after them for human recovery. The
-// Terminal account keeps its long-standing first position within either group.
+// Preserve the host's stable profile order. Eligibility is presentation and
+// admission state, not a reason for a row to jump when the user toggles it.
 export function orderProfiles(
   profiles: readonly ProviderProfile[],
 ): ReadonlyArray<ProviderProfile> {
-  return [...profiles].sort((a, b) => {
-    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-    if (a.kind === b.kind) return 0;
-    return a.kind === "ambient" ? -1 : 1;
-  });
+  return profiles;
 }
 
 /** The profile a fresh section instance (new provider, or first mount) should
- *  select - ambient/first per `orderProfiles`. `null` when the provider
+ *  select - first in the host's stable order. `null` when the provider
  *  reports no profiles (callers don't render profile-scoped UI then anyway). */
 export function defaultSelectedProfileId(
   profiles: readonly ProviderProfile[],

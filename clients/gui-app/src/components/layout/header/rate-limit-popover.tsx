@@ -2047,7 +2047,7 @@ function RateLimitProviderProfileRow({
                 aria-disabled={
                   profileEnablementDisabledReason !== null || undefined
                 }
-                className="mt-0.5 h-4 w-7 transition-colors duration-150"
+                className="relative mt-0.5 h-3.5 w-6 transition-colors duration-150 before:absolute before:inset-x-0 before:-inset-y-[5px] before:content-[''] [&>[data-slot=switch-thumb]]:size-3"
                 onCheckedChange={(enabled) => {
                   if (profileEnablementDisabledReason !== null) return;
                   onSetProfileEnabled(enabled);

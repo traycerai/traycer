@@ -311,7 +311,7 @@ describe("<ProfileDropdown />", () => {
     expect(screen.queryAllByRole("switch")).toHaveLength(0);
   });
 
-  it("groups disabled profiles after enabled rows and visibly labels them Disabled", () => {
+  it("preserves profile order when a profile is disabled and visibly labels it", () => {
     renderDropdown(
       baseDropdownInput({
         profiles: [PERSONAL_DISABLED, WORK, AMBIENT],
@@ -320,10 +320,10 @@ describe("<ProfileDropdown />", () => {
     );
 
     const profileRows = screen.getAllByRole("menuitem").slice(0, 3);
-    expect(profileRows[0]?.textContent).toContain("Terminal account");
+    expect(profileRows[0]?.textContent).toContain("Personal");
     expect(profileRows[1]?.textContent).toContain("Work");
-    expect(profileRows[2]?.textContent).toContain("Personal");
-    expect(within(profileRows[2]).getByText("Disabled")).toBeDefined();
+    expect(profileRows[2]?.textContent).toContain("Terminal account");
+    expect(within(profileRows[0]).getByText("Disabled")).toBeDefined();
   });
 
   it("keeps selection and enablement as sibling actions", () => {
