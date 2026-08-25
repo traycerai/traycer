@@ -144,6 +144,19 @@ export interface ChatStreamClientOptions {
 }
 
 /**
+ * The oldest `chat.subscribe@1.x` minor whose server frames carry the LIVE
+ * message/event SHAPE - i.e. every field the current types promise is present
+ * on the wire, with no compatibility default needed to synthesize it.
+ *
+ * `1.6` is that floor: it shipped image support (`imageResolutions`, the
+ * image-bearing `tool_call`) and the turn-tail anchor, and the only difference
+ * between its serverFrame and the live `1.7` one is the harness enum, which
+ * changes no field's presence. Raise this ONLY when a minor adds or removes a
+ * FIELD, not when one merely widens an enum.
+ */
+const CHAT_SUBSCRIBE_LIVE_SHAPED_MINOR = 6;
+
+/**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
  * Chat frames are text-only, so outbound action methods always send a null
@@ -203,17 +216,30 @@ export class ChatStreamClient {
   }
 
   /**
-   * Whether THIS session negotiated exactly the live `chat.subscribe` line.
-   * Gates the shallow snapshot path: on any other (older) line the host sends
-   * pre-image shapes that only the deep parse's compatibility defaults
-   * up-convert to the current `Message`/`ChatEvent` types.
+   * Whether THIS session's negotiated line emits live-SHAPED messages, which is
+   * the shallow snapshot path's actual soundness condition.
+   *
+   * Deliberately NOT exact equality with `chatSubscribeLiveSchemaVersion`. The
+   * shallow parse needs field PRESENCE to match the live types, because it skips
+   * the deep schema's compatibility defaults (`imageResolutions`, `serviceTier`,
+   * …) that up-convert an older host's pre-image objects. `1.6` shipped the full
+   * post-image shape and differs from the live `1.7` only in the harness enum,
+   * which changes no field's presence - so a `1.6` peer satisfies the condition
+   * exactly as the live line does. `1.5` and below do not: they predate image
+   * support, and a shallow-parsed `1.5` snapshot would hand consumers assistant
+   * messages missing fields the types promise (`imageResolutions.map` throws).
+   *
+   * Pinning this to the live line instead would silently deep-parse every
+   * snapshot from a current `1.6` host the moment `1.7` opened - "10s-100s of
+   * MB" and "seconds of render-thread CPU per snapshot" by the shallow schema's
+   * own doc - and new-app-before-new-host is a routine pairing.
    */
-  private isOnLiveSchemaLine(): boolean {
+  private isOnLiveShapedSchemaLine(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
     return (
       version !== null &&
       version.major === chatSubscribeLiveSchemaVersion.major &&
-      version.minor === chatSubscribeLiveSchemaVersion.minor
+      version.minor >= CHAT_SUBSCRIBE_LIVE_SHAPED_MINOR
     );
   }
 
@@ -222,7 +248,7 @@ export class ChatStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (binaryPayload !== null) return;
-    if (envelope.kind === "snapshot" && this.isOnLiveSchemaLine()) {
+    if (envelope.kind === "snapshot" && this.isOnLiveShapedSchemaLine()) {
       // Snapshots are the one frame whose size scales with chat history
       // (10s-100s of MB under full-chat-on-subscribe); a deep zod parse over
       // the message/event histories is seconds of render-thread CPU per

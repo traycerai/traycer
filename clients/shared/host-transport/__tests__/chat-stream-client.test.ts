@@ -609,7 +609,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     client.close();
   });
 
-  it("takes the shallow parse path and passes a live (1.6) snapshot's message through structurally unchanged", () => {
+  it("takes the shallow parse path and passes a live (1.7) snapshot's message through structurally unchanged", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
 
@@ -623,7 +623,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     });
     // Default handshake echoes the client's own manifest verbatim, which
     // negotiates to the client's canonical chat.subscribe version - today
-    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:6}).
+    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:7}).
     completeHandshake(sockets[0]);
 
     sockets[0].fireText(
@@ -635,6 +635,41 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     // No deep parse ran, so no compatibility default filled the field: the
     // structural-only shallow schema hands the message through exactly as
     // sent, `imageResolutions` genuinely absent.
+    expect(assistant).not.toHaveProperty("imageResolutions");
+    expect(assistant).toMatchObject({ messageId: "assistant-1" });
+
+    client.close();
+  });
+
+  // Finding-3 regression. `1.6` is a RELEASED line that is not the live one, and
+  // it emits live-SHAPED frames (it shipped image support; it differs from `1.7`
+  // only in the harness enum, which changes no field's presence). Gating the
+  // shallow path on exact equality with `chatSubscribeLiveSchemaVersion` would
+  // silently deep-parse every snapshot from a current `1.6` host the moment
+  // `1.7` opened - "seconds of render-thread CPU per snapshot" by the shallow
+  // schema's own doc, on the routine new-app-before-new-host pairing.
+  it("still takes the shallow parse path against a released 1.6 host", () => {
+    const { factory, sockets } = makeFactory();
+    const deliveredMessages: unknown[] = [];
+
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks((frame) => {
+        deliveredMessages.push(...frame.snapshot.chat.messages);
+      }),
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+
+    sockets[0].fireText(
+      snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
+    );
+
+    expect(deliveredMessages).toHaveLength(1);
+    const [assistant] = deliveredMessages;
+    // Absent `imageResolutions` proves the SHALLOW path ran: the deep parse's
+    // compatibility default would have filled it in, as the 1.5 case above shows.
     expect(assistant).not.toHaveProperty("imageResolutions");
     expect(assistant).toMatchObject({ messageId: "assistant-1" });
 

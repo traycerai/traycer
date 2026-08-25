@@ -18,17 +18,22 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
+  chatEventSchemaPreReasonix,
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreReasonix,
   chatSchema,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
+  chatSchemaV16,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
+  userMessageSchemaPreReasonix,
   userMessageSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  userMessageSenderSchemaPreReasonix,
   type ChatEvent,
   type ChatRunSettings,
   type Message,
@@ -58,6 +63,7 @@ import {
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
   runtimeEventSchemaV12PreInReplyTo,
+  runtimeEventSchemaV16,
   runtimeInterviewAnswerSchema,
   runtimePlanActionSchema,
   type ImageResolutionUpdatedEvent,
@@ -68,7 +74,10 @@ export {
   type ChatQueueSteerMode,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { z } from "zod";
-import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreReasonix,
+} from "@traycer/protocol/host/agent/shared";
 import {
   worktreeBindingSchema,
   worktreeIntentSchema,
@@ -507,7 +516,9 @@ const chatQueuedItemSchemaPreInReplyTo = z.object({
   messageId: z.string(),
   message: userMessagePayloadSchema,
   sender: userMessageSenderSchemaPreInReplyTo,
-  settings: chatRunSettingsSchema,
+  // Pre-Reasonix freeze: a queued item's settings tuple carries the harness id
+  // the turn will run under, and released peers cannot decode `"reasonix"`.
+  settings: chatRunSettingsSchemaPreReasonix,
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
   delivery: chatQueueItemDeliverySchema.default("next_turn"),
   status: chatQueueItemStatusSchema.default("pending"),
@@ -540,8 +551,12 @@ const chatQueuedItemSchemaPreManagedCommand = z.object({
   queueItemId: z.string(),
   messageId: z.string(),
   message: userMessagePayloadSchema,
-  sender: userMessageSenderSchema,
-  settings: chatRunSettingsSchema,
+  // Pre-Reasonix freeze on BOTH leaves: an A2A queue item's sender carries the
+  // sending agent's harness id, and the settings tuple carries the harness the
+  // queued turn will run under. Released peers cannot decode `"reasonix"` in
+  // either position.
+  sender: userMessageSenderSchemaPreReasonix,
+  settings: chatRunSettingsSchemaPreReasonix,
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
   delivery: chatQueueItemDeliverySchema.default("next_turn"),
   status: chatQueueItemStatusSchema.default("pending"),
@@ -570,9 +585,14 @@ export const chatRunStatusSchema = z.enum(["idle", "running", "stopping"]);
 export type ChatRunStatus = z.infer<typeof chatRunStatusSchema>;
 
 // Frozen `chat.subscribe@1.0–1.4` active-turn shape (pre-`sameTurnSteeringSupported`).
-// The live shape below extends this with the `1.5` steering-capability field;
-// every released ≤1.4 line binds this frozen copy so the host strips the new
+// Every released ≤1.4 line binds this frozen copy so the host strips the newer
 // field for those subscribers (see `chat-frame-projection.ts`).
+//
+// `harnessId` is ALSO pinned to the pre-Reasonix enum here: ≤1.4 needs both
+// freezes, and the two later rungs re-widen exactly one field each -
+// `chatActiveTurnSchemaPreReasonix` adds the `1.5` steering flag (and serves
+// `1.5`/`1.6`), and the live `chatActiveTurnSchema` restores the full enum for
+// the `1.7` line.
 export const chatActiveTurnSchemaPreV15 = z.object({
   turnId: z.string(),
   status: z.enum([
@@ -584,7 +604,7 @@ export const chatActiveTurnSchemaPreV15 = z.object({
     "interrupted",
     "errored",
   ]),
-  harnessId: guiHarnessIdSchema,
+  harnessId: guiHarnessIdSchemaPreReasonix,
   model: z.string().min(1),
   // Reasoning effort + service tier the active turn is running with, mirrored
   // from its `ChatRunSettings` so the GUI can surface them per turn. `null`
@@ -612,13 +632,25 @@ export const chatActiveTurnSchemaPreV15 = z.object({
   updatedAt: z.number(),
 });
 
-export const chatActiveTurnSchema = chatActiveTurnSchemaPreV15.extend({
-  // Whether the running turn's harness supports same-turn steering (`chat.subscribe@1.5`).
-  // The renderer reads this to gate the Cmd+Enter steer behavior and its
-  // discovery hints instead of duplicating the host's capability table. Defaults
-  // to `false` so a ≤1.4 host (or a turn persisted before this field) parses as
-  // "not steer-capable" - a safe, hint-suppressing fallback.
-  sameTurnSteeringSupported: z.boolean().default(false),
+// Frozen `chat.subscribe@1.5` active-turn shape: the steering-capability field
+// that minor shipped, still on the pre-Reasonix harness enum. `1.5` is RELEASED,
+// so it cannot follow the live shape by reference - binding the live schema here
+// is exactly how `harnessId: "reasonix"` would reach an installed `1.5`/`1.6`
+// client whose strict enum rejects the whole frame.
+export const chatActiveTurnSchemaPreReasonix =
+  chatActiveTurnSchemaPreV15.extend({
+    // Whether the running turn's harness supports same-turn steering (`chat.subscribe@1.5`).
+    // The renderer reads this to gate the Cmd+Enter steer behavior and its
+    // discovery hints instead of duplicating the host's capability table. Defaults
+    // to `false` so a ≤1.4 host (or a turn persisted before this field) parses as
+    // "not steer-capable" - a safe, hint-suppressing fallback.
+    sameTurnSteeringSupported: z.boolean().default(false),
+  });
+
+// Live shape, bound only to the unreleased `1.7` line: re-widens `harnessId` to
+// the full enum so a Reasonix turn is expressible on the wire it ships with.
+export const chatActiveTurnSchema = chatActiveTurnSchemaPreReasonix.extend({
+  harnessId: guiHarnessIdSchema,
 });
 export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
 
@@ -856,7 +888,7 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
 // are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
 // pre-`inReplyTo` frozen chat-tree while the live line binds the current one;
 // `action` is parameterized because `actionAck` echoes the action-kind enum,
-// which grew on the unreleased `1.6` (`stopBackgroundSession`) after `1.5`
+// which grew on `1.6` (`stopBackgroundSession`) after `1.5`
 // shipped.
 // Everything else is byte-identical across live and frozen. Variant order is
 // preserved (the wire-compat differ matches union variants by `kind`, but
@@ -1027,7 +1059,9 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
     message: userMessageSchemaPreTurnTail,
     queue: chatQueueStateSchemaPreManagedCommand,
-    event: chatEventSchema,
+    // Pre-Reasonix event actor: an A2A chat event names the acting agent's
+    // harness, and `eventAppended` rides this released line.
+    event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV15,
   });
 
@@ -1590,7 +1624,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     messageId: z.string(),
     content: jsonContentSchema,
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreReasonix,
     accountContext: accountContextSchema,
     deliveryPolicy: chatQueueDeliveryPolicySchema.default("auto"),
     worktreeIntent: worktreeIntentSchemaV10.nullable().default(null),
@@ -1607,7 +1641,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     messageId: z.string(),
     content: jsonContentSchema,
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreReasonix,
     accountContext: accountContextSchema,
     revertFileChanges: z.boolean(),
     revertArtifacts: z.boolean().default(true),
@@ -1642,7 +1676,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("queueSteerNow"),
     ...ownerActionFrameFields,
     queueItemId: z.string(),
-    newSettings: chatRunSettingsSchema.nullable().default(null),
+    newSettings: chatRunSettingsSchemaPreReasonix.nullable().default(null),
   }),
   z.object({
     kind: z.literal("queueAbortSteer"),
@@ -1653,13 +1687,13 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("queueSettingsUpdate"),
     ...ownerActionFrameFields,
     queueItemId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreReasonix,
     accountContext: accountContextSchema,
   }),
   z.object({
     kind: z.literal("queueSettingsRestamp"),
     ...ownerActionFrameFields,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreReasonix,
     accountContext: accountContextSchema,
     excludeQueueItemId: z.string().nullable(),
   }),
@@ -1981,7 +2015,7 @@ const chatSnapshotSchemaV15 = z.object({
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreManagedCommand,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -2009,7 +2043,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV15 = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
   backgroundItems: z.array(backgroundItemSchemaV14ToV15).optional(),
   turnInProgress: z.boolean().optional(),
 });
@@ -2057,22 +2091,147 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // background-command stop capability (`individualStopUnavailable` on command
 // items, the `stopBackgroundSession` action) rides this same unreleased line.
 //
-// Those last two arrived on a `1.7` opened above a `1.6` that was itself
-// pinned to a hand-written pre-image bundle, so that the live schemas could
-// grow without mutating it. The release collapsed the two: no peer in the field
-// has ever negotiated `1.6` or `1.7` (the highest minor any released
-// `host-v*`/`cli-v*`/`desktop-v*` baseline carries is `1.5`), so a pre-image
-// that froze `1.6` against `1.7` froze it against nothing, and shipping both
-// minors would have announced two negotiable lines where one peer set exists.
+// Those last two arrived on an earlier `1.7` opened above a `1.6` that was
+// itself pinned to a hand-written pre-image bundle, so that the live schemas
+// could grow without mutating it. The release collapsed the two on the reading
+// that no peer in the field had negotiated either.
 //
-// This line is therefore bound to the LIVE schemas, and that is what makes the
-// freeze discipline start again cleanly: the moment `1.6` ships, or the moment
-// a `1.7` opens above it, whichever comes first, this line must be re-pinned to
-// a hand-written pre-image bundle the way `1.4` and `1.5` are above. The lines
-// below it are frozen precisely because they HAVE peers; this one does not yet.
+// HISTORICAL, and half of it was wrong: `1.6` DID ship. The committed
+// `released-baseline-surface.json` advertises `chat.subscribe` `latestMinor: 6`
+// with a nineteen-id harness enum, so `1.6` has peers and is frozen below. The
+// collapse's own stated trigger - "the moment `1.6` ships, or the moment a
+// `1.7` opens above it, this line must be re-pinned" - is what the freeze
+// immediately below discharges.
+// ─── Frozen `chat.subscribe@1.6` shape (pre-Reasonix) ──────────────────────
+//
+// The comment above described `1.6` as peerless and therefore safe to leave on
+// the live schemas, on the reading that no released baseline carried a minor
+// above `1.5`. That is not true: the committed
+// `released-baseline-surface.json` (synced by #1385, on `main`) advertises
+// `chat.subscribe` `latestMinor: 6` with a NINETEEN-id harness enum. A shipped
+// client can negotiate `1.6` and strict-decodes exactly those ids, so Reasonix
+// on this line is the same break as Reasonix on `1.5`.
+//
+// This is the re-pinning that comment asked for, on the trigger it named ("the
+// moment a `1.7` opens above it"). Every leaf below is a hand-frozen
+// pre-Reasonix copy of the LIVE shape - `1.6` shipped the full live surface, so
+// these freeze the harness enum ONLY, not the shape.
+const chatQueuedPromptItemSchemaV16 = z.object({
+  kind: z.literal("prompt").default("prompt"),
+  queueItemId: z.string(),
+  messageId: z.string(),
+  message: userMessagePayloadSchema,
+  sender: userMessageSenderSchemaPreReasonix,
+  settings: chatRunSettingsSchemaPreReasonix,
+  accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
+  delivery: chatQueueItemDeliverySchema.default("next_turn"),
+  status: chatQueueItemStatusSchema.default("pending"),
+  targetTurnId: z.string().nullable().default(null),
+  steerRequest: chatQueueSteerRequestSchema.nullable().default(null),
+  fallbackReason: z.string().nullable().default(null),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+// Same `z.union` (not `discriminatedUnion`) ordering rationale as the live
+// `chatQueuedItemSchema`: managed-command arm first, legacy no-`kind` payloads
+// fall through to the defaulted prompt arm.
+const chatQueuedItemSchemaV16 = z.union([
+  chatQueuedManagedCommandItemSchema,
+  chatQueuedPromptItemSchemaV16,
+]);
+
+const chatQueueStateSchemaV16 = z.object({
+  status: z.enum(["idle", "running", "paused"]),
+  items: z.array(chatQueuedItemSchemaV16),
+});
+
+const chatSnapshotSchemaV16 = z.object({
+  chat: chatSchemaV16,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchemaV16,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16,
+});
+
+const chatSubscribeTurnStateChangedServerFrameSchemaV16 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchemaPreReasonix.nullable(),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeCommonServerFrameSchemasV16 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchemaPreReasonix,
+    queue: chatQueueStateSchemaV16,
+    event: chatEventSchemaPreReasonix,
+    action: chatActionSchema,
+  });
+
+const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV16,
+  chatSubscribeTurnStateChangedServerFrameSchemaV16,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV16,
+  blockDeltaServerFrameSchema(runtimeEventSchemaV16),
+]);
+
+// `clientFrameSchema` is DELIBERATELY the live union, unlike the frozen
+// serverFrame above. `1.6`'s action set is identical to the live one - diffing
+// its clientFrame against the released baseline shows only the deliberate
+// `reasonix` enum add - so nothing is unrepresentable today, and the enum grows
+// on a client→HOST slot, where a wider host is the safe direction.
+//
+// It is not free, though, and the compat checker cannot catch the regression:
+// its oracle only guards host→client additions, so a new action appended to
+// `chatSubscribeClientFrameSchemaOptions` would silently join this released
+// line and let a stale or crafted `1.6` peer dispatch it. That is exactly why
+// `chatSubscribeClientFrameSchemaV14ToV15` exists below.
+//
+// THEREFORE: the next action added to the live client frame must pin `1.6` to
+// its own frozen option list FIRST. Doing that today means naming the five
+// settings-bearing frames, which the positional destructure above
+// (`const [, deleteMessageSuffixClientFrameSchema, , ...rest] = …`) currently
+// leaves anonymous.
 export const chatSubscribeV16 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV16,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.7` ─────────────────────────────────────────────
+//
+// The line Reasonix rides. Opened because `1.6` turned out to be released (see
+// the freeze note above), so the harness enum could not grow on it. This line
+// is bound to the LIVE schemas; the moment it ships, it must be re-pinned to a
+// hand-written pre-`<next>` bundle exactly the way `1.6` just was.
+export const chatSubscribeV17 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
@@ -2084,4 +2243,4 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
  * doc for why any down-negotiated line must take the deep parse instead.
  */
-export const chatSubscribeLiveSchemaVersion = chatSubscribeV16.schemaVersion;
+export const chatSubscribeLiveSchemaVersion = chatSubscribeV17.schemaVersion;

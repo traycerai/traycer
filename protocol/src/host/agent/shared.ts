@@ -73,6 +73,46 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
 /**
+ * Frozen harness id set as the released `chat.subscribe@1.0–1.6` lines shipped
+ * it - i.e. everything before Reasonix, which first rides `1.7`. (`1.6` looked
+ * unreleased and is not: the committed released-baseline surface advertises it
+ * with exactly these nineteen ids.) Bound by the wire-freeze copies of every released server-frame schema
+ * that carries a harness id (runtime session/plan events, the active turn); a
+ * newer host must not project an id an installed older client's strict enum
+ * cannot decode.
+ *
+ * Deliberately NOT aliased to `guiHarnessIdSchemaV70`, even though the two sets
+ * coincide today: that one pins the `agent.*` RPC **major/minor** axis, this one
+ * pins the `chat.subscribe` **minor** axis. They are independent, and a future
+ * harness admitted to one line but frozen off the other would silently break
+ * whichever schema borrowed the wrong copy. Do NOT add new harnesses here.
+ */
+export const guiHarnessIdSchemaPreReasonix = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdPreReasonix = z.infer<
+  typeof guiHarnessIdSchemaPreReasonix
+>;
+
+/**
  * Frozen harness id set as shipped in protocol v1.0. Used only by the frozen
  * v1.0 response schema of `agent.gui.listHarnesses` so a v1.0 client (which
  * predates the ACP GUI harnesses) negotiates a wire that can never carry them;

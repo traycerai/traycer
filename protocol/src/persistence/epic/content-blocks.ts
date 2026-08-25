@@ -1,7 +1,10 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  userMessageSenderSchema,
+  userMessageSenderSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import {
   imageByteLengthSchema,
@@ -55,6 +58,33 @@ const harnessIdSchema = getRecordSchema(
   "harness-id",
   "latest",
 );
+
+// Frozen pre-Reasonix copy of the canonical harness enum, for the three block
+// members that carry a harness id onto a released `chat.subscribe` line (see
+// `contentBlockSchemaPreReasonix`). Derived with `.extract()` off the live enum
+// rather than re-spelled, so adding a vendor to the canonical list without
+// deciding its freeze story is a compile error here. Do NOT add new harnesses.
+const harnessIdSchemaPreReasonix = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
 
 // Canonical artifact-kind vocabulary (spec / ticket / story / review), shared
 // with the artifact metadata + tombstone schemas and the GUI node registries.
@@ -427,7 +457,7 @@ export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 // Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
 // existed (`chat.subscribe@1.0-1.5`). Bound (via the frozen content-block
 // union below) to every released `chat.subscribe` minor so those lines can
-// never observe image data - see `contentBlockSchemaPreImage`. Hand-frozen,
+// never observe image data - see `contentBlockSchemaPreReasonix`. Hand-frozen,
 // NOT derived from the live shape via `.omit()`, so a future field added to
 // the live block cannot silently leak onto a released wire line.
 export const toolCallBlockSchemaPreImage = z.object({
@@ -1078,8 +1108,110 @@ export type ContentBlock = z.infer<typeof contentBlockSchema>;
 // released `chat.subscribe@1.0-1.5` minor so those lines structurally match
 // the shipped wire and can never observe `imageResults`. Every other member
 // reuses the live sub-schema (same convention as `messageSchemaPreInReplyTo`).
-export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
-  textBlockSchema,
+
+// ── Wire-freeze variants (pre-Reasonix) ─────────────────────────────────────
+// Three block members reach the harness enum, and every released
+// `chat.subscribe@1.0–1.5` line carries all three through the assistant
+// message's `blocks` array. Unlike `activeTurn`/`settings`, these ride the
+// PERSISTED tree, so they are permanent: once a Reasonix chat has one assistant
+// row, an un-frozen released line can never decode its snapshot again.
+//
+// Field-for-field hand copies, NOT `.extend()` off the live shapes - a future
+// block field must not silently leak onto a released wire line.
+const planSourceSchemaPreReasonix = z.object({
+  harnessId: harnessIdSchemaPreReasonix,
+  sessionId: z.string().nullable().default(null),
+  turnId: z.string().nullable().default(null),
+  kind: z.string(),
+});
+
+const planBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("plan"),
+  planStatus: planStatusSchema,
+  planId: z.string(),
+  harnessId: harnessIdSchemaPreReasonix,
+  source: planSourceSchemaPreReasonix,
+  title: z.string().nullable().default(null),
+  summary: z.string().nullable().default(null),
+  markdownPreview: z.string().default(""),
+  fullContentRef: planContentRefSchema.nullable().default(null),
+  steps: z.array(planStepSchema).default([]),
+  actions: z.array(planActionSchema).default([]),
+  approvalId: z.string().nullable().default(null),
+  supersededByPlanId: z.string().nullable().default(null),
+  metadata: z.record(z.string(), z.unknown()).nullable().default(null),
+});
+
+export const providerNoticeMetadataSchemaPreReasonix = z
+  .object({
+    harnessId: harnessIdSchemaPreReasonix,
+    noticeKind: providerNoticeKindSchema,
+    tone: providerNoticeToneSchema,
+    title: z.string(),
+    message: z.string().nullable(),
+    details: z.array(providerNoticeDetailSchema),
+    metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  })
+  .superRefine((notice, ctx) => {
+    if (
+      notice.metadata !== null &&
+      notice.noticeKind !== notice.metadata.type
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["metadata", "type"],
+        message: "providerNotice.metadata.type must match noticeKind.",
+      });
+    }
+  });
+
+const textBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("text"),
+  text: z.string(),
+  providerNotice: providerNoticeMetadataSchemaPreReasonix
+    .nullable()
+    .default(null),
+});
+
+const steerBlockSchemaPreReasonix = z.object({
+  ...baseBlockFields,
+  type: z.literal("steer"),
+  queueItemId: z.string(),
+  messageId: z.string(),
+  content: jsonContentSchema,
+  mode: z.enum(["safe_point", "interrupt_restart"]).default("safe_point"),
+  sender: userMessageSenderSchemaPreReasonix.nullable().default(null),
+});
+
+// Bound to every released `chat.subscribe@1.0–1.5` assistant message (through
+// both `assistantMessageSchemaPreInReplyTo` and `assistantMessageSchemaPreImage`).
+// `toolCallBlockSchemaPreImage` is kept because every line this serves also
+// predates image support; the three swapped members are the harness-bearing ones.
+// The `1.6` counterpart: the LIVE block union (image-bearing `tool_call`) with
+// the same three harness-bearing members swapped for their pre-Reasonix copies.
+// `1.6` shipped after image support, so it must keep `toolCallBlockSchema`.
+export const contentBlockSchemaPreReasonixLive = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchemaPreReasonix,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchema,
+  steerBlockSchemaPreReasonix,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);
+
+export const contentBlockSchemaPreReasonix = z.discriminatedUnion("type", [
+  textBlockSchemaPreReasonix,
   reasoningBlockSchema,
   toolCallBlockSchemaPreImage,
   fileChangeBlockSchema,
@@ -1087,11 +1219,11 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
   subAgentBlockSchema,
   approvalBlockSchema,
   todoBlockSchema,
-  planBlockSchema,
+  planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
   autonomousResumeBlockSchema,
-  steerBlockSchema,
+  steerBlockSchemaPreReasonix,
   interviewBlockSchema,
   artifactOperationBlockSchema,
 ]);
