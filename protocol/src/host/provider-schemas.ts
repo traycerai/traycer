@@ -228,6 +228,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   hermes: "Hermes Agent",
   omp: "Oh My Pi",
   huggingface: "Hugging Face",
+  reasonix: "Reasonix",
 };
 
 /**
@@ -688,6 +689,44 @@ export const providerManagedVersionsSchema = z.object({
 });
 export type ProviderManagedVersions = z.infer<
   typeof providerManagedVersionsSchema
+>;
+
+/**
+ * Frozen `providers.list@7.x` version-manager state: identical to the live
+ * schema except `sharedWithProviders` is pinned to `providerIdSchemaV70`.
+ *
+ * This is the sub-schema freeze the `frozen-catalog-lines` fixture's own
+ * instructions call for, and it is the second half of the v7.0 response
+ * freeze. `providerCliStateBaseShapeV70` pins v7.0's KEY SET but deliberately
+ * keeps live references for its leaf schemas, so the id enum reached the
+ * already-released v7.0 wire THROUGH this one array - a host→client enum
+ * addition at a released version, which the compat gate scores `breaking`.
+ * Adding `reasonix` is what surfaced it: the deep dump went red on
+ * `managedVersions.anyOf`, exactly as that fixture's comment predicted, and
+ * the answer it prescribes is this freeze rather than a regenerate-to-green.
+ *
+ * The blast radius was real but narrow, which is worth stating so the next
+ * reader does not conclude the freeze was ceremonial: `sharedWithProviders`
+ * carries `.catch([])`, so a v7.0 client handed an unknown id degrades the
+ * label to "shared with nobody" rather than throwing. Reasonix also ships its
+ * own binary and joins no shared pack, so it can never actually appear here.
+ * Neither fact is a reason to leave a released line tracking a growing enum -
+ * the next id added may well be pack-sharing, and `.catch()` tolerance is
+ * parse-time hardening, not a versioning mechanism.
+ *
+ * Do NOT widen this schema; extend the live one and let the next major
+ * publish it.
+ */
+export const providerManagedVersionsSchemaV70 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  sharedWithProviders: z.array(providerIdSchemaV70).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+export type ProviderManagedVersionsV70 = z.infer<
+  typeof providerManagedVersionsSchemaV70
 >;
 
 /**
@@ -1940,7 +1979,11 @@ const providerCliStateBaseShapeV70 = {
   advisory: providerAdvisorySchema.nullable().catch(null).optional(),
   cliBinaryResolved: z.boolean().catch(true).optional(),
   packId: z.string().nullable().catch(null).optional(),
-  managedVersions: providerManagedVersionsSchema
+  // The ONE leaf this shape does not keep live - see
+  // `providerManagedVersionsSchemaV70`. Its `sharedWithProviders` array is a
+  // host→client `providerId` enum, so leaving it live let every id added after
+  // v7.0 shipped reach an already-released wire through this key.
+  managedVersions: providerManagedVersionsSchemaV70
     .nullable()
     .catch(null)
     .optional(),
@@ -1967,6 +2010,50 @@ export const providersListResponseSchemaV70 = z.object({
 });
 export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
+>;
+
+// ── Frozen `providers.list@7.1` provider state + list response (pre-Reasonix)
+//
+// v7.1 is where the auth-aware enablement fields formally enter the major-7
+// line. It is frozen here at the v7.0 PROVIDER ID SET even though no tag has
+// shipped 7.1 yet, and that is the load-bearing part: a minor may not GROW A
+// RESPONSE ENUM over its predecessor - `versioned-rpc.ts`'s
+// projection-feasibility check refuses it outright - and v7.0 IS released, so
+// no minor of major 7 can ever carry a provider id v7.0 lacks. Reasonix
+// therefore opens 8.0 rather than riding 7.1.
+//
+// The refusal is protecting a real failure, not a formality. A 7.0 peer
+// receives a 7.1 response through a within-major re-parse, which STRIPS
+// unknown keys but REJECTS an unknown enum value - so a Reasonix ROW on 7.1
+// would not degrade to "one provider missing", it would fail the whole
+// `providers.list` response and empty that peer's provider list. Only a
+// cross-major bridge can filter rows.
+//
+// Same key-set-only discipline as `providerCliStateBaseShapeV70` above: the
+// leaf schemas stay live references and the deep `frozen-catalog-lines`
+// snapshot is what catches growth inside them.
+const providerCliStateBaseShapeV71 = {
+  ...providerCliStateBaseShapeV70,
+  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
+  enablementSource: providerEnablementSourceSchema.optional().catch(undefined),
+};
+
+export const providerCliStateSchemaV71 = z.object({
+  providerId: providerIdSchemaV70,
+  ...providerCliStateBaseShapeV71,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV71 = z.infer<typeof providerCliStateSchemaV71>;
+
+export const providersListResponseSchemaV71 = z.object({
+  providers: z.array(providerCliStateSchemaV71),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV71 = z.infer<
+  typeof providersListResponseSchemaV71
 >;
 
 // Frozen protocol-v1.0 provider state + list response. The v2.0 line of
@@ -3518,6 +3605,27 @@ export function downgradeProviderCliStateListToV60(
 ): ProviderCliStateV60[] {
   return states.flatMap((state) => {
     const parsed = providerCliStateSchemaV60.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Same filter-by-reparse as `downgradeProviderCliStateListToV60`, one line up:
+ * drops rows whose `providerId` is not in the frozen v7.0 enum (`reasonix`
+ * today) so a major-7 caller's strict decode never sees one.
+ *
+ * There is nothing to STRIP here - v7.1 and the live shape carry the same keys
+ * at this cut - but the filter still has to exist. A straight pass-through
+ * throws the whole response away on the first Reasonix row rather than losing
+ * one provider, which is exactly the latent bug the `…ToV60` helper was written
+ * to fix for `huggingface` (that bridge passed the array through unfiltered
+ * until #1011).
+ */
+export function downgradeProviderCliStateListToV71(
+  states: readonly unknown[],
+): ProviderCliStateV71[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV71.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

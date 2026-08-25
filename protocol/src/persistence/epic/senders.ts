@@ -447,6 +447,23 @@ export type HuggingFaceChatSessionAnchor = z.infer<
   typeof huggingFaceChatSessionAnchorSchema
 >;
 
+// Reasonix (`reasonix acp`) resumes at session granularity only — `session/load`
+// reloads the whole ACP session and there is no per-message truncation/fork
+// point (`session/fork` is genuinely absent: it answers `-32601`) — so the
+// anchor carries just the ACP session id. `sessionId` is that ACP session id.
+export const reasonixChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("reasonix"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type ReasonixChatSessionAnchor = z.infer<
+  typeof reasonixChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -467,6 +484,7 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   hermesChatSessionAnchorSchema,
   ompChatSessionAnchorSchema,
   huggingFaceChatSessionAnchorSchema,
+  reasonixChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
 

@@ -387,6 +387,41 @@ export const listGuiHarnessesResponseSchemaV70 = z.object({
 export type ListGuiHarnessesResponseV70 = z.infer<
   typeof listGuiHarnessesResponseSchemaV70
 >;
+
+// ── Frozen protocol-v7.1 catalog row + response (pre-Reasonix) ─────────────
+// 7.1 is where `authStatus` / `enablementMode` formally enter the major-7 line.
+// It is frozen here at the v7.0 ID SET even though no tag has shipped 7.1 yet,
+// which is the part worth stating: a minor may not GROW A RESPONSE ENUM over
+// its predecessor (`versioned-rpc.ts`'s projection-feasibility check refuses
+// it), and 7.0 IS released, so no minor of major 7 can ever carry a harness id
+// 7.0 does not. Reasonix therefore opens 8.0 rather than riding 7.1, exactly as
+// it would if 7.1 were released.
+//
+// That refusal is the whole safety property here. A 7.0 peer receives a 7.1
+// response through a within-major re-parse, which STRIPS unknown keys but
+// REJECTS an unknown enum value - so a Reasonix row on 7.1 would not degrade,
+// it would fail the entire `listHarnesses` response and empty that peer's
+// picker. Only a cross-major bridge can filter rows.
+//
+// Do NOT add fields or ids here; add fields to `guiHarnessOptionSchema` above,
+// which only v8.0 (the head line) binds.
+const guiHarnessOptionBaseShapeV71 = {
+  ...guiHarnessOptionBaseShapeV70,
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
+};
+
+export const guiHarnessOptionSchemaV71 = z.object({
+  id: guiHarnessIdSchemaV70,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV71 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV71),
+});
+export type ListGuiHarnessesResponseV71 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV71
+>;
+
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema
 >;

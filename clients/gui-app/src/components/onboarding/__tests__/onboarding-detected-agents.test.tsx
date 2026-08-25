@@ -180,6 +180,7 @@ describe("OnboardingDetectedAgents", () => {
       "Pi",
       "Hermes Agent",
       "Oh My Pi",
+      "Reasonix",
     ];
     const textOrEmpty = (text: string | null): string => text ?? "";
     // Longest match, not first match: display names overlap ("Pi" is a

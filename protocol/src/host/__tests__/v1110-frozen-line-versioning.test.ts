@@ -159,7 +159,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     for (const major of RELEASED_REQUEST_MAJORS) {
       const down = downgradeRequestAcrossMajors(
         providersListRegistry,
-        7,
+        8,
         major,
         canonical,
       );
@@ -256,7 +256,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
     });
     const down = downgradeResponseAcrossMajors(
       providersListRegistry,
-      7,
+      8,
       6,
       canonicalResponse,
     );

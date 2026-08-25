@@ -68,6 +68,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "hermes",
   "omp",
   "huggingface",
+  "reasonix",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -380,6 +381,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "hermes",
   "omp",
   "huggingface",
+  "reasonix",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -904,6 +906,29 @@ export const listAgentsResponseSchemaV60 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV60),
 });
 export type ListAgentsResponseV60 = z.infer<typeof listAgentsResponseSchemaV60>;
+
+// ── Frozen protocol-v7.0 agent.list response (with Hugging Face, pre-Reasonix)
+// `agent.list` enumerates every agent in the epic - including Reasonix GUI
+// harness chats a newer client created - so an already-shipped v7.0 client
+// would hit a strict enum on those rows. This line IS released (`cli-v1.2.0` /
+// `host-v1.2.0`, both tagged 2026-08-24), so it is frozen here as actually
+// shipped; the v8.0 line carries Reasonix rows and v8→v7 … v8→v1 bridges drop
+// them for older callers. Do not add new harnesses here - use the existing v8
+// bridge.
+//
+// The row body is hand-frozen off `releasedAgentSummarySchema` plus the
+// `runConfig` field v7.0 shipped, rather than `agentSummarySchema.extend(...)`:
+// pinning only the id over a LIVE body is the half-freeze
+// `guiHarnessOptionBaseShapeV70` had to correct in `gui/unary-schemas.ts`. A
+// field added to `agentSummarySchema` must not widen this released line.
+export const agentSummarySchemaV70 = releasedAgentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV70.nullable(),
+  runConfig: agentRunConfigSchema.nullable().default(null),
+});
+export const listAgentsResponseSchemaV70 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV70),
+});
+export type ListAgentsResponseV70 = z.infer<typeof listAgentsResponseSchemaV70>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to

@@ -573,18 +573,20 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
-    // list/configure and rate-limit reads all sit on the v4.0 line: the
-    // OpenCode arm and credentialGeneration ride major 4 rather than a
-    // separate 5, since 4 has never shipped.
+    // All three now sit on the v5.0 line. Major 4 DID ship - the v1.2.0 tags
+    // (2026-08-24) carry it - so the sentence this comment used to end with
+    // ("since 4 has never shipped") stopped being true, and with it the reason
+    // these three could keep absorbing ids in place. `reasonix` opened major 5
+    // on each, with fail-closed v5->v4 bridges.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 4,
+      major: 5,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 4, minor: 0 });
+    ).toEqual({ major: 5, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 4,
+      major: 5,
       minor: 0,
     });
   });
