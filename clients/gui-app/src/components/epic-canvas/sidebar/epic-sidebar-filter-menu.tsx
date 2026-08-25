@@ -6,14 +6,7 @@
  * Radix submenus. When there is not enough room for two menu columns, the same
  * root drills into a detail page with Back instead of flipping left.
  */
-import {
-  ArrowDownWideNarrow,
-  ArrowUpNarrowWide,
-  ChevronLeft,
-  ChevronRight,
-  ListFilter,
-  RotateCcw,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight, ListFilter, RotateCcw } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
@@ -42,13 +35,15 @@ import {
 import {
   ARTIFACT_SORT_FIELDS,
   CHAT_SORT_FIELDS,
-  DEFAULT_SORT_MODE,
-  SORT_DIRECTION,
-  SORT_FIELD_LABELS,
   type SortField,
   type SortMode,
 } from "@/lib/epic-sort";
 import { STATUS_DOT_CLASSES, STATUS_LABELS } from "./epic-sidebar-tree-shared";
+import {
+  OrderingDetail,
+  ViewMenuBadge,
+} from "./epic-sidebar-view-menu-details";
+import { sortSummary, viewTriggerLabel } from "./epic-sidebar-view-menu-shared";
 import {
   ARTIFACT_READ,
   ARTIFACT_STATUS,
@@ -231,7 +226,6 @@ function ViewMenuTrigger(props: {
   readonly setTriggerElement: (element: HTMLButtonElement | null) => void;
 }) {
   const { filterCount, label, setTriggerElement } = props;
-  const badge = filterCount > 9 ? "9+" : String(filterCount);
   return (
     <TooltipWrapper
       label={label}
@@ -249,39 +243,11 @@ function ViewMenuTrigger(props: {
           className="relative shrink-0 text-muted-foreground transition-colors hover:text-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground"
         >
           <ListFilter className="size-4" />
-          {filterCount > 0 ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-foreground px-0.5 text-[9px] leading-none font-semibold text-background ring-1 ring-background"
-            >
-              {badge}
-            </span>
-          ) : null}
+          <ViewMenuBadge filterCount={filterCount} />
         </Button>
       </DropdownMenuTrigger>
     </TooltipWrapper>
   );
-}
-
-function viewTriggerLabel(args: {
-  readonly base: string;
-  readonly filterCount: number;
-  readonly sort: SortMode;
-  readonly showChanged: boolean;
-}): string {
-  const details: string[] = [];
-  if (args.filterCount > 0) {
-    details.push(
-      `${args.filterCount} ${args.filterCount === 1 ? "filter" : "filters"} active`,
-    );
-  }
-  if (isSortModeActive(args.sort)) {
-    details.push(`ordered by ${SORT_FIELD_LABELS[args.sort.field]}`);
-  }
-  if (args.showChanged) details.push("visibility changed");
-  return details.length === 0
-    ? args.base
-    : `${args.base}, ${details.join(", ")}`;
 }
 
 function ViewDetailEntry<TDetail extends string>(props: {
@@ -354,89 +320,6 @@ function DrillInHeader(props: {
       <DropdownMenuSeparator />
     </>
   );
-}
-
-function OrderingDetail(props: {
-  readonly fields: ReadonlyArray<SortField>;
-  readonly sort: SortMode;
-  readonly onFieldChange: (field: SortField) => void;
-  readonly onToggleDirection: () => void;
-}) {
-  const resetOrdering = (): void => {
-    props.onFieldChange(DEFAULT_SORT_MODE.field);
-    if (props.sort.direction !== DEFAULT_SORT_MODE.direction) {
-      props.onToggleDirection();
-    }
-  };
-  return (
-    <>
-      <DropdownMenuLabel>Order by</DropdownMenuLabel>
-      <DropdownMenuRadioGroup
-        value={props.sort.field}
-        onValueChange={(next) => {
-          const match = props.fields.find((field) => field === next);
-          if (match !== undefined) props.onFieldChange(match);
-        }}
-      >
-        {props.fields.map((field) => (
-          <DropdownMenuRadioItem
-            key={field}
-            value={field}
-            onSelect={(event) => event.preventDefault()}
-          >
-            {SORT_FIELD_LABELS[field]}
-          </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator />
-      <DropdownMenuRadioGroup value={props.sort.direction}>
-        <DropdownMenuRadioItem
-          value={SORT_DIRECTION.Desc}
-          onSelect={(event) => {
-            event.preventDefault();
-            if (props.sort.direction !== SORT_DIRECTION.Desc) {
-              props.onToggleDirection();
-            }
-          }}
-        >
-          <ArrowDownWideNarrow className="size-4" />
-          Descending
-        </DropdownMenuRadioItem>
-        <DropdownMenuRadioItem
-          value={SORT_DIRECTION.Asc}
-          onSelect={(event) => {
-            event.preventDefault();
-            if (props.sort.direction !== SORT_DIRECTION.Asc) {
-              props.onToggleDirection();
-            }
-          }}
-        >
-          <ArrowUpNarrowWide className="size-4" />
-          Ascending
-        </DropdownMenuRadioItem>
-      </DropdownMenuRadioGroup>
-      {isSortModeActive(props.sort) ? (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(event) => {
-              event.preventDefault();
-              resetOrdering();
-            }}
-          >
-            <RotateCcw className="size-4" />
-            Reset ordering
-          </DropdownMenuItem>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-function sortSummary(sort: SortMode): string {
-  return `${SORT_FIELD_LABELS[sort.field]} ${
-    sort.direction === SORT_DIRECTION.Asc ? "↑" : "↓"
-  }`;
 }
 
 function selectedSummary(labels: readonly string[]): string {

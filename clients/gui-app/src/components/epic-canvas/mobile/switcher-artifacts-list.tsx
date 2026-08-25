@@ -9,6 +9,8 @@ import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row
 import { SwitcherNewArtifactMenu } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { SwitcherArtifactsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
+import { useArtifactSort } from "@/stores/epics/left-panel-store";
 import {
   useEpicArtifactRecords,
   useEpicPermissionRole,
@@ -52,7 +54,10 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
       ),
     [records],
   );
-  const artifacts = useOrderedSwitcherRecords(filtered);
+  const artifacts = useOrderedSwitcherRecords(
+    filtered,
+    useArtifactSort(epicId),
+  );
   const canMutate = isEditableRole(useEpicPermissionRole());
 
   return (
@@ -67,6 +72,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
             />
           ) : null
         }
+        viewMenu={<SwitcherArtifactsViewMenu epicId={epicId} />}
       />
       {artifacts.length === 0 ? (
         <SwitcherListEmpty message="No artifacts yet." />
