@@ -817,6 +817,10 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         sessionId: "session-first",
       });
     });
+    // Counted, not just matched: `toHaveBeenCalledWith` passes on a duplicate,
+    // and one gesture sending two kills is the thing the shared close boundary
+    // exists to prevent.
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
 
     // Host stays drainable throughout - only the tombstone set changes.
     act(() => {
@@ -837,6 +841,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         sessionId: "session-second",
       });
     });
+    // One dispatch per tombstone - the first close is not re-sent.
+    expect(mocks.kill).toHaveBeenCalledTimes(2);
   });
 
   it("rescopes probes when settlement flips without the directory rows changing", async () => {
