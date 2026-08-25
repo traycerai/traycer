@@ -42,4 +42,40 @@ describe("chat expansion stores", () => {
 
     expect(store.getState().forcedKeyIds.size).toBe(0);
   });
+
+  it("tracks one tile-scoped active find target and clears only its own key", () => {
+    const store = createChatFindForceStore();
+    const interviewKey = createChatCollapsibleKey(
+      "tile-a",
+      "interview",
+      "interview-1",
+    );
+    const otherKey = createChatCollapsibleKey(
+      "tile-a",
+      "interview",
+      "interview-2",
+    );
+
+    store.getState().setActiveTarget({ key: interviewKey, unitId: "unit-q2" });
+
+    expect(store.getState().activeTarget).toEqual({
+      key: interviewKey,
+      unitId: "unit-q2",
+    });
+    store.getState().clearActiveTarget(otherKey);
+    expect(store.getState().activeTarget?.unitId).toBe("unit-q2");
+
+    store.getState().setActiveTarget({ key: interviewKey, unitId: "unit-q3" });
+    expect(store.getState().activeTarget?.unitId).toBe("unit-q3");
+    store.getState().clearActiveTarget(interviewKey);
+    expect(store.getState().activeTarget).toBeNull();
+
+    store.getState().reconcileActiveTarget({
+      key: interviewKey,
+      unitId: "unit-q3",
+    });
+    expect(store.getState().activeTarget).toBeNull();
+    store.getState().setActiveTarget({ key: interviewKey, unitId: "unit-q3" });
+    expect(store.getState().activeTarget?.unitId).toBe("unit-q3");
+  });
 });

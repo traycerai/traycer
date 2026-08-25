@@ -99,7 +99,17 @@ export interface ChatActions {
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
   ) => string | null;
-  readonly interviewError: (blockId: string, reason: string) => string | null;
+  readonly interviewSkip: (
+    blockId: string,
+    reason: string,
+    draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+  ) => string | null;
+  readonly interviewDeliveryRetry: (identity: {
+    readonly blockId: string;
+    readonly settlementId: string;
+    readonly deliveryId: string;
+    readonly generation: number;
+  }) => string | null;
   readonly ackFailedSendRestoration: (clientActionId: string) => void;
   readonly ackAcceptedAction: (clientActionId: string) => void;
   readonly takeSetupFailedRestoration: (
@@ -282,8 +292,10 @@ export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
             });
           },
         ),
-      interviewError: (blockId, reason) =>
-        handle.store.getState().interviewError(blockId, reason),
+      interviewSkip: (blockId, reason, draftAnswers) =>
+        handle.store.getState().interviewSkip(blockId, reason, draftAnswers),
+      interviewDeliveryRetry: (identity) =>
+        handle.store.getState().interviewDeliveryRetry(identity),
       ackFailedSendRestoration: (clientActionId) =>
         handle.store.getState().ackFailedSendRestoration(clientActionId),
       ackAcceptedAction: (clientActionId) =>

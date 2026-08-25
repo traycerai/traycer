@@ -125,7 +125,10 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 type ChatStreamClientHandle = Pick<
   ChatStreamClient,
   "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
->;
+> &
+  Partial<
+    Pick<ChatStreamClient, "interviewSettlementActionsProtocolSupported">
+  >;
 
 export type ChatStreamClientFactory = (
   epicId: string,
@@ -183,6 +186,18 @@ export interface PendingUserMessage {
   readonly restoreWorktreeIntent: WorktreeIntent | null;
 }
 
+/**
+ * The durable outbox tuple a retry may requeue. `generation` is renderer-only
+ * reconciliation state: the wire contract names the stable delivery id, while
+ * this value proves a later host projection superseded the attempted retry.
+ */
+export interface InterviewDeliveryRetryIdentity {
+  readonly blockId: string;
+  readonly settlementId: string;
+  readonly deliveryId: string;
+  readonly generation: number;
+}
+
 export interface PendingChatAction {
   readonly clientActionId: string;
   readonly action: ChatOwnerActionFrame["kind"];
@@ -191,6 +206,8 @@ export interface PendingChatAction {
   // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
   // interviews, and lets lifecycle resolution drop this block's stale actions.
   readonly interviewBlockId: string | null;
+  /** Immutable retry identity; null for all non-delivery-retry actions. */
+  readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
   readonly restoreContent: JsonContent | null;
   readonly sender: UserMessageSender | null;
@@ -313,6 +330,7 @@ export interface AcceptedChatAction {
   // unresolved interview answer/skip keeps gating its card. `null` for every
   // non-interview action.
   readonly interviewBlockId: string | null;
+  readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
   readonly acceptedAt: number;
   /**
@@ -497,6 +515,8 @@ export interface ChatSessionState {
    * the plain-Enter queue alias until steer support is confirmed.
    */
   readonly steerProtocolSupported: boolean;
+  /** `chat.subscribe@1.7` support for detached interview delivery retries. */
+  readonly interviewDeliveryRetryProtocolSupported: boolean;
   /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
@@ -748,7 +768,14 @@ export interface ChatSessionState {
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
   ) => string | null;
-  interviewError: (blockId: string, reason: string) => string | null;
+  interviewSkip: (
+    blockId: string,
+    reason: string,
+    draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+  ) => string | null;
+  interviewDeliveryRetry: (
+    identity: InterviewDeliveryRetryIdentity,
+  ) => string | null;
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
   /**
@@ -1671,7 +1698,18 @@ export function createChatSessionStoreWithNotificationDependencies(
           }
           merged = { ...merged, ...partial };
         }
-        return merged;
+        const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
+          merged.pendingActions,
+          merged.messages,
+        );
+        const acceptedActions = withoutSupersededInterviewDeliveryRetryActions(
+          merged.acceptedActions,
+          merged.messages,
+        );
+        return pendingActions === merged.pendingActions &&
+          acceptedActions === merged.acceptedActions
+          ? merged
+          : { ...merged, pendingActions, acceptedActions };
       });
     };
 
@@ -1803,6 +1841,33 @@ export function createChatSessionStoreWithNotificationDependencies(
           );
           restoredWorktreeIntentForSnapshot =
             settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
+          const pendingActions = withoutSupersededInterviewDeliveryRetryActions(
+            pending.pendingActions,
+            messages,
+          );
+          const acceptedActions =
+            withoutSupersededInterviewDeliveryRetryActions(
+              pruneAcceptedActions(
+                {
+                  ...withoutSettledAcceptedActions(
+                    state.acceptedActions,
+                    // BOTH passes retire records: the snapshot pass for sends it
+                    // settled itself, the settled pass for rows it recovered.
+                    new Set([
+                      ...pending.settledAcceptedActionIds,
+                      ...settled.settledAcceptedActionIds,
+                    ]),
+                  ),
+                  // Confirmation stamps first, then this pass's own additions -
+                  // an id cannot be in both, but ordering the merge makes that
+                  // independent of whether it ever could be.
+                  ...pending.confirmedAcceptedActions,
+                  ...pending.acceptedActions,
+                },
+                now,
+              ),
+              messages,
+            );
           return {
             chat: {
               ...frame.snapshot.chat,
@@ -1866,26 +1931,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               )
                 ? null
                 : state.pendingBackgroundSessionStop,
-            pendingActions: pending.pendingActions,
-            acceptedActions: pruneAcceptedActions(
-              {
-                ...withoutSettledAcceptedActions(
-                  state.acceptedActions,
-                  // BOTH passes retire records: the snapshot pass for sends it
-                  // settled itself, the settled pass for rows it recovered.
-                  new Set([
-                    ...pending.settledAcceptedActionIds,
-                    ...settled.settledAcceptedActionIds,
-                  ]),
-                ),
-                // Confirmation stamps first, then this pass's own additions -
-                // an id cannot be in both, but ordering the merge makes that
-                // independent of whether it ever could be.
-                ...pending.confirmedAcceptedActions,
-                ...pending.acceptedActions,
-              },
-              now,
-            ),
+            pendingActions,
+            acceptedActions,
             pendingUserMessages: settled.pendingUserMessages,
             failedSendRestoration: settled.failedSendRestoration,
             // Statements both reconcile passes owe the user: a send whose
@@ -2690,11 +2737,22 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return false;
           };
+          const resolveInterviewDeliveryRetryProtocolSupported = () => {
+            if (status === "open") {
+              return (
+                streamClient?.interviewSettlementActionsProtocolSupported?.() ??
+                false
+              );
+            }
+            return false;
+          };
           return {
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
             steerProtocolSupported: resolveSteerProtocolSupported(),
+            interviewDeliveryRetryProtocolSupported:
+              resolveInterviewDeliveryRetryProtocolSupported(),
             fatalClose: resolveFatalClose(),
           };
         });
@@ -2868,6 +2926,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       runStatus: "idle",
       activeTurn: null,
       steerProtocolSupported: false,
+      interviewDeliveryRetryProtocolSupported: false,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -2900,6 +2959,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         set({
           connectionStatus: "connecting",
           steerProtocolSupported: false,
+          interviewDeliveryRetryProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
         });
@@ -2993,6 +3053,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "send",
             interviewBlockId: null,
+            interviewDeliveryRetry: null,
             messageId,
             restoreContent: content,
             sender,
@@ -3111,6 +3172,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             action: "send",
             interviewBlockId: null,
+            interviewDeliveryRetry: null,
             messageId: input.messageId,
             restoreContent: input.content,
             sender: input.sender,
@@ -3213,6 +3275,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "editUserMessage",
             interviewBlockId: null,
+            interviewDeliveryRetry: null,
             messageId,
             restoreContent: null,
             sender: null,
@@ -3284,6 +3347,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "stop",
             interviewBlockId: null,
+            interviewDeliveryRetry: null,
             messageId: null,
             restoreContent: null,
             sender: null,
@@ -3708,7 +3772,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         });
         return sentClientActionId;
       },
-      interviewError: (blockId, reason) => {
+      interviewSkip: (blockId, reason, draftAnswers) => {
         const existing = existingInterviewActionId(get(), blockId);
         if (existing !== null) return existing;
         const clientActionId = uuidv4();
@@ -3720,6 +3784,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           clientActionId,
           blockId,
           reason,
+          settlement:
+            draftAnswers === undefined
+              ? null
+              : { outcome: "skipped", draftAnswers: [...draftAnswers] },
         };
         const sentClientActionId = sendAction({
           set,
@@ -3732,6 +3800,37 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingUserMessage: null,
         });
         return sentClientActionId;
+      },
+      interviewDeliveryRetry: (identity) => {
+        // The retry action is additive in protocol 1.7. Do not let a renderer
+        // paired with an older host emit an unknown frame.
+        if (!get().interviewDeliveryRetryProtocolSupported) return null;
+        const existing = existingInterviewDeliveryRetryActionId(
+          get(),
+          identity,
+        );
+        if (existing !== null) return existing;
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "interviewDeliveryRetry",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          blockId: identity.blockId,
+          settlementId: identity.settlementId,
+          deliveryId: identity.deliveryId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: {
+            ...basicPending(clientActionId, "interviewDeliveryRetry"),
+            interviewDeliveryRetry: identity,
+          },
+          pendingUserMessage: null,
+        });
       },
       ackAcceptedAction: (clientActionId) => {
         set((state) => {
@@ -3987,6 +4086,7 @@ function basicPending(
     clientActionId,
     action,
     interviewBlockId: null,
+    interviewDeliveryRetry: null,
     messageId: null,
     restoreContent: null,
     sender: null,
@@ -4015,6 +4115,39 @@ function existingInterviewActionId(
   return accepted?.clientActionId ?? null;
 }
 
+function sameInterviewDeliveryRetryIdentity(
+  left: InterviewDeliveryRetryIdentity,
+  right: InterviewDeliveryRetryIdentity,
+): boolean {
+  return (
+    left.blockId === right.blockId &&
+    left.settlementId === right.settlementId &&
+    left.deliveryId === right.deliveryId &&
+    left.generation === right.generation
+  );
+}
+
+// Delivery retry is deliberately independent of answer/skip's block-wide
+// guard. A historical retry may only dedupe the exact settled outbox attempt.
+function existingInterviewDeliveryRetryActionId(
+  state: ChatSessionState,
+  identity: InterviewDeliveryRetryIdentity,
+): string | null {
+  const actions = [
+    ...Object.values(state.pendingActions),
+    ...Object.values(state.acceptedActions),
+  ];
+  const existing = actions.find(
+    (action) =>
+      action.interviewDeliveryRetry !== null &&
+      sameInterviewDeliveryRetryIdentity(
+        action.interviewDeliveryRetry,
+        identity,
+      ),
+  );
+  return existing?.clientActionId ?? null;
+}
+
 // Drop every pending/accepted action targeting `blockId`'s interview. Called
 // when the host authoritatively resolves the interview so a lingering
 // accepted-but-unacked entry can never keep a later card gated. Returns the
@@ -4027,6 +4160,50 @@ function withoutInterviewActionsForBlock<
 ): Readonly<Record<string, T>> {
   const entries = Object.entries(actions).filter(
     ([, action]) => action.interviewBlockId !== blockId,
+  );
+  if (entries.length === Object.keys(actions).length) return actions;
+  return Object.fromEntries(entries);
+}
+
+function isCurrentRetryableInterviewDelivery(
+  messages: ReadonlyArray<Message>,
+  identity: InterviewDeliveryRetryIdentity,
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.blocks.some(
+        (block) =>
+          block.type === "interview" &&
+          block.blockId === identity.blockId &&
+          block.settlement?.settlementId === identity.settlementId &&
+          block.delivery?.deliveryId === identity.deliveryId &&
+          block.delivery.generation === identity.generation &&
+          block.delivery.status === "failed" &&
+          block.delivery.retryable,
+      ),
+  );
+}
+
+// An accepted retry is not its own terminal state. The card's authoritative
+// delivery projection is: any status, generation, or identity change retires
+// the old action. A later retryable failure has a new generation and therefore
+// renders a fresh Retry affordance instead of reviving a stale accepted id.
+function withoutSupersededInterviewDeliveryRetryActions<
+  T extends {
+    readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
+  },
+>(
+  actions: Readonly<Record<string, T>>,
+  messages: ReadonlyArray<Message>,
+): Readonly<Record<string, T>> {
+  const entries = Object.entries(actions).filter(
+    ([, action]) =>
+      action.interviewDeliveryRetry === null ||
+      isCurrentRetryableInterviewDelivery(
+        messages,
+        action.interviewDeliveryRetry,
+      ),
   );
   if (entries.length === Object.keys(actions).length) return actions;
   return Object.fromEntries(entries);

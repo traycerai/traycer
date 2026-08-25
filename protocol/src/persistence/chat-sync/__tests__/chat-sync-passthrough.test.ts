@@ -154,7 +154,7 @@ const unknownEvent: JsonObject = {
 };
 
 const persistedMessageShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   chatId: "chat-1",
   section: "messages",
   messages: [userMessage, assistantMessage, unknownMessage],
@@ -163,7 +163,7 @@ const persistedMessageShard: JsonObject = {
 };
 
 const persistedEventShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   chatId: "chat-1",
   section: "events",
   messages: [],
@@ -247,7 +247,7 @@ describe("chat-shard passthrough", () => {
     );
 
     const graduatedHostPrivate: JsonObject = {
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 2 },
       chatId: "chat-1",
       section: "host-private",
       messages: [],
@@ -308,7 +308,7 @@ describe("chat-shard section coherence", () => {
   it("rejects a host-private shard with no envelope", () => {
     expect(() =>
       parse({
-        schemaVersion: { major: 1, minor: 1 },
+        schemaVersion: { major: 1, minor: 2 },
         chatId: "chat-1",
         section: "host-private",
         messages: [],

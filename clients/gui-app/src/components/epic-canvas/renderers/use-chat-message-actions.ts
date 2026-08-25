@@ -50,6 +50,7 @@ export interface ChatMessageActionsInput {
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
@@ -69,6 +70,8 @@ export interface ChatMessageActionsInput {
   readonly events: ChatSessionState["events"];
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
+  readonly pendingActions: ChatSessionState["pendingActions"];
+  readonly acceptedActions: ChatSessionState["acceptedActions"];
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
   // The source chat's live binding, used to seed the fork dialog's workspace
@@ -134,6 +137,7 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
     slashCatalog,
@@ -147,6 +151,8 @@ export function useChatMessageActions(
     events,
     profile,
     chatActions,
+    pendingActions,
+    acceptedActions,
     confirmingDeleteMessageId,
     setForkTarget,
     worktreeBinding,
@@ -346,6 +352,38 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
+      const interviewDeliveryRetry =
+        canAct && interviewDeliveryRetryProtocolSupported
+          ? {
+              isPending: (identity: {
+                readonly blockId: string;
+                readonly settlementId: string;
+                readonly deliveryId: string;
+                readonly generation: number;
+              }): boolean =>
+                [
+                  ...Object.values(pendingActions),
+                  ...Object.values(acceptedActions),
+                ].some((action) => {
+                  const pendingIdentity = action.interviewDeliveryRetry;
+                  return (
+                    pendingIdentity !== null &&
+                    pendingIdentity.blockId === identity.blockId &&
+                    pendingIdentity.settlementId === identity.settlementId &&
+                    pendingIdentity.deliveryId === identity.deliveryId &&
+                    pendingIdentity.generation === identity.generation
+                  );
+                }),
+              onRetry: (identity: {
+                readonly blockId: string;
+                readonly settlementId: string;
+                readonly deliveryId: string;
+                readonly generation: number;
+              }): void => {
+                chatActions.interviewDeliveryRetry(identity);
+              },
+            }
+          : null;
       // A completed assistant message exposes the plain footer fork. A stable
       // message with a resolved interview also exposes its Q&A fork icons while
       // the rest of that assistant turn may still be running.
@@ -375,6 +413,14 @@ export function useChatMessageActions(
                 null,
               ),
           },
+          interviewDeliveryRetry,
+        };
+      }
+      if (message.role === "assistant" && interviewDeliveryRetry !== null) {
+        return {
+          type: "assistant",
+          fork: null,
+          interviewDeliveryRetry,
         };
       }
       const persistentMessageId = editablePersistentMessageId(message);
@@ -441,7 +487,11 @@ export function useChatMessageActions(
       editSettings,
       fallbackToGlobalMentionRoots,
       forkAtAssistantMessage,
+      interviewDeliveryRetryProtocolSupported,
       mentionRoots,
+      pendingActions,
+      acceptedActions,
+      chatActions,
       submitInlineEdit,
       updateInlineEdit,
     ],

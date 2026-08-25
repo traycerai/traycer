@@ -8,6 +8,7 @@ import { chatFindSegmentUnitId } from "./chat-find";
 import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
+import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 
@@ -78,6 +79,7 @@ export interface ChatMessageUserActions {
 export interface ChatMessageAssistantActions {
   readonly type: "assistant";
   readonly fork: ChatMessageForkAction | null;
+  readonly interviewDeliveryRetry?: InterviewDeliveryRetryAction | null;
 }
 
 export type ChatMessageActions =
@@ -164,6 +166,9 @@ function renderAssistantMessage(props: ChatMessageProps): ReactElement {
         meta={message.assistantMeta}
         nextStepActions={nextStepActions}
         forkAction={assistantActions?.fork ?? null}
+        interviewDeliveryRetry={
+          assistantActions?.interviewDeliveryRetry ?? null
+        }
       />
     </div>
   );

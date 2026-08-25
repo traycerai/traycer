@@ -27,6 +27,10 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
+import {
+  TileFindContext,
+  type TileFindContextValue,
+} from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX } from "@/components/chat/chat-messages-scroll-helpers";
 import { captureChatFreeScrollingOffset } from "@/components/chat/chat-scroll-restoration";
 import {
@@ -55,6 +59,8 @@ import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { InterviewSegment } from "@/stores/composer/chat-store";
+import type { TileFindAdapter } from "@/stores/tile-find";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -84,6 +90,7 @@ const activityGroupOpenIds = vi.hoisted(() => ({
   lastOpenIds: new Set<string>(),
   setOpenCalls: [] as Array<{ groupId: string; open: boolean }>,
 }));
+const legendListItemSizeChanges = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
   const actual =
@@ -104,10 +111,22 @@ vi.mock("@/components/chat/chat-message", () => ({
   ChatMessage: function MockChatMessage(props: {
     message: ChatMessageModel;
   }): ReactElement {
+    const interview = props.message.segments.find(
+      (segment): segment is InterviewSegment => segment.kind === "interview",
+    );
+    const answer = interview?.answers[0]?.values[0] ?? null;
+    const interviewUnitId =
+      interview === undefined || answer === null
+        ? null
+        : `interview:${interview.id}:question:0:answer:value:0`;
     return (
       <div data-testid={`mock-message-${props.message.id}`}>
         {props.message.role}:{props.message.id}
-        {props.message.content}
+        {interviewUnitId === null ? (
+          props.message.content
+        ) : (
+          <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+        )}
       </div>
     );
   },
@@ -131,7 +150,7 @@ const legendListRefHolder = vi.hoisted(() => ({
 vi.mock("@legendapp/list/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@legendapp/list/react")>();
   const TeedLegendList: typeof actual.LegendList = (props) => {
-    const { ref, ...rest } = props;
+    const { ref, onItemSizeChanged, ...rest } = props;
     const teeRef = useCallback(
       (instance: import("@legendapp/list/react").LegendListRef | null) => {
         legendListRefHolder.current = instance;
@@ -143,7 +162,16 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
       },
       [ref],
     );
-    return <actual.LegendList {...rest} ref={teeRef} />;
+    return (
+      <actual.LegendList
+        {...rest}
+        onItemSizeChanged={(info) => {
+          legendListItemSizeChanges.count += 1;
+          onItemSizeChanged?.(info);
+        }}
+        ref={teeRef}
+      />
+    );
   };
   return { ...actual, LegendList: TeedLegendList };
 });
@@ -203,6 +231,53 @@ function makeTranscript(count: number): ChatMessageModel[] {
   return Array.from({ length: count }, (_unused, index) =>
     makeMessage(index, index % 2 === 0 ? "user" : "assistant"),
   );
+}
+
+function makeInterviewFindTranscript(count: number): ChatMessageModel[] {
+  const target: ChatMessageModel = {
+    ...makeMessage(0, "assistant"),
+    id: "msg-interview-find",
+    segments: [
+      {
+        id: "interview-find",
+        kind: "interview",
+        status: "completed",
+        toolName: "AskUserQuestion",
+        title: null,
+        description: null,
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which detail?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which detail?",
+            values: ["offscreen interview detail"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        draftAnswers: [],
+        outcome: "answered",
+        settlement: null,
+        error: null,
+        delivery: null,
+        forkedWithoutAnswer: false,
+      },
+    ],
+  };
+  return [
+    target,
+    ...Array.from({ length: Math.max(count - 1, 0) }, (_unused, index) =>
+      makeMessage(index + 1, index % 2 === 0 ? "user" : "assistant"),
+    ),
+  ];
 }
 
 function appendAssistant(
@@ -686,6 +761,8 @@ interface RenderChatMessagesOptions {
   readonly freshOpen?: boolean;
   /** `ChatSessionState.transcriptBaselineEpoch`; see `ChatMessages`. */
   readonly baselineEpoch?: number;
+  /** Test-only seam: captures the adapter registered by ChatMessages. */
+  readonly tileFindContext?: TileFindContextValue;
 }
 
 interface ChatMessagesRenderState {
@@ -808,11 +885,20 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
       {options.withSiblingChrome === true ? siblingChrome() : null}
     </div>
   );
+  const contentWithFindContext = (): ReactNode => {
+    const rendered = content();
+    if (options.tileFindContext === undefined) return rendered;
+    return (
+      <TileFindContext.Provider value={options.tileFindContext}>
+        {rendered}
+      </TileFindContext.Provider>
+    );
+  };
   const jsx = (): ReactNode =>
     options.strictMode === true ? (
-      <StrictMode>{content()}</StrictMode>
+      <StrictMode>{contentWithFindContext()}</StrictMode>
     ) : (
-      content()
+      contentWithFindContext()
     );
 
   const result = render(jsx());
@@ -840,12 +926,43 @@ async function waitForPillVisible(): Promise<void> {
   });
 }
 
+function installChatFindHighlights(): void {
+  const previousCss = Object.getOwnPropertyDescriptor(globalThis, "CSS");
+  const previousHighlight = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "Highlight",
+  );
+  Object.defineProperty(globalThis, "CSS", {
+    configurable: true,
+    value: { highlights: new Map<string, object>() },
+  });
+  Object.defineProperty(globalThis, "Highlight", {
+    configurable: true,
+    value: class TestHighlight {
+      constructor(..._ranges: ReadonlyArray<Range>) {}
+    },
+  });
+  onTestFinished(() => {
+    if (previousCss === undefined) {
+      Reflect.deleteProperty(globalThis, "CSS");
+    } else {
+      Object.defineProperty(globalThis, "CSS", previousCss);
+    }
+    if (previousHighlight === undefined) {
+      Reflect.deleteProperty(globalThis, "Highlight");
+    } else {
+      Object.defineProperty(globalThis, "Highlight", previousHighlight);
+    }
+  });
+}
+
 describe("ChatMessages scroll policy", () => {
   beforeEach(() => {
     activityGroupOpenIds.lastOpenIds = new Set();
     activityGroupOpenIds.setOpenCalls = [];
     platformMock.isMac = true;
     tileLiveness.live = false;
+    legendListItemSizeChanges.count = 0;
     installLegendListViewportMetrics();
     vi.useRealTimers();
     useSettingsStore.setState({
@@ -868,6 +985,64 @@ describe("ChatMessages scroll policy", () => {
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
     evictChatTabPersistenceForEpic("epic-1");
+  });
+
+  it("re-syncs a virtualized find highlight from row mount without a resize", async () => {
+    installChatFindHighlights();
+    const messages = makeInterviewFindTranscript(200);
+    let registeredAdapter: TileFindAdapter | null = null;
+    const tileFindContext: TileFindContextValue = {
+      tileInstanceId: "chat-messages-find-mount",
+      registerAdapter: (adapter) => {
+        registeredAdapter = adapter;
+        return () => {
+          if (registeredAdapter === adapter) registeredAdapter = null;
+        };
+      },
+    };
+
+    renderChatMessages({
+      messages,
+      instanceId: "chat-messages-find-mount",
+      tileFindContext,
+    });
+    await settleLegendList();
+    await waitFor(() => {
+      expect(registeredAdapter).not.toBeNull();
+    });
+
+    // The initial bottom-following viewport has recycled the target row out;
+    // this search asks the real ChatMessages controller to reveal it. No test
+    // reaches into the controller or invokes its mount callback directly.
+    expect(
+      document.querySelector(
+        '[data-chat-find-unit="interview:interview-find:question:0:answer:value:0"]',
+      ),
+    ).toBeNull();
+    const itemSizeChangesBeforeSearch = legendListItemSizeChanges.count;
+
+    await act(async () => {
+      await registeredAdapter?.search({
+        requestId: 1,
+        query: "offscreen interview detail",
+        matchCase: false,
+      });
+    });
+    await settleLegendList();
+    await settleLegendList();
+
+    await waitFor(() => {
+      expect(
+        document.querySelector(
+          '[data-chat-find-unit="interview:interview-find:question:0:answer:value:0"]',
+        ),
+      ).not.toBeNull();
+      expect(registeredAdapter?.getSnapshot()).toMatchObject({
+        activeUnitId: "interview:interview-find:question:0:answer:value:0",
+        exactHighlight: "painted",
+      });
+    });
+    expect(legendListItemSizeChanges.count).toBe(itemSizeChangesBeforeSearch);
   });
 
   it("starts following-end (no jump pill) when scroll cache is bottom-following", async () => {

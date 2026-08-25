@@ -3,6 +3,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreImage,
+  contentBlockSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -296,4 +297,36 @@ export const userMessageSchemaPreTurnTail = z
 export const messageSchemaPreImage = z.discriminatedUnion("role", [
   userMessageSchemaPreTurnTail,
   assistantMessageSchemaPreImage,
+]);
+
+// ── Wire-freeze variant (pre-interview-settlement, `chat.subscribe@1.6`) ────
+// Hand-frozen copy of `assistantMessageSchema` as the `host-v1.2.0-rc.1` `1.6`
+// line shipped it: the image fields ARE present (that is the minor that added
+// them), and only `blocks` is swapped for the frozen
+// `contentBlockSchemaPreSettlement` union so a `1.6` peer never observes
+// canonical interview settlement or answer selection evidence.
+// Field-for-field hand copy, NOT `.omit()`/`.extend()` - see
+// `assistantMessageSchemaPreImage` for why a released line must not follow the
+// live shape by reference.
+export const assistantMessageSchemaPreSettlement = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchema,
+  blocks: z.array(contentBlockSchemaPreSettlement),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+// The user branch is the LIVE `userMessageSchema` (with `turnTailUuid`): the
+// Claude anchor's turn-tail field predates the `1.6` cut, so a real `1.6` peer
+// does observe it. Only the assistant branch is frozen here.
+export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
+  userMessageSchema,
+  assistantMessageSchemaPreSettlement,
 ]);

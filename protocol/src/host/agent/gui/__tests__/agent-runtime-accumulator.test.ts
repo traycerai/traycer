@@ -12,8 +12,11 @@ import {
 } from "../agent-runtime";
 import type {
   ContentBlock,
+  InterviewAnswer,
   ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { interviewBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { applyInterviewSettlement } from "../interview-settlement";
 
 function makeBlocks(): ContentBlock[] {
   return [];
@@ -38,6 +41,30 @@ function expectPlanBlock(block: ContentBlock | undefined): PlanBlock {
     throw new Error("Expected a plan block");
   }
   return block;
+}
+
+function expectInterviewBlock(
+  block: ContentBlock | undefined,
+): InterviewBlock {
+  if (block?.type !== "interview") {
+    throw new Error("Expected an interview block");
+  }
+  return block;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isProductionShapedAnswer(value: unknown): value is InterviewAnswer {
+  if (!isRecord(value)) return false;
+  if (Object.hasOwn(value, "selection")) return false;
+  return (
+    (typeof value.questionId === "string" || value.questionId === null) &&
+    (typeof value.question === "string" || value.question === null) &&
+    Array.isArray(value.values) &&
+    (typeof value.notes === "string" || value.notes === null)
+  );
 }
 
 describe("accumulateEvent", () => {
@@ -1673,6 +1700,7 @@ describe("accumulateEvent", () => {
           question: "Which library?",
           values: ["date-fns"],
           notes: null,
+          selection: null,
         },
       ],
     });
@@ -1687,8 +1715,58 @@ describe("accumulateEvent", () => {
         question: "Which library?",
         values: ["date-fns"],
         notes: null,
+        selection: null,
       },
     ]);
+  });
+
+  it("stores explicit null selection when interview.resolved answers omit the key", () => {
+    // Adapters emit production-shaped answers without `selection`. The
+    // accumulator is the boundary that must coerce that absence so the
+    // reducer's `changed` detection does not treat a later normalized
+    // replay as a new write.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const productionAnswer: Record<string, unknown> = {
+      questionId: "q1",
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: null,
+    };
+    expect(Object.hasOwn(productionAnswer, "selection")).toBe(false);
+    if (!isProductionShapedAnswer(productionAnswer)) {
+      throw new Error("expected production-shaped answer");
+    }
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [productionAnswer],
+    });
+
+    const interview = blocks[0];
+    if (interview === undefined || interview.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    expect(interview.answers).toHaveLength(1);
+    expect(Object.hasOwn(interview.answers[0], "selection")).toBe(true);
+    expect(interview.answers[0].selection).toBeNull();
+    expect(interview.answers[0].values).toEqual(["date-fns"]);
   });
 
   it("a later empty interview.resolved does not erase recorded answers", () => {
@@ -1723,6 +1801,7 @@ describe("accumulateEvent", () => {
           question: "Where should the game live?",
           values: ["gui-app"],
           notes: null,
+          selection: null,
         },
       ],
     });
@@ -1741,6 +1820,7 @@ describe("accumulateEvent", () => {
         question: "Where should the game live?",
         values: ["gui-app"],
         notes: null,
+        selection: null,
       },
     ]);
   });
@@ -1791,6 +1871,509 @@ describe("accumulateEvent", () => {
     ]);
     // Interview blocks no longer persist raw input; the questions/answers above
     // are the rendered surface.
+  });
+
+  it("interview.requested after a settled block is ignored", () => {
+    // A late request must not reopen an interview whose answer or Skip may
+    // already have reached a provider. Only the pending-fork transform may
+    // clear terminal facts.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Original",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const settled = blocks;
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 3,
+      toolName: "AskUserQuestion",
+      title: "Reopened",
+      questions: [
+        {
+          questionId: null,
+          question: "Pick again?",
+          header: "Retry",
+          options: [{ label: "yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    expect(blocks).toBe(settled);
+    expect((blocks[0] as InterviewBlock).title).toBe("Original");
+    expect((blocks[0] as InterviewBlock).outcome).toBe("answered");
+  });
+
+  it("interview.requested while streaming still updates the pending card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "First",
+      questions: [],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 2,
+      toolName: "AskUserQuestion",
+      title: "Updated",
+      questions: [
+        {
+          questionId: null,
+          question: "Proceed?",
+          header: "Approval",
+          options: [{ label: "Yes", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as InterviewBlock).status).toBe("streaming");
+    expect((blocks[0] as InterviewBlock).title).toBe("Updated");
+    expect((blocks[0] as InterviewBlock).questions).toHaveLength(1);
+  });
+
+  it("runtime interview.errored after a GUI-authored skipped block keeps outcome skipped", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    const pending = blocks[0];
+    if (pending === undefined || pending.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    const { patch } = applyInterviewSettlement(pending, {
+      settlementId: "gui-skip",
+      outcome: "skipped",
+      answers: [],
+      draftAnswers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      reason: "Not now",
+      source: "gui",
+      diagnostic: null,
+      delivery: null,
+      timestamp: 2,
+    });
+    blocks = [{ ...pending, ...patch }];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+
+    const skipped = blocks[0];
+    if (skipped === undefined || skipped.type !== "interview") {
+      throw new Error("expected interview block");
+    }
+    expect(skipped.outcome).toBe("skipped");
+    expect(skipped.error).toBe("Not now");
+    expect(skipped.status).toBe("errored");
+    expect(skipped.draftAnswers).toHaveLength(1);
+    expect(skipped.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("keeps a schema-degraded skipped outcome payload-authoritative through later runtime events", () => {
+    // A future/malformed settlement.source .catch(null)s while outcome
+    // survives. Feeding that parsed block through the accumulator must not
+    // treat the missing provenance as "unowned" and let a runtime event
+    // replace the skip.
+    const draft = {
+      questionId: null,
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: "saved, not sent",
+      selection: null,
+    };
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "errored",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [],
+      error: "Not now",
+      metadata: null,
+      outcome: "skipped",
+      draftAnswers: [draft],
+      settlement: { settlementId: "s", source: "orchestrator" },
+      diagnostics: [],
+      delivery: null,
+      settlementExtensions: {},
+    });
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.outcome).toBe("skipped");
+    expect(parsed.draftAnswers).toHaveLength(1);
+
+    let blocks: ContentBlock[] = [parsed];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 4,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["lodash"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+
+    const skipped = expectInterviewBlock(blocks[0]);
+    expect(skipped.outcome).toBe("skipped");
+    expect(skipped.answers).toEqual([]);
+    expect(skipped.draftAnswers).toEqual([draft]);
+    expect(skipped.error).toBe("Not now");
+    expect(skipped.settlement).toBeNull();
+    expect(skipped.delivery).toBeNull();
+    expect(skipped.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("keeps a schema-degraded answered outcome payload-authoritative through later runtime events", () => {
+    const submitted = {
+      questionId: "q1",
+      question: "Which library?",
+      values: ["date-fns"],
+      notes: null,
+      selection: null,
+    };
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "completed",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [submitted],
+      error: null,
+      metadata: null,
+      outcome: "answered",
+      draftAnswers: [],
+      settlement: { settlementId: "s", source: "orchestrator" },
+      diagnostics: [],
+      delivery: null,
+      settlementExtensions: {},
+    });
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.outcome).toBe("answered");
+
+    let blocks: ContentBlock[] = [parsed];
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "adapter cleanup",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 4,
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          values: ["lodash"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+
+    const answered = expectInterviewBlock(blocks[0]);
+    expect(answered.outcome).toBe("answered");
+    expect(answered.answers).toEqual([submitted]);
+    expect(answered.draftAnswers).toEqual([]);
+    expect(answered.error).toBeNull();
+    expect(answered.settlement).toBeNull();
+    expect(answered.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+  });
+
+  it("lets a runtime settlement repair a genuinely ambiguous legacy terminal block", () => {
+    // outcome null + settlement null + legacy terminal status is the
+    // unowned reading: a crash before projection, or a pre-1.7 row.
+    // A runtime resolution MUST be allowed to fill that hole.
+    const parsed = interviewBlockSchema.parse({
+      blockId: "interview1",
+      status: "errored",
+      timestamp: 2,
+      parentBlockId: null,
+      type: "interview",
+      toolName: "AskUserQuestion",
+      title: "Question",
+      description: "Pick one",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+      answers: [],
+      error: "legacy error",
+      metadata: null,
+    });
+    expect(parsed.outcome).toBeNull();
+    expect(parsed.settlement).toBeNull();
+    expect(parsed.status).toBe("errored");
+
+    const answers = [
+      {
+        questionId: null,
+        question: "Which library?",
+        values: ["date-fns"],
+        notes: null,
+        selection: null,
+      },
+    ];
+    const blocks = accumulateEvent([parsed], {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 3,
+      answers,
+    });
+
+    const repaired = expectInterviewBlock(blocks[0]);
+    expect(repaired.outcome).toBe("answered");
+    expect(repaired.answers).toEqual(answers);
+    expect(repaired.settlement).toEqual({
+      settlementId: "runtime:interview.resolved:interview1:3",
+      source: "runtime",
+    });
+    expect(repaired.status).toBe("completed");
+    expect(repaired.error).toBeNull();
+  });
+
+  it("treats two same-type runtime events at the same blockId and timestamp as a replay", () => {
+    // Runtime events have no event id. The derived settlement id collides
+    // when type, blockId and timestamp match, so the second reads as a
+    // replay of the first. Containment: it cannot install its own
+    // answers/outcome/drafts/delivery, and a colliding diagnostic does
+    // not multiply.
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [
+        {
+          questionId: null,
+          question: "Which library?",
+          header: "Library",
+          options: [{ label: "date-fns", description: null, preview: null }],
+          multiSelect: false,
+        },
+      ],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["date-fns"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    });
+    const afterFirst = expectInterviewBlock(blocks[0]);
+    const firstAnswers = afterFirst.answers;
+    const firstOutcome = afterFirst.outcome;
+    const firstDrafts = afterFirst.draftAnswers;
+    const firstDelivery = afterFirst.delivery;
+    const firstDiagnostics = afterFirst.diagnostics;
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.resolved",
+      blockId: "interview1",
+      timestamp: 2,
+      answers: [
+        {
+          questionId: null,
+          question: "Which library?",
+          values: ["lodash"],
+          notes: "different payload",
+          selection: null,
+        },
+      ],
+    });
+    const afterCollision = expectInterviewBlock(blocks[0]);
+    expect(afterCollision.answers).toEqual(firstAnswers);
+    expect(afterCollision.outcome).toBe(firstOutcome);
+    expect(afterCollision.draftAnswers).toEqual(firstDrafts);
+    expect(afterCollision.delivery).toBe(firstDelivery);
+    expect(afterCollision.diagnostics).toBe(firstDiagnostics);
+    expect(afterCollision.answers[0]?.values).toEqual(["date-fns"]);
+  });
+
+  it("dedupes a colliding errored diagnostic and records one at a distinct timestamp", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "interview.requested",
+      blockId: "interview1",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: "Question",
+      questions: [],
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "first failure",
+    });
+    const afterFirst = expectInterviewBlock(blocks[0]);
+    expect(afterFirst.outcome).toBe("failed");
+    expect(afterFirst.error).toBe("first failure");
+    expect(afterFirst.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:2",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 2,
+      error: "colliding different payload",
+    });
+    const afterCollision = expectInterviewBlock(blocks[0]);
+    expect(afterCollision.error).toBe("first failure");
+    expect(afterCollision.outcome).toBe("failed");
+    expect(afterCollision.draftAnswers).toEqual([]);
+    expect(afterCollision.delivery).toBeNull();
+    expect(afterCollision.diagnostics).toHaveLength(1);
+    expect(afterCollision.diagnostics).toEqual(afterFirst.diagnostics);
+
+    blocks = accumulateEvent(blocks, {
+      type: "interview.errored",
+      blockId: "interview1",
+      timestamp: 3,
+      error: "later distinct failure",
+    });
+    const afterDistinct = expectInterviewBlock(blocks[0]);
+    // Distinct identity, losing path: outcome/reason stay, the new
+    // diagnostic is recorded because its id is not the colliding one.
+    expect(afterDistinct.outcome).toBe("failed");
+    expect(afterDistinct.error).toBe("first failure");
+    expect(afterDistinct.diagnostics).toEqual([
+      {
+        diagnosticId: "runtime:interview.errored:interview1:2",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+      {
+        diagnosticId: "runtime:interview.errored:interview1:3",
+        code: "runtime.interview_errored",
+        source: "runtime",
+      },
+    ]);
   });
 
   // ── file change events ───────────────────────────────────────

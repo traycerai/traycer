@@ -3,6 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
   ClaudePendingWake,
+  InterviewDeliveryProjection,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -824,6 +825,69 @@ function persistedUserMessage(
   };
 }
 
+function persistedInterviewMessage(
+  delivery: InterviewDeliveryProjection,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId: "assistant-interview",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-1",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "interview",
+        blockId: "interview-delivery-retry",
+        status: "completed",
+        timestamp: 4,
+        parentBlockId: null,
+        toolName: "AskUserQuestion",
+        title: null,
+        description: null,
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            values: ["Alpha"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+        outcome: "answered",
+        draftAnswers: [],
+        settlement: { settlementId: "settlement-1", source: "gui" },
+        diagnostics: [],
+        delivery,
+        settlementExtensions: {},
+      },
+    ],
+    startedAt: 4,
+    blocksVersion: 1,
+    timestamp: 4,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
 describe("createChatSessionStore", () => {
   // The worktree intent staging store is a module-global Zustand store; a test
   // that leaves a staged (or restored-on-reject) intent behind would make later
@@ -1159,6 +1223,110 @@ describe("createChatSessionStore", () => {
       }),
     ).toBe("after_safe_point");
 
+    harness.handle.dispose();
+  });
+
+  it("dedupes an exact interview delivery retry and reconciles newer generations", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const failedDelivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedInterviewMessage(failedDelivery)],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(first).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.sent[0]?.kind).toBe("interviewDeliveryRetry");
+    expect(
+      harness.handle.store.getState().pendingActions[first ?? ""]
+        .interviewBlockId,
+    ).toBeNull();
+
+    // The same exact outbox identity is a single action while pending, and
+    // remains one action after its ACK moves it to acceptedActions.
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    expect(harness.sent).toHaveLength(1);
+
+    // Any authoritative status transition retires the accepted retry. A later
+    // failed generation is a fresh exact identity and can be retried once.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          status: "delivering",
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          generation: 1,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const newer = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry({ ...identity, generation: 1 });
+    expect(newer).not.toBeNull();
+    expect(newer).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
+  it("does not emit an interview delivery retry on a pre-1.7 chat session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 6 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry({
+        blockId: "interview-delivery-retry",
+        settlementId: "settlement-1",
+        deliveryId: "delivery-1",
+        generation: 0,
+      }),
+    ).toBeNull();
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(false);
     harness.handle.dispose();
   });
 
@@ -7059,6 +7227,7 @@ describe("createChatSessionStore", () => {
       blockId: "question-snapshot",
       answers: [],
       resolvedAt: 4,
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
@@ -7073,6 +7242,9 @@ describe("createChatSessionStore", () => {
       blockId: "question-live",
       reason: "Skipped",
       resolvedAt: 5,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
@@ -7099,7 +7271,7 @@ describe("createChatSessionStore", () => {
       .interviewAnswer("question-answer", []);
     const skipActionId = harness.handle.store
       .getState()
-      .interviewError("question-skip", "Skipped by user");
+      .interviewSkip("question-skip", "Skipped by user", []);
 
     expect(answerActionId).not.toBeNull();
     expect(skipActionId).not.toBeNull();
@@ -7107,6 +7279,12 @@ describe("createChatSessionStore", () => {
       "interviewAnswer",
       "interviewError",
     ]);
+    expect(harness.sent[1]).toMatchObject({
+      kind: "interviewError",
+      blockId: "question-skip",
+      reason: "Skipped by user",
+      settlement: { outcome: "skipped", draftAnswers: [] },
+    });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
       { blockId: "question-skip", requestedAt: 3 },
@@ -7162,6 +7340,9 @@ describe("createChatSessionStore", () => {
       blockId: "question-skip",
       reason: "Skipped by user",
       resolvedAt: 4,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -7198,6 +7379,7 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      delivery: null,
     });
 
     expect(
@@ -7238,6 +7420,9 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(
@@ -7431,6 +7616,7 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
@@ -7470,9 +7656,9 @@ describe("createChatSessionStore", () => {
 
     const actionId = harness.handle.store
       .getState()
-      .interviewError(blockId, "Skipped by user");
+      .interviewSkip(blockId, "Skipped by user", []);
     if (actionId === null) {
-      throw new Error("expected interviewError action");
+      throw new Error("expected interview Skip action");
     }
 
     callbacks.onInterviewErrored({
@@ -7483,6 +7669,9 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);

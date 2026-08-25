@@ -23,6 +23,8 @@ import {
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
+  chatSchemaV16,
+  interviewDeliveryProjectionSchema,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
@@ -56,8 +58,10 @@ import {
   runtimeEventSchema,
   runtimeEventSchemaPreImage,
   runtimeEventSchemaPreInReplyTo,
+  runtimeEventSchemaPreSettlement,
   runtimeEventSchemaV12PreInReplyTo,
   runtimeInterviewAnswerSchema,
+  runtimeInterviewAnswerSchemaPreSettlement,
   runtimePlanActionSchema,
   type ImageResolutionUpdatedEvent,
 } from "@traycer/protocol/host/agent/gui/agent-runtime";
@@ -147,8 +151,18 @@ export const chatActionSchema = z.enum([
   // background items). The renderer gates sending on that capability field
   // being present, so an old host is never asked for an action it lacks.
   "stopBackgroundSession",
+  // `1.7`: requeue an existing detached interview delivery. The action names
+  // immutable outbox identities so retry cannot create another settlement.
+  "interviewDeliveryRetry",
 ]);
 export type ChatAction = z.infer<typeof chatActionSchema>;
+
+// `1.6` is a shipped RC line. Keep its action-ack vocabulary frozen instead
+// of allowing the live `1.7` retry literal to leak through an ack.
+export const chatActionSchemaV16 = z.enum([
+  ...chatActionSchemaV15.options,
+  "stopBackgroundSession",
+]);
 
 /**
  * One file in the chat-level **accumulated changes** view (the pinned panel
@@ -834,6 +848,98 @@ const chatSubscribeHeldUpdatesChangedServerFrameSchema = z.object({
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
 });
 
+// ─── Interview lifecycle frames ────────────────────────────────────────────
+//
+// Both frames changed on `1.7`, so each has a hand-frozen pre-`1.7` copy and a
+// live one, and the common-frame factory below is parameterized over the pair.
+// The frozen copies are what every line through `@1.6` binds.
+
+const interviewAnsweredServerFrameSchemaPreSettlement = z.object({
+  kind: z.literal("interviewAnswered"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  blockId: z.string(),
+  answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
+  resolvedAt: z.number(),
+});
+
+const interviewErroredServerFrameSchemaPreSettlement = z.object({
+  kind: z.literal("interviewErrored"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  blockId: z.string(),
+  reason: z.string(),
+  resolvedAt: z.number(),
+});
+
+// Live (`chat.subscribe@1.7`). `answers` carries selection evidence, and
+// `delivery` is the content-free outbox projection for a DETACHED settlement,
+// joined by `settlementId`. It rides the lifecycle frame - rather than
+// requiring a fresh settlement - precisely so a `pending → delivering →
+// delivered` transition can be broadcast without inventing a second settlement
+// for the same answer. Defaulted null so an active waiter (which has no outbox
+// item at all) is representable as "no delivery to speak of", never as failure.
+const interviewAnsweredServerFrameSchema = z.object({
+  kind: z.literal("interviewAnswered"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  blockId: z.string(),
+  answers: z.array(runtimeInterviewAnswerSchema),
+  resolvedAt: z.number(),
+  delivery: interviewDeliveryProjectionSchema.nullable().default(null),
+});
+
+// Live (`chat.subscribe@1.7`). `reason` stays exactly what it was - the
+// user-visible text - and the canonical facts ride ALONGSIDE it: `outcome`
+// distinguishes an explicit Skip from a genuine failure (both of which this
+// frame has always represented identically), and `draftAnswers` carries the
+// saved-but-unsent values a Skip may have kept. Both defaulted, so a host that
+// settles without canonical metadata produces the pre-`1.7` meaning unchanged.
+//
+// TWO LIFECYCLE INVARIANTS ARE ENCODED, not merely documented, because this
+// frame is where an untruthful combination would enter history:
+//
+//   1. `outcome` here is `skipped | failed | null` - never `answered`. An
+//      answered interview settles through `interviewAnswered`; the same block
+//      arriving as "errored but answered" is a contradiction no consumer
+//      should have to reconcile.
+//   2. `draftAnswers` are saved-but-unsent values from an explicit Skip, so
+//      they are only meaningful when `outcome === "skipped"`. Drafts attached
+//      to a failure or to an unknown outcome would make the card claim the
+//      user saved work it has no basis for.
+//
+// Enforced with `superRefine` rather than a discriminated union, deliberately.
+// A union here would make `Extract<ChatSubscribeServerFrame, { kind:
+// "interviewErrored" }>` a union of three shapes, so every consumer -
+// `ChatStreamCallbacks.onInterviewErrored`, the GUI chat store - would have to
+// narrow before reading `reason`, a field whose meaning does not vary. That
+// trades real ergonomic cost across the client for no additional safety: the
+// refinement rejects the same payloads at the same boundary. This file's
+// `chatQueuedItemSchema` records the mirror-image tradeoff for a case where
+// the union genuinely was worth it.
+const interviewErroredServerFrameSchema = z
+  .object({
+    kind: z.literal("interviewErrored"),
+    ...textFrameFields,
+    ...chatReferenceFields,
+    blockId: z.string(),
+    reason: z.string(),
+    resolvedAt: z.number(),
+    outcome: z.enum(["skipped", "failed"]).nullable().default(null),
+    draftAnswers: z.array(runtimeInterviewAnswerSchema).default([]),
+    delivery: interviewDeliveryProjectionSchema.nullable().default(null),
+  })
+  .superRefine((frame, ctx) => {
+    if (frame.draftAnswers.length === 0) return;
+    if (frame.outcome === "skipped") return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["draftAnswers"],
+      message:
+        "interviewErrored.draftAnswers require outcome === 'skipped': saved drafts only exist for an explicit Skip.",
+    });
+  });
+
 // `blockDelta`'s `event` schema is the one shared-frame shape that changes
 // incompatibly across `chat.subscribe` minors (`runtimeEventSchema` gained
 // `workflow.*` in `1.3`), so it is versioned separately from the rest of the
@@ -856,7 +962,9 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
 // pre-`inReplyTo` frozen chat-tree while the live line binds the current one;
 // `action` is parameterized because `actionAck` echoes the action-kind enum,
 // which grew on the unreleased `1.6` (`stopBackgroundSession`) after `1.5`
-// shipped.
+// shipped; and the two interview lifecycle frames are parameterized because
+// `1.7` grows both (selection evidence, canonical outcome, saved drafts, and
+// the detached delivery projection).
 // Everything else is byte-identical across live and frozen. Variant order is
 // preserved (the wire-compat differ matches union variants by `kind`, but
 // keeping order avoids churn in any order-sensitive fixture).
@@ -865,11 +973,15 @@ function buildChatSubscribeCommonServerFrameSchemas<
   QueueSchema extends z.ZodType,
   EventSchema extends z.ZodType,
   ActionSchema extends z.ZodType,
+  InterviewAnsweredSchema extends z.ZodType,
+  InterviewErroredSchema extends z.ZodType,
 >(schemas: {
   readonly message: MessageSchema;
   readonly queue: QueueSchema;
   readonly event: EventSchema;
   readonly action: ActionSchema;
+  readonly interviewAnswered: InterviewAnsweredSchema;
+  readonly interviewErrored: InterviewErroredSchema;
 }) {
   return [
     z.object({
@@ -935,22 +1047,8 @@ function buildChatSubscribeCommonServerFrameSchemas<
       blockId: z.string(),
       requestedAt: z.number(),
     }),
-    z.object({
-      kind: z.literal("interviewAnswered"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      blockId: z.string(),
-      answers: z.array(runtimeInterviewAnswerSchema),
-      resolvedAt: z.number(),
-    }),
-    z.object({
-      kind: z.literal("interviewErrored"),
-      ...textFrameFields,
-      ...chatReferenceFields,
-      blockId: z.string(),
-      reason: z.string(),
-      resolvedAt: z.number(),
-    }),
+    schemas.interviewAnswered,
+    schemas.interviewErrored,
     z.object({
       kind: z.literal("eventAppended"),
       ...textFrameFields,
@@ -1007,6 +1105,8 @@ const chatSubscribeCommonServerFrameSchemas =
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchema,
+    interviewAnswered: interviewAnsweredServerFrameSchema,
+    interviewErrored: interviewErroredServerFrameSchema,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.0–1.3` (pre-`inReplyTo`).
@@ -1016,6 +1116,8 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
     queue: chatQueueStateSchemaPreInReplyTo,
     event: chatEventSchemaPreInReplyTo,
     action: chatActionSchemaV15,
+    interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
+    interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
   });
 
 // Frozen common frames bound to `chat.subscribe@1.4–1.5`: live message/event
@@ -1027,6 +1129,24 @@ const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
     queue: chatQueueStateSchemaPreManagedCommand,
     event: chatEventSchema,
     action: chatActionSchemaV15,
+    interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
+    interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
+  });
+
+// Frozen common frames bound to `chat.subscribe@1.6` - the line `host-v1.2.0`
+// shipped. Identical to the live bundle at that tag except the two interview
+// lifecycle frames, which `1.7` grows; everything else here reuses the same
+// live sub-schemas that tag bound, and the released-baseline surface
+// (`__fixtures__/released-baseline-surface.json`, dumped from the tag) is what
+// holds the tree still.
+const chatSubscribeCommonServerFrameSchemasV16 =
+  buildChatSubscribeCommonServerFrameSchemas({
+    message: userMessageSchema,
+    queue: chatQueueStateSchema,
+    event: chatEventSchema,
+    action: chatActionSchemaV16,
+    interviewAnswered: interviewAnsweredServerFrameSchemaPreSettlement,
+    interviewErrored: interviewErroredServerFrameSchemaPreSettlement,
   });
 
 // Frozen for `chat.subscribe@1.2` and earlier.
@@ -1078,13 +1198,13 @@ function isStructuralRecord(value: unknown): boolean {
  * ONLY SOUND ON THE LIVE LINE (`chatSubscribeLiveSchemaVersion`). The deep
  * message/event schemas carry compatibility defaults (`imageResolutions`,
  * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
- * objects; the structural check skips them, so a `1.6` assistant message
+ * objects; the structural check skips them, so a `1.5` assistant message
  * would reach consumers with `imageResolutions` genuinely absent while typed
  * as present. A host serving the client's own live line emits fully live
  * shapes (its in-memory objects are post-parse normalized and its frame
  * projection is the identity on the live line), so the shallow path is
  * exact there — callers MUST fall back to the deep parse for any other
- * negotiated version.
+ * negotiated version, EXCEPT `1.6` — see the companion schema below.
  */
 export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
   kind: z.literal("snapshot"),
@@ -1135,7 +1255,12 @@ const activeProfileUpdateClientFrameSchema = z.object({
   profileId: z.string().nullable(),
 });
 
-const chatSubscribeClientFrameSchemaBeforeV13Options = [
+// The client-frame options that precede the two interview actions. Split out
+// (rather than written inline in one array) because `1.7` swaps ONLY the
+// interview pair: keeping the surrounding options in their own consts lets the
+// frozen `≤1.6` union and the live one be composed from the same pieces in the
+// same order, instead of one being a hand-maintained copy of the other.
+const chatSubscribeClientFrameSchemaOptionsBeforeInterview = [
   z.object({
     kind: z.literal("send"),
     ...ownerActionFrameFields,
@@ -1278,18 +1403,83 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
     approvalId: z.string(),
     decision: runtimeApprovalDecisionSchema,
   }),
-  z.object({
-    kind: z.literal("interviewAnswer"),
-    ...ownerActionFrameFields,
-    blockId: z.string(),
-    answers: z.array(runtimeInterviewAnswerSchema),
-  }),
-  z.object({
-    kind: z.literal("interviewError"),
-    ...ownerActionFrameFields,
-    blockId: z.string(),
-    reason: z.string(),
-  }),
+] as const;
+
+// ─── Interview action frames ───────────────────────────────────────────────
+//
+// Frozen pre-`1.7` pair, bound to every line through `@1.6`.
+const interviewAnswerClientFrameSchemaPreSettlement = z.object({
+  kind: z.literal("interviewAnswer"),
+  ...ownerActionFrameFields,
+  blockId: z.string(),
+  answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
+});
+
+const interviewErrorClientFrameSchemaPreSettlement = z.object({
+  kind: z.literal("interviewError"),
+  ...ownerActionFrameFields,
+  blockId: z.string(),
+  reason: z.string(),
+});
+
+/**
+ * Explicit Skip intent (`chat.subscribe@1.7`), carried on the EXISTING
+ * `interviewError` wire kind rather than a new action literal.
+ *
+ * `actionAck` echoes the action-kind enum back, so a new literal would be a
+ * host→client surface change on a line that already has peers. The GUI is free
+ * to call this affordance `interviewSkip`; on the wire it stays
+ * `interviewError` with this intent attached, which is also what makes the
+ * ≤`1.6` downgrade a pure field strip rather than an action rewrite.
+ *
+ * Its presence - not a match against the reason string - is what distinguishes
+ * a deliberate Skip from an unanswerable-dismiss or a genuine error. Those two
+ * omit the intent entirely.
+ *
+ * `draftAnswers` are saved-but-unsent values. The host persists them as
+ * history and never forwards them to the harness/provider result, so a Skip
+ * remains a Skip from the agent's point of view.
+ */
+const interviewSkipIntentSchema = z.object({
+  outcome: z.literal("skipped"),
+  draftAnswers: z.array(runtimeInterviewAnswerSchema),
+});
+export type InterviewSkipIntent = z.infer<typeof interviewSkipIntentSchema>;
+
+// Live pair (`chat.subscribe@1.7`).
+const interviewAnswerClientFrameSchema = z.object({
+  kind: z.literal("interviewAnswer"),
+  ...ownerActionFrameFields,
+  blockId: z.string(),
+  answers: z.array(runtimeInterviewAnswerSchema),
+});
+
+const interviewErrorClientFrameSchema = z.object({
+  kind: z.literal("interviewError"),
+  ...ownerActionFrameFields,
+  blockId: z.string(),
+  reason: z.string(),
+  // Null (the default) ⇒ the pre-`1.7` meaning, unchanged: an error or an
+  // unanswerable dismiss, with no drafts to save.
+  settlement: interviewSkipIntentSchema.nullable().default(null),
+});
+
+/**
+ * Requeue the SAME durable detached delivery. `blockId` selects the visible
+ * card; settlement and delivery ids are the immutable join guard that proves
+ * it still names the one outbox item this action is allowed to touch.
+ */
+const interviewDeliveryRetryClientFrameSchema = z.object({
+  kind: z.literal("interviewDeliveryRetry"),
+  ...ownerActionFrameFields,
+  blockId: z.string(),
+  settlementId: z.string(),
+  deliveryId: z.string(),
+});
+
+// The client-frame options that follow the interview pair, split out for the
+// same reason as the leading ones above.
+const chatSubscribeClientFrameSchemaOptionsAfterInterview = [
   z.object({
     kind: z.literal("restoreCheckpoint"),
     ...ownerActionFrameFields,
@@ -1319,6 +1509,13 @@ const chatSubscribeClientFrameSchemaBeforeV13Options = [
   }),
 ] as const;
 
+const chatSubscribeClientFrameSchemaBeforeV13Options = [
+  ...chatSubscribeClientFrameSchemaOptionsBeforeInterview,
+  interviewAnswerClientFrameSchemaPreSettlement,
+  interviewErrorClientFrameSchemaPreSettlement,
+  ...chatSubscribeClientFrameSchemaOptionsAfterInterview,
+] as const;
+
 export const chatSubscribeClientFrameSchemaBeforeV13 = z.discriminatedUnion(
   "kind",
   chatSubscribeClientFrameSchemaBeforeV13Options,
@@ -1344,6 +1541,12 @@ const [
   ...chatSubscribeClientFrameSchemaRestOptions
 ] = chatSubscribeClientFrameSchemaBeforeV14Options;
 
+// The same drop-the-first-three destructure applied to the pre-interview
+// segment alone, so the live `1.7` union can re-splice its own interview pair
+// into the middle instead of inheriting the frozen one.
+const [, , , ...chatSubscribeClientFrameSchemaMiddleOptions] =
+  chatSubscribeClientFrameSchemaOptionsBeforeInterview;
+
 // `1.6`: the session-scoped background stop - the escalation the renderer
 // offers when a command item carries `individualStopUnavailable`. Kills the
 // chat's provider session process, ending every background item in it. Live
@@ -1354,15 +1557,47 @@ const stopBackgroundSessionClientFrameSchema = z.object({
   ...ownerActionFrameFields,
 });
 
-const chatSubscribeClientFrameSchemaOptions = [
-  chatSubscribeClientFrameSchemaBeforeV13Options[0].extend({
+// Frozen client frame of the `1.6` line as `host-v1.2.0-rc.1` shipped it.
+// Exported for the same reason `chatSubscribeClientFrameSchemaV14ToV15` is:
+// the host's stream resolver must parse a `1.6` connection against the
+// contract it actually negotiated, so a stale or crafted peer cannot dispatch
+// `1.7`-only action fields (Skip intent, saved drafts, selection evidence) on
+// a line that has no handling for them.
+const chatSubscribeClientFrameSchemaV16Options = [
+  chatSubscribeClientFrameSchemaOptionsBeforeInterview[0].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
   }),
   deleteMessageSuffixClientFrameSchema,
-  chatSubscribeClientFrameSchemaBeforeV13Options[2].extend({
+  chatSubscribeClientFrameSchemaOptionsBeforeInterview[2].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
   }),
   ...chatSubscribeClientFrameSchemaRestOptions,
+  activeProfileUpdateClientFrameSchema,
+  stopBackgroundSessionClientFrameSchema,
+] as const;
+
+export const chatSubscribeClientFrameSchemaV16 = z.discriminatedUnion(
+  "kind",
+  chatSubscribeClientFrameSchemaV16Options,
+);
+
+// Live client frame (`chat.subscribe@1.7`) - the `1.6` composition above with
+// the interview pair swapped for the enhanced one. Variant order is preserved
+// so the two unions differ only where `1.7` genuinely differs.
+const chatSubscribeClientFrameSchemaOptions = [
+  chatSubscribeClientFrameSchemaOptionsBeforeInterview[0].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  deleteMessageSuffixClientFrameSchema,
+  chatSubscribeClientFrameSchemaOptionsBeforeInterview[2].extend({
+    worktreeIntent: worktreeIntentSchema.nullable().default(null),
+  }),
+  ...chatSubscribeClientFrameSchemaMiddleOptions,
+  interviewAnswerClientFrameSchema,
+  interviewErrorClientFrameSchema,
+  interviewDeliveryRetryClientFrameSchema,
+  ...chatSubscribeClientFrameSchemaOptionsAfterInterview,
+  pauseQueueClientFrameSchema,
   activeProfileUpdateClientFrameSchema,
   stopBackgroundSessionClientFrameSchema,
 ] as const;
@@ -1523,7 +1758,7 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     ...textFrameFields,
     ...chatReferenceFields,
     blockId: z.string(),
-    answers: z.array(runtimeInterviewAnswerSchema),
+    answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
     resolvedAt: z.number(),
   }),
   z.object({
@@ -1682,7 +1917,7 @@ const chatSubscribeClientFrameSchemaV10 = z.discriminatedUnion("kind", [
     kind: z.literal("interviewAnswer"),
     ...ownerActionFrameFields,
     blockId: z.string(),
-    answers: z.array(runtimeInterviewAnswerSchema),
+    answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
   }),
   z.object({
     kind: z.literal("interviewError"),
@@ -2027,7 +2262,7 @@ export const chatSubscribeV15 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV15,
 });
 
-// ─── Live `chat.subscribe@1.6` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.6` shape (host-v1.2.0-rc.1, as shipped) ──────
 //
 // `1.6` is where the whole Shells surface joined the chat stream: the chat's
 // own commands (`snapshot.managedCommands` + `managedCommandsChanged`) and the
@@ -2057,20 +2292,143 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 //
 // Those last two arrived on a `1.7` opened above a `1.6` that was itself
 // pinned to a hand-written pre-image bundle, so that the live schemas could
-// grow without mutating it. The release collapsed the two: no peer in the field
-// has ever negotiated `1.6` or `1.7` (the highest minor any released
-// `host-v*`/`cli-v*`/`desktop-v*` baseline carries is `1.5`), so a pre-image
-// that froze `1.6` against `1.7` froze it against nothing, and shipping both
-// minors would have announced two negotiable lines where one peer set exists.
+// grow without mutating it. The release collapsed the two: at that point no
+// peer in the field had ever negotiated `1.6` or `1.7`, so a pre-image that
+// froze `1.6` against `1.7` froze it against nothing, and shipping both minors
+// would have announced two negotiable lines where one peer set exists.
 //
-// This line is therefore bound to the LIVE schemas, and that is what makes the
-// freeze discipline start again cleanly: the moment `1.6` ships, or the moment
-// a `1.7` opens above it, whichever comes first, this line must be re-pinned to
-// a hand-written pre-image bundle the way `1.4` and `1.5` are above. The lines
-// below it are frozen precisely because they HAVE peers; this one does not yet.
+// `host-v1.2.0` then SHIPPED this line, and the note the collapse left behind
+// said exactly what to do next: "the moment `1.6` ships, or the moment a `1.7`
+// opens above it, whichever comes first, this line must be re-pinned to a
+// hand-written pre-image bundle the way `1.4` and `1.5` are above." Both have
+// now happened, and this block is that re-pin. Every schema below is
+// hand-frozen from the `host-v1.2.0` tag.
+//
+// Because that tag is STABLE, `1.6` needs no line-specific fixture: it is an
+// ordinary released baseline. The `protocol-compat` CI workflow resolves it
+// from `git ls-remote` and dumps its surface from the tag, and the local
+// tripwire (`__fixtures__/released-baseline-surface.json`) now carries `1.6`
+// as well. Both read the tag and never the working tree, so neither can be
+// regenerated to green around drift in the schemas below - a red there means
+// freeze the offending sub-schema here. The support floor stays at `1.0.0`
+// with `includeReleaseCandidates: false`; with `1.6` stable there is no longer
+// an RC that would need to look released.
+const chatSnapshotSchemaV16 = z.object({
+  chat: chatSchemaV16,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16,
+});
+
+// `turnStateChanged` carries no interview content, so `1.6` and the live line
+// agree on it today. Pinned anyway, for the reason the `1.5` retro-pin above
+// records: reusing the live frame is safe only until something touches
+// background items again, and by then the released line has peers.
+const chatSubscribeTurnStateChangedServerFrameSchemaV16 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV16,
+  chatSubscribeTurnStateChangedServerFrameSchemaV16,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeCommonServerFrameSchemasV16,
+  blockDeltaServerFrameSchema(runtimeEventSchemaPreSettlement),
+]);
+
 export const chatSubscribeV16 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV16,
+  clientFrameSchema: chatSubscribeClientFrameSchemaV16,
+});
+
+/**
+ * The same shallow snapshot frame for a peer that negotiated `@1.6`.
+ *
+ * Opening `1.7` moved the live line, and without this a `1.6` full-chat
+ * snapshot — the biggest frame this stream has, 10s–100s of MB — would fall
+ * straight into the generic deep parser it was explicitly built to avoid.
+ * That is a performance cliff for the entire shipped RC cohort, caused by a
+ * change they cannot observe. So the fast path is retained per-line, not
+ * per-"is this the newest line".
+ *
+ * The one thing `1.6` genuinely lacks is interview settlement, and it lives
+ * inside `chat.messages`, which this schema does not walk. So this is
+ * deliberately paired with `normalizeInterviewBlocksInShallowSnapshot`: a
+ * targeted pass over interview blocks ONLY, supplying `outcome`/
+ * `draftAnswers`/`settlement`/`diagnostics`/`delivery` and each answer's
+ * `selection` where absent, and touching nothing else. Callers MUST run it
+ * before handing the snapshot to consumers, or those consumers read fields
+ * typed as present that are genuinely missing — the exact hazard the live
+ * schema's doc above describes.
+ *
+ * Every bounded envelope field is still validated deeply, against the FROZEN
+ * `1.6` shapes, which is what makes this exact rather than merely permissive.
+ */
+export const chatSubscribeSnapshotServerFrameShallowSchemaV16 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16.extend({
+    chat: chatSchemaV16.extend({
+      messages: z.array(z.custom<Message>(isStructuralRecord)),
+      events: z.array(z.custom<ChatEvent>(isStructuralRecord)).default([]),
+    }),
+  }),
+});
+
+// ─── Live `chat.subscribe@1.7` contract ────────────────────────────────────
+//
+// `1.7` is the interview-history line. Everything it adds is additive and
+// defaulted, and all of it exists so a settled interview can state what
+// actually happened instead of leaving a renderer to infer it:
+//
+//   - `interviewAnswer.answers[]` and every persisted/streamed answer carry
+//     `selection` — structured provenance for what the user actually picked.
+//     `values` stays canonical and is still the only form a provider sees.
+//   - `interviewError` carries optional Skip intent plus saved `draftAnswers`,
+//     over the existing wire kind (see `interviewSkipIntentSchema` for why no
+//     new action literal). Drafts are history; they never reach the harness.
+//   - `interviewAnswered`/`interviewErrored` echo the canonical outcome, the
+//     saved drafts, and the content-free detached `delivery` projection, so
+//     `pending → delivered` needs no second settlement.
+//   - Snapshot/message interview blocks expose `outcome`, `draftAnswers`,
+//     answer evidence, settlement authority, diagnostics, and `delivery`.
+//
+// A `1.6` peer sees none of it: the frozen bundle above strips every field,
+// and a new client talking to a `1.6` host must strip them on the way OUT too
+// (`projectChatClientFrameForVersion`) — negotiation is the mechanism, not
+// permissive unknown-field parsing.
+export const chatSubscribeV17 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,
@@ -2080,6 +2438,7 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * The live line's version, declared HERE (next to the live contract) so a
  * future line bump cannot miss it. This is the one negotiated version on
  * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
- * doc for why any down-negotiated line must take the deep parse instead.
+ * doc, and `chatSubscribeSnapshotServerFrameShallowSchemaV16` for the one
+ * other line that keeps a (normalized) shallow path.
  */
-export const chatSubscribeLiveSchemaVersion = chatSubscribeV16.schemaVersion;
+export const chatSubscribeLiveSchemaVersion = chatSubscribeV17.schemaVersion;

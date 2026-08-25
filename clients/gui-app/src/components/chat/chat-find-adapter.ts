@@ -14,6 +14,8 @@ export interface ChatFindAdapter extends TileFindAdapter {
   // query, so a closed bar pays no projection cost on streaming updates.
   notifyRowsChanged(): void;
   syncMountedHighlight(): void;
+  /** Leave the current result without closing the query or discarding matches. */
+  dismissActiveMatch(): void;
   dispose(): void;
 }
 
@@ -112,6 +114,10 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   private snapshot: TileFindStateSnapshot;
   private paintFrameId: number | null = null;
   private paintGeneration = 0;
+  // Clearing the find target is an explicit user dismissal. Passive rescans
+  // and virtual-row mount syncs must preserve that state until navigation or a
+  // new search deliberately selects an active match again.
+  private activeMatchDismissed = false;
 
   constructor(options: ChatFindAdapterOptions) {
     this.tileInstanceId = options.tileInstanceId;
@@ -149,6 +155,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
     this.clearReveal();
     this.cancelScheduledPaint();
     this.highlighter.clear();
+    this.activeMatchDismissed = false;
     if (input.query.length === 0) {
       // An empty query needs no projection: skip the supplier entirely and let
       // publishMatchState reset to the idle snapshot.
@@ -173,6 +180,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   next(): void {
     if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    this.activeMatchDismissed = false;
     this.activeMatchIndex = (this.activeMatchIndex + 1) % this.matches.length;
     this.publishMatchState({
       requestId: this.snapshot.requestId,
@@ -184,6 +192,7 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
   previous(): void {
     if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    this.activeMatchDismissed = false;
     this.activeMatchIndex =
       (this.activeMatchIndex - 1 + this.matches.length) % this.matches.length;
     this.publishMatchState({
@@ -246,8 +255,33 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
   }
 
   syncMountedHighlight(): void {
-    if (this.matches.length === 0 || this.snapshot.query.length === 0) return;
+    if (
+      this.activeMatchDismissed ||
+      this.matches.length === 0 ||
+      this.snapshot.query.length === 0
+    ) {
+      return;
+    }
     this.requestHighlightPaint();
+  }
+
+  dismissActiveMatch(): void {
+    if (this.snapshot.query.length === 0) return;
+    this.cancelScheduledPaint();
+    this.highlighter.clear();
+    this.activeMatchDismissed = true;
+    if (
+      this.snapshot.activeUnitId === null &&
+      this.snapshot.exactHighlight === "none"
+    ) {
+      return;
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      activeUnitId: null,
+      exactHighlight: "none",
+    };
+    this.notify();
   }
 
   dispose(): void {
@@ -302,6 +336,21 @@ class ChatFindAdapterImpl implements ChatFindAdapter {
 
     const activeMatch = this.matches.at(this.activeMatchIndex);
     if (activeMatch === undefined) return;
+    if (this.activeMatchDismissed) {
+      this.snapshot = createChatFindSnapshot({
+        requestId: args.requestId,
+        status: "ready",
+        query: args.query,
+        matchCase: args.matchCase,
+        current: this.activeMatchIndex + 1,
+        total: this.matches.length,
+        activeUnitId: null,
+        exactHighlight: "none",
+      });
+      this.highlighter.clear();
+      this.notify();
+      return;
+    }
     this.snapshot = createChatFindSnapshot({
       requestId: args.requestId,
       status: "ready",

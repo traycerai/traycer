@@ -2,8 +2,11 @@ import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schem
 import type { StoredInterviewDraftAnswer } from "@/stores/composer/interview-draft-store";
 
 export interface DraftAnswer {
-  // The set of selected option labels.
-  selected: ReadonlySet<string>;
+  // Interaction-time option indices, not labels. Labels can repeat.
+  selected: ReadonlySet<number>;
+  // Old persisted drafts only carried labels. They may restore a visible
+  // choice, but are never promoted into exact selection evidence.
+  selectionEvidenceExact: boolean;
   // Free-text body when "Other" is selected.
   otherText: string;
   // True when "Other" is checked.
@@ -11,7 +14,12 @@ export interface DraftAnswer {
 }
 
 export function emptyDraft(): DraftAnswer {
-  return { selected: new Set(), otherText: "", otherSelected: false };
+  return {
+    selected: new Set(),
+    selectionEvidenceExact: true,
+    otherText: "",
+    otherSelected: false,
+  };
 }
 
 export function replaceDraftAt(
@@ -40,8 +48,22 @@ export function draftFromStoredAnswer(
   question: InterviewQuestion,
 ): DraftAnswer {
   if (stored === undefined) return emptyDraft();
-  const optionLabels = new Set(question.options.map((option) => option.label));
-  const selected = stored.selected.filter((label) => optionLabels.has(label));
+  const storedIndices = stored.selectedOptionIndices;
+  const exactIndices =
+    storedIndices === undefined
+      ? null
+      : [...new Set(storedIndices)].filter(
+          (index) => index >= 0 && index < question.options.length,
+        );
+  const legacyIndices = stored.selected.flatMap((label) => {
+    const matching = question.options.flatMap((option, index) =>
+      option.label === label ? [index] : [],
+    );
+    // An old label-only row cannot prove which duplicate was selected. Keep
+    // the first visible choice for editing, while keeping evidence neutral.
+    return matching.length === 0 ? [] : [matching[0]];
+  });
+  const selected = exactIndices ?? [...new Set(legacyIndices)];
   // Enforce single-select mutual exclusivity on restore: a stored answer can
   // carry both `selected` and `otherSelected: true` (e.g. hand-edited
   // localStorage, or an older draft written before this invariant existed),
@@ -54,6 +76,7 @@ export function draftFromStoredAnswer(
         ? normalizedSelected
         : normalizedSelected.slice(0, 1),
     ),
+    selectionEvidenceExact: exactIndices !== null,
     otherText: stored.otherText,
     otherSelected: stored.otherSelected,
   };
@@ -61,17 +84,29 @@ export function draftFromStoredAnswer(
 
 export function draftToStoredAnswer(
   draft: DraftAnswer,
+  question: InterviewQuestion,
 ): StoredInterviewDraftAnswer {
   return {
-    selected: [...draft.selected],
+    selected: [...draft.selected].flatMap((index) => {
+      const option = question.options.at(index);
+      return option === undefined ? [] : [option.label];
+    }),
+    selectedOptionIndices: [...draft.selected],
     otherText: draft.otherText,
     otherSelected: draft.otherSelected,
   };
 }
 
-export function draftToAnswerValues(draft: DraftAnswer): ReadonlyArray<string> {
+export function draftToAnswerValues(
+  draft: DraftAnswer,
+  question: InterviewQuestion,
+): ReadonlyArray<string> {
   const otherText = draft.otherText.trim();
+  const selected = [...draft.selected].flatMap((index) => {
+    const option = question.options.at(index);
+    return option === undefined ? [] : [option.label];
+  });
   return draft.otherSelected && otherText.length > 0
-    ? [...draft.selected, otherText]
-    : [...draft.selected];
+    ? [...selected, otherText]
+    : selected;
 }
