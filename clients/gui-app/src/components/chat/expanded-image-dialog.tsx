@@ -9,10 +9,11 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
 import {
   type ImageAction,
-  ImageActions,
   imageFileName,
   performImageAction,
-} from "./segments/image-actions";
+} from "@/lib/images/perform-image-action";
+
+import { ImageActions } from "./segments/image-actions";
 
 export type ExpandedImageState =
   | { readonly status: "loading" }

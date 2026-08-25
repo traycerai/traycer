@@ -14,10 +14,11 @@ import { cn } from "@/lib/utils";
 
 import {
   type ImageAction,
-  ImageActions,
   imageFileName,
   performImageAction,
-} from "./image-actions";
+} from "@/lib/images/perform-image-action";
+
+import { ImageActions } from "./image-actions";
 
 interface ImageLightboxProps {
   readonly src: string;

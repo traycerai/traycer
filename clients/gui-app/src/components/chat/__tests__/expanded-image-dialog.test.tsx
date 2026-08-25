@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -47,11 +46,11 @@ const TINY_PNG_BYTES = Uint8Array.from(
   (char) => char.charCodeAt(0),
 );
 
-function renderOpenDialog(image: ExpandedImageState): ReactNode {
+function renderOpenDialog(image: ExpandedImageState): void {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
-  return render(
+  render(
     <QueryClientProvider client={queryClient}>
       <Dialog open modal={false}>
         <ExpandedImageDialogContent
