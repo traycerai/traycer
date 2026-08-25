@@ -885,8 +885,8 @@ function ProviderEnableSwitch(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      {/* Guard span: the Switch is `disabled` in exactly the state this
-          explains, and a disabled control emits no pointer events. */}
+      {/* Guard span: the Switch stays focusable with aria-disabled when a
+          profile is guarded, while pending state disables pointer events. */}
       <span className="inline-flex">
         <Switch
           id={id}
