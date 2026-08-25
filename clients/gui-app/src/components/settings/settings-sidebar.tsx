@@ -4,8 +4,8 @@ import { ChevronRight } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
-  SETTINGS_SECTIONS,
   SETTINGS_SECTION_GROUPS,
+  visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
@@ -58,6 +58,11 @@ export interface SettingsSidebarProps {
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
   const scope = useHostScope();
+  // The OFFERED list, and the same one the leader digits index: a row's `index`
+  // below is what `singleDigitLeaderDigitFor` badges it with, and
+  // `switchToSettingsSection` walks this list to resolve that digit back to a
+  // section.
+  const sections = visibleSettingsSections();
   // The host picker below shows a live dot and a health word per row, so this
   // is a liveness surface and opts into the registry poll. It is also the ONE
   // place in Settings that has to: the picker is mounted for as long as any
@@ -97,7 +102,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
               group.id === "host" && "ml-4",
             )}
           >
-            {SETTINGS_SECTIONS.map((section, index) =>
+            {sections.map((section, index) =>
               section.group === group.id ? (
                 <SettingsSidebarItem
                   key={section.id}
