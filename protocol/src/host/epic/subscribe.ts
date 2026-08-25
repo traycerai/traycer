@@ -914,7 +914,9 @@ export const epicSubscribeServerFrameSchemaV20 = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("pong"),
-    ...epicSubscribeV2EpochField,
+    // Heartbeats are intercepted by the shared connection handler before a
+    // resolver is selected, so it cannot mint a resolver-local epoch. This is
+    // intentionally the same transport-level shape as @1's pong.
     hasBinaryPayload: z.literal(false),
   }),
 ]);

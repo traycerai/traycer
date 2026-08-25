@@ -124,9 +124,13 @@ const DELETED_TICKET = {
 };
 
 type ReplacementStateKind = (typeof REPLACEMENT_STATE_KINDS)[number];
+type EpochOnlyKind = Exclude<
+  EpicSubscribeServerFrameV20["kind"],
+  ReplacementStateKind | "pong"
+>;
 
 const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
-  readonly kind: Exclude<EpicSubscribeServerFrameV20["kind"], ReplacementStateKind>;
+  readonly kind: EpochOnlyKind;
   readonly extra: Record<string, unknown>;
   readonly hasBinaryPayload: boolean;
 }> = [
@@ -211,11 +215,6 @@ const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
     extra: { artifactId: "spec-1", reason: "deleted", terminal: true },
     hasBinaryPayload: false,
   },
-  {
-    kind: "pong",
-    extra: {},
-    hasBinaryPayload: false,
-  },
 ];
 
 function replacementStateFixture(
@@ -287,9 +286,7 @@ function epochOnlyFixture(
   };
 }
 
-function epochOnlyByKind(
-  kind: (typeof EPOCH_ONLY_KIND_FIXTURES)[number]["kind"],
-): (typeof EPOCH_ONLY_KIND_FIXTURES)[number] {
+function epochOnlyByKind(kind: EpochOnlyKind): (typeof EPOCH_ONLY_KIND_FIXTURES)[number] {
   const fixture = EPOCH_ONLY_KIND_FIXTURES.find((entry) => entry.kind === kind);
   if (fixture === undefined) {
     throw new Error(`missing epoch-only fixture for ${kind}`);
@@ -374,6 +371,12 @@ function applyEpicV2Ordering(
   state: EpochSeqState,
   frame: EpicSubscribeServerFrameV20,
 ): { readonly decision: EpochSeqDecision; readonly next: EpochSeqState } {
+  // Heartbeats are intercepted below the resolver, so `pong` has no epoch and
+  // is not subject to the typed-plane discard fence.
+  if (frame.kind === "pong") {
+    return { decision: "accept", next: state };
+  }
+
   const isSnapshot = frame.kind === "epicStateSnapshot";
   const seq = replacementStateSeq(frame);
 
@@ -643,11 +646,14 @@ describe("epic.subscribe@2 peer combinations", () => {
 });
 
 describe("epic.subscribe@2 subscription-scoped server frames", () => {
-  it("requires streamEpoch on every server frame and never retains payload epicId", () => {
+  it("requires streamEpoch on typed server frames and never retains payload epicId", () => {
     for (const kind of REPLACEMENT_STATE_KINDS) {
       const parsed = epicSubscribeServerFrameSchemaV20.parse(
         replacementStateFixture(kind, STREAM_EPOCH, 0),
       );
+      if (parsed.kind === "pong") {
+        throw new Error("replacement-state fixture parsed as framework pong");
+      }
       expect(parsed.streamEpoch).toBe(STREAM_EPOCH);
       expect("epicId" in parsed).toBe(false);
       expect("seq" in parsed).toBe(true);
@@ -657,11 +663,39 @@ describe("epic.subscribe@2 subscription-scoped server frames", () => {
       const parsed = epicSubscribeServerFrameSchemaV20.parse(
         epochOnlyFixture(fixture, STREAM_EPOCH),
       );
+      if (parsed.kind === "pong") {
+        throw new Error("epoch-only fixture parsed as framework pong");
+      }
       expect(parsed.kind).toBe(fixture.kind);
       expect(parsed.streamEpoch).toBe(STREAM_EPOCH);
       expect("epicId" in parsed).toBe(false);
       expect("seq" in parsed).toBe(false);
     }
+  });
+
+  it("parses a framework-level pong without streamEpoch", () => {
+    const parsed = epicSubscribeServerFrameSchemaV20.parse({
+      kind: "pong",
+      hasBinaryPayload: false,
+    });
+    expect(parsed).toEqual({ kind: "pong", hasBinaryPayload: false });
+    expect("streamEpoch" in parsed).toBe(false);
+    expect("seq" in parsed).toBe(false);
+
+    const leakedEpoch = epicSubscribeServerFrameSchemaV20.parse({
+      kind: "pong",
+      streamEpoch: STREAM_EPOCH,
+      hasBinaryPayload: false,
+    });
+    expect(leakedEpoch).toEqual({ kind: "pong", hasBinaryPayload: false });
+    expect("streamEpoch" in leakedEpoch).toBe(false);
+
+    expect(
+      epicSubscribeServerFrameSchemaV20.safeParse({
+        kind: "pong",
+        hasBinaryPayload: true,
+      }).success,
+    ).toBe(false);
   });
 
   it("strips a leaked epicId even when the host echoes the open-request id", () => {
@@ -837,10 +871,14 @@ describe("epic.subscribe@2 epoch/seq discard rules", () => {
       "discard",
     );
 
-    const staleEpochPong = epicSubscribeServerFrameSchemaV20.parse(
-      epochOnlyFixture(epochOnlyByKind("pong"), "epoch-old"),
-    );
-    expect(applyEpicV2Ordering(state, staleEpochPong).decision).toBe("discard");
+    const frameworkPong = epicSubscribeServerFrameSchemaV20.parse({
+      kind: "pong",
+      hasBinaryPayload: false,
+    });
+    const afterPong = applyEpicV2Ordering(state, frameworkPong);
+    expect(afterPong.decision).toBe("accept");
+    expect(afterPong.next).toEqual(state);
+    expect("streamEpoch" in frameworkPong).toBe(false);
 
     const replacement = epicSubscribeServerFrameSchemaV20.parse(
       replacementStateFixture("epicStateSnapshot", "epoch-b", 0),
