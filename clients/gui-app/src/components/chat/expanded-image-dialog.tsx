@@ -38,18 +38,6 @@ export function ExpandedImageDialogContent(props: {
 }): ReactNode {
   const image = props.image;
   const contentRef = useRef<HTMLDivElement>(null);
-  const imageAction = useMutation<void, Error, ImageAction>({
-    mutationKey: imageMutationKeys.perform(),
-    mutationFn: (action) => {
-      if (image.status !== "ready") return Promise.resolve();
-      const name =
-        props.suggestedName ??
-        imageFileName(props.alt, image.src, image.mediaType);
-      return performImageAction(action, image.src, image.mediaType, name);
-    },
-    onError: (error, action) =>
-      toastFromRunnerError(error, `Failed to ${action} image`),
-  });
 
   let body: ReactNode;
   if (image.status === "loading") {
@@ -79,12 +67,11 @@ export function ExpandedImageDialogContent(props: {
           draggable={false}
         />
         <div className="absolute bottom-3 right-3">
-          <ImageActions
-            pendingAction={imageAction.isPending ? imageAction.variables : null}
-            canCopy={isClipboardImageMediaType(image.mediaType)}
-            remote={null}
-            onCopy={() => imageAction.mutate("copy")}
-            onDownload={() => imageAction.mutate("download")}
+          <ExpandedImageActionBar
+            src={image.src}
+            mediaType={image.mediaType}
+            alt={props.alt}
+            suggestedName={props.suggestedName}
           />
         </div>
       </div>
@@ -109,5 +96,42 @@ export function ExpandedImageDialogContent(props: {
       <DialogTitle className="sr-only">{props.title}</DialogTitle>
       {body}
     </DialogContent>
+  );
+}
+
+/**
+ * Owns the copy/download mutation, deliberately BELOW `DialogContent`: Radix
+ * mounts a closed dialog's subtree lazily, so keeping the hook here means a
+ * thumbnail that never gets opened costs no query client at all - the chips
+ * render inside surfaces that have no reason to provide one.
+ */
+function ExpandedImageActionBar(props: {
+  readonly src: string;
+  readonly mediaType: string;
+  readonly alt: string;
+  readonly suggestedName: string | null;
+}): ReactNode {
+  const imageAction = useMutation<void, Error, ImageAction>({
+    mutationKey: imageMutationKeys.perform(),
+    mutationFn: (action) =>
+      performImageAction(
+        action,
+        props.src,
+        props.mediaType,
+        props.suggestedName ??
+          imageFileName(props.alt, props.src, props.mediaType),
+      ),
+    onError: (error, action) =>
+      toastFromRunnerError(error, `Failed to ${action} image`),
+  });
+
+  return (
+    <ImageActions
+      pendingAction={imageAction.isPending ? imageAction.variables : null}
+      canCopy={isClipboardImageMediaType(props.mediaType)}
+      remote={null}
+      onCopy={() => imageAction.mutate("copy")}
+      onDownload={() => imageAction.mutate("download")}
+    />
   );
 }
