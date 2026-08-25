@@ -1495,7 +1495,6 @@ describe("createChatSessionStore", () => {
       draftAnswers: [],
       delivery: null,
     });
-
     const message = harness.handle.store.getState().messages[0];
     const block =
       message.role === "assistant"
@@ -1508,6 +1507,190 @@ describe("createChatSessionStore", () => {
       outcome: "answered",
       settlement: { settlementId: "settlement-new", source: "gui" },
       delivery: { deliveryId: "delivery-new", status: "failed" },
+    });
+  });
+
+  it("applies a lifecycle frame only to the newest unresolved owner when block ids repeat", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const historical = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const current = persistedInterviewMessage({
+      deliveryId: "delivery-placeholder",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const currentBlock = current.blocks[0];
+    if (currentBlock.type !== "interview") {
+      throw new Error("Expected interview");
+    }
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        { ...historical, messageId: "assistant-historical" },
+        {
+          ...current,
+          messageId: "assistant-current",
+          blocks: [
+            {
+              ...currentBlock,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An unchanged update for the older exact settlement must still count as
+    // routed; it must not fall through and install old authority on the newer
+    // unresolved row that happens to reuse the block id.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 4,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "pending",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-current",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 6,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const messages = harness.handle.store.getState().messages;
+    const oldBlock =
+      messages[0]?.role === "assistant" ? messages[0].blocks[0] : null;
+    const newBlock =
+      messages[1]?.role === "assistant" ? messages[1].blocks[0] : null;
+    expect(oldBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      settlement: { settlementId: "settlement-1" },
+      delivery: { deliveryId: "delivery-old", generation: 1 },
+    });
+    expect(newBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Beta"] }],
+      settlement: { settlementId: "settlement-current" },
+    });
+  });
+
+  it("does not let an ambiguous legacy cleanup overwrite a terminal outcome", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-legacy",
+      status: "delivered",
+      retryable: false,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [{ ...existing, settlement: null, delivery: null }],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Late ambiguous cleanup",
+      resolvedAt: 6,
+      settlementId: null,
+      settlementSource: null,
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block = message.role === "assistant" ? message.blocks[0] : null;
+    expect(block).toMatchObject({
+      status: "completed",
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      error: null,
     });
   });
 

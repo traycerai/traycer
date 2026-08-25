@@ -2599,19 +2599,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           .getState()
           .clearDraft(frame.chatId, frame.blockId);
         set((state) => {
-          const messages = withInterviewLifecycleProjection(state.messages, {
-            kind: "answered",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: frame.answers,
-            reason: null,
-            outcome: "answered",
-            draftAnswers: [],
-            delivery: frame.delivery,
-          });
-          const liveAssistantMessage = withLiveInterviewLifecycleProjection(
+          const lifecycle = withInterviewLifecycleState(
+            state.messages,
             state.liveAssistantMessage,
             {
               kind: "answered",
@@ -2626,6 +2615,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               delivery: frame.delivery,
             },
           );
+          const { messages, liveAssistantMessage } = lifecycle;
           return {
             messages,
             liveAssistantMessage,
@@ -2660,19 +2650,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           .getState()
           .clearDraft(frame.chatId, frame.blockId);
         set((state) => {
-          const messages = withInterviewLifecycleProjection(state.messages, {
-            kind: "errored",
-            blockId: frame.blockId,
-            settlementId: frame.settlementId,
-            settlementSource: frame.settlementSource,
-            resolvedAt: frame.resolvedAt,
-            answers: [],
-            reason: frame.reason,
-            outcome: frame.outcome,
-            draftAnswers: frame.draftAnswers,
-            delivery: frame.delivery,
-          });
-          const liveAssistantMessage = withLiveInterviewLifecycleProjection(
+          const lifecycle = withInterviewLifecycleState(
+            state.messages,
             state.liveAssistantMessage,
             {
               kind: "errored",
@@ -2687,6 +2666,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               delivery: frame.delivery,
             },
           );
+          const { messages, liveAssistantMessage } = lifecycle;
           return {
             messages,
             liveAssistantMessage,
@@ -4845,85 +4825,207 @@ type InterviewLifecycleProjection = {
 function withInterviewLifecycleBlocks(
   blocks: ReadonlyArray<ContentBlock>,
   projection: InterviewLifecycleProjection,
+  allowUnresolvedFallback: boolean,
 ): ReadonlyArray<ContentBlock> {
-  const next = blocks.map((block): ContentBlock => {
-    if (block.type !== "interview" || block.blockId !== projection.blockId) {
-      return block;
-    }
-    if (
-      block.settlement !== null &&
-      projection.settlementId !== null &&
-      block.settlement.settlementId !== projection.settlementId
-    ) {
-      return block;
-    }
-    if (
-      projection.settlementId !== null &&
-      projection.settlementSource !== null &&
-      projection.outcome !== null
-    ) {
-      const reduced = applyInterviewSettlement(block, {
-        settlementId: projection.settlementId,
-        source: projection.settlementSource,
-        outcome: projection.outcome,
-        answers: [...projection.answers],
-        draftAnswers: [...projection.draftAnswers],
-        reason: projection.reason,
-        diagnostic: null,
-        delivery: projection.delivery,
-        timestamp: projection.resolvedAt,
-      });
-      return reduced.changed ? { ...block, ...reduced.patch } : block;
-    }
-    if (block.settlement !== null) return block;
+  const targetIndex = interviewLifecycleBlockIndex(
+    blocks,
+    projection,
+    allowUnresolvedFallback,
+  );
+  if (targetIndex < 0) return blocks;
+  const block = blocks[targetIndex];
+  if (block.type !== "interview") return blocks;
+  let updated: ContentBlock;
+  if (
+    projection.settlementId !== null &&
+    projection.settlementSource !== null &&
+    projection.outcome !== null
+  ) {
+    const reduced = applyInterviewSettlement(block, {
+      settlementId: projection.settlementId,
+      source: projection.settlementSource,
+      outcome: projection.outcome,
+      answers: [...projection.answers],
+      draftAnswers: [...projection.draftAnswers],
+      reason: projection.reason,
+      diagnostic: null,
+      delivery: projection.delivery,
+      timestamp: projection.resolvedAt,
+    });
+    updated = reduced.changed ? { ...block, ...reduced.patch } : block;
+  } else if (block.settlement !== null || block.outcome !== null) {
+    // A partial legacy tuple cannot weaken a terminal fact already projected
+    // for this row. This also makes duplicate legacy cleanup frames monotonic.
+    updated = block;
+  } else {
     const delivery = block.delivery;
-    return projection.kind === "answered"
-      ? {
-          ...block,
-          status: "completed",
-          answers: [...projection.answers],
-          error: null,
-          outcome: "answered",
-          draftAnswers: [],
-          delivery,
-        }
-      : {
-          ...block,
-          status: "errored",
-          error: projection.reason,
-          outcome: projection.outcome,
-          draftAnswers:
-            projection.outcome === "skipped"
-              ? [...projection.draftAnswers]
-              : [],
-          delivery,
-        };
-  });
-  return next.some((block, index) => block !== blocks[index]) ? next : blocks;
+    updated =
+      projection.kind === "answered"
+        ? {
+            ...block,
+            status: "completed",
+            answers: [...projection.answers],
+            error: null,
+            outcome: "answered",
+            draftAnswers: [],
+            delivery,
+          }
+        : {
+            ...block,
+            status: "errored",
+            error: projection.reason,
+            outcome: projection.outcome,
+            draftAnswers:
+              projection.outcome === "skipped"
+                ? [...projection.draftAnswers]
+                : [],
+            delivery,
+          };
+  }
+  if (updated === block) return blocks;
+  const next = blocks.slice();
+  next[targetIndex] = updated;
+  return next;
 }
 
-function withInterviewLifecycleProjection(
+function interviewLifecycleBlockIndex(
+  blocks: ReadonlyArray<ContentBlock>,
+  projection: InterviewLifecycleProjection,
+  allowUnresolvedFallback: boolean,
+): number {
+  if (projection.settlementId !== null) {
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      const block = blocks[index];
+      if (
+        block.type === "interview" &&
+        block.blockId === projection.blockId &&
+        block.settlement?.settlementId === projection.settlementId
+      ) {
+        return index;
+      }
+    }
+  }
+  if (!allowUnresolvedFallback) return -1;
+  // A first lifecycle frame installs authority only on the newest unresolved
+  // owner. Never fall back to an older terminal row that merely reused the id.
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (
+      block.type === "interview" &&
+      block.blockId === projection.blockId &&
+      block.status === "streaming" &&
+      block.settlement === null
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function withInterviewLifecycleProjectionPass(
   messages: ReadonlyArray<Message>,
   projection: InterviewLifecycleProjection,
-): ReadonlyArray<Message> {
-  const next = messages.map((message): Message => {
-    if (message.role !== "assistant") return message;
-    const blocks = withInterviewLifecycleBlocks(message.blocks, projection);
-    if (blocks === message.blocks) return message;
-    return { ...message, blocks: [...blocks] };
-  });
-  return next.some((message, index) => message !== messages[index])
-    ? next
-    : messages;
+  allowUnresolvedFallback: boolean,
+): {
+  readonly messages: ReadonlyArray<Message>;
+  readonly matched: boolean;
+} {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "assistant") continue;
+    if (
+      interviewLifecycleBlockIndex(
+        message.blocks,
+        projection,
+        allowUnresolvedFallback,
+      ) < 0
+    ) {
+      continue;
+    }
+    const blocks = withInterviewLifecycleBlocks(
+      message.blocks,
+      projection,
+      allowUnresolvedFallback,
+    );
+    if (blocks === message.blocks) return { messages, matched: true };
+    const next = messages.slice();
+    next[index] = { ...message, blocks: [...blocks] };
+    return { messages: next, matched: true };
+  }
+  return { messages, matched: false };
 }
 
-function withLiveInterviewLifecycleProjection(
-  message: LiveAssistantMessage | null,
+function withInterviewLifecycleState(
+  messages: ReadonlyArray<Message>,
+  liveAssistantMessage: LiveAssistantMessage | null,
   projection: InterviewLifecycleProjection,
-): LiveAssistantMessage | null {
-  if (message === null) return null;
-  const blocks = withInterviewLifecycleBlocks(message.blocks, projection);
-  return blocks === message.blocks ? message : { ...message, blocks };
+): {
+  readonly messages: ReadonlyArray<Message>;
+  readonly liveAssistantMessage: LiveAssistantMessage | null;
+} {
+  if (projection.settlementId !== null) {
+    const exactMessages = withInterviewLifecycleProjectionPass(
+      messages,
+      projection,
+      false,
+    );
+    if (exactMessages.matched) {
+      return { messages: exactMessages.messages, liveAssistantMessage };
+    }
+    if (liveAssistantMessage !== null) {
+      const exactLiveMatched =
+        interviewLifecycleBlockIndex(
+          liveAssistantMessage.blocks,
+          projection,
+          false,
+        ) >= 0;
+      const exactLiveBlocks = withInterviewLifecycleBlocks(
+        liveAssistantMessage.blocks,
+        projection,
+        false,
+      );
+      if (exactLiveMatched) {
+        return {
+          messages,
+          liveAssistantMessage:
+            exactLiveBlocks === liveAssistantMessage.blocks
+              ? liveAssistantMessage
+              : { ...liveAssistantMessage, blocks: exactLiveBlocks },
+        };
+      }
+    }
+  }
+  if (liveAssistantMessage !== null) {
+    const liveMatched =
+      interviewLifecycleBlockIndex(
+        liveAssistantMessage.blocks,
+        projection,
+        true,
+      ) >= 0;
+    const liveBlocks = withInterviewLifecycleBlocks(
+      liveAssistantMessage.blocks,
+      projection,
+      true,
+    );
+    if (liveMatched) {
+      return {
+        messages,
+        liveAssistantMessage:
+          liveBlocks === liveAssistantMessage.blocks
+            ? liveAssistantMessage
+            : { ...liveAssistantMessage, blocks: liveBlocks },
+      };
+    }
+  }
+  const unresolvedMessages = withInterviewLifecycleProjectionPass(
+    messages,
+    projection,
+    true,
+  );
+  return {
+    messages: unresolvedMessages.messages,
+    liveAssistantMessage,
+  };
 }
 
 function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
