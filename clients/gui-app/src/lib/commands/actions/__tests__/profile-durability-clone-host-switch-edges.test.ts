@@ -118,7 +118,13 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
 function buildClient(
   hostId: string,
   providersListHandler:
-    (() => { providers: ProviderCliState[]; native: null }) | null,
+    | (() =>
+        | {
+            providers: ProviderCliState[];
+            native: null;
+          }
+        | Promise<{ providers: ProviderCliState[]; native: null }>)
+    | null,
 ): HostClient<HostRpcRegistry> {
   const entry = {
     hostId,
@@ -313,6 +319,74 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     expect(onProfileFallbackToAmbient).toHaveBeenCalledTimes(1);
     expect(createChat).toHaveBeenCalledTimes(1);
     expect(createChat.mock.calls[0][0].settings?.profileId).toBeNull();
+  });
+
+  it("suppresses ambient fallback notice when cancellation wins during profile resolution", async () => {
+    const createChat = vi.fn<CreateChatCommand>();
+    const onProfileFallbackToAmbient = vi.fn();
+    const targetProviders = new Promise<{
+      providers: ProviderCliState[];
+      native: null;
+    }>((resolve) => {
+      setTimeout(
+        () =>
+          resolve({
+            providers: [
+              claudeState([
+                profile("ambient", "ambient", "Terminal account", "acct-9"),
+              ]),
+            ],
+            native: null,
+          }),
+        0,
+      );
+    });
+    let requestCount = 0;
+    const directory = fakeDirectory([
+      {
+        hostId: "source-host",
+        label: "Source",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:0/source",
+        version: "0.0.0-mock",
+        transportDialability: "dialable",
+      },
+      {
+        hostId: "target-host",
+        label: "Target",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:0/target",
+        version: "0.0.0-mock",
+        transportDialability: "dialable",
+      },
+    ]);
+    const cancel = cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory,
+        createChat,
+        onProfileFallbackToAmbient,
+        globalClient: buildClient("global", () => {
+          requestCount += 1;
+          return requestCount === 1
+            ? targetProviders
+            : {
+                providers: [
+                  claudeState([
+                    profile("source-work-uuid", "managed", "Work", "acct-1"),
+                  ]),
+                ],
+                native: null,
+              };
+        }),
+      }),
+    );
+
+    cancel();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+
+    expect(onProfileFallbackToAmbient).not.toHaveBeenCalled();
+    expect(createChat).not.toHaveBeenCalled();
   });
 
   it("ambient source settings pass through when Terminal is enabled", async () => {

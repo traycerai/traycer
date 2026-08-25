@@ -248,6 +248,10 @@ export function cloneChatOnHostSwitch(
         if (!cancelled) args.onProfileSelectionRequired(resolution);
         return;
       }
+      if (cancelled) return;
+      if (resolution.fallenBackToAmbient) {
+        args.onProfileFallbackToAmbient();
+      }
       openWithForkSource(resolution.settings, {
         boundary: "latest",
         sourceChatId: args.sourceChatId,
@@ -284,11 +288,15 @@ export function cloneChatOnHostSwitch(
 async function resolveSettingsForClone(
   args: CloneChatOnHostSwitchArgs,
 ): Promise<
-  | { readonly status: "ready"; readonly settings: ChatRunSettings | null }
+  | {
+      readonly status: "ready";
+      readonly settings: ChatRunSettings | null;
+      readonly fallenBackToAmbient: boolean;
+    }
   | ClonedChatProfileRecoveryRequired
 > {
   if (args.sourceSettings === null) {
-    return { status: "ready", settings: null };
+    return { status: "ready", settings: null, fallenBackToAmbient: false };
   }
   const targetEntry = args.directory.findById(args.targetHostId);
   const targetClient =
@@ -300,12 +308,10 @@ async function resolveSettingsForClone(
     if (providerId !== null) {
       return { status: "catalog-unavailable", providerId };
     }
-    if (args.sourceSettings.profileId !== null) {
-      args.onProfileFallbackToAmbient();
-    }
     return {
       status: "ready",
       settings: { ...args.sourceSettings, profileId: null },
+      fallenBackToAmbient: args.sourceSettings.profileId !== null,
     };
   }
   const sourceEntry = args.directory.findById(args.sourceHostId);
@@ -321,8 +327,9 @@ async function resolveSettingsForClone(
     explicitTargetProfileId: args.explicitTargetProfileId,
   });
   if (resolved.status !== "ready") return resolved;
-  if (resolved.fallenBackToAmbient) {
-    args.onProfileFallbackToAmbient();
-  }
-  return { status: "ready", settings: resolved.settings };
+  return {
+    status: "ready",
+    settings: resolved.settings,
+    fallenBackToAmbient: resolved.fallenBackToAmbient,
+  };
 }
