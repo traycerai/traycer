@@ -299,6 +299,7 @@ export function ProviderProfileScopedSection(
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
+          profileEnablementPending={profileEnablementPending}
           eligibilityControls={
             profileEnablementAvailable
               ? {

@@ -56,6 +56,7 @@ interface HarnessModelPickerPanelProps {
   readonly activeProfileId: string | null;
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   /** The browsed provider's CLI state, for the ambient-auth line shown when
    *  the provider has under 2 profiles (the profile dropdown owns identity
    *  above that). `null` when `providers.list` hasn't resolved it. */
@@ -132,6 +133,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     activeProfileId,
     activeProfileIdByHarnessId,
     activeProviderProfiles,
+    profileEnablementPending,
     activeProviderState,
     lockedHarnessId,
     degradedHarnessIds,
@@ -263,6 +265,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 createProfileDisabled={createProfileDisabled}
                 createProfileDisabledReason={createProfileDisabledReason}
                 shortcutHintForIndex={pickerProfileShortcutHintForIndex}
+                profileEnablementPending={profileEnablementPending}
                 contentContainer={profileDropdownContainer}
                 inputRef={inputRef}
                 runTargetHostId={runTargetHostId}

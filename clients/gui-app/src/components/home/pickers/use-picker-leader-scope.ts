@@ -5,6 +5,7 @@ import {
   type RailEntry,
 } from "@/components/home/pickers/harness-rail-providers";
 import {
+  eligibleProfilesForShortcut,
   profileCommitId,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
@@ -161,20 +162,14 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
           // rendered (2+ profiles) - otherwise there is nothing to hint or
           // dispatch to, matching the rail/reasoning gates above.
           isActive: () =>
-            stateRef.current.activeProviderProfiles.filter(
-              (profile) =>
-                profile.enabled &&
-                !stateRef.current.profileEnablementPending(
-                  profileCommitId(profile),
-                ),
+            eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
             ).length >= 2,
           dispatch: (digit) => {
-            const profiles = stateRef.current.activeProviderProfiles.filter(
-              (profile) =>
-                profile.enabled &&
-                !stateRef.current.profileEnablementPending(
-                  profileCommitId(profile),
-                ),
+            const profiles = eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
             );
             // Beyond digit 9, profiles stay click-only - mirrors the provider
             // rail's own overflow behavior above.

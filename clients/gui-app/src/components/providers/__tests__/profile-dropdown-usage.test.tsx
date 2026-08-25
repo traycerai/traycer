@@ -226,6 +226,7 @@ function renderDropdown(
         digit: String(index + 1),
         label: `Hint ${index + 1}`,
       })}
+      profileEnablementPending={null}
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}

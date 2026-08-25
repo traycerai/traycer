@@ -179,6 +179,7 @@ function renderDropdown(input: RenderDropdownInput) {
       createProfileDisabled={input.createProfileDisabled}
       createProfileDisabledReason={input.createProfileDisabledReason}
       shortcutHintForIndex={input.shortcutHintForIndex}
+      profileEnablementPending={input.profileEnablementPending}
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
       usagePresentation={null}
@@ -539,6 +540,27 @@ describe("<ProfileDropdown />", () => {
           name: "Terminal account profile controls",
         }),
       ).getByTestId("model-profile-digit-1"),
+    ).toBeDefined();
+  });
+
+  it("keeps picker shortcut indexes aligned when controls are hidden", () => {
+    renderDropdown(
+      baseDropdownInput({
+        profiles: [AMBIENT, WORK, PERSONAL_SIGNED_OUT],
+        profileEnablementAvailable: false,
+        profileEnablementPending: (profileId) => profileId === "work-profile",
+      }),
+    );
+
+    expect(
+      within(
+        screen.getByRole("group", { name: "Work profile controls" }),
+      ).queryByTestId("model-profile-digit-2"),
+    ).toBeNull();
+    expect(
+      within(
+        screen.getByRole("group", { name: "Personal profile controls" }),
+      ).getByTestId("model-profile-digit-2"),
     ).toBeDefined();
   });
 

@@ -111,6 +111,7 @@ function NestedPickerSurface() {
               createProfileDisabled={false}
               createProfileDisabledReason={undefined}
               shortcutHintForIndex={noShortcutHint}
+              profileEnablementPending={null}
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
@@ -264,6 +265,7 @@ function OpenProfileDropdownSurface() {
               createProfileDisabled={false}
               createProfileDisabledReason={undefined}
               shortcutHintForIndex={noShortcutHint}
+              profileEnablementPending={null}
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}

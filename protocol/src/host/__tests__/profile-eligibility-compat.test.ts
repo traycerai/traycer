@@ -77,10 +77,10 @@ describe("profile eligibility protocol compatibility", () => {
     );
   });
 
-  it("rejects a malformed present profile eligibility value instead of enabling it", () => {
+  it("normalizes a malformed present profile eligibility value to enabled", () => {
     const malformed = { ...profileRow(undefined, null), enabled: "yes" };
 
-    expect(providerProfileSchema.safeParse(malformed).success).toBe(false);
+    expect(providerProfileSchema.parse(malformed).enabled).toBe(true);
   });
 
   it("upgrades a v7 response with legacy profiles as enabled", () => {
@@ -138,6 +138,9 @@ describe("profile eligibility protocol compatibility", () => {
     ).not.toContain("disabled");
     expect(downgraded.value.providers[0]?.profiles[0]).not.toHaveProperty(
       "launchCommand",
+    );
+    expect(downgraded.value.providers[0]?.profiles[0]).not.toHaveProperty(
+      "enabled",
     );
   });
 

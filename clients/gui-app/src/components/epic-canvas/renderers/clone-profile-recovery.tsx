@@ -88,6 +88,7 @@ export function CloneProfileRecovery(props: {
             contentContainer={null}
             onCloseAutoFocus={null}
             usagePresentation={null}
+            profileEnablementPending={null}
             eligibilityControls={null}
             admissionByProfileId={null}
           />
@@ -115,14 +116,24 @@ export function CloneProfileRecovery(props: {
         </div>
       )}
       {profiles.length > 0 ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          onClick={props.onOpenProviderSettings}
-        >
-          Open provider settings
-        </Button>
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={props.onOpenProviderSettings}
+          >
+            Open provider settings
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </Button>
+        </>
       ) : null}
     </RecoveryBar>
   );

@@ -656,6 +656,7 @@ import {
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV71,
+  isProfileEnabled,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
   providersModelProviderAuthRequestSchema,
@@ -2126,7 +2127,7 @@ function enabledProviderProfilesOnly(
 ): ProviderCliState[] {
   return providers.map((provider) => ({
     ...provider,
-    profiles: provider.profiles.filter((profile) => profile.enabled !== false),
+    profiles: provider.profiles.filter(isProfileEnabled),
   }));
 }
 

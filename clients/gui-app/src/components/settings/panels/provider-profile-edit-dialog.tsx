@@ -12,6 +12,7 @@ import { ProviderProfileCard } from "@/components/providers/provider-profile-car
 import {
   profileCommitId,
   profileDisplayLabel,
+  profileEnablementTooltipText,
   profileEligibilityToggleDisabledReason,
 } from "@/components/providers/provider-profile-model";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -111,7 +112,10 @@ function ProfileEligibilityEditor(props: {
         </div>
       </div>
       <TooltipWrapper
-        label={props.disabledReason}
+        label={profileEnablementTooltipText(
+          props.profile.enabled,
+          props.disabledReason,
+        )}
         side="left"
         sideOffset={6}
         align={undefined}

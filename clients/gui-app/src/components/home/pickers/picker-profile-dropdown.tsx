@@ -32,6 +32,7 @@ interface PickerProfileDropdownProps {
   readonly shortcutHintForIndex: (
     index: number,
   ) => ProfileDropdownShortcutHint | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly contentContainer: HTMLElement | null;
   readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly runTargetHostId: string | null;
@@ -191,6 +192,7 @@ function PickerProfileDropdownView({
       createProfileDisabled={props.createProfileDisabled}
       createProfileDisabledReason={props.createProfileDisabledReason}
       shortcutHintForIndex={props.shortcutHintForIndex}
+      profileEnablementPending={props.profileEnablementPending}
       contentContainer={props.contentContainer}
       onCloseAutoFocus={() => props.inputRef.current?.focus()}
       usagePresentation={usagePresentation}

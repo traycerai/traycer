@@ -168,9 +168,14 @@ describe("<CloneProfileRecovery /> catalog recovery", () => {
       screen.getByRole("menuitem", { name: /Work.*Disabled/ }),
     ).toBeDefined();
 
+    fireEvent.click(screen.getByRole("menuitem", { name: /Personal/ }));
+    expect(props.onChooseProfile).toHaveBeenCalledWith("personal");
+
     fireEvent.click(
       screen.getByRole("button", { name: "Open provider settings" }),
     );
     expect(props.onOpenProviderSettings).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
 });

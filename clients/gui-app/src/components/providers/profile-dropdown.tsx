@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
+  eligibleProfilesForShortcut,
   profileCommitId,
   profileDisplayLabel,
   profileEnablementTooltipText,
@@ -45,6 +46,21 @@ const PROFILE_DROPDOWN_KEYS = new Set([
   "Enter",
   "Escape",
 ]);
+
+const NO_PROFILE_ENABLEMENT_PENDING = (): boolean => false;
+
+function resolveShortcutProfiles(
+  profiles: readonly ProviderProfile[],
+  profileEnablementPending: ProfileDropdownProps["profileEnablementPending"],
+  eligibilityControls: ProfileDropdownEligibilityControls | null,
+): ProviderProfile[] {
+  return eligibleProfilesForShortcut(
+    profiles,
+    profileEnablementPending ??
+      eligibilityControls?.pending ??
+      NO_PROFILE_ENABLEMENT_PENDING,
+  );
+}
 
 /** A row's ⌘⇧-digit shortcut hint - `digit` drives the row's test id,
  *  `label` is the displayed chord text. Keeping both explicit (rather than
@@ -79,6 +95,8 @@ interface ProfileDropdownProps {
   readonly shortcutHintForIndex: (
     index: number,
   ) => ProfileDropdownShortcutHint | null;
+  readonly profileEnablementPending:
+    ((profileId: string | null) => boolean) | null;
   /** Portal target for nested surfaces. The model picker passes its popover
    *  node so dropdown outside-click handling does not dismiss the whole picker;
    *  Settings passes null to keep the default document-level portal. */
@@ -121,6 +139,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     createProfileDisabled,
     createProfileDisabledReason,
     shortcutHintForIndex,
+    profileEnablementPending,
     contentContainer,
     onCloseAutoFocus,
     usagePresentation,
@@ -142,6 +161,11 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     (profile) => profileCommitId(profile) === previewProfileId,
   );
   const previewEntry = usagePresentation?.entries.get(previewProfileId);
+  const shortcutProfiles = resolveShortcutProfiles(
+    profiles,
+    profileEnablementPending,
+    eligibilityControls,
+  );
 
   const preview = (profileId: string | null, anchor: HTMLElement): void => {
     setPreviewProfileId(profileId);
@@ -157,6 +181,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
     usagePresentation,
     admissionByProfileId,
     eligibilityControls,
+    profileEnablementPending,
     onSelectProfile,
   };
 
@@ -274,15 +299,8 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
             shortcutIndex={
               profiles
                 .slice(0, index)
-                .filter(
-                  (candidate) =>
-                    candidate.enabled &&
-                    !(
-                      eligibilityControls?.pending(
-                        profileCommitId(candidate),
-                      ) ?? false
-                    ),
-                ).length
+                .filter((candidate) => shortcutProfiles.includes(candidate))
+                .length
             }
             context={rowContext}
           />
@@ -337,6 +355,7 @@ interface ProfileDropdownRowContext {
   readonly usagePresentation: ProfileDropdownUsagePresentation | null;
   readonly admissionByProfileId: ProfileDropdownProps["admissionByProfileId"];
   readonly eligibilityControls: ProfileDropdownEligibilityControls | null;
+  readonly profileEnablementPending: ProfileDropdownProps["profileEnablementPending"];
   readonly onSelectProfile: ProfileDropdownProps["onSelectProfile"];
 }
 
@@ -367,7 +386,9 @@ function ProfileDropdownRow(props: {
     admissionByProfileId: props.context.admissionByProfileId,
   });
   const enablementPending =
-    props.context.eligibilityControls?.pending(state.commitId) ?? false;
+    props.context.eligibilityControls?.pending(state.commitId) ??
+    props.context.profileEnablementPending?.(state.commitId) ??
+    false;
   const enablementDisabledReason =
     props.context.eligibilityControls?.disabledReason(props.profile) ?? null;
   const selectionId = `${props.context.rowIdPrefix}-profile-${props.index}`;

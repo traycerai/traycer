@@ -1212,7 +1212,7 @@ export const providerProfileSchema = z.object({
   ...providerProfileShapeV70,
   // Host-wide eligibility. Old supporting decoders treat an omitted legacy
   // field as enabled; older protocol lines omit disabled rows entirely.
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(true).catch(true),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
   // hosts that predate this field omit it. Kept inside v8.0 because that line
@@ -1227,6 +1227,12 @@ export const providerProfileSchema = z.object({
     .optional(),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+
+export function isProfileEnabled(profile: {
+  readonly enabled?: boolean;
+}): boolean {
+  return profile.enabled !== false;
+}
 
 export const providersSetProfileEnabledRequestSchema = z.object({
   providerId: providerIdSchema,
@@ -3528,9 +3534,7 @@ function parseProviderStateWithEnabledProfiles(state: unknown) {
   if (!current.success) return null;
   return {
     ...current.data,
-    profiles: current.data.profiles.filter(
-      (profile) => profile.enabled !== false,
-    ),
+    profiles: current.data.profiles.filter(isProfileEnabled),
   };
 }
 

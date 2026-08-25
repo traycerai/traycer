@@ -78,6 +78,16 @@ export function profileEligibilityToggleDisabledReason(
     : "Enable another profile before disabling this one.";
 }
 
+export function eligibleProfilesForShortcut(
+  profiles: readonly ProviderProfile[],
+  profileEnablementPending: (profileId: string | null) => boolean,
+): ProviderProfile[] {
+  return profiles.filter(
+    (profile) =>
+      profile.enabled && !profileEnablementPending(profileCommitId(profile)),
+  );
+}
+
 /** The profile a fresh section instance (new provider, or first mount) should
  *  select - first in the host's stable order. `null` when the provider
  *  reports no profiles (callers don't render profile-scoped UI then anyway). */
