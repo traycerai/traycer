@@ -72,6 +72,10 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     profileEnablementPending,
     onProfileChange,
   } = input;
+  const eligibleProfileCount = eligibleProfilesForShortcut(
+    activeProviderProfiles,
+    profileEnablementPending,
+  ).length;
   const stateRef = useRef({
     railEntries,
     onEntryChange,
@@ -110,7 +114,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
   useEffect(() => {
     if (!open) return;
     notifyLeaderScopesChanged();
-  }, [open, reasoningActionable, activeProviderProfiles.length]);
+  }, [open, reasoningActionable, eligibleProfileCount]);
 
   useEffect(() => {
     if (!open) return;
