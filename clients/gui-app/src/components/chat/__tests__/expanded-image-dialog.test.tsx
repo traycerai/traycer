@@ -97,9 +97,7 @@ describe("<ExpandedImageDialogContent />", () => {
     });
 
     expect(screen.getByRole("button", { name: "Copy image" })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Download image" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
   });
 
   it("routes Copy image through copyImageBlobToClipboard", async () => {
@@ -127,9 +125,7 @@ describe("<ExpandedImageDialogContent />", () => {
     });
 
     expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Download image" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download image" })).toBeTruthy();
   });
 
   it("takes focus onto the dialog itself, not onto the Copy button", async () => {
@@ -150,8 +146,6 @@ describe("<ExpandedImageDialogContent />", () => {
 
     expect(screen.getByText("Image unavailable")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Download image" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download image" })).toBeNull();
   });
 });

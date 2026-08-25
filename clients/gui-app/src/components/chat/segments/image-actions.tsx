@@ -84,4 +84,3 @@ function ImageActionButton(props: {
     </TooltipWrapper>
   );
 }
-
