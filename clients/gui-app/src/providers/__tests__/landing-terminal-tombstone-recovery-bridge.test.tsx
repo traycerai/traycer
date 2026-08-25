@@ -933,4 +933,61 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       });
     });
   });
+
+  it("re-dispatches the other way too: legacy in flight, authority becomes capable", async () => {
+    // The mirror of the case above. Same suppression in
+    // `closeRetryStillWarranted`, same invisible `finally`, so the capability
+    // -keyed mark has to work in both directions rather than only capable ->
+    // legacy.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    let rejectKill: (reason: Error) => void = () => undefined;
+    mocks.kill.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectKill = reject;
+        }),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "mirror-tab",
+      sessionId: "session-mirror",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "mirror-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    // The probe resolves to the plain protocol while the kill is outstanding.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-mirror": {} };
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectKill(new Error("legacy kill unsupported"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.closeAsync).toHaveBeenCalledWith({
+        hostId: "host-b",
+        terminalId: "session-mirror",
+      });
+    });
+  });
 });
