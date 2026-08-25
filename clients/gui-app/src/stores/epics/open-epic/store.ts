@@ -35,7 +35,11 @@ import type {
 import { artifactBodyFragmentName } from "@traycer/protocol/persistence/epic/artifacts";
 import type { DeletedEpicArtifact } from "@traycer/protocol/persistence/epic/artifacts";
 import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
-import { evaluateReparent, reparentRejectionError } from "@/lib/reparent-rules";
+import { resolveReparentNode } from "@/lib/reparent-rules";
+import {
+  evaluateProjectedReparent,
+  projectedReparentRejectionError,
+} from "@/lib/reparent-projection-rules";
 import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
@@ -673,8 +677,16 @@ export interface OpenEpicState {
   deleteArtifact: (artifactId: string) => boolean;
   /**
    * Move an artifact, chat, or terminal-agent to a new parent within its own
-   * family. Throws `MissingNodeError`, `CrossFamilyParentError`, or
-   * `ReparentCycleError` on validation failure.
+   * family.
+   *
+   * Validated against the PROJECTED TREE, not the doc, so a record-backed
+   * parent is a legal target: a doc-only terminal agent can be nested under a
+   * registry-backed chat, which is what the sidebar has always displayed as
+   * possible. Throws `MissingNodeError`, `CrossFamilyParentError`, or
+   * `ReparentCycleError` when the PROJECTION rejects the move.
+   *
+   * Returns `false` without throwing when the node has no doc entry to write:
+   * that node is registry-backed and `epic.reparentChat` owns its pointer.
    */
   reparentArtifact: (artifactId: string, newParentId: string | null) => boolean;
   /** Returns true when the title actually changed. */
@@ -882,9 +894,12 @@ function emitCurrentAwareness(
   client.awareness(encodeAwarenessUpdate(awareness, [doc.clientID]));
 }
 
-// Reparent write-path validation lives in `@/lib/reparent-rules`
-// (`evaluateReparent`). DnD preview/commit uses the projected-tree twin in
-// `@/lib/reparent-projection-rules`.
+// Reparent validation lives in `@/lib/reparent-projection-rules`
+// (`evaluateProjectedReparent`) for the DnD preview, the DnD commit AND this
+// store's write path - one evaluator over the projected tree, so preview and
+// write cannot disagree. `@/lib/reparent-rules` is now consulted for one thing
+// only: `resolveReparentNode`, which finds the Y.Map entry to write to. It
+// still owns the doc-side evaluator for callers that genuinely mean the doc.
 
 /**
  * Constructs a fresh per-Epic session.
@@ -3188,27 +3203,53 @@ export function createOpenEpicStore(
           if (disposed) return false;
           const role = currentRole ?? get().permissionRole;
           if (role === "viewer" || role === null) return false;
+          // VALIDATE AGAINST THE PROJECTION, WRITE TO THE DOC. The two are no
+          // longer the same surface and have not been since chats-off-YJS: a
+          // registry-backed chat or terminal agent has NO doc entry, so the
+          // doc evaluator answers `missing-node` for a row the user is plainly
+          // dragging. That is not a hypothetical - it rejected every drop onto
+          // a record-backed parent, and the rejection THREW, which is how one
+          // ordinary drag came to wedge the whole DnD session (4.3a).
+          //
+          // The projected tree is the union the sidebar renders, so it is the
+          // only surface that can judge a drop for every node the user can
+          // grab. Cycle detection improves for free: the walk now crosses the
+          // doc and record arms, which the doc-only walk could not see.
+          //
+          // Read before the transaction, deliberately. `get().tree` is
+          // projector output, and the projector runs on the doc observer -
+          // reading it INSIDE `doc.transact` would still return the pre-write
+          // projection, but only by accident of when observers fire. Reading
+          // it here says what we mean, and nothing can mutate between these
+          // two synchronous statements.
+          const evaluation = evaluateProjectedReparent(
+            get().tree,
+            artifactId,
+            newParentId,
+          );
+          if (!evaluation.ok) {
+            if (evaluation.reason === "same-parent") return false; // no-op
+            throw projectedReparentRejectionError(
+              get().tree,
+              evaluation.reason,
+              artifactId,
+              newParentId,
+            );
+          }
+          // The projection said yes; now find something to write to. A node
+          // with no doc entry is registry-backed, and its parent pointer lives
+          // on the host record - `epic.reparentChat` owns that move, and the
+          // caller routes it there instead. Returning false rather than
+          // throwing is the honest answer: nothing is wrong, there is simply
+          // no local write to make.
+          const target = resolveReparentNode(doc, artifactId);
+          if (target === null) return false;
           let mutated = false;
-          const pendingErrors: Error[] = [];
           doc.transact(() => {
-            const evaluation = evaluateReparent(doc, artifactId, newParentId);
-            if (!evaluation.ok) {
-              if (evaluation.reason === "same-parent") return; // no-op
-              pendingErrors.push(
-                reparentRejectionError(
-                  doc,
-                  evaluation.reason,
-                  artifactId,
-                  newParentId,
-                ),
-              );
-              return;
-            }
-            evaluation.node.entry.set("parentId", newParentId);
-            evaluation.node.entry.set("updatedAt", Date.now());
+            target.entry.set("parentId", newParentId);
+            target.entry.set("updatedAt", Date.now());
             mutated = true;
           }, LOCAL_ORIGIN);
-          if (pendingErrors.length > 0) throw pendingErrors[0];
           return mutated;
         };
 

@@ -1,8 +1,16 @@
 /**
- * Coverage for `evaluateReparent` in `@/lib/reparent-rules` (still live —
- * `OpenEpicState.reparentArtifactAction` calls it). `writeReparent` here is a
- * test-local helper matching the deleted `epic-y-mutations.ts` adapter: it
- * must not be reintroduced under `src/lib/`.
+ * Coverage for `evaluateReparent` in `@/lib/reparent-rules`.
+ *
+ * As of task 4.3 this evaluator has NO production caller:
+ * `OpenEpicState.reparentArtifactAction` used to be the last one and now
+ * validates against the projected tree (`evaluateProjectedReparent`), taking
+ * only `resolveReparentNode` from this module to locate the Y.Map entry it
+ * writes. What remains here therefore tests a retired surface - see
+ * `stores/epics/open-epic/__tests__/reparent-artifact-projected-validation.test.ts`
+ * for the live one.
+ *
+ * `writeReparent` is a test-local helper matching the deleted
+ * `epic-y-mutations.ts` adapter: it must not be reintroduced under `src/lib/`.
  */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
@@ -718,9 +726,10 @@ describe("evaluateReparent", () => {
     );
   });
 
-  // Agreement guard: the test-local `writeReparent` and the live
-  // `evaluateReparent` (also used by `reparentArtifactAction`) must agree
-  // on every matrix cell. `writeReparent` is not production code.
+  // Agreement guard: the test-local `writeReparent` and `evaluateReparent`
+  // must agree on every matrix cell. Neither is production code any more -
+  // `reparentArtifactAction` moved off this evaluator in task 4.3 - so this
+  // pins the retired pair against each other, not against the app.
   it("mirrors writeReparent decisions across the matrix", () => {
     const setup = () =>
       seedDoc({

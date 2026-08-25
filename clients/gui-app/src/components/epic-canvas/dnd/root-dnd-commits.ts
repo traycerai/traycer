@@ -666,10 +666,11 @@ function isDocOnlyTerminalAgent(
  * Silent no-op when the session is gone or the re-check fails - matching
  * the "invalid drop = silent cancel" rule.
  *
- * The projected re-check does NOT make the throwing store action unreachable,
- * and this used to claim it did. The two evaluators read different sources and
- * disagree for one live pairing; see the doc-write branch below. The throw is
- * handled there, and `handleDragEnd` additionally ends the drag in a `finally`
+ * `reparentArtifact` can still throw, and this file does not assume it cannot.
+ * Task 4.3 moved the store's own validation onto the SAME projected evaluator
+ * the gate above uses, so a rejection here would mean two reads of one tree
+ * disagreed - which nothing enforces. The throw is caught in the doc-write
+ * branch below, and `handleDragEnd` additionally ends the drag in a `finally`
  * so no future escape from this function can strand the session.
  */
 export function commitSidebarReparentDrop(
@@ -747,32 +748,30 @@ export function commitSidebarReparentDrop(
     // `epic.reparentArtifact` so persist does not depend on that arm.
     // Doc-only TUI stays Y-only until listTuiAgents is on the floor (Q1):
     // this RPC names an artifact id, not a tuiAgents map entry.
-    // `reparentArtifact` VALIDATES AGAINST THE DOC and THROWS on rejection,
-    // while the gate above validated against the PROJECTED TREE. The header
-    // claims that gate "keeps the throwing store action unreachable"; it does
-    // not, and there is one live pairing where the two evaluators genuinely
-    // disagree:
+    // As of task 4.3 `reparentArtifact` validates against the PROJECTED TREE
+    // too - the same `evaluateProjectedReparent` the gate above called, on the
+    // same `state.tree`, reached synchronously with nothing able to mutate it
+    // in between. So the pairing that used to wedge a drag session:
     //
     //   a doc-only terminal agent  ->  dropped onto a RECORD-BACKED chat
     //
-    // Both nodes are in the projected tree, same family, no cycle - so
-    // `canReparentProjected` says yes. The parent has no DOC entry, so the doc
-    // evaluator calls it `missing-node` and this call throws. Nothing here
-    // caught it, so it escaped `handleDragEnd` before `dragEnded()` ran and
-    // wedged the whole drag session - a dead sidebar until remount, from one
-    // ordinary drop.
+    // now commits. Both nodes are in the projected tree, same family, no cycle;
+    // the parent's missing DOC entry no longer decides anything, because the
+    // write resolves the dragged NODE's entry and the parent is only a value
+    // being written.
     //
-    // Caught rather than pre-empted, deliberately. Re-deriving "will the doc
-    // evaluator accept this?" here would duplicate `evaluateReparent`'s rules
-    // in a second place and pull the doc back into this file, which the `@2`
-    // work is removing it from. Catching also covers the reasons we have NOT
-    // enumerated, not just this pairing.
+    // The catch stays. "Both callers use one evaluator on one tree" is a
+    // property of this file's current control flow, not an invariant anything
+    // checks - one `await` introduced above, or one caller that reads the tree
+    // earlier and passes it down, reopens the gap. 4.3a is the record of what
+    // that gap costs: an uncaught throw escaped `handleDragEnd` before
+    // `dragEnded()` ran and left a dead sidebar until remount, from one
+    // ordinary drop. The guard is a branch; the failure is unrecoverable
+    // without a remount.
     //
     // A rejection is logged, never toasted: an invalid drop is a silent cancel
-    // by this file's own rule, and the divergence is an internal invariant
-    // mismatch the user cannot act on. The log is the signal that the doc and
-    // projected evaluators have drifted - which is what task 4.3 retires by
-    // moving the write path onto the projection.
+    // by this file's own rule, and two reads of one tree disagreeing is an
+    // internal invariant mismatch the user cannot act on.
     let mutated = false;
     try {
       mutated = handle.store
