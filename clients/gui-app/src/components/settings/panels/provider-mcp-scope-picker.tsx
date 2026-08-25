@@ -7,6 +7,7 @@ import {
   Globe,
 } from "lucide-react";
 import type { ProviderNativeScope } from "@traycer/protocol/host/provider-native-schemas";
+import { useDeclineOpenAutoFocusOnCoarsePointer } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -97,6 +98,7 @@ export function McpScopePicker(props: {
   readonly locationLabel: string;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const declineOpenAutoFocus = useDeclineOpenAutoFocusOnCoarsePointer();
   const {
     multiScope,
     effectiveScope,
@@ -157,7 +159,11 @@ export function McpScopePicker(props: {
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </PopoverTrigger>
       </TooltipWrapper>
-      <PopoverContent align="start" className="w-[min(90vw,26rem)] p-0">
+      <PopoverContent
+        align="start"
+        className="w-[min(90vw,26rem)] p-0"
+        onOpenAutoFocus={declineOpenAutoFocus}
+      >
         <Command>
           <CommandInput placeholder="Search workspaces…" />
           <CommandList>

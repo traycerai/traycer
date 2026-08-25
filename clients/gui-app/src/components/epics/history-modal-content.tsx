@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { EpicsListPanel } from "@/components/epics/epics-list-panel";
-import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 
 export interface HistoryModalContentProps {
   /**
@@ -15,9 +15,11 @@ export interface HistoryModalContentProps {
 export function HistoryModalContent(
   props: HistoryModalContentProps,
 ): ReactNode {
-  // No autofocus on phones: focusing the search input raises the on-screen
-  // keyboard over half the just-opened sheet.
-  const isMobile = useIsMobileViewport();
+  // No autofocus on a touch pointer: focusing the search input raises the
+  // on-screen keyboard over half the just-opened sheet. The pointer is what
+  // decides, not the width - a desktop window snapped narrow still types with
+  // hardware, and a tablet at desktop width still summons a keyboard.
+  const coarsePointer = useCoarsePointer();
   // `variant="page"` keeps the chrome (header + search + filters)
   // identical to the `/epics` strip-tab view so the modal and tab
   // forms read as the same surface, just framed differently.
@@ -35,7 +37,7 @@ export function HistoryModalContent(
         onOpenItem={null}
         routeSearch={null}
         historyNowMs={null}
-        autoFocusSearch={!isMobile}
+        autoFocusSearch={!coarsePointer}
       />
     </div>
   );

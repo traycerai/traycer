@@ -3903,6 +3903,62 @@ describe("<HarnessModelPicker />", () => {
       profileId: null,
     });
   });
+
+  /**
+   * Search-on-open is a hardware-keyboard convenience, and the panel is opened
+   * on every harness or model change. On a touch pointer the same focus is a
+   * software keyboard over the list the tap was aiming at, so it stands down.
+   *
+   * Both arms are pinned because the coarse arm is invisible on every
+   * developer's machine: asserting only the focused case keeps passing after
+   * the gate is deleted.
+   */
+  describe("search autofocus", () => {
+    /**
+     * The global test shim answers every media query with `matches: false`,
+     * which is the fine-pointer arm. This narrows the coarse-pointer query
+     * alone so the rest of the app's queries keep the shim's answer.
+     */
+    function stubCoarsePointer(coarse: boolean): void {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: coarse && query === "(pointer: coarse)",
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+
+    it("focuses the search when a fine pointer is driving", async () => {
+      stubCoarsePointer(false);
+      renderPicker(undefined);
+      const input = await openPicker();
+
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    });
+
+    it("leaves the search alone on a coarse pointer", async () => {
+      stubCoarsePointer(true);
+      renderPicker(undefined);
+      const input = await openPicker();
+
+      expect(document.activeElement).not.toBe(input);
+      // Declining strands nothing here: the trigger is a still-mounted button
+      // in the composer toolbar, and closing restores the composer's caret.
+      expect(
+        screen.getByRole("button", { name: /^GPT-5\.5/ }).contains(
+          document.activeElement,
+        ) || document.activeElement === document.body,
+      ).toBe(true);
+    });
+  });
 });
 
 // Fire a leader digit straight through the scope stack (the picker registers

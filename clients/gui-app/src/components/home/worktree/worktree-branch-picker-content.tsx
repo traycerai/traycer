@@ -8,6 +8,8 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { PopoverContent } from "@/components/ui/popover";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useDeclineOpenAutoFocusOnCoarsePointer } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { cn } from "@/lib/utils";
 import {
   PickerActionButton,
@@ -55,15 +57,23 @@ export function WorktreeBranchPickerContent(
     side,
   } = props;
 
+  // Typing to narrow a long branch list is a hardware-keyboard convenience.
+  // On a touch pointer the same focus raises a software keyboard over the very
+  // list the popover exists to show, so the search stands down and the popover
+  // opens on its rows. Focus stays on the still-mounted trigger, so declining
+  // strands nothing.
+  const coarsePointer = useCoarsePointer();
+  const declineOpenAutoFocus = useDeclineOpenAutoFocusOnCoarsePointer();
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || coarsePointer) return;
     const timer = window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [inputRef, open]);
+  }, [coarsePointer, inputRef, open]);
 
   const computeResultRowKey = useCallback(
     (index: number, row: WorktreeBranchPickerRow | undefined) =>
@@ -112,6 +122,10 @@ export function WorktreeBranchPickerContent(
         "h-[min(var(--radix-popover-content-available-height),22rem)] w-[min(90vw,26rem)] min-w-(--radix-popover-trigger-width) gap-0 overflow-hidden rounded-xl p-0 data-[side=bottom]:rounded-t-none data-[side=top]:rounded-b-none",
         contentClassName,
       )}
+      // The search field is the first tabbable descendant, so Radix's own
+      // open-autofocus takes it whether or not the effect above runs. Both
+      // halves have to move together or the gate is a no-op.
+      onOpenAutoFocus={declineOpenAutoFocus}
       onKeyDown={handleContentKeyDown}
       onEscapeKeyDown={(event) => {
         if (!hasQuery) return;

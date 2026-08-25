@@ -1,4 +1,5 @@
 import { PopoverContent } from "@/components/ui/popover";
+import { useDeclineOpenAutoFocusOnCoarsePointer } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
@@ -114,6 +115,7 @@ interface HarnessModelPickerPanelProps {
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
+  const declineOpenAutoFocus = useDeclineOpenAutoFocusOnCoarsePointer();
   const {
     trimmedQuery,
     hasQuery,
@@ -195,6 +197,10 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       onCloseAutoFocus={(event) => {
         if (focusActiveComposer()) event.preventDefault();
       }}
+      // The search field is the first tabbable descendant, so Radix's own
+      // open-autofocus takes it whether or not the panel's search effect runs.
+      // Both halves have to move together or the gate is a no-op.
+      onOpenAutoFocus={declineOpenAutoFocus}
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
         if (trimmedQuery.length === 0) return;

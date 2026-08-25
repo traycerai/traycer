@@ -28,6 +28,7 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { useDeclineOpenAutoFocusOnCoarsePointer } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { useHostBinding } from "@/lib/host";
 import { cn } from "@/lib/utils";
 
@@ -242,6 +243,7 @@ export function HostSwitcher(props: {
   readonly onRetryLists: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const declineOpenAutoFocus = useDeclineOpenAutoFocusOnCoarsePointer();
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
   const { hosts, selected } = props;
@@ -336,6 +338,12 @@ export function HostSwitcher(props: {
         )}
         data-testid="settings-host-switcher-list"
         {...{ [HOST_SWITCHER_LIST_ATTRIBUTE]: "true" }}
+        // Only the search input is worth declining for; below the threshold
+        // there is no input and Radix's default lands on a host row, which
+        // summons nothing.
+        onOpenAutoFocus={
+          hosts.length >= SEARCH_THRESHOLD ? declineOpenAutoFocus : undefined
+        }
       >
         <Command>
           {hosts.length >= SEARCH_THRESHOLD ? (
