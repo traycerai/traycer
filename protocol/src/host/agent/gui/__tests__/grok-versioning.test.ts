@@ -740,7 +740,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     ).not.toThrow();
   });
 
-  it("drops Hugging Face/Reasonix agents from agent.list for every released caller down to v1.0", () => {
+  it("drops Hugging Face/Reasonix/Antigravity agents from agent.list for every released caller down to v1.0", () => {
     const v8Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -753,6 +753,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
         agentSummary("a-omp", "omp"),
         agentSummary("a-hf", "huggingface"),
         agentSummary("a-reasonix", "reasonix"),
+        agentSummary("a-agy", "antigravity"),
         agentSummary("a-null", null),
       ],
     });

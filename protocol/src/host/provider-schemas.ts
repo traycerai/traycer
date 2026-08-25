@@ -225,6 +225,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   omp: "Oh My Pi",
   huggingface: "Hugging Face",
   reasonix: "Reasonix",
+  antigravity: "Antigravity",
 };
 
 /**

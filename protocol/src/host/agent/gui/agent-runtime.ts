@@ -1164,6 +1164,15 @@ export const reasonixUserMessageAnchorResolvedSchema = z.object({
   reasonixSessionId: z.string().nullable(),
 });
 
+export const antigravityUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("antigravity"),
+  sessionId: z.string(),
+  // The Antigravity CLI (`agy`) conversation id assigned for this turn. Null
+  // until the first headless run resolves it; used to resume the same
+  // conversation (`--conversation`) on a later turn.
+  antigravityConversationId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1189,6 +1198,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ompUserMessageAnchorResolvedSchema,
     huggingFaceUserMessageAnchorResolvedSchema,
     reasonixUserMessageAnchorResolvedSchema,
+    antigravityUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1196,9 +1206,9 @@ export type UserMessageAnchorResolvedEvent = z.infer<
 >;
 
 // Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
-// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
-// this union prevents a newer host from sending an anchor an installed older
-// client cannot decode.
+// Reasonix and Antigravity first ride the unreleased 1.7 line; keeping their
+// discriminants out of this union prevents a newer host from sending an anchor
+// an installed older client cannot decode.
 const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),

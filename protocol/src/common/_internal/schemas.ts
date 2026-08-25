@@ -68,6 +68,7 @@ export const harnessIdSchemaPreReasonix = z.enum([
   "hermes",
   "omp",
   "huggingface",
+  "antigravity",
 ]);
 
 export const harnessIdSchema = z.enum([

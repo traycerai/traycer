@@ -37,6 +37,9 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   traycer: null,
   openrouter: "https://openrouter.ai/settings/keys",
   huggingface: "https://huggingface.co/settings/tokens",
+  // Antigravity authenticates with a Google account login (`agy` interactive
+  // session), not a personal API key - no dashboard URL exists.
+  antigravity: null,
   grok: null,
   qwen: null,
   // Kiro keys are issued from the Kiro app / AWS console rather than a stable

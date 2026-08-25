@@ -14,6 +14,9 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   traycer: "ANTHROPIC_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
   huggingface: "HF_TOKEN",
+  // Antigravity authenticates with a Google account login; the env name is
+  // illustrative only (no personal API key exists).
+  antigravity: "ANTIGRAVITY_API_KEY",
   cursor: "CURSOR_API_KEY",
   grok: "XAI_API_KEY",
   qwen: "OPENAI_API_KEY",

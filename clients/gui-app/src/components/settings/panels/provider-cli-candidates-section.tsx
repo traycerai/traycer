@@ -104,6 +104,7 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   traycer: "opencode",
   openrouter: "opencode",
   huggingface: "opencode",
+  antigravity: null,
   grok: null,
   qwen: null,
   kiro: null,
@@ -147,6 +148,7 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // Borrows OpenCode's binary (see `SHARED_CLI_CANDIDATE_SOURCE`), so there is
   // no Hugging-Face-specific install page to send anyone to.
   huggingface: null,
+  antigravity: "https://antigravity.google/docs/cli/install/",
   grok: null,
   qwen: null,
   kiro: null,

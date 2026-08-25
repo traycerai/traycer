@@ -69,6 +69,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "omp",
   "huggingface",
   "reasonix",
+  "antigravity",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -422,6 +423,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "omp",
   "huggingface",
   "reasonix",
+  "antigravity",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");

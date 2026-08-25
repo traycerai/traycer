@@ -3,6 +3,7 @@ import {
   TRAYCER_MARK_PATH_D,
   TRAYCER_MARK_VIEWBOX,
 } from "@/lib/brand/traycer-mark";
+import AntigravityMono from "@lobehub/icons/es/Antigravity/components/Mono";
 import CodexMono from "@lobehub/icons/es/Codex/components/Mono";
 import ClaudeColor from "@lobehub/icons/es/Claude/components/Color";
 import OpenCodeMono from "@lobehub/icons/es/OpenCode/components/Mono";
@@ -29,6 +30,11 @@ export type HarnessIcon = (props: SVGProps<SVGSVGElement>) => ReactElement;
 // it keeps its brand orange in both themes.
 export const CodexIcon: HarnessIcon = (props) => <CodexMono {...props} />;
 export const ClaudeAIIcon: HarnessIcon = (props) => <ClaudeColor {...props} />;
+// Antigravity (Google) — lobehub monochrome brand mark (`currentColor`
+// theming), same pattern as Devin/Hermes.
+export const AntigravityIcon: HarnessIcon = (props) => (
+  <AntigravityMono {...props} />
+);
 export const OpenCodeIcon: HarnessIcon = (props) => <OpenCodeMono {...props} />;
 export const CursorIcon: HarnessIcon = (props) => <CursorMono {...props} />;
 export const GrokIcon: HarnessIcon = (props) => <GrokMono {...props} />;
