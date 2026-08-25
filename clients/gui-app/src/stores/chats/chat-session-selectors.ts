@@ -2,7 +2,10 @@ import {
   selectRestorableSetupInterruption as protocolSelectRestorableSetupInterruption,
   type RestorableSetupInterruption,
 } from "@traycer/protocol/persistence/chat-transcript/setup-interruption";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+} from "@/stores/chats/chat-session-store";
 
 /**
  * Composer-facing projections of the worktree-aware chat event stream.
@@ -43,12 +46,11 @@ export function selectRestorableSetupInterruption(
   // ordinal, so it is in no row's record set and `state.events` never receives
   // it. This is the one consumer in the sweep with no client-side repair.
   //
-  // `transcriptDerived !== null` IS the line check, and the reason this is not
-  // a `??` chain: `restorableSetupInterruption: null` INSIDE a derived payload
-  // is a real answer - "nothing to restore", the ordinary case - not a missing
-  // one. Falling through to the scan on it would re-run, on every ordinary
-  // chat, precisely the scan that cannot see the event.
-  if (state.transcriptDerived !== null) {
+  // Not a `??` chain: `restorableSetupInterruption: null` INSIDE a derived
+  // payload is a real answer - "nothing to restore", the ordinary case - not a
+  // missing one. Falling through to the scan on it would re-run, on every
+  // ordinary chat, precisely the scan that cannot see the event.
+  if (isWindowedTranscript(state)) {
     return state.transcriptDerived.restorableSetupInterruption;
   }
   return protocolSelectRestorableSetupInterruption(state.events);

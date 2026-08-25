@@ -259,29 +259,46 @@ export function updateWindowMessage(
   messageId: string,
   update: (message: Message) => Message,
 ): { readonly window: TranscriptWindow; readonly held: boolean } {
-  const holdsMessage = (messages: readonly Message[]): boolean =>
-    messages.some((message) => message.messageId === messageId);
+  const indexIn = (messages: readonly Message[]): number =>
+    messages.findIndex((message) => message.messageId === messageId);
+  // Located once and reused below, rather than re-scanned per span. The
+  // positions are also what make `update` run exactly once - a `map` with an
+  // id comparison would call it per matching element, and "the update is pure
+  // so a second call is harmless" is a property of today's callers, not of the
+  // signature.
+  const spanIndexes = window.spans.map((span) => indexIn(span.messages));
+  const liveIndex = indexIn(window.liveMessages);
   // Computed rather than accumulated in a flag: an assignment inside a `map`
   // callback is invisible to control-flow narrowing, so a `let held = false`
   // read afterwards is typed `false` and the guard below reads as dead code.
-  const held =
-    window.spans.some((span) => holdsMessage(span.messages)) ||
-    holdsMessage(window.liveMessages);
+  const held = liveIndex >= 0 || spanIndexes.some((index) => index >= 0);
   if (!held) return { window, held: false };
-  const spans = window.spans.map((span) => {
-    if (!holdsMessage(span.messages)) return span;
-    const messages = span.messages.map((message) =>
-      message.messageId === messageId ? update(message) : message,
-    );
+  const spans = window.spans.map((span, spanIndex) => {
+    const index = spanIndexes[spanIndex];
+    if (index < 0) return span;
+    const previous = span.messages[index];
+    const next = update(previous);
+    const messages = span.messages.slice();
+    messages[index] = next;
     return {
       ...span,
       messages,
-      bytes: recordsByteLength(messages, span.events),
+      // Charged as a DELTA, not by re-measuring the span. Every caller of this
+      // function is a row-targeted delta applier, and two of them (a detached
+      // subagent's card, a carried steer block) run at streaming frequency -
+      // so a whole-span recompute would serialize every record the span holds
+      // once per token, which is the per-token O(history) cost this whole
+      // feature exists to delete. The result is identical: only one record
+      // changed.
+      bytes: span.bytes + recordByteLength(next) - recordByteLength(previous),
     };
   });
-  const liveMessages = window.liveMessages.map((message) =>
-    message.messageId === messageId ? update(message) : message,
-  );
+  const liveMessages =
+    liveIndex < 0
+      ? window.liveMessages
+      : window.liveMessages.map((message, index) =>
+          index === liveIndex ? update(message) : message,
+        );
   return {
     window: {
       ...window,

@@ -6,6 +6,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   appendLiveRecords,
   applyIndexChange,
@@ -729,4 +730,59 @@ describe("records the index has not placed yet", () => {
     expect(absent.held).toBe(false);
     expect(absent.window).toBe(live.window);
   });
+
+  it("charges the byte delta exactly, in both directions", () => {
+    // The bytes are charged incrementally because two callers run at streaming
+    // frequency, and a whole-span recompute would serialize every record the
+    // span holds once per token. Incremental is only safe if it is EXACT, so
+    // this pins it against a from-scratch measure of the same span - and in
+    // both directions, because `+ next - previous` and a naive `+ next` agree
+    // on every growing rewrite and disagree only when a row sheds bytes.
+    const seeded = applyRangeResponse(
+      windowWithSkeleton(4),
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+      }),
+    );
+    const spanBytes = (window: TranscriptWindow): number =>
+      window.spans[0].messages.reduce(
+        (sum, message) => sum + recordByteLength(message),
+        0,
+      );
+
+    const grown = updateWindowMessage(seeded, "m-0", (message) =>
+      messageWithText(message, "a much longer body ".repeat(40)),
+    );
+    expect(grown.held).toBe(true);
+    expect(grown.window.spans[0].bytes).toBe(spanBytes(grown.window));
+    expect(grown.window.hydratedBytes).toBe(spanBytes(grown.window));
+    // And it moved: an incremental charge that silently did nothing would also
+    // satisfy an equality written against a span that never changed.
+    expect(grown.window.spans[0].bytes).toBeGreaterThan(seeded.spans[0].bytes);
+
+    const shrunk = updateWindowMessage(grown.window, "m-0", (message) =>
+      messageWithText(message, "x"),
+    );
+    expect(shrunk.window.spans[0].bytes).toBe(spanBytes(shrunk.window));
+    expect(shrunk.window.spans[0].bytes).toBeLessThan(
+      grown.window.spans[0].bytes,
+    );
+  });
 });
+
+function messageWithText(message: Message, text: string): Message {
+  if (message.role !== "user") return message;
+  return {
+    ...message,
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+      },
+    },
+  };
+}

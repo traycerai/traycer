@@ -43,6 +43,7 @@ import {
   hydratedRecords,
   isTailHydrated,
   planTranscriptHydration,
+  updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
@@ -2119,17 +2120,6 @@ export function createChatSessionStoreWithNotificationDependencies(
      */
     let windowedLine = false;
 
-    /**
-     * Route a record that arrived with no ordinal into the window.
-     *
-     * The write-through half of "state.messages is DERIVED on this line". An
-     * applier that appended to the published array instead would have its work
-     * erased by the very next windowed frame - a skeleton chunk, an index
-     * delta, a range - because that array is rebuilt from the window each time.
-     * The legacy line has the same shape and does not notice, because there the
-     * only rebuild is a snapshot, which carries the record anyway.
-     */
-
     /** Ask for whatever the window says is missing, if anything. */
     const requestPlannedHydration = (): void => {
       const client = streamClient;
@@ -2172,6 +2162,19 @@ export function createChatSessionStoreWithNotificationDependencies(
       });
     };
 
+    /**
+     * Route a record that arrived with no ordinal into the window.
+     *
+     * The append half of "state.messages is DERIVED on this line". An applier
+     * that appended to the published array instead would have its work erased
+     * by the very next windowed frame - a skeleton chunk, an index delta, a
+     * range - because that array is rebuilt from the window each time. The
+     * legacy line has the same shape and does not notice, because there the only
+     * rebuild is a snapshot, which carries the record anyway.
+     *
+     * {@link rewriteMessageInPlace} is the same rule for a record that already
+     * HAS an ordinal.
+     */
     const takeLiveRecords = (input: {
       readonly messages: readonly Message[];
       readonly events: readonly ChatEvent[];
@@ -4849,9 +4852,14 @@ function applyImageResolutionDelta(
       : message.imageResolutions.map((entry, index) =>
           index === entryIndex ? event.entry : entry,
         );
-  const messages = state.messages.slice();
-  messages[messageIndex] = { ...message, imageResolutions };
-  return { messages };
+  // A no-op rather than `{}` if the row is unreachable: the caller has already
+  // decided this event belongs to a persisted row rather than the live one, so
+  // falling back would re-run that decision with a worse answer.
+  return (
+    rewriteMessageInPlace(state, message.messageId, (target) =>
+      target.role === "assistant" ? { ...target, imageResolutions } : target,
+    ) ?? {}
+  );
 }
 
 function applyContentDelta(
@@ -4959,6 +4967,82 @@ function detachedSubagentOwnerTarget(
   return null;
 }
 
+/**
+ * Is this session on the windowed line?
+ *
+ * `transcriptDerived` is the discriminator because it is the one field only a
+ * windowed snapshot sets and every windowed snapshot sets - the host computes
+ * those folds precisely because a windowed client cannot. Named here so the
+ * rule is stated once: it is read by the row appliers below, by the context
+ * chip's usage selector, and by the composer-restore selector, and three
+ * hand-written `transcriptDerived !== null` checks would be three places to
+ * forget it.
+ *
+ * What it MEANS is the important part: on this line `state.messages` holds what
+ * is HYDRATED, not what exists, and it is DERIVED - rebuilt from
+ * `transcriptWindow` by `publishWindowedTranscript` on every windowed frame. So
+ * "not found in `state.messages`" is not "absent", and a write to
+ * `state.messages` is not a write at all.
+ */
+export function isWindowedTranscript<
+  T extends Pick<ChatSessionState, "transcriptDerived">,
+>(
+  state: T,
+): state is T & { readonly transcriptDerived: ChatTranscriptDerived } {
+  return state.transcriptDerived !== null;
+}
+
+/**
+ * Rewrite one row in place, on whichever line this session is on.
+ *
+ * The shared path for the row-targeted delta appliers - an image resolving, a
+ * detached subagent's card, a block carried to the frozen half of a split turn.
+ * Each locates its own target (they key on a block, not a message id), then
+ * hands the row and its rewrite here.
+ *
+ * On the windowed line the write goes into the WINDOW. That is not a detail of
+ * where the data lives: `state.messages` is rebuilt from the window by the next
+ * windowed frame of ANY kind, so an applier that spliced the published array
+ * would have its work erased by the next skeleton chunk, index delta, range or
+ * appended event - whichever arrived first. `05577d2f` settled that for records
+ * arriving with no ordinal; this is the same rule for records that have one.
+ *
+ * `null` means the row is not reachable and the change is DROPPED. That is
+ * sound rather than lossy, and only because of the host's emit-after-persist
+ * invariant: the host wrote the row before it told us about the change, so the
+ * `loadRange` that eventually hydrates that ordinal serves a body that already
+ * contains it. Dropping loses nothing; applying to a copy the next frame
+ * overwrites loses the same thing while looking like it worked.
+ */
+function rewriteMessageInPlace(
+  state: ChatSessionState,
+  messageId: string,
+  update: (message: Message) => Message,
+): Partial<ChatSessionState> | null {
+  if (!isWindowedTranscript(state)) {
+    const index = state.messages.findIndex(
+      (message) => message.messageId === messageId,
+    );
+    if (index < 0) return null;
+    const messages = state.messages.slice();
+    messages[index] = update(state.messages[index]);
+    return { messages };
+  }
+  const applied = updateWindowMessage(
+    state.transcriptWindow,
+    messageId,
+    update,
+  );
+  if (!applied.held) return null;
+  return {
+    transcriptWindow: applied.window,
+    // `messages` only: republishing `events` from the same fold would hand
+    // every event consumer a new array identity for a change that touched no
+    // event.
+    messages: hydratedRecords(applied.window).messages,
+  };
+}
+
 function assistantMessageOwnsBlock(message: Message, blockId: string): boolean {
   return (
     message.role === "assistant" &&
@@ -4998,15 +5082,23 @@ function applySteerSplitCarryoverEvent(
     event,
   );
   if (content.blocks === sibling.blocks) return {};
-  const next = state.messages.slice();
-  next[siblingIndex] = {
-    ...sibling,
-    blocks: content.blocks,
-    ...(sibling.blocksVersion === undefined
-      ? {}
-      : { blocksVersion: content.blocksVersion }),
-  };
-  return { messages: next };
+  // `{}` and not `null` when the row is unreachable: `null` here means "this is
+  // not a carryover event", and the caller answers it by routing to the ACTIVE
+  // row - which is the duplicate-card outcome this function exists to prevent.
+  // A sibling we found but cannot write to is still a carryover.
+  return (
+    rewriteMessageInPlace(state, sibling.messageId, (target) =>
+      target.role === "assistant"
+        ? {
+            ...target,
+            blocks: content.blocks,
+            ...(target.blocksVersion === undefined
+              ? {}
+              : { blocksVersion: content.blocksVersion }),
+          }
+        : target,
+    ) ?? {}
+  );
 }
 
 // Finds the EARLIER assistant row of the same turn that owns this event's
@@ -5060,19 +5152,24 @@ function applyEventToOwningMessage(
     event,
   );
   if (content.blocks === target.blocks) return {};
-  const next = state.messages.slice();
-  next[index] = {
-    ...target,
-    blocks: content.blocks,
-    ...(target.blocksVersion === undefined
-      ? {}
-      : { blocksVersion: content.blocksVersion }),
-    // Preserve the settled row's `timestamp` (its completed-at). A detached
-    // subagent's later activity must NOT advance the turn's completed-at / cache
-    // token - the host detached writer only replaces blocks/blocksVersion, and
-    // this mirrors it so the turn doesn't appear to "complete later".
-  };
-  return { messages: next };
+  return (
+    rewriteMessageInPlace(state, target.messageId, (message) =>
+      message.role !== "assistant"
+        ? message
+        : {
+            ...message,
+            blocks: content.blocks,
+            ...(message.blocksVersion === undefined
+              ? {}
+              : { blocksVersion: content.blocksVersion }),
+            // Preserve the settled row's `timestamp` (its completed-at). A
+            // detached subagent's later activity must NOT advance the turn's
+            // completed-at / cache token - the host detached writer only
+            // replaces blocks/blocksVersion, and this mirrors it so the turn
+            // doesn't appear to "complete later".
+          },
+    ) ?? {}
+  );
 }
 
 // Reduces a single runtime delta event onto the session state. The branches map

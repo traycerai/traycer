@@ -14,9 +14,10 @@ import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatMessageEditing } from "@/components/chat/chat-message";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type {
-  ChatSessionState,
-  PendingChatAction,
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+  type PendingChatAction,
 } from "@/stores/chats/chat-session-store";
 import { isTransientLiveAssistantMessageId } from "@/lib/chat/transient-live-assistant-message-id";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -720,7 +721,7 @@ export function selectContextUsage(
   // usage yet, and the chip's empty form is what that should render. Falling
   // through would put the O(history) scan back on every fresh chat, and let a
   // hydrated row contradict the host on a chat where the host can see further.
-  if (state.transcriptDerived !== null) {
+  if (isWindowedTranscript(state)) {
     return state.transcriptDerived.latestAssistantUsage;
   }
   return findLastAssistantUsage(state.messages);

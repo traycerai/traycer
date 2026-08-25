@@ -6,6 +6,7 @@ import type {
   ChatLoadRangeRequest,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { createImageResolutionUpdatedFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -73,6 +74,99 @@ function userMessage(messageId: string, timestamp: number): Message {
     message: { kind: "user", content: CONTENT },
     timestamp,
     sessionAnchor: null,
+  };
+}
+
+function assistantMessage(messageId: string, timestamp: number): Message {
+  return {
+    role: "assistant",
+    messageId,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "claude-sonnet-4",
+      displayName: "Claude Sonnet 4",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [],
+    startedAt: timestamp,
+    timestamp,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
+type AssistantBlocks = Extract<Message, { role: "assistant" }>["blocks"];
+
+function assistantWithBlocks(
+  messageId: string,
+  timestamp: number,
+  turnId: string,
+  blocks: AssistantBlocks,
+): Message {
+  const base = assistantMessage(messageId, timestamp);
+  return base.role === "assistant" ? { ...base, turnId, blocks } : base;
+}
+
+function raiseActiveTurn(callbacks: ChatStreamCallbacks, turnId: string): void {
+  callbacks.onTurnStateChanged({
+    kind: "turnStateChanged",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    runStatus: "running",
+    activeTurn: {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId,
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5.4",
+      profileId: null,
+      userMessageId: "m-1",
+      startedAt: 3,
+      updatedAt: 3,
+      reasoningEffort: null,
+      serviceTier: null,
+    },
+  });
+}
+
+function blockOf(
+  message: Message | undefined,
+  blockId: string,
+): AssistantBlocks[number] | undefined {
+  if (message === undefined || message.role !== "assistant") return undefined;
+  return message.blocks.find((block) => block.blockId === blockId);
+}
+
+function appendedEvent(
+  eventId: string,
+): Parameters<ChatStreamCallbacks["onEventAppended"]>[0] {
+  return {
+    kind: "eventAppended",
+    hasBinaryPayload: false,
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    event: {
+      eventId,
+      type: "turn.completed",
+      timestamp: 9,
+      clientActionId: null,
+      actor: null,
+      message: null,
+      turnId: "turn-1",
+      messageId: null,
+      queueItemId: null,
+      approvalId: null,
+      blockId: null,
+      severity: "info",
+      metadata: null,
+    },
   };
 }
 
@@ -658,6 +752,223 @@ describe("a record that arrives with no ordinal", () => {
         "m-legacy",
       ]);
       expect(state.transcriptWindow.liveMessages).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * A row-targeted delta names a row that ALREADY has an ordinal, which is what
+ * separates these from `messageAccepted`: the question is not where the record
+ * goes, it is whether the write survives.
+ *
+ * On this line it only survives in the WINDOW. `state.messages` is rebuilt from
+ * the window by the next windowed frame of any kind, so an applier that spliced
+ * the published array would look correct until the next frame - and the next
+ * frame is a skeleton chunk on any reconnect, or simply the next appended
+ * event.
+ */
+describe("a row-targeted delta on the windowed line", () => {
+  function resolutionCount(harness: WindowedHarness): number {
+    const row = harness.handle.store
+      .getState()
+      .messages.find((message) => message.messageId === "a-1");
+    if (row === undefined || row.role !== "assistant") return -1;
+    return row.imageResolutions.length;
+  }
+
+  function seedAndResolve(harness: WindowedHarness): void {
+    harness.callbacks().onWindowedSnapshot(
+      windowedSnapshot({
+        epoch: 4,
+        rowCount: 2,
+        tailFromOrdinal: 0,
+        tailMessages: [userMessage("m-1", 1), assistantMessage("a-1", 2)],
+        accumulatedFileChangeCount: 0,
+      }),
+    );
+    harness.callbacks().onBlockDelta(
+      createImageResolutionUpdatedFrame({
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "image_resolution.updated",
+          blockId: "a-1",
+          messageId: "a-1",
+          timestamp: 3,
+          turnId: "turn-1",
+          entry: {
+            source: "chart.png",
+            canonicalSource: "chart.png",
+            state: "resolved",
+            attachmentHash: "hash-1",
+            mediaType: "image/png",
+            width: null,
+            height: null,
+          },
+        },
+      }),
+    );
+  }
+
+  it("survives the republish that the next windowed frame performs", () => {
+    const harness = createWindowedHarness();
+    try {
+      seedAndResolve(harness);
+      expect(resolutionCount(harness)).toBe(1);
+
+      // The frame that used to erase it. Any windowed frame would do; an
+      // appended event is the one that needs no reconnect to arrive.
+      harness.callbacks().onEventAppended(appendedEvent("e-1"));
+
+      expect(resolutionCount(harness)).toBe(1);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("carries a steer-split block through to the frozen row, and keeps it", () => {
+    // Consumer 10. Three appliers share `rewriteMessageInPlace`, and sharing a
+    // helper is not the same as using it - a mutation that un-wires THIS one
+    // passed every test until this existed.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 3,
+          tailFromOrdinal: 0,
+          tailMessages: [
+            assistantWithBlocks("a-frozen", 1, "turn-1", [
+              {
+                type: "text",
+                blockId: "b-1",
+                status: "streaming",
+                timestamp: 1,
+                text: "before",
+                providerNotice: null,
+              },
+            ]),
+            // The steer bubble sits between the split siblings.
+            userMessage("m-steer", 2),
+            assistantWithBlocks("a-continuation", 3, "turn-1", []),
+          ],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      raiseActiveTurn(harness.callbacks(), "turn-1");
+
+      harness.callbacks().onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "text.delta",
+          blockId: "b-1",
+          timestamp: 4,
+          delta: " and after",
+        },
+      });
+
+      const frozenBlock = (): AssistantBlocks[number] | undefined =>
+        blockOf(
+          harness.handle.store
+            .getState()
+            .messages.find((message) => message.messageId === "a-frozen"),
+          "b-1",
+        );
+      const carried = frozenBlock();
+      expect(carried?.type === "text" ? carried.text : "").toBe(
+        "before and after",
+      );
+
+      harness.callbacks().onEventAppended(appendedEvent("e-carry"));
+      const survived = frozenBlock();
+      expect(survived?.type === "text" ? survived.text : "").toBe(
+        "before and after",
+      );
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("routes a detached background terminal to its settled row, and keeps it", () => {
+    // Consumer 8, the third applier. Its owner row belongs to an ALREADY
+    // SETTLED turn, which is what makes it a row-targeted delta at arbitrary
+    // history rather than a tail write.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [
+            assistantWithBlocks("a-settled", 2, "turn-settled", [
+              {
+                type: "command",
+                blockId: "bg-command",
+                status: "streaming",
+                timestamp: 2,
+                command: "sleep 20 && echo done",
+                cwd: "/tmp",
+                exitCode: null,
+                backgroundTask: true,
+                stopped: false,
+              },
+            ]),
+          ],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      raiseActiveTurn(harness.callbacks(), "turn-1");
+
+      harness.callbacks().onBlockDelta({
+        kind: "blockDelta",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        event: {
+          type: "command.completed",
+          blockId: "bg-command",
+          timestamp: 30,
+          command: "sleep 20 && echo done",
+          exitCode: 0,
+          backgroundTask: true,
+        },
+      });
+
+      const settledBlock = (): AssistantBlocks[number] | undefined =>
+        blockOf(
+          harness.handle.store
+            .getState()
+            .messages.find((message) => message.messageId === "a-settled"),
+          "bg-command",
+        );
+      const completed = settledBlock();
+      expect(completed?.type === "command" ? completed.exitCode : null).toBe(0);
+
+      harness.callbacks().onEventAppended(appendedEvent("e-detached"));
+      const survived = settledBlock();
+      expect(survived?.type === "command" ? survived.exitCode : null).toBe(0);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("lands in the window itself, not only in the published array", () => {
+    // The stronger statement, and the one that does not depend on which frame
+    // happens to arrive next: the span holding the row carries the resolution.
+    const harness = createWindowedHarness();
+    try {
+      seedAndResolve(harness);
+      const span = harness.handle.store.getState().transcriptWindow.spans[0];
+      const row = span.messages.find((message) => message.messageId === "a-1");
+      expect(
+        row?.role === "assistant" ? row.imageResolutions : [],
+      ).toHaveLength(1);
     } finally {
       harness.handle.dispose();
     }
