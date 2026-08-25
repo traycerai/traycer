@@ -4,18 +4,11 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
-  BrowserViewCdpResult,
   BrowserViewBridge,
-  BrowserViewElectronTabLifecycleBridge,
-  BrowserViewCdpSessionEndedChange,
-  BrowserViewCdpTargetAttachedChange,
   BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewControlActionResult,
-  BrowserViewControlGrantResult,
-  BrowserViewControlRevokedChange,
   BrowserViewDebugSnapshotChange,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
@@ -23,27 +16,23 @@ import type {
   BrowserViewOverlayOcclusionResult,
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
-  BrowserViewNativeTabCdpSessionEndedChange,
-  BrowserViewNativeTabCdpTargetAttachedChange,
   BrowserViewElectronTabHandoffChange,
+  BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
-  BrowserViewProvisionedTab,
   BrowserViewStatusChange,
   BrowserViewStorageStateApplyResult,
   BrowserViewStorageStateCaptureResult,
+  BrowserCdpResult,
 } from "../ipc-contracts/browser-view-types";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
   BrowserAnnotationStartResult,
 } from "../ipc-contracts/browser-annotation-types";
+import type { PipCaptureIpcPayload } from "../ipc-contracts/pip-capture-types";
 import { subscribe } from "./subscribe";
 
-export interface BrowserViewBridgeSurface {
-  browserView: BrowserViewBridge & BrowserViewElectronTabLifecycleBridge;
-}
-
-export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
+export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
   return {
     browserView: {
       upsertTile: (input) =>
@@ -55,7 +44,7 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewEnsureTab,
           input,
-        ) as Promise<BrowserViewProvisionedTab>,
+        ) as Promise<BrowserViewNativeTabCapability>,
       acceptTab: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewAcceptTab,
@@ -230,21 +219,6 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,
         ) as Promise<BrowserPrimaryProfileCaptureResult>,
-      grantControl: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewControlGrant,
-          input,
-        ) as Promise<BrowserViewControlGrantResult>,
-      revokeControl: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewControlRevoke,
-          input,
-        ) as Promise<void>,
-      executeControlAction: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewControlAction,
-          input,
-        ) as Promise<BrowserViewControlActionResult>,
       onStatusChange: (handler) =>
         subscribe<BrowserViewStatusChange>(
           RunnerHostEvent.browserViewStatusChange,
@@ -280,11 +254,6 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
           RunnerHostEvent.browserViewDebugSnapshotChange,
           handler,
         ),
-      onControlRevoked: (handler) =>
-        subscribe<BrowserViewControlRevokedChange>(
-          RunnerHostEvent.browserViewControlRevoked,
-          handler,
-        ),
       onAnnotationEvent: (handler) =>
         subscribe<BrowserAnnotationSessionIpcEvent>(
           RunnerHostEvent.browserViewAnnotationEvent,
@@ -295,44 +264,33 @@ export function buildBrowserViewBridge(): BrowserViewBridgeSurface {
           RunnerHostEvent.browserViewAnnotationAttached,
           handler,
         ),
-      dispatchCdp: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewCdpDispatch,
-          input,
-        ) as Promise<BrowserViewCdpResult>,
       dispatchElectronTabCdp: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewElectronTabCdpDispatch,
           input,
-        ) as Promise<BrowserViewCdpResult>,
+        ) as Promise<BrowserCdpResult>,
+      startPipCapture: (input) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.pipCaptureStart,
+          input,
+        ) as Promise<void>,
+      stopPipCapture: () =>
+        ipcRenderer.invoke(RunnerHostInvoke.pipCaptureStop) as Promise<void>,
+      onPipCaptureFrame: (handler) =>
+        subscribe<PipCaptureIpcPayload>(
+          RunnerHostEvent.pipCaptureFrame,
+          (payload) => {
+            handler(payload.frame, payload.jpegBytes);
+          },
+        ),
       onNativeTabStatusChange: (handler) =>
         subscribe<BrowserViewNativeTabStatusChange>(
           RunnerHostEvent.browserViewNativeTabStatusChange,
           handler,
         ),
-      onNativeTabCdpSessionEnded: (handler) =>
-        subscribe<BrowserViewNativeTabCdpSessionEndedChange>(
-          RunnerHostEvent.browserViewNativeTabCdpSessionEnded,
-          handler,
-        ),
-      onNativeTabCdpTargetAttached: (handler) =>
-        subscribe<BrowserViewNativeTabCdpTargetAttachedChange>(
-          RunnerHostEvent.browserViewNativeTabCdpTargetAttached,
-          handler,
-        ),
       onElectronTabHandoff: (handler) =>
         subscribe<BrowserViewElectronTabHandoffChange>(
           RunnerHostEvent.browserViewElectronTabHandoff,
-          handler,
-        ),
-      onCdpSessionEnded: (handler) =>
-        subscribe<BrowserViewCdpSessionEndedChange>(
-          RunnerHostEvent.browserViewCdpSessionEnded,
-          handler,
-        ),
-      onCdpTargetAttached: (handler) =>
-        subscribe<BrowserViewCdpTargetAttachedChange>(
-          RunnerHostEvent.browserViewCdpTargetAttached,
           handler,
         ),
     },

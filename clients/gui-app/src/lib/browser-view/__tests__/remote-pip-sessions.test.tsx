@@ -1,20 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PipEpicSessionsFeed } from "../use-pip-epic-sessions";
-import { resetPipEpicSessionsForTests } from "../pip-epic-sessions";
-import { resetPipStoreForTests } from "../pip-store";
+import { useRemotePipSessions } from "../use-pip-epic-sessions";
 
 const EPIC = "epic-1";
-
-interface DirectoryEntry {
-  readonly hostId: string;
-  readonly label: string;
-  readonly kind: "local";
-  readonly websocketUrl: string | null;
-  readonly version: string;
-  readonly transportDialability: "dialable" | "not-dialable";
-}
 
 interface RecordedSession {
   readonly hostId: string;
@@ -29,13 +18,13 @@ interface RecordedTransport {
   readonly sessions: RecordedSession[];
 }
 
-const directoryState = vi.hoisted(() => ({
-  data: [] as DirectoryEntry[],
-}));
-
 const transportFactory = vi.hoisted(() => {
   const transports: RecordedTransport[] = [];
+  const failOnceFor = new Set<string>();
   const openTransport = (hostId: string) => {
+    if (failOnceFor.delete(hostId)) {
+      throw new Error(`No directory entry for host ${hostId}`);
+    }
     const record: RecordedTransport = {
       hostId,
       closed: false,
@@ -68,19 +57,34 @@ const transportFactory = vi.hoisted(() => {
   };
   return {
     transports,
+    failOnceFor,
     openTransport,
     reset(): void {
       transports.length = 0;
+      failOnceFor.clear();
     },
   };
 });
 
-vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
-  useHostDirectoryList: () => ({ data: directoryState.data }),
-}));
+const directoryEvents = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const state = {
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return { dispose: () => listeners.delete(listener) };
+    },
+    emit(): void {
+      for (const listener of listeners) listener();
+    },
+    reset(): void {
+      listeners.clear();
+    },
+  };
+  return { ...state, directory: { onChange: state.subscribe } };
+});
 
-vi.mock("@/hooks/host/use-remote-sessions-poll-readiness", () => ({
-  useRemoteSessionsPollReadiness: () => () => false,
+vi.mock("@/lib/host", () => ({
+  useHostDirectory: () => directoryEvents.directory,
 }));
 
 vi.mock("@/lib/host/use-durable-stream-transport", () => ({
@@ -91,57 +95,41 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => [{ id: "chat-a" }],
 }));
 
-function localHost(
-  hostId: string,
-  overrides: Partial<DirectoryEntry>,
-): DirectoryEntry {
-  return {
-    hostId,
-    label: hostId,
-    kind: "local",
-    websocketUrl: `ws://127.0.0.1/${hostId}`,
-    version: "test",
-    transportDialability: "dialable",
-    ...overrides,
-  };
-}
-
 function allSessions(): RecordedSession[] {
   return transportFactory.transports.flatMap((transport) => transport.sessions);
 }
 
-describe("PipEpicSessionsFeed", () => {
+function RemoteSessionsProbe(props: { readonly hostIds: readonly string[] }) {
+  useRemotePipSessions(EPIC, props.hostIds);
+  return null;
+}
+
+describe("useRemotePipSessions", () => {
   beforeEach(() => {
-    resetPipStoreForTests();
-    resetPipEpicSessionsForTests();
     transportFactory.reset();
-    directoryState.data = [localHost("host-a", {}), localHost("host-b", {})];
+    directoryEvents.reset();
   });
 
   afterEach(() => {
     cleanup();
-    resetPipStoreForTests();
-    resetPipEpicSessionsForTests();
     transportFactory.reset();
+    directoryEvents.reset();
   });
 
-  it("subscribes to browser.sessions on both hosts and closes transports and sessions on unmount", () => {
-    const { unmount } = render(<PipEpicSessionsFeed epicId={EPIC} />);
+  it("subscribes only the exact remote PiP target", () => {
+    const remoteHostIds = ["host-b"];
+    const { unmount } = render(<RemoteSessionsProbe hostIds={remoteHostIds} />);
 
     expect(transportFactory.transports.map((item) => item.hostId)).toEqual([
-      "host-a",
       "host-b",
     ]);
     const sessions = allSessions();
-    expect(sessions).toHaveLength(2);
-    expect(sessions.map((session) => session.method)).toEqual([
-      "browser.sessions",
-      "browser.sessions",
-    ]);
-    expect(sessions.map((session) => session.params)).toEqual([
-      { epicId: EPIC, chatId: "chat-a" },
-      { epicId: EPIC, chatId: "chat-a" },
-    ]);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      hostId: "host-b",
+      method: "browser.sessions",
+      params: { epicId: EPIC },
+    });
     expect(transportFactory.transports.every((item) => !item.closed)).toBe(
       true,
     );
@@ -153,33 +141,39 @@ describe("PipEpicSessionsFeed", () => {
     expect(allSessions().every((session) => session.closed)).toBe(true);
   });
 
-  it("closes only the host that becomes undialable and still tears the rest down on unmount", () => {
-    const { rerender, unmount } = render(<PipEpicSessionsFeed epicId={EPIC} />);
-    expect(transportFactory.transports).toHaveLength(2);
-
-    directoryState.data = [
-      localHost("host-a", {}),
-      localHost("host-b", { transportDialability: "not-dialable" }),
-    ];
-    rerender(<PipEpicSessionsFeed epicId={EPIC} />);
-
-    const hostA = transportFactory.transports.find(
-      (item) => item.hostId === "host-a",
+  it("closes a subscription immediately when the PiP no longer targets its host", () => {
+    const remoteHostIds = ["host-b"];
+    const noRemoteHosts: readonly string[] = [];
+    const { rerender, unmount } = render(
+      <RemoteSessionsProbe hostIds={remoteHostIds} />,
     );
+    expect(transportFactory.transports).toHaveLength(1);
+
+    rerender(<RemoteSessionsProbe hostIds={noRemoteHosts} />);
+
     const hostB = transportFactory.transports.find(
       (item) => item.hostId === "host-b",
     );
-    expect(hostA?.closed).toBe(false);
     expect(hostB?.closed).toBe(true);
-    expect(hostA?.sessions.every((session) => !session.closed)).toBe(true);
     expect(hostB?.sessions.every((session) => session.closed)).toBe(true);
-    expect(transportFactory.transports).toHaveLength(2);
+    expect(transportFactory.transports).toHaveLength(1);
 
     unmount();
 
-    expect(hostA?.closed).toBe(true);
-    expect(hostA?.sessions.every((session) => session.closed)).toBe(true);
     expect(hostB?.closed).toBe(true);
     expect(hostB?.sessions.every((session) => session.closed)).toBe(true);
+  });
+
+  it("retries a target on directory evidence after synchronous construction failure", () => {
+    const remoteHostIds = ["host-b"];
+    transportFactory.failOnceFor.add("host-b");
+    render(<RemoteSessionsProbe hostIds={remoteHostIds} />);
+
+    expect(transportFactory.transports).toHaveLength(0);
+    directoryEvents.emit();
+
+    expect(transportFactory.transports.map((item) => item.hostId)).toEqual([
+      "host-b",
+    ]);
   });
 });

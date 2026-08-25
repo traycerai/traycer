@@ -200,10 +200,7 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
           : null,
       );
       if (windowId === null || requestId === null) return;
-      const waiter = bridge.browserHandoffDrainWaiters.get(requestId);
-      if (waiter?.windowId !== windowId) return;
-      bridge.browserHandoffDrainWaiters.delete(requestId);
-      waiter.resolve();
+      bridge.acknowledgeBrowserHandoffsDrained(windowId, requestId);
     },
   );
 }

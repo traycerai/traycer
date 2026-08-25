@@ -138,8 +138,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
-import type { BrowserViewBridgeSurface } from "../electron-preload/browser-view-bridge";
-import type { PipCaptureBridgeSurface } from "../electron-preload/pip-capture-bridge";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -247,8 +246,7 @@ export interface DesktopPreloadBridge {
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
-  browserView: DesktopBrowserViewBridge;
-  pipCapture: PipCaptureBridgeSurface["pipCapture"];
+  browserView: BrowserViewBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -479,9 +477,6 @@ export interface DesktopZoomBridge {
   };
 }
 
-/** The renderer consumes exactly the bridge shape exposed by preload. */
-export type DesktopBrowserViewBridge = BrowserViewBridgeSurface["browserView"];
-
 export interface DesktopTraycerCliBridge {
   hostStatus(): Promise<TraycerHostStatusSnapshot>;
   shellConfigGet(): Promise<TraycerShellConfig>;
@@ -645,8 +640,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly platform: DesktopPlatformBridge;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
-  readonly browserView: DesktopBrowserViewBridge;
-  readonly pipCapture: PipCaptureBridgeSurface["pipCapture"];
+  readonly browserView: BrowserViewBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -675,7 +669,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
     this.browserView = options.bridge.browserView;
-    this.pipCapture = options.bridge.pipCapture;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so
     // re-wrapping it here could only add a second identity for the same

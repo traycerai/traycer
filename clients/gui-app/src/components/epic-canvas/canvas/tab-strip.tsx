@@ -54,6 +54,7 @@ import {
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
+  EpicNodeRef,
   EpicTerminalRef,
   SplitDirection,
 } from "@/stores/epics/canvas/types";
@@ -503,9 +504,10 @@ function useBrowserTabPresentation(
             candidate.sessionId === tab.sessionId,
         )
       : undefined;
-  const liveTab = session?.tabs.find(
-    (candidate) => candidate.tabId === tab.tabId,
-  );
+  const liveTab =
+    tab.type === "browser-session"
+      ? session?.tabs.find((candidate) => candidate.tabId === tab.tabId)
+      : undefined;
   const [state, setState] = useState(() => ({
     liveTab,
     presentation:
@@ -1200,6 +1202,14 @@ function renderFixedTabIcon(
   }
 }
 
+function isEpicNodeRef(tab: EpicCanvasTileRef): tab is EpicNodeRef {
+  return (
+    tab.type === "terminal" ||
+    tab.type === "workspace-file" ||
+    isOpenableEpicNodeKind(tab.type)
+  );
+}
+
 function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
@@ -1235,6 +1245,7 @@ function TabIcon(props: {
     managedCommand?.monitoring === true,
   );
   if (fixedIcon !== null) return fixedIcon;
+  if (!isEpicNodeRef(props.tab)) return null;
   // A live chat tab whose bound host is unreachable renders the published
   // copy (see tab-group-view's fallback), so its strip icon must say the same
   // thing the surface does: locked, not steerable, exactly like a copy tab.

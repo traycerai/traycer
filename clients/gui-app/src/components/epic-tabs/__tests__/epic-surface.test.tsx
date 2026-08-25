@@ -66,50 +66,41 @@ vi.mock("@/providers/epic-session-provider", () => ({
 }));
 
 /**
- * Ready-scope BrowserSessionsProvider stand-in: proves ReadyEpicBrowserSessionsScope
- * mounts it (and can publish sessions) without pulling in the host stream stack.
+ * BrowserSessionsProvider stand-in: publishes the same cold/live transition as
+ * the real continuously mounted provider without pulling in the host stream.
  */
-vi.mock("@/lib/browser-view/use-pip-epic-sessions", () => ({
-  PipEpicSessionsFeed: () => null,
-  usePipEpicSessionsFeed: () => undefined,
-}));
-
-vi.mock("@/components/epic-canvas/renderers/browser-session-dock", async () => {
-  const { BrowserSessionsContext } =
-    await import("@/components/epic-canvas/renderers/browser-sessions-context");
-  return {
-    BrowserSessionsProvider: (props: {
-      readonly epicId: string;
-      readonly routingChatId: string | null;
-      readonly children: ReactNode;
-    }) => {
-      const value: BrowserSessionsState = {
-        lifecycle: "live",
-        inventoryReady: true,
-        items: readySessionsState.items,
-        errorMessage: null,
-        routingChatId: props.routingChatId,
-        retry: () => undefined,
-        closeSession: () => undefined,
-        closeTab: () => Promise.resolve(),
-        requestPromoteState: () =>
-          Promise.reject(new Error("not used in epic-surface test")),
-        requestLendStorage: () =>
-          Promise.reject(new Error("not used in epic-surface test")),
-      };
-      return (
-        <BrowserSessionsContext.Provider value={value}>
-          <div
-            data-epic-id={props.epicId}
-            data-routing-chat-id={props.routingChatId ?? "null"}
-            data-testid="browser-sessions-provider"
-          />
-          {props.children}
-        </BrowserSessionsContext.Provider>
-      );
-    },
-  };
-});
+vi.mock(
+  "@/components/epic-canvas/renderers/browser-sessions-provider",
+  async () => {
+    const { BrowserSessionsContext } =
+      await import("@/components/epic-canvas/renderers/browser-sessions-context");
+    return {
+      BrowserSessionsProvider: (props: {
+        readonly epicId: string;
+        readonly children: ReactNode;
+      }) => {
+        const ready = openEpicHandleState.handle !== null;
+        const value: BrowserSessionsState = {
+          lifecycle: ready ? "live" : "connecting",
+          inventoryReady: ready,
+          items: ready ? readySessionsState.items : [],
+          errorMessage: null,
+          retry: () => undefined,
+          closeTab: () => Promise.resolve(),
+        };
+        return (
+          <BrowserSessionsContext.Provider value={value}>
+            <div
+              data-epic-id={props.epicId}
+              data-testid="browser-sessions-provider"
+            />
+            {props.children}
+          </BrowserSessionsContext.Provider>
+        );
+      },
+    };
+  },
+);
 
 vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
   EpicRouteSessionBody: (props: { readonly tabId: string }) => (
@@ -188,6 +179,7 @@ const SAMPLE_SESSION: BrowserSessionInfo = {
   createdBy: { chatId: "chat-a", agentRunId: null },
   createdAt: 1,
   lastActivityAt: 2,
+  runtime: { kind: "electron", revision: 0 },
   tabs: [],
 };
 
@@ -246,8 +238,9 @@ describe("<EpicSurface />", () => {
   it("cold-starts browser sessions with a null open-epic handle, then mounts the ready provider when the handle resolves", () => {
     const { rerender } = renderEpicSurface("tab-a", "epic-a");
 
-    // (1) Initial null handle: empty no-op BrowserSessionsContext, no throw.
-    expect(screen.queryByTestId("browser-sessions-provider")).toBeNull();
+    // (1) Initial null handle: the real provider remains mounted but has no
+    // owner yet, so its one context reports connecting with empty inventory.
+    expect(screen.getByTestId("browser-sessions-provider")).not.toBeNull();
     expect(screen.getByTestId("browser-session-count-tab-a").textContent).toBe(
       "0",
     );
@@ -255,8 +248,7 @@ describe("<EpicSurface />", () => {
       screen.getByTestId("browser-session-lifecycle-tab-a").textContent,
     ).toBe("connecting");
 
-    // (2) Handle resolves: ReadyEpicBrowserSessionsScope mounts provider;
-    // sessions can appear via the ready context.
+    // (2) Handle resolves: the same provider publishes its ready inventory.
     readySessionsState.items = [SAMPLE_SESSION];
     openEpicHandleState.handle = { epicId: "epic-a" };
 
@@ -271,8 +263,6 @@ describe("<EpicSurface />", () => {
     const provider = screen.getByTestId("browser-sessions-provider");
     expect(provider).not.toBeNull();
     expect(provider.dataset.epicId).toBe("epic-a");
-    // Lexicographic first chat id is the deterministic routing chat.
-    expect(provider.dataset.routingChatId).toBe("chat-a");
     expect(screen.getByTestId("browser-session-count-tab-a").textContent).toBe(
       "1",
     );

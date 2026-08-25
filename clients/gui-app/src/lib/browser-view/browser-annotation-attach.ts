@@ -1,21 +1,12 @@
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import type { BrowserAnnotationAttachPayload } from "@traycer-clients/shared/platform/browser-annotation";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 type ImageBytes = Uint8Array<ArrayBuffer>;
 
-/**
- * Incoming attach payload from the native annotation session. Crop bytes
- * are stored separately; this object never carries pixels.
- */
-export type BrowserAnnotationAttachPayload = Omit<
-  BrowserAnnotationRecord,
-  "kind" | "imageFileName" | "imageHash"
->;
-
-export type AttachBrowserAnnotationResult =
-  | { readonly status: "attached" }
-  | { readonly status: "store-failed" };
+type AttachBrowserAnnotationResult =
+  { readonly status: "attached" } | { readonly status: "store-failed" };
 
 /**
  * Store crop bytes in the existing hash-backed composer image store, mint the

@@ -4,17 +4,14 @@ import { toast } from "sonner";
 import { useAnnotationRoute } from "@/hooks/browser/use-annotation-route";
 import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
 import type {
-  BrowserAnnotationAttachResultInput,
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
+} from "@traycer-clients/shared/platform/browser-annotation";
+import type {
+  BrowserViewBridge,
   BrowserViewStatus,
   BrowserViewTileKey,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
-
-type ReportAnnotationAttachResult = (
-  input: BrowserAnnotationAttachResultInput,
-) => Promise<void>;
+} from "@traycer-clients/shared/platform/browser-view";
 
 export interface BrowserAnnotationSessionController {
   readonly isActive: boolean;
@@ -23,18 +20,8 @@ export interface BrowserAnnotationSessionController {
   readonly toggle: () => void;
 }
 
-export type BrowserAnnotationSessionBridge = Pick<
-  DesktopBrowserViewBridge,
-  | "startAnnotation"
-  | "cancelAnnotation"
-  | "setAnnotationTargetChatLabel"
-  | "reportAnnotationAttachResult"
-  | "onAnnotationEvent"
-  | "onAnnotationAttached"
->;
-
 interface UseBrowserAnnotationSessionArgs {
-  readonly browserView: BrowserAnnotationSessionBridge | null;
+  readonly browserView: BrowserViewBridge | null;
   readonly tileKey: BrowserViewTileKey;
   readonly status: BrowserViewStatus;
   readonly epicId: string;
@@ -84,12 +71,8 @@ export function useBrowserAnnotationSession(
     if (browserView === null) return;
     const subscription = browserView.onAnnotationAttached((change) => {
       if (!isEventForTile(change, tileKey)) return;
-      const reportResult = browserView.reportAnnotationAttachResult;
-      void ingestAttachedAnnotation(
-        change,
-        reportResult === undefined
-          ? null
-          : (input) => reportResult.call(browserView, input),
+      void ingestAttachedAnnotation(change, (input) =>
+        browserView.reportAnnotationAttachResult(input),
       );
     });
     return () => {
@@ -165,7 +148,7 @@ function applySessionEvent(
 
 async function ingestAttachedAnnotation(
   change: BrowserAnnotationAttachedIpcEvent,
-  reportResult: ReportAnnotationAttachResult | null,
+  reportResult: BrowserViewBridge["reportAnnotationAttachResult"] | null,
 ): Promise<void> {
   const annotationId = change.payload.annotationId;
   let status: "attached" | "failed" = "failed";

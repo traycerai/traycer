@@ -966,7 +966,7 @@ describe("BrowserPeekTile input capture", () => {
     ]);
   });
 
-  it("disarms, pauses, and releases capture when the tile is hidden", () => {
+  it("disarms and closes capture when the tile is hidden", () => {
     const view = render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
@@ -992,11 +992,7 @@ describe("BrowserPeekTile input capture", () => {
       hasBinaryPayload: false,
       armEpoch: 1,
     });
-    expect(framesOfKind(stream, "setPaused")).toContainEqual({
-      kind: "setPaused",
-      hasBinaryPayload: false,
-      paused: true,
-    });
+    expect(stream.closed).toBe(true);
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
     expect(peekTile().querySelector(".ring-primary")).toBeNull();
   });

@@ -13,6 +13,7 @@ import {
   originFromPageUrl,
 } from "./browser-annotation-crop";
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "./browser-annotation-overlay-guest.generated";
+import { BrowserDebugSession } from "./browser-debug-session";
 import {
   ANNOTATION_BINDING_NAME,
   ANNOTATION_CANCEL_EXPRESSION,
@@ -25,32 +26,29 @@ import {
   buildAnnotationSetTargetChatLabelExpression,
   sanitizeAnnotationBindingPayload,
 } from "./browser-annotation-overlay-script";
-import type {
-  BrowserViewCapturedImage,
-  BrowserViewDebugger,
-} from "./browser-view-manager";
+import type { BrowserViewCapturedImage } from "./browser-view-port";
 
-export interface BrowserAnnotationWebContents {
+interface BrowserAnnotationWebContents {
   readonly id: number;
-  readonly debugger: BrowserViewDebugger;
   capturePage(): Promise<BrowserViewCapturedImage>;
   getURL(): string;
   getTitle(): string;
 }
 
-export interface BrowserAnnotationSessionIdentity {
+interface BrowserAnnotationSessionIdentity {
   readonly tabId: string;
   readonly sessionId: string;
 }
 
-export interface BrowserAnnotationAttachedResult {
+interface BrowserAnnotationAttachedResult {
   readonly targetChatId: string;
   readonly payload: BrowserAnnotationAttachPayload;
   readonly pngBytes: Uint8Array;
 }
 
-export interface BrowserAnnotationSessionOptions {
+interface BrowserAnnotationSessionOptions {
   readonly webContents: BrowserAnnotationWebContents;
+  readonly debugSession: BrowserDebugSession;
   readonly identity: BrowserAnnotationSessionIdentity;
   readonly onEvent: (event: BrowserAnnotationSessionEvent) => void;
   readonly onAttached: (
@@ -66,23 +64,22 @@ export interface BrowserAnnotationSessionOptions {
  */
 export class BrowserAnnotationSession {
   private readonly webContents: BrowserAnnotationWebContents;
+  private readonly debugSession: BrowserDebugSession;
   private readonly identity: BrowserAnnotationSessionIdentity;
   private readonly onEvent: (event: BrowserAnnotationSessionEvent) => void;
   private readonly onAttached: (
     result: BrowserAnnotationAttachedResult,
   ) => Promise<boolean>;
-  private readonly messageListener = (...args: unknown[]) => {
-    this.handleDebuggerMessage(args);
-  };
+  private removeBindingListener: (() => void) | null = null;
   private contextId: number | null = null;
   private ended = false;
   private started = false;
-  private listening = false;
   private capturing = false;
   private markCount = 0;
 
   constructor(options: BrowserAnnotationSessionOptions) {
     this.webContents = options.webContents;
+    this.debugSession = options.debugSession;
     this.identity = options.identity;
     this.onEvent = options.onEvent;
     this.onAttached = options.onAttached;
@@ -97,17 +94,11 @@ export class BrowserAnnotationSession {
   }
 
   async start(): Promise<BrowserAnnotationStartResult> {
-    const browserDebugger = this.webContents.debugger;
     if (this.ended) return { ok: false, reason: "inject-failed" };
-    if (!browserDebugger.isAttached()) {
-      return { ok: false, reason: "debugger-not-attached" };
-    }
     try {
-      await browserDebugger.sendCommand("Page.enable", {}, undefined);
+      await this.debugSession.enableAfterCommit();
       if (this.ended) return this.abortStart("inject-failed");
-      await browserDebugger.sendCommand("Runtime.enable", {}, undefined);
-      if (this.ended) return this.abortStart("inject-failed");
-      await browserDebugger.sendCommand(
+      await this.debugSession.sendCommand(
         "Runtime.addBinding",
         {
           name: ANNOTATION_BINDING_NAME,
@@ -116,7 +107,7 @@ export class BrowserAnnotationSession {
         undefined,
       );
       if (this.ended) return this.abortStart("inject-failed");
-      const frameTree = await browserDebugger.sendCommand(
+      const frameTree = await this.debugSession.sendCommand(
         "Page.getFrameTree",
         {},
         undefined,
@@ -126,12 +117,12 @@ export class BrowserAnnotationSession {
       if (frameId === null) {
         return this.abortStart("no-main-frame");
       }
-      const world = await browserDebugger.sendCommand(
+      const world = await this.debugSession.sendCommand(
         "Page.createIsolatedWorld",
         {
           frameId,
           worldName: ANNOTATION_WORLD_NAME,
-          grantUniveralAccess: false,
+          grantUniversalAccess: false,
         },
         undefined,
       );
@@ -142,7 +133,7 @@ export class BrowserAnnotationSession {
       this.contextId = contextId;
       if (this.ended) return this.abortStart("inject-failed");
       this.attachMessageListener();
-      const evaluation = await browserDebugger.sendCommand(
+      const evaluation = await this.debugSession.sendCommand(
         "Runtime.evaluate",
         {
           expression: ANNOTATION_OVERLAY_GUEST_SOURCE,
@@ -166,7 +157,11 @@ export class BrowserAnnotationSession {
           webContentsId: this.webContents.id,
         });
       }
-      return this.abortStart("inject-failed");
+      return this.abortStart(
+        this.debugSession.isAttached()
+          ? "inject-failed"
+          : "debugger-not-attached",
+      );
     }
   }
 
@@ -212,7 +207,11 @@ export class BrowserAnnotationSession {
   }
 
   private abortStart(
-    reason: "inject-failed" | "no-main-frame" | "no-isolated-world",
+    reason:
+      | "debugger-not-attached"
+      | "inject-failed"
+      | "no-main-frame"
+      | "no-isolated-world",
   ): BrowserAnnotationStartResult {
     this.teardownListeners();
     this.removeBinding();
@@ -236,31 +235,28 @@ export class BrowserAnnotationSession {
   }
 
   private attachMessageListener(): void {
-    if (this.listening) return;
-    this.webContents.debugger.on("message", this.messageListener);
-    this.listening = true;
+    if (this.removeBindingListener !== null) return;
+    this.removeBindingListener = this.debugSession.onBindingCalled((params) => {
+      this.handleBindingCalled(params);
+    });
   }
 
   private teardownListeners(): void {
-    if (!this.listening) return;
-    this.webContents.debugger.off("message", this.messageListener);
-    this.listening = false;
+    this.removeBindingListener?.();
+    this.removeBindingListener = null;
   }
 
-  private handleDebuggerMessage(args: readonly unknown[]): void {
+  private handleBindingCalled(params: Record<string, unknown>): void {
     if (this.ended) return;
-    const event = readCdpEvent(args);
-    if (event === null) return;
-    if (event.method !== "Runtime.bindingCalled") return;
-    if (event.params.name !== ANNOTATION_BINDING_NAME) return;
+    if (params.name !== ANNOTATION_BINDING_NAME) return;
     if (
       this.contextId !== null &&
-      typeof event.params.executionContextId === "number" &&
-      event.params.executionContextId !== this.contextId
+      typeof params.executionContextId === "number" &&
+      params.executionContextId !== this.contextId
     ) {
       return;
     }
-    const sanitized = sanitizeAnnotationBindingPayload(event.params.payload);
+    const sanitized = sanitizeAnnotationBindingPayload(params.payload);
     if (sanitized === null) return;
     if (sanitized.type === "cancelled") {
       this.end("cancelled");
@@ -281,9 +277,8 @@ export class BrowserAnnotationSession {
   }
 
   private removeBinding(): void {
-    const browserDebugger = this.webContents.debugger;
-    if (!browserDebugger.isAttached()) return;
-    browserDebugger
+    if (!this.debugSession.isAttached()) return;
+    this.debugSession
       .sendCommand(
         "Runtime.removeBinding",
         { name: ANNOTATION_BINDING_NAME },
@@ -385,10 +380,9 @@ export class BrowserAnnotationSession {
   ): Promise<void> {
     if (!required) {
       if (this.contextId === null) return;
-      const browserDebugger = this.webContents.debugger;
-      if (!browserDebugger.isAttached()) return;
+      if (!this.debugSession.isAttached()) return;
       try {
-        await browserDebugger.sendCommand(
+        await this.debugSession.sendCommand(
           "Runtime.evaluate",
           {
             expression,
@@ -416,11 +410,10 @@ export class BrowserAnnotationSession {
     if (this.contextId === null) {
       throw new Error("annotation isolated world is gone");
     }
-    const browserDebugger = this.webContents.debugger;
-    if (!browserDebugger.isAttached()) {
+    if (!this.debugSession.isAttached()) {
       throw new Error("annotation debugger is not attached");
     }
-    return browserDebugger.sendCommand(
+    return this.debugSession.sendCommand(
       "Runtime.evaluate",
       {
         expression,
@@ -431,18 +424,6 @@ export class BrowserAnnotationSession {
       undefined,
     );
   }
-}
-
-interface CdpEvent {
-  readonly method: string;
-  readonly params: Record<string, unknown>;
-}
-
-function readCdpEvent(args: readonly unknown[]): CdpEvent | null {
-  const method = args[1];
-  if (typeof method !== "string") return null;
-  const params = isRecord(args[2]) ? args[2] : {};
-  return { method, params };
 }
 
 function readMainFrameId(value: unknown): string | null {

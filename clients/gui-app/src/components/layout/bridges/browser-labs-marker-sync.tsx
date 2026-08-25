@@ -1,14 +1,10 @@
-import { useEffect, useMemo } from "react";
-import { resolveDesktopBrowserViewBridge } from "@/lib/browser-view/desktop-browser-view";
+import { useEffect } from "react";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export function BrowserLabsMarkerSync() {
   const runnerHost = useRunnerHost();
-  const browserView = useMemo(
-    () => resolveDesktopBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
+  const browserView = runnerHost.browserView;
 
   useEffect(() => {
     if (browserView === null) return;

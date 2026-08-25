@@ -1,14 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyPipCaption,
-  applyPipVisibilityChanged,
   completePipConversion,
   convertBrowserTabToPip,
   dismissPip,
   failPipConversion,
   getPipSnapshot,
-  PIP_CONVERSION_TIMEOUT_MS,
-  resetPipStoreForTests,
 } from "../pip-store";
 import {
   registerVisibleBrowserTile,
@@ -42,12 +39,8 @@ function convert(overrides: ConvertOverrides): string {
 
 describe("manual PiP store", () => {
   beforeEach(() => {
-    resetPipStoreForTests();
+    dismissPip(EPIC_ID);
     resetVisibleBrowserTileRegistryForTests();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it("stays hidden until an explicit conversion receives its first frame", () => {
@@ -97,17 +90,6 @@ describe("manual PiP store", () => {
     expect(onError).toHaveBeenCalledWith("capture failed");
   });
 
-  it("times out a conversion that never produces a frame", () => {
-    vi.useFakeTimers();
-    const onError = vi.fn();
-    convert({ onError });
-
-    vi.advanceTimersByTime(PIP_CONVERSION_TIMEOUT_MS);
-
-    expect(getPipSnapshot(EPIC_ID).pendingTarget).toBeNull();
-    expect(onError).toHaveBeenCalledOnce();
-  });
-
   it("dismisses only the PiP view", () => {
     const ready = vi.fn();
     const selectionId = convert({ onReady: ready });
@@ -127,8 +109,6 @@ describe("manual PiP store", () => {
       sessionId: "session-1",
       tabId: "tab-1",
     });
-
-    applyPipVisibilityChanged();
 
     expect(getPipSnapshot(EPIC_ID).target).toBeNull();
     unregister();
@@ -161,7 +141,10 @@ describe("manual PiP store", () => {
     completePipConversion(EPIC_ID, selectionId);
     expect(getPipSnapshot(EPIC_ID).target?.origin).toBe("manual");
 
-    const agentSelectionId = convert({ sessionId: "session-2", origin: "agent" });
+    const agentSelectionId = convert({
+      sessionId: "session-2",
+      origin: "agent",
+    });
     completePipConversion(EPIC_ID, agentSelectionId);
     expect(getPipSnapshot(EPIC_ID).target?.origin).toBe("agent");
   });

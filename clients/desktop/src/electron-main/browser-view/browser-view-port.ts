@@ -1,14 +1,5 @@
-import type {
-  BrowserWindowConstructorOptions,
-  Event,
-  Input,
-  RenderProcessGoneDetails,
-  Result,
-} from "electron";
+import type { BrowserWindowConstructorOptions } from "electron";
 import type { BrowserViewBounds } from "../../ipc-contracts/browser-view-types";
-
-export type BrowserViewEvent = Event;
-export type BrowserViewRenderProcessGoneDetails = RenderProcessGoneDetails;
 
 export interface BrowserViewDebugger {
   isAttached(): boolean;
@@ -31,13 +22,13 @@ export interface BrowserViewNavigationHistory {
   goForward(): void;
 }
 
-export interface BrowserViewOpenDevToolsOptions {
+interface BrowserViewOpenDevToolsOptions {
   readonly mode: "detach";
   readonly activate: boolean;
   readonly title: string;
 }
 
-export interface BrowserViewFindInPageOptions {
+interface BrowserViewFindInPageOptions {
   readonly forward: boolean;
   readonly findNext: boolean;
   readonly matchCase: boolean;
@@ -58,7 +49,7 @@ export type BrowserViewWindowOpenResult =
       readonly outlivesOpener: boolean;
     };
 
-export interface BrowserViewCropRect {
+interface BrowserViewCropRect {
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -74,7 +65,7 @@ export interface BrowserViewCapturedImage {
   toPNG(): Uint8Array;
 }
 
-export interface BrowserViewDevToolsWebContents {
+interface BrowserViewDevToolsWebContents {
   readonly id: number;
 }
 
@@ -83,9 +74,6 @@ export interface BrowserViewDevToolsWindow {
   isDestroyed(): boolean;
   destroy(): void;
 }
-
-export type BrowserViewInput = Input;
-export type BrowserViewFoundInPageResult = Result;
 
 export interface BrowserViewPopupWebContents {
   readonly id: number;
@@ -140,7 +128,7 @@ export interface ManagedBrowserView {
   setVisible(visible: boolean): void;
 }
 
-export interface ManagedContentView {
+interface ManagedContentView {
   addChildView(view: ManagedBrowserView): void;
   removeChildView(view: ManagedBrowserView): void;
 }

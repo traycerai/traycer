@@ -10,7 +10,7 @@ import {
 } from "@/components/epic-canvas/renderers/tile-controller";
 import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-browser-annotation-session";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { BrowserCookieCryptoState } from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
 const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
   mode: "real",

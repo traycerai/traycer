@@ -56,6 +56,7 @@ function session(
     createdAt: 1,
     lastActivityAt: 2,
     ...overrides,
+    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
   };
 }
 

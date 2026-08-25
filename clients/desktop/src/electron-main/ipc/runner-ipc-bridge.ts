@@ -465,6 +465,7 @@ interface FreshSnapshotWaiter {
 interface BrowserHandoffDrainWaiter {
   readonly windowId: string;
   readonly resolve: () => void;
+  readonly reject: (error: Error) => void;
 }
 
 /**
@@ -506,7 +507,7 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
-  readonly browserHandoffDrainWaiters = new Map<
+  private readonly browserHandoffDrainWaiters = new Map<
     string,
     BrowserHandoffDrainWaiter
   >();
@@ -809,11 +810,12 @@ export class RunnerIpcBridge {
     await Promise.all(
       this.windowRegistry.records().map(
         (record) =>
-          new Promise<void>((resolve) => {
+          new Promise<void>((resolve, reject) => {
             const requestId = randomUUID();
             this.browserHandoffDrainWaiters.set(requestId, {
               windowId: record.windowId,
               resolve,
+              reject,
             });
             if (
               this.safeSendToWindow(
@@ -825,10 +827,24 @@ export class RunnerIpcBridge {
               return;
             }
             this.browserHandoffDrainWaiters.delete(requestId);
-            resolve();
+            reject(
+              new Error(
+                `Browser handoff drain request could not be delivered to window ${record.windowId}`,
+              ),
+            );
           }),
       ),
     );
+  }
+
+  acknowledgeBrowserHandoffsDrained(
+    windowId: string,
+    requestId: string,
+  ): void {
+    const waiter = this.browserHandoffDrainWaiters.get(requestId);
+    if (waiter?.windowId !== windowId) return;
+    this.browserHandoffDrainWaiters.delete(requestId);
+    waiter.resolve();
   }
 
   /**
@@ -914,10 +930,12 @@ export class RunnerIpcBridge {
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
     );
-    for (const waiter of this.browserHandoffDrainWaiters.values()) {
-      waiter.resolve();
-    }
-    this.browserHandoffDrainWaiters.clear();
+    this.rejectBrowserHandoffDrainWaiters(
+      () => true,
+      new Error(
+        "Runner IPC bridge disposed before browser handoff drain resolved",
+      ),
+    );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
     // that no longer owns any IPC handlers, or hang the awaiting caller
@@ -1259,6 +1277,12 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
+    this.rejectBrowserHandoffDrainWaiters(
+      (waiter) => !liveWindowIds.has(waiter.windowId),
+      new Error(
+        "Browser handoff window closed before acknowledging the drain",
+      ),
+    );
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1320,6 +1344,17 @@ export class RunnerIpcBridge {
       if (predicate(waiter)) {
         waiter.resolveStale();
       }
+    }
+  }
+
+  private rejectBrowserHandoffDrainWaiters(
+    predicate: (waiter: BrowserHandoffDrainWaiter) => boolean,
+    error: Error,
+  ): void {
+    for (const [requestId, waiter] of this.browserHandoffDrainWaiters) {
+      if (!predicate(waiter)) continue;
+      this.browserHandoffDrainWaiters.delete(requestId);
+      waiter.reject(error);
     }
   }
 }

@@ -34,14 +34,14 @@ export type ErasedConditionPollPolicy<
   readonly resetLaneIds: ReadonlySet<string>;
 };
 
-export type HostMethodPollPolicy<
+type HostMethodPollPolicy<
   Method extends keyof HostRpcRegistry & string,
 > =
   | null
   | { readonly kind: "fixed"; readonly intervalMs: number }
   | ErasedConditionPollPolicy<Method>;
 
-export type HostMethodScheduling<
+type HostMethodScheduling<
   Method extends keyof HostRpcRegistry & string,
 > = {
   readonly mode:
@@ -51,7 +51,7 @@ export type HostMethodScheduling<
   readonly poll: HostMethodPollPolicy<Method>;
 };
 
-export type HostMethodPolicyTable = {
+type HostMethodPolicyTable = {
   readonly [
     Method in keyof HostRpcRegistry & string
   ]: HostMethodScheduling<Method>;
@@ -695,13 +695,6 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
-  // Ticket 12: the passive borrowed-tile indicator's Stop button. Same
-  // posture as `agent.stop` - a mutation with side effects, not a query.
-  "browser.stopAgentActivity": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   // Forking an agent persists a new collaboration record, like agent.create.
   "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
@@ -1560,7 +1553,7 @@ export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   },
 };
 
-export type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
+type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
   readonly hostRpcMethod: Method;
 };
 

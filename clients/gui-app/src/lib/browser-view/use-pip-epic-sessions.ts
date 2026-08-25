@@ -1,79 +1,64 @@
 /**
- * React binding for the epic-wide PiP sessions aggregator.
+ * React binding for the active PiP's remote-host inventory.
  *
- * Reachable hosts come from the directory list (not a separate "hosts in this
- * epic" concept). Unreachable hosts are simply absent and join on reconnect.
- * The manager is disposed on unmount so every subscription closes with the
- * epic surface.
+ * The caller supplies only the distinct non-canvas hosts named by the current
+ * and pending PiP targets. A directory change retries a target that was not
+ * registered when first requested; an open durable transport reconnects
+ * itself thereafter. There is no timer and no epic-wide host scan.
  */
-import { useEffect, useMemo, useRef } from "react";
-import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { useEffect, useRef, useState } from "react";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import { useHostDirectory } from "@/lib/host";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import { dialableHostEndpointFor } from "@/lib/host/transport-key";
-import { useEpicChatRecords } from "@/lib/epic-selectors";
-import {
-  createPipEpicSessionsOpener,
-  PipEpicSessionsManager,
-} from "./pip-epic-sessions";
+import { RemotePipSessionsManager } from "./pip-epic-sessions";
 
-export function usePipEpicSessionsFeed(epicId: string): void {
-  const directory = useHostDirectoryList();
+const EMPTY_REMOTE_SESSIONS: readonly BrowserSessionInfo[] = [];
+
+export function useRemotePipSessions(
+  epicId: string,
+  hostIds: readonly string[],
+): readonly BrowserSessionInfo[] {
   const openTransport = useDurableStreamTransportFactory();
-  const chats = useEpicChatRecords();
-  const directoryHostIds = useMemo(
-    () => (directory.data ?? []).map((entry) => entry.hostId),
-    [directory.data],
+  const directory = useHostDirectory();
+  const managerRef = useRef<RemotePipSessionsManager | null>(null);
+  const [items, setItems] = useState<readonly BrowserSessionInfo[]>(
+    EMPTY_REMOTE_SESSIONS,
   );
-  const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
-  const reachableHostIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const entry of directory.data ?? []) {
-      if (
-        dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) ===
-        null
-      ) {
-        continue;
-      }
-      ids.push(entry.hostId);
-    }
-    return ids;
-  }, [directory.data, hasReadySessionFor]);
-  const routingChatId = useMemo(() => {
-    return (
-      chats
-        .map((chat) => chat.id)
-        .toSorted((left, right) => left.localeCompare(right))[0] ?? null
-    );
-  }, [chats]);
-
-  const opener = useMemo(
-    () => createPipEpicSessionsOpener(openTransport),
-    [openTransport],
-  );
-
-  const managerRef = useRef<PipEpicSessionsManager | null>(null);
+  const active = hostIds.length > 0;
 
   useEffect(() => {
-    const manager = new PipEpicSessionsManager(epicId, opener);
+    if (!active) {
+      managerRef.current = null;
+      setItems(EMPTY_REMOTE_SESSIONS);
+      return;
+    }
+    let current = true;
+    const manager = new RemotePipSessionsManager(
+      epicId,
+      openTransport,
+      (nextItems) => {
+        if (current) setItems(nextItems);
+      },
+    );
     manager.attach();
     managerRef.current = manager;
     return () => {
-      manager.dispose();
+      current = false;
       if (managerRef.current === manager) managerRef.current = null;
+      manager.dispose();
     };
-  }, [epicId, opener]);
+  }, [active, epicId, openTransport]);
 
   useEffect(() => {
-    managerRef.current?.setChatId(routingChatId);
-  }, [routingChatId]);
-
-  useEffect(() => {
-    managerRef.current?.setHostIds(reachableHostIds);
-  }, [reachableHostIds]);
-}
-
-export function PipEpicSessionsFeed(props: { readonly epicId: string }): null {
-  usePipEpicSessionsFeed(props.epicId);
-  return null;
+    if (!active) return;
+    const reconcile = (): void => {
+      managerRef.current?.setHostIds(hostIds);
+    };
+    reconcile();
+    const subscription = directory.onChange(reconcile);
+    return () => {
+      subscription.dispose();
+    };
+  }, [active, directory, epicId, hostIds, openTransport]);
+  return items;
 }

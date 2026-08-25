@@ -4,7 +4,7 @@ import {
   subscribeBrowserViewSnapshot,
   type BrowserViewSnapshotState,
 } from "@/lib/browser-view/browser-overlay-coordinator";
-import type { BrowserViewTileKey } from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 
 export function useBrowserViewSnapshot(
   tileKey: BrowserViewTileKey,

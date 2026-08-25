@@ -1,10 +1,8 @@
 import "../../../../../__tests__/test-browser-apis";
+import type { ComponentProps } from "react";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  ElectronTabSurface,
-  type ElectronTabSurfaceNode,
-} from "@/components/epic-canvas/renderers/agent-browser-tile";
+import { ElectronTabSurface } from "@/components/epic-canvas/renderers/agent-browser-tile";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
@@ -23,17 +21,8 @@ vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
   useTileBodyVisible: () => state.visible,
 }));
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => ({}),
+  useRunnerHost: () => ({ browserView: state.bridge }),
 }));
-vi.mock("@/lib/browser-view/desktop-browser-view", async (load) => {
-  const actual =
-    await load<typeof import("@/lib/browser-view/desktop-browser-view")>();
-  return {
-    ...actual,
-    resolveDesktopBrowserViewBridge: () => state.bridge,
-    resolveDesktopElectronTabLifecycleBridge: () => state.bridge,
-  };
-});
 vi.mock(
   "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge",
   () => ({
@@ -54,9 +43,6 @@ vi.mock("@/lib/browser-view/visible-tile-registry", async (load) => {
     await load<typeof import("@/lib/browser-view/visible-tile-registry")>();
   return { ...actual, useRegisterVisibleBrowserTile: () => undefined };
 });
-vi.mock("@/lib/browser-view/browser-tile-control-store", () => ({
-  useBrowserTileControlState: () => ({ active: null, pending: null }),
-}));
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsContext: () => null,
 }));
@@ -120,7 +106,7 @@ class TestBridge {
   }
 }
 
-const NODE: ElectronTabSurfaceNode = {
+const NODE = {
   id: "browser-session:session-1:tab-1",
   instanceId: "tile-1",
   name: "Example",
@@ -128,7 +114,7 @@ const NODE: ElectronTabSurfaceNode = {
   sessionId: "session-1",
   url: "https://example.com/",
   viewportPreset: "responsive",
-};
+} satisfies ComponentProps<typeof ElectronTabSurface>["node"];
 
 function createBinding(
   bindSurface: ElectronTabBinding["bindSurface"],
@@ -138,8 +124,6 @@ function createBinding(
     sessionId: "session-1",
     tabId: "tab-1",
     registrationId: "registration-1",
-    url: "https://example.com/",
-    title: "Example",
     control: vi.fn(async () => {}),
     bindSurface,
   };

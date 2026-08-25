@@ -3,13 +3,10 @@ import {
   browserSessionsClientFrameSchema,
   browserSessionsOpenRequestSchema,
   browserSessionsServerFrameSchema,
-  browserSessionsV1,
-  browserSessionInfoSchema,
   browserScreencastClientFrameSchema,
   browserScreencastOpenRequestSchema,
   browserScreencastServerFrameSchema,
-  browserScreencastV10,
-  browserTabInfoSchema,
+  browserScreencastV1,
 } from "@traycer/protocol/host/browser/contracts";
 
 const SAMPLE_SESSION = {
@@ -21,6 +18,7 @@ const SAMPLE_SESSION = {
   createdBy: { chatId: "chat-1", agentRunId: null },
   createdAt: 10,
   lastActivityAt: 20,
+  runtime: { kind: "headless" as const, revision: 0 },
   tabs: [
     {
       tabId: "session-1",
@@ -34,91 +32,13 @@ const SAMPLE_SESSION = {
   ],
 };
 
-describe("browser.sessions@1.0 visible tile control frames", () => {
-  it("parses visible tile control request frames on the baseline contract", () => {
-    const frame = {
-      kind: "visibleTileControlRequest",
-      hasBinaryPayload: false,
-      requestId: "request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "agent-1",
-      tileInstanceId: "tile-1",
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 10,
-      expiresAt: 20,
-    };
-
-    expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-    expect(browserSessionsV1.serverFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-  });
-
-  it("accepts host-issued grant ids on the control grant decision frame", () => {
-    const frame = {
-      kind: "visibleTileControlDecision",
-      hasBinaryPayload: false,
-      requestId: "request-1",
-      approved: true,
-      grant: {
-        grantId: "grant-1",
-        chatId: "chat-1",
-        tileInstanceId: "tile-1",
-        origin: "http://localhost:3000",
-        dataLevel: "control",
-        expiresAt: 20,
-      },
-      reason: null,
-    };
-
-    expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-    expect(browserSessionsV1.clientFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-  });
-
-  it("accepts semantic visible tile actions on the baseline server frame", () => {
-    const frame = {
-      kind: "visibleTileControlAction",
-      hasBinaryPayload: false,
-      requestId: "action-1",
-      grantId: "grant-1",
-      tileInstanceId: "tile-1",
-      action: {
-        kind: "click",
-        selector: "button",
-      },
-      requestedAt: 30,
-    };
-
-    expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-  });
-
-  it("accepts tile-addressed visible tile control failures on the baseline server frame", () => {
-    const frame = {
-      kind: "visibleTileControlResult",
-      hasBinaryPayload: false,
-      requestId: "request-1",
-      tileInstanceId: "tile-1",
-      ok: false,
-      reason: "Visible tile control request expired.",
-      grant: null,
-    };
-
-    expect(browserSessionsServerFrameSchema.safeParse(frame).success).toBe(
-      true,
-    );
-  });
-});
+function parsesSession(session: unknown): boolean {
+  return browserSessionsServerFrameSchema.safeParse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    sessions: [session],
+  }).success;
+}
 
 describe("browser.screencast@1.0 control frames", () => {
   it("carries arming and subscription-bound input on the unreleased baseline", () => {
@@ -165,7 +85,7 @@ describe("browser.screencast@1.0 control frames", () => {
         true,
       );
       expect(
-        browserScreencastV10.clientFrameSchema.safeParse(frame).success,
+        browserScreencastV1.clientFrameSchema.safeParse(frame).success,
       ).toBe(true);
     }
 
@@ -182,7 +102,7 @@ describe("browser.screencast@1.0 control frames", () => {
         true,
       );
       expect(
-        browserScreencastV10.serverFrameSchema.safeParse(frame).success,
+        browserScreencastV1.serverFrameSchema.safeParse(frame).success,
       ).toBe(true);
     }
   });
@@ -197,7 +117,7 @@ describe("browser.screencast@1.0 control frames", () => {
       true,
     );
     expect(
-      browserScreencastV10.serverFrameSchema.safeParse(pending).success,
+      browserScreencastV1.serverFrameSchema.safeParse(pending).success,
     ).toBe(true);
   });
 
@@ -222,15 +142,15 @@ describe("browser.screencast@1.0 control frames", () => {
     expect(browserScreencastServerFrameSchema.safeParse(opened).success).toBe(
       true,
     );
-    expect(browserScreencastV10.serverFrameSchema.safeParse(opened).success).toBe(
-      true,
-    );
+    expect(
+      browserScreencastV1.serverFrameSchema.safeParse(opened).success,
+    ).toBe(true);
     expect(browserScreencastClientFrameSchema.safeParse(response).success).toBe(
       true,
     );
-    expect(browserScreencastV10.clientFrameSchema.safeParse(response).success).toBe(
-      true,
-    );
+    expect(
+      browserScreencastV1.clientFrameSchema.safeParse(response).success,
+    ).toBe(true);
 
     expect(
       browserScreencastServerFrameSchema.safeParse({
@@ -247,28 +167,37 @@ describe("browser.screencast@1.0 control frames", () => {
   });
 });
 
-describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
-  it("requires both epicId and chatId on the open request", () => {
+describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
+  it("requires only the authorizing epicId on the open request", () => {
     expect(
       browserSessionsOpenRequestSchema.safeParse({
         epicId: "epic-1",
-        chatId: "chat-1",
+        chatId: "legacy-route",
       }).success,
+    ).toBe(false);
+    expect(
+      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
     ).toBe(true);
     expect(
       browserSessionsOpenRequestSchema.safeParse({ chatId: "chat-1" }).success,
     ).toBe(false);
-    expect(
-      browserSessionsOpenRequestSchema.safeParse({ epicId: "epic-1" }).success,
-    ).toBe(false);
+    expect(browserSessionsOpenRequestSchema.safeParse({}).success).toBe(false);
   });
 
   it("parses the tab-shaped session info (url/status live on tabs, not the session root)", () => {
-    expect(browserSessionInfoSchema.safeParse(SAMPLE_SESSION).success).toBe(
-      true,
-    );
+    expect(parsesSession(SAMPLE_SESSION)).toBe(true);
     expect(
-      browserSessionInfoSchema.safeParse({
+      parsesSession({
+        ...SAMPLE_SESSION,
+        migration: { state: "legacy" },
+      }),
+    ).toBe(false);
+    const { runtime: _omittedRuntime, ...sessionWithoutRuntime } =
+      SAMPLE_SESSION;
+    expect(_omittedRuntime.kind).toBe("headless");
+    expect(parsesSession(sessionWithoutRuntime)).toBe(false);
+    expect(
+      parsesSession({
         sessionId: "session-1",
         hostId: "host-1",
         chatId: "chat-1",
@@ -278,38 +207,47 @@ describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
         title: "App",
         createdAt: 10,
         lastActivityAt: 20,
-      }).success,
+      }),
     ).toBe(false);
   });
 
   it("requires viewed boolean on BrowserTabInfo and electronTabState frames (ticket 13)", () => {
     expect(
-      browserTabInfoSchema.safeParse({
-        tabId: "tab-1",
-        url: "https://example.com",
-        originTier: "external",
-        status: "ready",
-        title: "Example",
-        viewed: true,
-        drivenBy: [],
-      }).success,
+      parsesSession({
+        ...SAMPLE_SESSION,
+        tabs: [
+          {
+            tabId: "tab-1",
+            url: "https://example.com",
+            originTier: "external",
+            status: "ready",
+            title: "Example",
+            viewed: true,
+            drivenBy: [],
+          },
+        ],
+      }),
     ).toBe(true);
     expect(
-      browserTabInfoSchema.safeParse({
-        tabId: "tab-1",
-        url: "https://example.com",
-        originTier: "external",
-        status: "ready",
-        title: "Example",
-        drivenBy: [],
-      }).success,
+      parsesSession({
+        ...SAMPLE_SESSION,
+        tabs: [
+          {
+            tabId: "tab-1",
+            url: "https://example.com",
+            originTier: "external",
+            status: "ready",
+            title: "Example",
+            drivenBy: [],
+          },
+        ],
+      }),
     ).toBe(false);
 
     expect(
       browserSessionsClientFrameSchema.safeParse({
         kind: "electronTabState",
         hasBinaryPayload: false,
-        requestId: "req-1",
         registrationId: "reg-1",
         sessionId: "session-1",
         tabId: "tab-1",
@@ -323,7 +261,6 @@ describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
       browserSessionsClientFrameSchema.safeParse({
         kind: "electronTabState",
         hasBinaryPayload: false,
-        requestId: "req-1",
         registrationId: "reg-1",
         sessionId: "session-1",
         tabId: "tab-1",
@@ -344,6 +281,7 @@ describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
         maxHeight: 720,
         quality: 80,
         format: "jpeg",
+        role: "tile",
       }).success,
     ).toBe(true);
     expect(
@@ -354,6 +292,7 @@ describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
         maxHeight: 720,
         quality: 80,
         format: "jpeg",
+        role: "tile",
       }).success,
     ).toBe(false);
     expect(
@@ -364,7 +303,90 @@ describe("browser.sessions@1.0 dual-key open + tab-shaped session info", () => {
         maxHeight: 720,
         quality: 80,
         format: "jpeg",
+        role: "tile",
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser.sessions@1.0 correlation", () => {
+  it("rejects fake request ids on events and one-way retirement", () => {
+    const clientEvents = [
+      { kind: "electronTabLifecycleReady", hasBinaryPayload: false },
+      {
+        kind: "electronTabState",
+        hasBinaryPayload: false,
+        registrationId: "registration-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        url: "https://example.com/",
+        title: "Example",
+        status: "ready",
+        viewed: false,
+      },
+    ];
+    for (const frame of clientEvents) {
+      expect(browserSessionsClientFrameSchema.safeParse(frame).success).toBe(
+        true,
+      );
+      expect(
+        browserSessionsClientFrameSchema.safeParse({
+          ...frame,
+          requestId: "unsettled-request",
+        }).success,
+      ).toBe(false);
+    }
+
+    const release = {
+      kind: "releaseElectronTab",
+      hasBinaryPayload: false,
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    };
+    expect(browserSessionsServerFrameSchema.safeParse(release).success).toBe(
+      true,
+    );
+    expect(
+      browserSessionsServerFrameSchema.safeParse({
+        ...release,
+        requestId: "unsettled-request",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires request ids on request-response frames", () => {
+    const capture = {
+      kind: "capturePrimaryProfile",
+      hasBinaryPayload: false,
+      requestId: "capture-1",
+    };
+    expect(browserSessionsServerFrameSchema.safeParse(capture).success).toBe(
+      true,
+    );
+    const { requestId: _captureRequestId, ...captureWithoutRequestId } =
+      capture;
+    expect(_captureRequestId).toBe("capture-1");
+    expect(
+      browserSessionsServerFrameSchema.safeParse(captureWithoutRequestId)
+        .success,
+    ).toBe(false);
+
+    const cdpResult = {
+      kind: "cdpResult",
+      hasBinaryPayload: false,
+      requestId: "cdp-1",
+      result: { kind: "cdpReleaseObject", ok: true },
+    };
+    expect(browserSessionsClientFrameSchema.safeParse(cdpResult).success).toBe(
+      true,
+    );
+    const { requestId: _cdpRequestId, ...cdpResultWithoutRequestId } =
+      cdpResult;
+    expect(_cdpRequestId).toBe("cdp-1");
+    expect(
+      browserSessionsClientFrameSchema.safeParse(cdpResultWithoutRequestId)
+        .success,
     ).toBe(false);
   });
 });

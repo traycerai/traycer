@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { BrowserAnnotationMarkKind } from "../../../ipc-contracts/browser-annotation-types";
+import type {
+  BrowserAnnotationCssRect,
+  BrowserAnnotationMarkKind,
+} from "../../../ipc-contracts/browser-annotation-types";
 import { ANNOTATION_OVERLAY_GUEST_SOURCE } from "../browser-annotation-overlay-guest.generated";
 import {
   ANNOTATION_BUNDLE_BYTE_BUDGET,
   ANNOTATION_BUNDLE_ELEMENT_CAP,
-  ANNOTATION_TINY_DRAG_PX,
   applyByteBudget,
   eraseNewestAtPoint,
   isElementVisuallyPresent,
@@ -18,7 +20,6 @@ import {
   toMarkSnapshot,
   unionRects,
   validateElementMark,
-  type AnnotationCssRect,
   type OverlayMarkModel,
   type RegionCandidate,
 } from "../browser-annotation-overlay-logic";
@@ -28,14 +29,14 @@ function rect(
   y: number,
   width: number,
   height: number,
-): AnnotationCssRect {
+): BrowserAnnotationCssRect {
   return { x, y, width, height };
 }
 
 function candidate(input: {
   readonly id: string;
   readonly ancestorIds: readonly string[];
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
   readonly visible: boolean;
 }): RegionCandidate {
   return {
@@ -50,7 +51,7 @@ function candidate(input: {
 function marked(input: {
   readonly id: string;
   readonly ancestorIds: readonly string[];
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
   readonly visible: boolean;
 }): RegionCandidate {
   return { ...candidate(input), alreadyMarked: true };
@@ -59,7 +60,7 @@ function marked(input: {
 function mark(input: {
   readonly id: string;
   readonly kind: BrowserAnnotationMarkKind;
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
   readonly selector: string | null;
   readonly elementKey: string | null;
 }): OverlayMarkModel {
@@ -116,10 +117,6 @@ describe("annotation overlay pointer and keyboard boundaries", () => {
 });
 
 describe("region drag geometry", () => {
-  it("exports the tiny-drag threshold of 4 CSS pixels", () => {
-    expect(ANNOTATION_TINY_DRAG_PX).toBe(4);
-  });
-
   it("normalizes a drag rect independently of pointer order", () => {
     const forward = normalizeDragRect(10, 20, 4, 6);
     const reverse = normalizeDragRect(4, 6, 10, 20);
@@ -129,13 +126,11 @@ describe("region drag geometry", () => {
     expect(mixed).toEqual(forward);
   });
 
-  it("treats a drag as tiny when either edge is under ANNOTATION_TINY_DRAG_PX", () => {
+  it("treats a drag as tiny when either edge is under 4 CSS pixels", () => {
     expect(isTinyDrag(rect(0, 0, 3, 20))).toBe(true);
     expect(isTinyDrag(rect(0, 0, 20, 3))).toBe(true);
     expect(isTinyDrag(rect(0, 0, 3, 3))).toBe(true);
-    expect(
-      isTinyDrag(rect(0, 0, ANNOTATION_TINY_DRAG_PX, ANNOTATION_TINY_DRAG_PX)),
-    ).toBe(false);
+    expect(isTinyDrag(rect(0, 0, 4, 4))).toBe(false);
     expect(isTinyDrag(rect(0, 0, 8, 8))).toBe(false);
   });
 });
@@ -730,7 +725,6 @@ describe("guest attach freeze", () => {
     expect(pendingAt).toBeGreaterThan(-1);
     expect(pendingAt).toBeLessThan(emitAt);
   });
-
 });
 
 describe("unionRects", () => {

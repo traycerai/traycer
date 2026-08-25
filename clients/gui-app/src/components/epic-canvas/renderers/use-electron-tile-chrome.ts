@@ -9,8 +9,8 @@ import type {
   BrowserViewElectronTabControlAction,
   BrowserViewTileKey,
   BrowserViewViewportPresetId,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 
 interface AddressDraft {
   readonly sourceUrl: string | null;
@@ -21,7 +21,7 @@ interface UseElectronTabChromeArgs {
   readonly control: (
     action: BrowserViewElectronTabControlAction,
   ) => Promise<void>;
-  readonly surfaceServices: DesktopBrowserViewBridge | null;
+  readonly surfaceServices: BrowserViewBridge | null;
   readonly tileKey: BrowserViewTileKey;
   readonly initialUrl: string;
   readonly capabilities: TileChromeCapabilities;
@@ -38,7 +38,7 @@ interface UseElectronTabChromeArgs {
   readonly onAttemptedUrl: (url: string) => void;
 }
 
-export interface ElectronTabChrome {
+interface ElectronTabChrome {
   readonly controller: TileController;
   readonly downloads: readonly BrowserViewDownloadChange[];
   readonly certificateError: BrowserViewCertificateErrorChange | null;

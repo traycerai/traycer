@@ -6,16 +6,12 @@ import {
 } from "@/lib/browser-view/browser-overlay-coordinator";
 import type {
   BrowserViewBounds,
-  BrowserViewBoundsUpdate,
+  BrowserViewBridge,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
-
-export interface BrowserViewBoundsBridge {
-  updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-}
+} from "@traycer-clients/shared/platform/browser-view";
 
 interface UseBrowserViewBoundsBridgeArgs {
-  readonly browserView: BrowserViewBoundsBridge | null;
+  readonly browserView: BrowserViewBridge | null;
   readonly surfaceRef: RefObject<HTMLDivElement | null>;
   readonly tileKey: BrowserViewTileKey;
   readonly visible: boolean;

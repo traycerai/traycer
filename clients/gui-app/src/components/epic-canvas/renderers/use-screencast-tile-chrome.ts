@@ -5,7 +5,7 @@ import type {
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
 import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-link-routing-core";
-import type { BrowserViewViewportPresetId } from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
 
 export interface ScreencastNavState {
@@ -32,7 +32,7 @@ const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
   devtools: false,
   find: false,
   siteInfo: false,
-  elementPicker: false,
+  annotate: false,
 };
 
 const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
@@ -125,7 +125,8 @@ export function useScreencastTileChrome(
     viewportPreset: UNUSED_VIEWPORT_PRESET,
     disabled,
     cookieCryptoState: null,
-    elementPicker: null,
+    zoomLocked: false,
+    annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
       event.preventDefault();
       const url = normalizeBrowserAddressInput(addressValue);

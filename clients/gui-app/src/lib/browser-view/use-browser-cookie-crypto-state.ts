@@ -1,16 +1,24 @@
 import { useEffect, useState } from "react";
-import {
-  fallbackCookieCryptoState,
-  type BrowserCookieCryptoState,
-  type DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+import type {
+  BrowserCookieCryptoState,
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 
 interface BrowserCookieCryptoStateLoad {
   readonly state: BrowserCookieCryptoState;
 }
 
+const DEGRADED_COOKIE_CRYPTO_STATE: BrowserCookieCryptoState = {
+  mode: "degraded",
+  persistence: "ephemeral",
+  reason: "unresolved",
+  storageBackend: null,
+  encryptionAvailable: false,
+  mockKeychainEnabled: false,
+};
+
 export function useBrowserCookieCryptoState(
-  browserView: DesktopBrowserViewBridge | null,
+  browserView: BrowserViewBridge | null,
 ): BrowserCookieCryptoState | null {
   const [load, setLoad] = useState<BrowserCookieCryptoStateLoad | null>(null);
 
@@ -23,7 +31,7 @@ export function useBrowserCookieCryptoState(
         if (active) setLoad({ state: nextState });
       })
       .catch(() => {
-        if (active) setLoad({ state: fallbackCookieCryptoState() });
+        if (active) setLoad({ state: DEGRADED_COOKIE_CRYPTO_STATE });
       });
     return () => {
       active = false;

@@ -1,13 +1,28 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  BrowserDisplayMediaRequestHandler,
-  BrowserDownloadListener,
-  BrowserViewDownloadChange,
-  BrowserPermissionCheckHandler,
-  BrowserPermissionRequestHandler,
-  BrowserViewPolicySession,
-} from "../browser-session";
+import type { BrowserSessionDownloadChange } from "../browser-session";
+
+type BrowserPermissionRequestHandler = (
+  webContents: unknown,
+  permission: string,
+  callback: (permissionGranted: boolean) => void,
+  details: unknown,
+) => void;
+type BrowserPermissionCheckHandler = (
+  webContents: unknown,
+  permission: string,
+  requestingOrigin: string,
+  details: unknown,
+) => boolean;
+type BrowserDisplayMediaRequestHandler = (
+  request: unknown,
+  callback: (streams: object) => void,
+) => void;
+type BrowserDownloadListener = (
+  event: unknown,
+  item: FakeDownloadItem,
+  webContents: FakeDownloadWebContents,
+) => void;
 
 const electronState = vi.hoisted(() => {
   const state = {
@@ -70,7 +85,7 @@ vi.mock("../../app/logger", () => ({
   },
 }));
 
-class FakePolicySession implements BrowserViewPolicySession {
+class FakePolicySession {
   permissionRequestHandler: BrowserPermissionRequestHandler | null = null;
   permissionCheckHandler: BrowserPermissionCheckHandler | null = null;
   devicePermissionHandler: ((details: unknown) => boolean) | null = null;
@@ -317,26 +332,27 @@ describe("browser view session policy", () => {
 
     mod.ensureBrowserViewSession();
     const preferences = mod.createBrowserViewWebPreferences();
+    const partition = preferences.partition;
+    if (partition === undefined) throw new Error("partition missing");
 
     expect(electronState.fromPartitionCalls).toEqual([
       {
-        partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+        partition,
         options: { cache: true },
       },
     ]);
-    expect(mod.BROWSER_VIEW_EPHEMERAL_PARTITION.startsWith("persist:")).toBe(
-      false,
-    );
+    expect(partition.startsWith("persist:")).toBe(false);
     expect(preferences).toMatchObject({
-      partition: mod.BROWSER_VIEW_EPHEMERAL_PARTITION,
+      partition,
     });
   });
 
   it("installs browser-specific permission and download handlers", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
+    electronState.browserSession = session;
 
-    mod.installBrowserViewSessionPolicy(session);
+    mod.ensureBrowserViewSession();
 
     const requestHandler = readRequestHandler(session);
     const checkHandler = readCheckHandler(session);
@@ -358,12 +374,13 @@ describe("browser view session policy", () => {
   it("surfaces download prompt, progress, completion, and cancellation states", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
-    const changes: BrowserViewDownloadChange[] = [];
+    const changes: BrowserSessionDownloadChange[] = [];
     const offDownloadChange = mod.onBrowserViewDownloadChange((change) => {
       changes.push(change);
     });
+    electronState.browserSession = session;
 
-    mod.installBrowserViewSessionPolicy(session);
+    mod.ensureBrowserViewSession();
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const webContents = new FakeDownloadWebContents(7, "https://app.test/");
@@ -424,13 +441,14 @@ describe("browser view session policy", () => {
   it("requires explicit confirmation before accepting dangerous downloads", async () => {
     const mod = await import("../browser-session");
     const session = new FakePolicySession();
-    const changes: BrowserViewDownloadChange[] = [];
+    const changes: BrowserSessionDownloadChange[] = [];
     const offDownloadChange = mod.onBrowserViewDownloadChange((change) => {
       changes.push(change);
     });
     electronState.messageBoxResult = 0;
+    electronState.browserSession = session;
 
-    mod.installBrowserViewSessionPolicy(session);
+    mod.ensureBrowserViewSession();
     const listener = session.downloadListeners[0];
     if (listener === undefined) throw new Error("download listener missing");
     const item = new FakeDownloadItem(

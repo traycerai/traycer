@@ -6,7 +6,6 @@ import {
 
 export const PIP_CAPTION_HOLD_MS = 3_500;
 export const PIP_CAPTION_FADE_MS = 300;
-export const PIP_CONVERSION_TIMEOUT_MS = 12_000;
 
 export type PipStreamHealth = "live" | "stale" | "disconnected";
 
@@ -50,7 +49,6 @@ export const HIDDEN_PIP_SNAPSHOT: PipSnapshot = {
 interface PipConversion {
   readonly onReady: () => void;
   readonly onError: (message: string) => void;
-  readonly timeout: number;
 }
 
 const snapshots = new Map<string, PipSnapshot>();
@@ -77,17 +75,9 @@ export function convertBrowserTabToPip(input: {
     selectionId: `pip-${String(selectionSequence)}`,
     origin: input.origin,
   };
-  const timeout = window.setTimeout(() => {
-    failPipConversion(
-      input.epicId,
-      target.selectionId,
-      "Picture in picture could not start.",
-    );
-  }, PIP_CONVERSION_TIMEOUT_MS);
   conversions.set(target.selectionId, {
     onReady: input.onReady,
     onError: input.onError,
-    timeout,
   });
   snapshots.set(input.epicId, {
     ...previous,
@@ -108,7 +98,6 @@ export function completePipConversion(
   const conversion = conversions.get(selectionId);
   if (conversion === undefined) return;
   conversions.delete(selectionId);
-  clearTimeout(conversion.timeout);
   snapshots.set(epicId, {
     target: pending,
     pendingTarget: null,
@@ -128,7 +117,6 @@ export function failPipConversion(
   if (current.pendingTarget?.selectionId !== selectionId) return;
   const conversion = conversions.get(selectionId);
   conversions.delete(selectionId);
-  if (conversion !== undefined) clearTimeout(conversion.timeout);
   snapshots.set(epicId, {
     ...current,
     pendingTarget: null,
@@ -202,7 +190,7 @@ export function applyPipStreamHealth(
   emit();
 }
 
-export function applyPipVisibilityChanged(): void {
+function applyPipVisibilityChanged(): void {
   for (const [epicId, snapshot] of snapshots) {
     const target = snapshot.target;
     if (target === null || !tileIsVisible(target)) continue;
@@ -245,16 +233,6 @@ export function captionFreshness(
   return "expired";
 }
 
-export function resetPipStoreForTests(): void {
-  for (const conversion of conversions.values()) {
-    clearTimeout(conversion.timeout);
-  }
-  snapshots.clear();
-  conversions.clear();
-  listeners.clear();
-  selectionSequence = 0;
-}
-
 function targetMatches(left: PipTarget | null, right: PipTarget): boolean {
   return (
     left !== null &&
@@ -284,9 +262,7 @@ function tileIsVisible(target: PipTarget): boolean {
 
 function cancelPendingConversion(target: PipTarget | null): void {
   if (target === null) return;
-  const conversion = conversions.get(target.selectionId);
   conversions.delete(target.selectionId);
-  if (conversion !== undefined) clearTimeout(conversion.timeout);
 }
 
 function emit(): void {

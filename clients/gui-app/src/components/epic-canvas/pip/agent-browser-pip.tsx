@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -9,9 +10,13 @@ import {
   type ReactElement,
 } from "react";
 import { Maximize2, X } from "lucide-react";
-import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserSessionInfo,
+  BrowserTabInfo,
+} from "@traycer/protocol/host/browser/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
@@ -29,10 +34,7 @@ import {
   readViewportSize,
 } from "@/lib/browser-view/pip-geometry";
 import { usePipOwnedFrame } from "@/lib/browser-view/pip-frame-capture";
-import {
-  findPipEpicSession,
-  usePipEpicSessionItems,
-} from "@/lib/browser-view/pip-epic-sessions";
+import { useRemotePipSessions } from "@/lib/browser-view/use-pip-epic-sessions";
 import {
   captionFreshness,
   dismissPip,
@@ -64,13 +66,51 @@ export function AgentBrowserPip(props: {
 }): ReactElement | null {
   const epicHandle = useMaybeOpenEpicHandle();
   const snapshot = usePipSnapshot(props.epicId);
-  if (epicHandle === null || !props.surfaceVisible) return null;
-  if (snapshot.target === null && snapshot.pendingTarget === null) return null;
+  if (
+    epicHandle === null ||
+    !props.surfaceVisible ||
+    (snapshot.target === null && snapshot.pendingTarget === null)
+  ) {
+    return null;
+  }
+  return (
+    <ActiveAgentBrowserPip
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      snapshot={snapshot}
+    />
+  );
+}
+
+function ActiveAgentBrowserPip(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly snapshot: PipSnapshot;
+}): ReactElement {
+  const snapshot = props.snapshot;
+  const canvasHostId = useCanvasHostId();
+  const primaryItems = useBrowserSessionsContext().items;
+  const remoteHostIds = useMemo(() => {
+    const targetHostIds = [
+      snapshot.target?.hostId,
+      snapshot.pendingTarget?.hostId,
+    ].filter(
+      (hostId): hostId is string =>
+        hostId !== undefined && hostId !== canvasHostId,
+    );
+    return Array.from(new Set(targetHostIds));
+  }, [canvasHostId, snapshot.pendingTarget?.hostId, snapshot.target?.hostId]);
+  const remoteItems = useRemotePipSessions(props.epicId, remoteHostIds);
+  const items = useMemo(
+    () => [...primaryItems, ...remoteItems],
+    [primaryItems, remoteItems],
+  );
   return (
     <AgentBrowserPipSurface
       epicId={props.epicId}
       viewTabId={props.viewTabId}
       snapshot={snapshot}
+      items={items}
     />
   );
 }
@@ -79,6 +119,7 @@ function AgentBrowserPipSurface(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly snapshot: PipSnapshot;
+  readonly items: readonly BrowserSessionInfo[];
 }): ReactElement {
   const { epicId, snapshot } = props;
   const frameSrc = usePipOwnedFrame(epicId, snapshot);
@@ -316,6 +357,7 @@ function AgentBrowserPipSurface(props: {
         epicId={epicId}
         viewTabId={props.viewTabId}
         snapshot={snapshot}
+        items={props.items}
         frameSrc={frameSrc}
         dragMovedRef={dragMovedRef}
         onHeaderPointerDown={(event) => handlePointerDown(event, "move")}
@@ -347,14 +389,15 @@ function PipWindow(props: {
   readonly epicId: string;
   readonly viewTabId: string;
   readonly snapshot: PipSnapshot;
+  readonly items: readonly BrowserSessionInfo[];
   readonly frameSrc: string | null;
   readonly dragMovedRef: { current: boolean };
   readonly onHeaderPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   readonly onResizePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
 }): ReactElement {
   const { snapshot, frameSrc, dragMovedRef } = props;
-  const meta = usePipTargetMeta(props.epicId, snapshot.target);
-  const openTile = useOpenPipTarget(props.epicId, props.viewTabId);
+  const meta = usePipTargetMeta(snapshot.target, props.items);
+  const openTile = useOpenPipTarget(props.epicId, props.viewTabId, props.items);
   const restore = (): void => {
     if (snapshot.target === null || !meta.available) return;
     openTile(snapshot.target);
@@ -556,8 +599,8 @@ function resolvePipTabMeta(tab: BrowserTabInfo | undefined): {
 }
 
 function usePipTargetMeta(
-  epicId: string,
   target: PipTarget | null,
+  items: readonly BrowserSessionInfo[],
 ): {
   readonly title: string;
   readonly site: string | null;
@@ -566,14 +609,13 @@ function usePipTargetMeta(
   readonly hostLabel: string | null;
   readonly available: boolean;
 } {
-  const items = usePipEpicSessionItems(epicId);
   const chats = useEpicChatRecords();
   const canvasHostId = useCanvasHostId();
   const hostEntry = useHostDirectoryEntry(target?.hostId ?? "");
   const session =
     target === null
       ? undefined
-      : findPipEpicSession(items, target.hostId, target.sessionId);
+      : findPipSession(items, target.hostId, target.sessionId);
   const tab = session?.tabs.find((item) => item.tabId === target?.tabId);
   const agentName =
     chats.find((chat) => chat.id === session?.createdBy.chatId)?.title ?? null;
@@ -594,6 +636,7 @@ function usePipTargetMeta(
 function useOpenPipTarget(
   epicId: string,
   viewTabId: string,
+  items: readonly BrowserSessionInfo[],
 ): (target: PipTarget) => void {
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpen = useEpicCanvasStore(
@@ -602,14 +645,9 @@ function useOpenPipTarget(
   const prepareFocus = useEpicCanvasStore(
     (state) => state.prepareSetActiveTileTabFocusTarget,
   );
-  const items = usePipEpicSessionItems(epicId);
   return useCallback(
     (target: PipTarget) => {
-      const session = findPipEpicSession(
-        items,
-        target.hostId,
-        target.sessionId,
-      );
+      const session = findPipSession(items, target.hostId, target.sessionId);
       const tab = session?.tabs.find((item) => item.tabId === target.tabId);
       if (session === undefined || tab === undefined) return;
       const tile = makeBrowserSessionTileRef({
@@ -633,6 +671,16 @@ function useOpenPipTarget(
       );
     },
     [epicId, items, navigateNested, prepareFocus, prepareOpen, viewTabId],
+  );
+}
+
+function findPipSession(
+  items: readonly BrowserSessionInfo[],
+  hostId: string,
+  sessionId: string,
+): BrowserSessionInfo | undefined {
+  return items.find(
+    (session) => session.hostId === hostId && session.sessionId === sessionId,
   );
 }
 

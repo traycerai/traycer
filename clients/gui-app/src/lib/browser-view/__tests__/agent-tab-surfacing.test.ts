@@ -16,8 +16,8 @@ import {
 } from "../agent-tab-surfacing";
 import {
   convertBrowserTabToPip,
+  dismissPip,
   getPipSnapshot,
-  resetPipStoreForTests,
 } from "../pip-store";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -49,6 +49,7 @@ function agentSessionFixture(overrides?: {
     },
     createdAt: 0,
     lastActivityAt: 0,
+    runtime: { kind: "electron", revision: 0 },
     tabs: [
       {
         tabId: "tab-a1",
@@ -252,7 +253,7 @@ describe("collectNewAgentTabsFromSessionFrame", () => {
 
 describe("isManualPipActive", () => {
   beforeEach(() => {
-    resetPipStoreForTests();
+    dismissPip(EPIC);
   });
 
   it("is false with no PiP and true only for manual conversions", () => {
@@ -268,7 +269,7 @@ describe("isManualPipActive", () => {
       onError: () => {},
     });
     expect(isManualPipActive(EPIC)).toBe(true);
-    resetPipStoreForTests();
+    dismissPip(EPIC);
 
     convertBrowserTabToPip({
       epicId: EPIC,
@@ -287,7 +288,7 @@ describe("isManualPipActive", () => {
 describe("canvas placement", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
-    resetPipStoreForTests();
+    dismissPip(EPIC);
     resetAgentTabSurfacingForTests();
     setEpicSurfaceVisibility(EPIC, true);
   });
@@ -402,7 +403,7 @@ describe("canvas placement", () => {
 describe("surfaceAgentTabsFromSessionFrame", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
-    resetPipStoreForTests();
+    dismissPip(EPIC);
     resetAgentTabSurfacingForTests();
     useSettingsStore.setState({ agentTabSurfacingMode: "off" });
   });

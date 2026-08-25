@@ -13,7 +13,7 @@ import {
   createBrowserDebugContextAttachment,
   mintBrowserObserveGrant,
 } from "@/lib/browser-view/browser-context-attachments";
-import type { BrowserViewCapturePageResult } from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserViewCapturePageResult } from "@traycer-clients/shared/platform/browser-view";
 
 const EMPTY_DOC: JsonContent = {
   type: "doc",

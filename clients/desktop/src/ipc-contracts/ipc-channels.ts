@@ -347,11 +347,6 @@ export const RunnerHostInvoke = {
   browserViewStorageStateCapture: "runnerHost:browserView:storageState:capture",
   browserViewPrimaryProfileCapture:
     "runnerHost:browserView:primaryProfile:capture",
-  browserViewControlGrant: "runnerHost:browserView:control:grant",
-  browserViewControlRevoke: "runnerHost:browserView:control:revoke",
-  browserViewControlAction: "runnerHost:browserView:control:action",
-  // Typed CDP surface for a host-registered durable browser tile.
-  browserViewCdpDispatch: "runnerHost:browserView:cdp:dispatch",
   browserViewCookieCryptoStateGet:
     "runnerHost:browserView:cookieCryptoState:get",
   browserViewLabsStateSet: "runnerHost:browserView:labsState:set",
@@ -423,10 +418,6 @@ export const RunnerHostEvent = {
   browserViewStatusChange: "runnerHost:event:browserView:statusChange",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
-  browserViewNativeTabCdpSessionEnded:
-    "runnerHost:event:browserView:nativeTab:cdp:sessionEnded",
-  browserViewNativeTabCdpTargetAttached:
-    "runnerHost:event:browserView:nativeTab:cdp:targetAttached",
   browserViewElectronTabHandoff:
     "runnerHost:event:browserView:electronTab:handoff",
   browserViewFindChange: "runnerHost:event:browserView:findChange",
@@ -437,13 +428,9 @@ export const RunnerHostEvent = {
     "runnerHost:event:browserView:snapshotInvalidated",
   browserViewDebugSnapshotChange:
     "runnerHost:event:browserView:debugSnapshotChange",
-  browserViewControlRevoked: "runnerHost:event:browserView:controlRevoked",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",
-  browserViewCdpSessionEnded: "runnerHost:event:browserView:cdp:sessionEnded",
-  browserViewCdpTargetAttached:
-    "runnerHost:event:browserView:cdp:targetAttached",
   // Native-tab PiP capture frames (`started` / `frame` / `stalled`).
   pipCaptureFrame: "runnerHost:event:pipCapture:frame",
   globalShortcutsChange: "runnerHost:event:globalShortcuts:change",
@@ -471,11 +458,11 @@ export const RunnerHostSync = {
   selectionAttachSeq: "runnerHost:sync:selectionAttachSeq",
 } as const;
 
-export type RunnerHostInvokeChannel =
+type RunnerHostInvokeChannel =
   (typeof RunnerHostInvoke)[keyof typeof RunnerHostInvoke];
-export type RunnerHostEventChannel =
+type RunnerHostEventChannel =
   (typeof RunnerHostEvent)[keyof typeof RunnerHostEvent];
-export type RunnerHostSyncChannel =
+type RunnerHostSyncChannel =
   (typeof RunnerHostSync)[keyof typeof RunnerHostSync];
 
 /**

@@ -3,7 +3,7 @@ import type { BrowserAnnotationSessionController } from "@/hooks/browser/use-bro
 import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Runtime capabilities of one Electron tile. A toolbar control renders

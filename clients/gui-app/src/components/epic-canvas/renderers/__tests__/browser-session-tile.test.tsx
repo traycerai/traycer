@@ -20,12 +20,8 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     inventoryReady: harness.inventoryReady,
     items: harness.items,
     errorMessage: null,
-    routingChatId: "chat-route",
     retry: vi.fn(),
-    closeSession: vi.fn(),
     closeTab: vi.fn(),
-    requestPromoteState: vi.fn(),
-    requestLendStorage: vi.fn(),
   }),
 }));
 vi.mock("@/lib/browser-view/electron-tabs", () => ({
@@ -40,7 +36,7 @@ vi.mock(
     useCloseCanvasTileWithNestedFocus: () => harness.closeCanvasTile,
   }),
 );
-vi.mock("@/components/epic-canvas/renderers/browser-session-dock", () => ({
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: {
     readonly children: React.ReactNode;
   }) => props.children,
@@ -84,7 +80,7 @@ const NODE: BrowserSessionTileRef = {
 
 function session(
   status: "ready" | "dormant" | "navigating" | "crashed",
-  runtime: "headless" | "electron" | "dormant" | null,
+  runtime: "headless" | "electron" | "dormant",
 ): BrowserSessionInfo {
   return {
     sessionId: "sess-1",
@@ -95,7 +91,7 @@ function session(
     createdBy: { chatId: "chat-route", agentRunId: "run-1" },
     createdAt: 1,
     lastActivityAt: 2,
-    migration: runtime === null ? undefined : { revision: 1, runtime },
+    runtime: { kind: runtime, revision: 1 },
     tabs: [
       {
         tabId: "tab-1",
@@ -116,8 +112,6 @@ function binding(): ElectronTabBinding {
     sessionId: "sess-1",
     tabId: "tab-1",
     registrationId: "native-registration-1",
-    url: "https://example.com/page",
-    title: "Example",
     control: vi.fn(async () => {}),
     bindSurface: vi.fn(),
   };
@@ -137,7 +131,7 @@ function renderTile(): void {
 describe("BrowserSessionTile lifecycle projection", () => {
   beforeEach(() => {
     harness.binding = null;
-    harness.items = [session("ready", null)];
+    harness.items = [session("dormant", "dormant")];
     harness.lifecycle = "live";
     harness.inventoryReady = true;
     harness.closeCanvasTile.mockClear();

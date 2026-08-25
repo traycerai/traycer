@@ -110,6 +110,7 @@ import {
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
   type EdgeDropPosition,
+  type BrowserTileRef,
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type CommGraphTileViewState,

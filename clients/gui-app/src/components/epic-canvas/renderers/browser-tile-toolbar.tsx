@@ -34,7 +34,7 @@ import { browserCookieDegradedMessage } from "@/lib/browser-view/browser-cookie-
 import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface BrowserPictureInPictureControl {

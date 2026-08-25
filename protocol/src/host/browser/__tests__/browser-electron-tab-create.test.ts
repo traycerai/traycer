@@ -24,7 +24,6 @@ const CREATE_BOOTSTRAP = {
 const RELEASE_REQUEST = {
   kind: "releaseElectronTab",
   hasBinaryPayload: false,
-  requestId: "req-release-1",
   sessionId: "session-1",
   tabId: "tab-minted-9",
   registrationId: "native-1",

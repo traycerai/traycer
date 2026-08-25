@@ -9,7 +9,7 @@ import { createBrowserConsoleAttachment } from "@/lib/browser-view/browser-conte
 import type {
   BrowserViewConsoleEntry,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 
 const STORAGE_KEY = "traycer-gui-app:composer-drafts";
 

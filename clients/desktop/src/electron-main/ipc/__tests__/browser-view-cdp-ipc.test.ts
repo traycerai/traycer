@@ -1,20 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  BrowserViewCdpCommand,
-  BrowserViewCdpDispatch,
-  BrowserViewCdpSessionEndedChange,
-  BrowserViewCdpTargetAttachedChange,
+  BrowserViewElectronTabCdpDispatch,
   BrowserViewElectronTabControl,
   BrowserViewEnsureTab,
-  BrowserViewProvisionedTab,
+  BrowserViewNativeTabCapability,
 } from "../../../ipc-contracts/browser-view-types";
-import type { BrowserViewManagerOptions } from "../../browser-view/browser-view-manager";
-import { browserViewIpcPayload } from "../browser-view-ipc-payload";
 
-type DispatchCdpCall = {
-  readonly windowId: string;
-  readonly input: BrowserViewCdpDispatch;
-};
+type DispatchElectronTabCdpCall = BrowserViewElectronTabCdpDispatch;
 
 type EnsureTabCall = {
   readonly windowId: string;
@@ -32,8 +24,7 @@ type InvokeHandler = (
 ) => unknown | Promise<unknown>;
 
 const captured = vi.hoisted(() => ({
-  managerOptions: null as BrowserViewManagerOptions | null,
-  dispatchCdpCalls: [] as DispatchCdpCall[],
+  dispatchedTabs: [] as DispatchElectronTabCdpCall[],
   ensuredTabs: [] as EnsureTabCall[],
   controlledTabs: [] as ControlElectronTabCall[],
 }));
@@ -98,30 +89,23 @@ vi.mock("../../app/cert-trust", () => ({
 vi.mock("../../browser-view/browser-view-manager", () => ({
   BOUNDS_STREAM_LOG_INTERVAL_MS: 1_000,
   BrowserViewManager: class {
-    constructor(options: BrowserViewManagerOptions) {
-      captured.managerOptions = options;
-    }
+    constructor(_options: unknown) {}
 
-    dispatchCdp(
-      windowId: string,
-      input: BrowserViewCdpDispatch,
-    ): Promise<{
-      readonly kind: "cdpGetFrameTree";
+    dispatchElectronTabCdp(input: BrowserViewElectronTabCdpDispatch): Promise<{
+      readonly kind: "cdpInsertText";
       readonly ok: true;
-      readonly frames: [];
     }> {
-      captured.dispatchCdpCalls.push({ windowId, input });
+      captured.dispatchedTabs.push(input);
       return Promise.resolve({
-        kind: "cdpGetFrameTree",
+        kind: "cdpInsertText",
         ok: true,
-        frames: [],
       });
     }
 
     ensureTab(
       windowId: string,
       input: BrowserViewEnsureTab,
-    ): Promise<BrowserViewProvisionedTab> {
+    ): Promise<BrowserViewNativeTabCapability> {
       captured.ensuredTabs.push({ windowId, input });
       return Promise.resolve({
         hostId: input.hostId,
@@ -238,304 +222,55 @@ function findInvokeHandler(
   return handler as InvokeHandler;
 }
 
-const VALID_COMMAND_PAYLOADS: ReadonlyArray<{
-  readonly name: string;
-  readonly payload: Record<string, unknown>;
-  readonly expected: BrowserViewCdpCommand;
-}> = [
-  {
-    name: "cdpNavigate",
-    payload: { kind: "cdpNavigate", url: "https://example.com/path" },
-    expected: { kind: "cdpNavigate", url: "https://example.com/path" },
-  },
-  {
-    name: "cdpCaptureScreenshot",
-    payload: {
-      kind: "cdpCaptureScreenshot",
-      format: "jpeg",
-      quality: 80,
-    },
-    expected: {
-      kind: "cdpCaptureScreenshot",
-      format: "jpeg",
-      quality: 80,
-    },
-  },
-  {
-    name: "cdpGetFrameTree",
-    payload: { kind: "cdpGetFrameTree" },
-    expected: { kind: "cdpGetFrameTree" },
-  },
-  {
-    name: "cdpCreateIsolatedWorld",
-    payload: {
-      kind: "cdpCreateIsolatedWorld",
-      frameId: "frame-1",
-      worldName: "agent-world",
-      grantUniversalAccess: true,
-    },
-    expected: {
-      kind: "cdpCreateIsolatedWorld",
-      frameId: "frame-1",
-      worldName: "agent-world",
-      grantUniversalAccess: true,
-    },
-  },
-  {
-    name: "cdpEvaluate",
-    payload: {
-      kind: "cdpEvaluate",
-      expression: "1 + 1",
-      awaitPromise: true,
-      returnByValue: false,
-      contextId: 7,
-    },
-    expected: {
-      kind: "cdpEvaluate",
-      expression: "1 + 1",
-      awaitPromise: true,
-      returnByValue: false,
-      contextId: 7,
-    },
-  },
-  {
-    name: "cdpCallFunctionOn",
-    payload: {
-      kind: "cdpCallFunctionOn",
-      objectId: "obj-1",
-      executionContextId: null,
-      functionDeclaration: "function() { return 1; }",
-      argumentsJson: [{ value: 1 }],
-      returnByValue: true,
-    },
-    expected: {
-      kind: "cdpCallFunctionOn",
-      objectId: "obj-1",
-      executionContextId: null,
-      functionDeclaration: "function() { return 1; }",
-      argumentsJson: [{ value: 1 }],
-      returnByValue: true,
-    },
-  },
-  {
-    name: "cdpReleaseObject",
-    payload: { kind: "cdpReleaseObject", objectId: "obj-2" },
-    expected: { kind: "cdpReleaseObject", objectId: "obj-2" },
-  },
-  {
-    name: "cdpDispatchMouseEvent",
-    payload: {
-      kind: "cdpDispatchMouseEvent",
-      type: "mousePressed",
-      x: 10,
-      y: 20,
-      button: "left",
-      clickCount: 1,
-      deltaX: null,
-      deltaY: null,
-    },
-    expected: {
-      kind: "cdpDispatchMouseEvent",
-      type: "mousePressed",
-      x: 10,
-      y: 20,
-      button: "left",
-      clickCount: 1,
-      deltaX: null,
-      deltaY: null,
-    },
-  },
-  {
-    name: "cdpInsertText",
-    payload: { kind: "cdpInsertText", text: "hello" },
-    expected: { kind: "cdpInsertText", text: "hello" },
-  },
-  {
-    name: "cdpDispatchKeyEvent",
-    payload: {
-      kind: "cdpDispatchKeyEvent",
-      type: "keyDown",
-      key: "a",
-      code: "KeyA",
-      text: "a",
-      modifiers: 0,
-      unmodifiedText: "a",
-      windowsVirtualKeyCode: 65,
-      location: 0,
-      isKeypad: false,
-      autoRepeat: false,
-      commands: [],
-    },
-    expected: {
-      kind: "cdpDispatchKeyEvent",
-      type: "keyDown",
-      key: "a",
-      code: "KeyA",
-      text: "a",
-      modifiers: 0,
-      unmodifiedText: "a",
-      windowsVirtualKeyCode: 65,
-      location: 0,
-      isKeypad: false,
-      autoRepeat: false,
-      commands: [],
-    },
-  },
-  {
-    name: "cdpSetDeviceMetricsOverride",
-    payload: {
-      kind: "cdpSetDeviceMetricsOverride",
-      width: 390,
-      height: 844,
-      deviceScaleFactor: 2,
-      mobile: true,
-    },
-    expected: {
-      kind: "cdpSetDeviceMetricsOverride",
-      width: 390,
-      height: 844,
-      deviceScaleFactor: 2,
-      mobile: true,
-    },
-  },
-  {
-    name: "cdpSetAutoAttach",
-    payload: {
-      kind: "cdpSetAutoAttach",
-      autoAttach: true,
-      waitForDebuggerOnStart: false,
-    },
-    expected: {
-      kind: "cdpSetAutoAttach",
-      autoAttach: true,
-      waitForDebuggerOnStart: false,
-    },
-  },
-  {
-    name: "cdpDescribeNode",
-    payload: {
-      kind: "cdpDescribeNode",
-      objectId: "obj-3",
-      depth: 1,
-      pierce: true,
-    },
-    expected: {
-      kind: "cdpDescribeNode",
-      objectId: "obj-3",
-      depth: 1,
-      pierce: true,
-    },
-  },
-  {
-    name: "cdpGetFullAXTree",
-    payload: { kind: "cdpGetFullAXTree", depth: null },
-    expected: { kind: "cdpGetFullAXTree", depth: null },
-  },
-];
-
-describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
+describe("native browser tab IPC", () => {
   beforeEach(() => {
-    captured.managerOptions = null;
-    captured.dispatchCdpCalls = [];
+    captured.dispatchedTabs = [];
     captured.ensuredTabs = [];
     captured.controlledTabs = [];
     vi.clearAllMocks();
   });
 
-  it("registers browserViewCdpDispatch and hands a parsed payload to the manager", async () => {
+  it("dispatches a curated command with its logical frame target", async () => {
     const { registerBrowserViewIpc } = await import("../browser-view-ipc");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
 
     const bridge = makeBridge();
     registerBrowserViewIpc(bridge as never);
-
-    const channelNames = bridge.handleInvoke.mock.calls.map(
-      (call) => call[0] as string,
-    );
-    expect(channelNames).toContain(RunnerHostInvoke.browserViewCdpDispatch);
-
     const handler = findInvokeHandler(
       bridge,
-      RunnerHostInvoke.browserViewCdpDispatch,
+      RunnerHostInvoke.browserViewElectronTabCdpDispatch,
     );
-    const payload = {
-      viewTabId: "view-tab-1",
-      paneId: "pane-1",
-      tileInstanceId: "browser-instance-1",
-      pageSessionId: "browser-page-1",
-      sessionId: "child-session-1",
-      command: {
-        kind: "cdpNavigate",
-        url: "https://example.com/borrowed",
-      },
-    };
-
-    await handler({}, payload);
-
-    expect(bridge.resolveSenderWindowId).toHaveBeenCalled();
-    expect(captured.dispatchCdpCalls).toEqual([
+    await handler(
+      {},
       {
-        windowId: "window-1",
-        input: {
-          viewTabId: "view-tab-1",
-          paneId: "pane-1",
-          tileInstanceId: "browser-instance-1",
-          pageSessionId: "browser-page-1",
-          sessionId: "child-session-1",
-          command: {
-            kind: "cdpNavigate",
-            url: "https://example.com/borrowed",
-          },
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+        target: {
+          kind: "frame",
+          frameId: "frame-1",
+          parentFrameId: "root-frame",
         },
+        command: { kind: "cdpInsertText", text: "hello" },
+      },
+    );
+
+    expect(captured.dispatchedTabs).toEqual([
+      {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+        target: {
+          kind: "frame",
+          frameId: "frame-1",
+          parentFrameId: "root-frame",
+        },
+        command: { kind: "cdpInsertText", text: "hello" },
       },
     ]);
-  });
-
-  it("forwards CDP session-ended and target-attached on the user-tile channels", async () => {
-    const { registerBrowserViewIpc } = await import("../browser-view-ipc");
-    const { RunnerHostEvent } =
-      await import("../../../ipc-contracts/ipc-channels");
-
-    const bridge = makeBridge();
-    registerBrowserViewIpc(bridge as never);
-
-    const options = captured.managerOptions;
-    if (options === null) {
-      throw new Error("BrowserViewManager was not constructed");
-    }
-
-    const sessionEnded: BrowserViewCdpSessionEndedChange = {
-      viewTabId: "view-tab-1",
-      paneId: "pane-1",
-      tileInstanceId: "browser-instance-1",
-      pageSessionId: "browser-page-1",
-      reason: "devtools-opened",
-    };
-    options.notifyCdpSessionEnded("window-1", sessionEnded);
-    expect(bridge.safeSendToWindow).toHaveBeenCalledWith(
-      "window-1",
-      RunnerHostEvent.browserViewCdpSessionEnded,
-      sessionEnded,
-    );
-
-    const targetAttached: BrowserViewCdpTargetAttachedChange = {
-      viewTabId: "view-tab-1",
-      paneId: "pane-1",
-      tileInstanceId: "browser-instance-1",
-      pageSessionId: "browser-page-1",
-      sessionId: "child-1",
-      targetId: "target-1",
-      targetType: "iframe",
-      url: "https://example.com/child",
-      waitingForDebugger: false,
-    };
-    options.notifyCdpTargetAttached("window-2", targetAttached);
-    expect(bridge.safeSendToWindow).toHaveBeenCalledWith(
-      "window-2",
-      RunnerHostEvent.browserViewCdpTargetAttached,
-      targetAttached,
-    );
   });
 
   it("passes the native tab storage seed through the IPC parser", async () => {
@@ -618,81 +353,5 @@ describe("browser view CDP IPC (ticket 09 borrowed tile)", () => {
         },
       },
     ]);
-  });
-
-  describe("canonical CDP command schema", () => {
-    it.each(VALID_COMMAND_PAYLOADS)(
-      "round-trips every field of $name",
-      ({ payload, expected }) => {
-        expect(browserViewIpcPayload.cdpCommand.parse(payload)).toEqual(expected);
-      },
-    );
-
-    it("rejects an unknown command kind rather than coercing", () => {
-      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
-        kind: "cdpEval",
-      });
-      expect(parsed.success).toBe(false);
-      if (parsed.success) throw new Error("expected command rejection");
-      expect(parsed.error.issues[0]?.path).toEqual(["kind"]);
-    });
-
-    it("rejects a wrong-typed required field on cdpNavigate.url", () => {
-      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
-        kind: "cdpNavigate",
-        url: 42,
-      });
-      expect(parsed.success).toBe(false);
-      if (parsed.success) throw new Error("expected command rejection");
-      expect(parsed.error.issues[0]?.path).toEqual(["url"]);
-    });
-
-    it("rejects an invalid cdpDispatchMouseEvent.type enum value", () => {
-      const parsed = browserViewIpcPayload.cdpCommand.safeParse({
-        kind: "cdpDispatchMouseEvent",
-        type: "click",
-        x: 0,
-        y: 0,
-        button: null,
-        clickCount: null,
-        deltaX: null,
-        deltaY: null,
-      });
-      expect(parsed.success).toBe(false);
-      if (parsed.success) throw new Error("expected command rejection");
-      expect(parsed.error.issues[0]?.path).toEqual(["type"]);
-    });
-
-    it("coerces missing cdpCallFunctionOn.argumentsJson to null rather than dropping the field", () => {
-      expect(
-        browserViewIpcPayload.cdpCommand.parse({
-          kind: "cdpCallFunctionOn",
-          objectId: null,
-          executionContextId: 1,
-          functionDeclaration: "function() {}",
-          returnByValue: true,
-        }),
-      ).toEqual({
-        kind: "cdpCallFunctionOn",
-        objectId: null,
-        executionContextId: 1,
-        functionDeclaration: "function() {}",
-        argumentsJson: null,
-        returnByValue: true,
-      });
-    });
-
-    it("rejects non-JSON cdpCallFunctionOn arguments at the IPC boundary", () => {
-      expect(() =>
-        browserViewIpcPayload.cdpCommand.parse({
-          kind: "cdpCallFunctionOn",
-          objectId: null,
-          executionContextId: 1,
-          functionDeclaration: "function() {}",
-          argumentsJson: { invalid: undefined },
-          returnByValue: true,
-        }),
-      ).toThrow();
-    });
   });
 });

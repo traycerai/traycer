@@ -1,4 +1,4 @@
-import type { BrowserViewProvisionedTab } from "../../ipc-contracts/browser-view-types";
+import type { BrowserViewNativeTabCapability } from "../../ipc-contracts/browser-view-types";
 
 type ActivationState =
   | { readonly kind: "provisioning" }
@@ -18,11 +18,11 @@ type HandoffState =
 /** Owns the legal lifecycle transitions of one host-owned Electron guest. */
 export class NativeBrowserViewLifecycle {
   private readonly provisioning =
-    Promise.withResolvers<BrowserViewProvisionedTab>();
+    Promise.withResolvers<BrowserViewNativeTabCapability>();
   private activation: ActivationState = { kind: "provisioning" };
   private handoff: HandoffState = { kind: "available" };
 
-  get provisioned(): Promise<BrowserViewProvisionedTab> {
+  get provisioned(): Promise<BrowserViewNativeTabCapability> {
     return this.provisioning.promise;
   }
 
@@ -39,7 +39,7 @@ export class NativeBrowserViewLifecycle {
   }
 
   completeProvisioning(
-    provisioned: BrowserViewProvisionedTab,
+    provisioned: BrowserViewNativeTabCapability,
     seedScriptId: string | null,
   ): void {
     if (this.activation.kind !== "provisioning") {
@@ -84,9 +84,11 @@ export class NativeBrowserViewLifecycle {
     return true;
   }
 
-  finishHandoffCapture(promise: Promise<void>): void {
+  finishHandoffCapture(promise: Promise<void>, delivered: boolean): void {
     if (this.handoff.kind === "capturing" && this.handoff.promise === promise) {
-      this.handoff = { kind: "handed-off" };
+      this.handoff = delivered
+        ? { kind: "handed-off" }
+        : { kind: "available" };
     }
   }
 }

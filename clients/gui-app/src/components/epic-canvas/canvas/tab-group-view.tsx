@@ -870,7 +870,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
   // artifact lookup miss is not deletion. A blank id is throwaway, the comm
   // graph id is epic-derived, and an output id belongs to a managed command;
   // each surface owns its own lifecycle instead.
-  const isRemoteDeleted = !isTileRefRecordBacked(activeTab)
+  const isRemoteDeleted = !isRecordBackedEpicNodeRef(activeTab)
     ? false
     : computeIsRemoteDeleted({
         snapshotLoaded,
@@ -1141,4 +1141,10 @@ function computeIsRemoteDeleted(args: ComputeIsRemoteDeletedArgs): boolean {
   if (isPendingCreate) return false;
   if (leafArtifact.type === "chat" && isCloudKnown) return false;
   return true;
+}
+
+function isRecordBackedEpicNodeRef(
+  ref: EpicCanvasTileRef,
+): ref is EpicNodeRef {
+  return isTileRefRecordBacked(ref);
 }

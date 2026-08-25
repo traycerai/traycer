@@ -15,7 +15,7 @@ import type {
   BrowserViewConsoleEntry,
   BrowserViewNetworkEntry,
   BrowserViewTileKey,
-} from "../desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { ElectronTabSurface } from "./agent-browser-tile";
 import { BrowserPeekTile } from "./browser-peek-tile";
-import { BrowserSessionsHostProvider } from "./browser-session-dock";
+import { BrowserSessionsHostProvider } from "./browser-sessions-provider";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
@@ -17,7 +17,7 @@ import type {
   BrowserSessionTileRef,
 } from "@/stores/epics/canvas/types";
 
-export interface BrowserSessionTileProps {
+interface BrowserSessionTileProps {
   readonly node: BrowserSessionTileRef;
   readonly viewTabId: string;
   readonly paneId: string;
@@ -25,14 +25,13 @@ export interface BrowserSessionTileProps {
 }
 
 function resolveSwapState(args: {
-  readonly migrationRuntime:
-    NonNullable<BrowserSessionInfo["migration"]>["runtime"] | undefined;
+  readonly runtimeKind: BrowserSessionInfo["runtime"]["kind"] | undefined;
   readonly bindingRegistrationId: string | null;
   readonly terminalBindingRegistrationId: string | null;
   readonly castMigrated: boolean;
 }): { readonly renderPeek: boolean; readonly holdReason: string | null } {
   const renderPeek =
-    args.migrationRuntime === "headless" ||
+    args.runtimeKind === "headless" ||
     args.bindingRegistrationId === null ||
     (args.castMigrated &&
       args.bindingRegistrationId === args.terminalBindingRegistrationId);
@@ -68,8 +67,8 @@ function useBrowserSessionSwap(input: {
   useEffect(() => {
     bindingRegistrationIdRef.current = input.bindingRegistrationId;
     latestMigrationRevisionRef.current =
-      input.session?.migration?.revision ?? 0;
-  }, [input.bindingRegistrationId, input.session?.migration?.revision]);
+      input.session?.runtime.revision ?? 0;
+  }, [input.bindingRegistrationId, input.session?.runtime.revision]);
 
   const onMigrated = useCallback(() => {
     setTerminalBindingRegistrationId(bindingRegistrationIdRef.current);
@@ -80,17 +79,17 @@ function useBrowserSessionSwap(input: {
   useEffect(() => {
     if (
       !castMigrated ||
-      input.session?.migration?.runtime !== "headless" ||
-      input.session.migration.revision <= terminalMigrationRevisionRef.current
+      input.session?.runtime.kind !== "headless" ||
+      input.session.runtime.revision <= terminalMigrationRevisionRef.current
     ) {
       return;
     }
     setCastMigrated(false);
     setCastGeneration((current) => current + 1);
-  }, [castMigrated, input.session?.migration]);
+  }, [castMigrated, input.session?.runtime]);
 
   const { renderPeek, holdReason } = resolveSwapState({
-    migrationRuntime: input.session?.migration?.runtime,
+    runtimeKind: input.session?.runtime.kind,
     bindingRegistrationId: input.bindingRegistrationId,
     terminalBindingRegistrationId,
     castMigrated,
@@ -101,7 +100,7 @@ function useBrowserSessionSwap(input: {
       swapDecisionSignatureRef.current = null;
       return;
     }
-    const settlementRevision = input.session?.migration?.revision ?? 0;
+    const settlementRevision = input.session?.runtime.revision ?? 0;
     const verdict = renderPeek ? "hold" : "swap";
     const signature = [
       terminalBindingRegistrationId,
@@ -126,7 +125,7 @@ function useBrowserSessionSwap(input: {
     castMigrated,
     holdReason,
     input.bindingRegistrationId,
-    input.session?.migration?.revision,
+    input.session?.runtime.revision,
     input.sessionId,
     input.tabId,
     renderPeek,
@@ -144,7 +143,6 @@ interface BrowserSessionTileBodyProps extends BrowserSessionTileProps {
   readonly session: BrowserSessionInfo | undefined;
   readonly tab: BrowserSessionInfo["tabs"][number] | undefined;
   readonly binding: ElectronTabBinding | null;
-  readonly routingChatId: string | null;
   readonly renderPeek: boolean;
   readonly castGeneration: number;
   readonly onMigrated: () => void;
@@ -159,14 +157,14 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     );
   }
 
-  if (props.renderPeek) {
+  if (props.renderPeek || props.binding === null) {
     const peek: BrowserPeekTileRef = {
       id: props.node.id,
       instanceId: props.node.instanceId,
       type: "browser-peek",
       name: props.tab.title ?? props.node.name,
       hostId: props.node.hostId,
-      chatId: props.routingChatId ?? props.session.createdBy.chatId,
+      chatId: props.session.createdBy.chatId,
       sessionId: props.node.sessionId,
       tabId: props.node.tabId,
       initialUrl: props.tab.url,
@@ -243,7 +241,6 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
       session={session}
       tab={tab}
       binding={binding}
-      routingChatId={sessions.routingChatId}
       renderPeek={renderPeek}
       castGeneration={castGeneration}
       onMigrated={onMigrated}
@@ -252,14 +249,12 @@ function BrowserSessionTileFromProvider(props: BrowserSessionTileProps) {
 }
 
 function CrossHostBrowserSessionTile(props: BrowserSessionTileProps) {
-  const currentSessions = useBrowserSessionsContext();
   const hostClient = useTabHostClient();
   return (
     <BrowserSessionsHostProvider
       hostId={props.node.hostId}
       hostClient={hostClient}
       epicId={props.epicId}
-      routingChatId={currentSessions.routingChatId}
     >
       <BrowserSessionTileFromProvider {...props} />
     </BrowserSessionsHostProvider>

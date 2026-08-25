@@ -6,39 +6,42 @@ import {
   type WebPreferences,
 } from "electron";
 import { randomUUID } from "node:crypto";
-import type { BrowserCookieCryptoState } from "../../ipc-contracts/browser-view-types";
+import type {
+  BrowserCookieCryptoState,
+  BrowserViewDownloadState,
+} from "../../ipc-contracts/browser-view-types";
 import { log } from "../app/logger";
 import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
 
 export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
-export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
 
-export type BrowserPermissionRequestHandler = (
+type BrowserPermissionRequestHandler = (
   webContents: unknown,
   permission: string,
   callback: (permissionGranted: boolean) => void,
   details: unknown,
 ) => void;
 
-export type BrowserPermissionCheckHandler = (
+type BrowserPermissionCheckHandler = (
   webContents: unknown,
   permission: string,
   requestingOrigin: string,
   details: unknown,
 ) => boolean;
 
-export type BrowserDownloadListener = (
+type BrowserDownloadListener = (
   event: unknown,
   item: BrowserDownloadItem,
   webContents: BrowserDownloadWebContents,
 ) => void;
 
-export type BrowserDisplayMediaRequestHandler = (
+type BrowserDisplayMediaRequestHandler = (
   request: unknown,
   callback: (streams: object) => void,
 ) => void;
 
-export interface BrowserViewPolicySession {
+interface BrowserViewPolicySession {
   setPermissionRequestHandler(
     handler: BrowserPermissionRequestHandler | null,
   ): void;
@@ -65,7 +68,7 @@ export interface BrowserViewPolicySession {
   on(event: "will-download", listener: BrowserDownloadListener): void;
 }
 
-export interface BrowserViewTrackedWebContents {
+interface BrowserViewTrackedWebContents {
   readonly id: number;
   once(event: "destroyed", listener: () => void): void;
 }
@@ -94,7 +97,7 @@ interface BrowserDownloadWebContents {
   getURL(): string;
 }
 
-export interface BrowserViewCertificateError {
+interface BrowserViewCertificateError {
   readonly webContentsId: number;
   readonly url: string;
   readonly hostname: string;
@@ -103,10 +106,7 @@ export interface BrowserViewCertificateError {
   readonly certificate: Certificate;
 }
 
-export type BrowserViewDownloadState =
-  "prompting" | "progressing" | "completed" | "cancelled" | "interrupted";
-
-export interface BrowserViewDownloadChange {
+export interface BrowserSessionDownloadChange {
   readonly webContentsId: number;
   readonly downloadId: string;
   readonly url: string;
@@ -120,7 +120,7 @@ export interface BrowserViewDownloadChange {
   readonly canCancel: boolean;
 }
 
-export interface BrowserViewCertificateErrorChange {
+export interface BrowserSessionCertificateErrorChange {
   readonly webContentsId: number;
   readonly certificateErrorId: string;
   readonly url: string;
@@ -131,7 +131,7 @@ export interface BrowserViewCertificateErrorChange {
   readonly issuer: string;
 }
 
-export interface BrowserViewPendingCertificateError extends BrowserViewCertificateErrorChange {
+interface BrowserSessionPendingCertificateError extends BrowserSessionCertificateErrorChange {
   readonly certificate: Certificate;
 }
 
@@ -147,15 +147,15 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
 const browserDownloadListeners = new Set<
-  (change: BrowserViewDownloadChange) => void
+  (change: BrowserSessionDownloadChange) => void
 >();
 const browserCertificateListeners = new Set<
-  (change: BrowserViewCertificateErrorChange) => void
+  (change: BrowserSessionCertificateErrorChange) => void
 >();
 const activeDownloadsById = new Map<string, BrowserDownloadItem>();
 const pendingCertificateErrorsById = new Map<
   string,
-  BrowserViewPendingCertificateError
+  BrowserSessionPendingCertificateError
 >();
 
 export function ensureBrowserViewSession(): Session {
@@ -175,11 +175,11 @@ export function createBrowserViewWebPreferences(): WebPreferences {
   };
 }
 
-export function getBrowserViewPartition(): string {
+function getBrowserViewPartition(): string {
   return browserViewPartitionForCryptoState(getBrowserCookieCryptoState());
 }
 
-export function browserViewPartitionForCryptoState(
+function browserViewPartitionForCryptoState(
   state: BrowserCookieCryptoState,
 ): string {
   return state.mode === "degraded"
@@ -187,7 +187,7 @@ export function browserViewPartitionForCryptoState(
     : BROWSER_VIEW_PARTITION;
 }
 
-export function installBrowserViewSessionPolicy(
+function installBrowserViewSessionPolicy(
   target: BrowserViewPolicySession,
 ): void {
   if (installedPolicySessions.has(target)) return;
@@ -219,7 +219,7 @@ export function installBrowserViewSessionPolicy(
   });
 }
 
-export function isBrowserPermissionAllowed(permission: string): boolean {
+function isBrowserPermissionAllowed(permission: string): boolean {
   return BROWSER_ALLOWED_PERMISSIONS.has(permission);
 }
 
@@ -239,7 +239,7 @@ export function isBrowserViewWebContents(
 }
 
 export function onBrowserViewDownloadChange(
-  listener: (change: BrowserViewDownloadChange) => void,
+  listener: (change: BrowserSessionDownloadChange) => void,
 ): () => void {
   browserDownloadListeners.add(listener);
   return () => {
@@ -248,7 +248,7 @@ export function onBrowserViewDownloadChange(
 }
 
 export function onBrowserViewCertificateError(
-  listener: (change: BrowserViewCertificateErrorChange) => void,
+  listener: (change: BrowserSessionCertificateErrorChange) => void,
 ): () => void {
   browserCertificateListeners.add(listener);
   return () => {
@@ -265,7 +265,7 @@ export function cancelBrowserViewDownload(downloadId: string): boolean {
 
 export function readBrowserViewPendingCertificateError(
   certificateErrorId: string,
-): BrowserViewPendingCertificateError | null {
+): BrowserSessionPendingCertificateError | null {
   return pendingCertificateErrorsById.get(certificateErrorId) ?? null;
 }
 
@@ -283,7 +283,7 @@ export function handleBrowserViewCertificateError(
     emitBrowserCertificateError(existing);
     return false;
   }
-  const pending: BrowserViewPendingCertificateError = {
+  const pending: BrowserSessionPendingCertificateError = {
     webContentsId: input.webContentsId,
     certificateErrorId: randomUUID(),
     url: input.url,
@@ -409,7 +409,7 @@ function emitBrowserDownloadChange(
     readonly canCancel: boolean;
   },
 ): void {
-  const change: BrowserViewDownloadChange = {
+  const change: BrowserSessionDownloadChange = {
     webContentsId: webContents.id,
     downloadId: state.downloadId,
     url: item.getURL(),
@@ -426,9 +426,9 @@ function emitBrowserDownloadChange(
 }
 
 function emitBrowserCertificateError(
-  pending: BrowserViewPendingCertificateError,
+  pending: BrowserSessionPendingCertificateError,
 ): void {
-  const change: BrowserViewCertificateErrorChange = {
+  const change: BrowserSessionCertificateErrorChange = {
     webContentsId: pending.webContentsId,
     certificateErrorId: pending.certificateErrorId,
     url: pending.url,
@@ -476,7 +476,7 @@ function dangerousDownloadType(filename: string): string | null {
 
 function findPendingCertificateError(
   input: BrowserViewCertificateError,
-): BrowserViewPendingCertificateError | null {
+): BrowserSessionPendingCertificateError | null {
   for (const pending of pendingCertificateErrorsById.values()) {
     if (
       pending.webContentsId === input.webContentsId &&

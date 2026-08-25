@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import type {
   BrowserViewCertificateErrorChange,
   BrowserViewDownloadChange,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 import { cn } from "@/lib/utils";
 
 export function BrowserTileDownloadStrip(props: {

@@ -1,4 +1,4 @@
-import { use, useEffect, useMemo } from "react";
+import { use, useEffect } from "react";
 import {
   clearBrowserViewSnapshot,
   collectBrowserOverlaySurfaces,
@@ -9,17 +9,11 @@ import {
   subscribeBrowserOverlayLayout,
 } from "@/lib/browser-view/browser-overlay-coordinator";
 import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
-import {
-  type BrowserViewTileKey,
-  type DesktopBrowserViewBridge,
-  resolveDesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+import type {
+  BrowserViewBridge,
+  BrowserViewTileKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 export function BrowserOverlayCoordinatorBridge() {
   const runnerHost = use(RunnerHostContext);
@@ -28,16 +22,12 @@ export function BrowserOverlayCoordinatorBridge() {
     // set on each call, so this is idempotent across HMR.
     if (runnerHost !== null) registerReservedBrowserChords(runnerHost);
   }, [runnerHost]);
-  const browserView = useMemo(
-    () =>
-      runnerHost === null ? null : resolveDesktopBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
+  const browserView = runnerHost?.browserView ?? null;
   return <BrowserOverlayCoordinator browserView={browserView} />;
 }
 
 function BrowserOverlayCoordinator(props: {
-  readonly browserView: DesktopBrowserViewBridge | null;
+  readonly browserView: BrowserViewBridge | null;
 }): null {
   useEffect(() => {
     const browserView = props.browserView;
@@ -51,9 +41,9 @@ function BrowserOverlayCoordinator(props: {
     /**
      * BT-202 flicker fix, phase 2: the native view must not leave the screen
      * until the replacement frame is DECODED and COMPOSITED. We wait one
-     * frame (commit), give every snapshot <img> a decode budget (capped, so
-     * a broken image can never stall parking), one more frame (paint), then
-     * ack — main moves the view offscreen only after this resolves.
+     * frame (commit), wait for every snapshot <img> to settle decoding, one
+     * more frame (paint), then ack — main moves the view offscreen only after
+     * this resolves.
      */
     const ackWhenPainted = async (overlayId: string): Promise<void> => {
       if (ackedOverlayIds.has(overlayId)) return;
@@ -76,10 +66,9 @@ function BrowserOverlayCoordinator(props: {
             ),
           );
         await waitFrame();
-        await Promise.race([decodeAll(), sleep(120)]);
+        await decodeAll();
         await waitFrame();
-        const ack = browserView.overlayPaintAck;
-        if (typeof ack === "function") await ack.call(browserView, overlayId);
+        await browserView.overlayPaintAck(overlayId);
       } catch {
         // A failed ack must never break the occlusion lifecycle; the view
         // simply stays live until release.

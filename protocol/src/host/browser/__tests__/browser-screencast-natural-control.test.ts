@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   browserScreencastClientFrameSchema,
   browserScreencastServerFrameSchema,
-  browserScreencastV10,
+  browserScreencastV1,
 } from "@traycer/protocol/host/browser/contracts";
 
 const ARM = {
@@ -14,14 +14,14 @@ const ARM = {
 function parsesClient(frame: unknown): boolean {
   return (
     browserScreencastClientFrameSchema.safeParse(frame).success &&
-    browserScreencastV10.clientFrameSchema.safeParse(frame).success
+    browserScreencastV1.clientFrameSchema.safeParse(frame).success
   );
 }
 
 function parsesServer(frame: unknown): boolean {
   return (
     browserScreencastServerFrameSchema.safeParse(frame).success &&
-    browserScreencastV10.serverFrameSchema.safeParse(frame).success
+    browserScreencastV1.serverFrameSchema.safeParse(frame).success
   );
 }
 
@@ -83,7 +83,7 @@ describe("browser.screencast@1.0 natural-control frames", () => {
     ).toBe(true);
   });
 
-  it("defaults keyboard.autoRepeat and pointer.clickCount for older peers", () => {
+  it("requires complete keyboard and pointer event state", () => {
     const keyboard = {
       kind: "keyboard" as const,
       hasBinaryPayload: false as const,
@@ -116,10 +116,8 @@ describe("browser.screencast@1.0 natural-control frames", () => {
     const { autoRepeat: _omittedAutoRepeat, ...keyboardWithoutAutoRepeat } =
       keyboard;
     expect(_omittedAutoRepeat).toBe(false);
-    expect(parsesClient(keyboardWithoutAutoRepeat)).toBe(true);
-    expect(
-      browserScreencastClientFrameSchema.parse(keyboardWithoutAutoRepeat),
-    ).toEqual(keyboard);
+    expect(parsesClient(keyboardWithoutAutoRepeat)).toBe(false);
+    expect(parsesClient({ ...keyboard, modifiers: 16 })).toBe(false);
 
     expect(parsesClient(pointer)).toBe(true);
     expect(parsesClient({ ...pointer, clickCount: 8 })).toBe(true);
@@ -127,9 +125,8 @@ describe("browser.screencast@1.0 natural-control frames", () => {
     const { clickCount: _omittedClickCount, ...pointerWithoutClickCount } =
       pointer;
     expect(_omittedClickCount).toBe(0);
-    expect(parsesClient(pointerWithoutClickCount)).toBe(true);
-    expect(
-      browserScreencastClientFrameSchema.parse(pointerWithoutClickCount),
-    ).toEqual({ ...pointer, clickCount: 1 });
+    expect(parsesClient(pointerWithoutClickCount)).toBe(false);
+    expect(parsesClient({ ...pointer, buttons: 32 })).toBe(false);
+    expect(parsesClient({ ...pointer, modifiers: 16 })).toBe(false);
   });
 });

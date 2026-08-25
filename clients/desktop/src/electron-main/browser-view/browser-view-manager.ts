@@ -1,25 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { BrowserWindowConstructorOptions } from "electron";
-import type { BrowserStorageState } from "@traycer/protocol/host/browser/contracts";
 import type {
-  BrowserViewCdpCommand,
-  BrowserViewCdpDispatch,
-  BrowserViewCdpErrorInfo,
-  BrowserViewCdpFrameInfo,
-  BrowserViewCdpResult,
-  BrowserViewCdpSessionEndedChange,
-  BrowserViewCdpTargetAttachedChange,
+  BrowserWindowConstructorOptions,
+  Event,
+  Input,
+  RenderProcessGoneDetails,
+  Result,
+} from "electron";
+import type {
+  BrowserCdpResult,
+  BrowserStorageState,
+} from "@traycer/protocol/host/browser/contracts";
+import type {
   BrowserViewBounds,
   BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewControlAction,
-  BrowserViewControlActionResult,
-  BrowserViewControlGrant,
-  BrowserViewControlGrantResult,
-  BrowserViewControlRevokedChange,
-  BrowserViewControlRevoke,
   BrowserViewDebugSnapshotChange,
   BrowserViewDebugSnapshotData,
   BrowserViewDownloadChange,
@@ -39,15 +35,11 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatus,
   BrowserViewStatusChange,
-  BrowserViewNativeTabCdpSessionEndedChange,
-  BrowserViewNativeTabCdpTargetAttachedChange,
   BrowserViewElectronTabControl,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabKey,
   BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabStatusChange,
-  BrowserViewProvisionedTab,
-  BrowserViewReleaseTab,
   BrowserViewStorageStateApply,
   BrowserViewStorageStateApplyResult,
   BrowserViewStorageStateCapture,
@@ -56,6 +48,7 @@ import type {
   BrowserViewTileUpsert,
   BrowserViewViewportPresetChange,
   BrowserViewViewportPresetId,
+  PipCaptureStartInput,
 } from "../../ipc-contracts/browser-view-types";
 import type {
   BrowserAnnotationAttachedIpcEvent,
@@ -65,17 +58,13 @@ import type {
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartResult,
 } from "../../ipc-contracts/browser-annotation-types";
-import type {
-  PipCaptureIpcPayload,
-  PipCaptureStartInput,
-} from "../../ipc-contracts/pip-capture-types";
+import type { PipCaptureIpcPayload } from "../../ipc-contracts/pip-capture-types";
 import type {
   BrowserPrimaryProfileOriginSnapshot,
   BrowserStorageCaptureWebContents,
 } from "./browser-storage-state";
 import { browserLocalStorageSeedScript } from "./browser-storage-state";
 import { createBoundsStreamStats } from "./bounds-stream-stats";
-import { isAgentBrowserPostureActive } from "./agent-browser-posture";
 import {
   hostSendKeyCodeForToken,
   parseReservedChordToken,
@@ -99,22 +88,17 @@ import { describeLogError, log } from "../app/logger";
 import { BrowserAnnotationSession } from "./browser-annotation-session";
 import { BrowserDebugSession } from "./browser-debug-session";
 import type {
-  BrowserViewCertificateErrorChange as BrowserSessionCertificateErrorChange,
-  BrowserViewDownloadChange as BrowserSessionDownloadChange,
+  BrowserSessionCertificateErrorChange,
+  BrowserSessionDownloadChange,
 } from "./browser-session";
 import type {
   BrowserViewCapturedImage,
-  BrowserViewDebugger,
   BrowserViewDevToolsWindow,
-  BrowserViewEvent,
-  BrowserViewFoundInPageResult,
   BrowserViewHostWebContents,
-  BrowserViewInput,
   BrowserViewInputModifier,
   BrowserViewNavigationHistory,
   BrowserViewPopupWebContents,
   BrowserViewPopupWindow,
-  BrowserViewRenderProcessGoneDetails,
   BrowserViewWebContents,
   BrowserViewWindow,
   BrowserViewWindowOpenDetails,
@@ -129,30 +113,9 @@ import {
   type BrowserViewEntryKey,
 } from "./browser-view-entry-registry";
 import { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
-import { BrowserViewControlSession } from "./browser-view-control-session";
-
-export type {
-  BrowserViewCapturedImage,
-  BrowserViewCropRect,
-  BrowserViewDebugger,
-  BrowserViewDevToolsWebContents,
-  BrowserViewDevToolsWindow,
-  BrowserViewFindInPageOptions,
-  BrowserViewHostWebContents,
-  BrowserViewNavigationHistory,
-  BrowserViewOpenDevToolsOptions,
-  BrowserViewPopupWebContents,
-  BrowserViewPopupWindow,
-  BrowserViewWebContents,
-  BrowserViewWindow,
-  BrowserViewWindowOpenDetails,
-  BrowserViewWindowOpenResult,
-  ManagedBrowserView,
-  ManagedContentView,
-} from "./browser-view-port";
 
 const DEBUG_SNAPSHOT_COALESCE_MS = 16;
-export const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
+const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
 // BT-101: aggregate window for the `bounds_stream` perf log. During a resize
 // drag the renderer streams rects every frame; per-call logging would flood
 // the lane, so outcomes accumulate here and flush once per window.
@@ -166,12 +129,10 @@ const encodeCapturedTileFrame = defaultTileFrameEncoder(
 // BT-401: hidden-but-bound tiles keep a full Chromium guest alive; past this
 // cap the least-recently-visible guests are destroyed and later rebuilt from
 // their persisted URL (silent reload) on the next visit.
-export const HIDDEN_GUEST_EVICTION_CAP = 3;
+const HIDDEN_GUEST_EVICTION_CAP = 3;
 /** Deferred so a switch's hide→show pair settles before the sweep counts. */
 const EVICTION_SWEEP_DELAY_MS = 0;
-// A hung state capture must not block native teardown or application quit.
-const HANDOFF_CAPTURE_TIMEOUT_MS = 1500;
-export const ANNOTATION_ATTACH_ACK_TIMEOUT_MS = 4000;
+const ANNOTATION_ATTACH_ACK_TIMEOUT_MS = 4000;
 
 type BrowserPrimaryProfileRecentOrigin = BrowserPrimaryProfileOriginSnapshot & {
   readonly visitSequence: number;
@@ -196,7 +157,7 @@ const VIEWPORT_PRESETS: Readonly<
   desktop: { width: 1440, height: 900 },
 };
 
-export interface BrowserViewManagerOptions {
+interface BrowserViewManagerOptions {
   readonly createView: () => ManagedBrowserView;
   readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   readonly createPopupWindowOptions: (
@@ -247,44 +208,11 @@ export interface BrowserViewManagerOptions {
     windowId: string,
     change: BrowserViewDebugSnapshotChange,
   ) => void;
-  readonly notifyControlRevoked: (
-    windowId: string,
-    change: BrowserViewControlRevokedChange,
-  ) => void;
-  // Fired once, immediately, when a tile's CDP debugger detaches - causes
-  // outside our control include the target being destroyed, a renderer
-  // crash, or an explicit `Target.detachFromTarget`/`Debugger.detach`. This
-  // is the only consumer-facing signal that CDP consumers must treat as
-  // ending access to that tile rather than
-  // silently discovering it on the next failed dispatch. Verified
-  // 2026-07-28, live: opening DevTools does NOT cause this on Electron
-  // 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
-  // `openDevTools()` coexist there, so do not cite DevTools-open as a
-  // trigger elsewhere.
-  readonly notifyCdpSessionEnded: (
-    windowId: string,
-    change: BrowserViewCdpSessionEndedChange,
-  ) => void;
-  // Fired whenever CDP's own `Target.attachedToTarget` fires on a tile's
-  // root session, so the host can discover a flattened child (OOPIF/worker)
-  // session id to address further dispatches at.
-  readonly notifyCdpTargetAttached: (
-    windowId: string,
-    change: BrowserViewCdpTargetAttachedChange,
-  ) => void;
-  readonly notifyNativeTabCdpSessionEnded: (
-    windowId: string,
-    change: BrowserViewNativeTabCdpSessionEndedChange,
-  ) => void;
-  readonly notifyNativeTabCdpTargetAttached: (
-    windowId: string,
-    change: BrowserViewNativeTabCdpTargetAttachedChange,
-  ) => void;
   /** Captured native-session state sent before destructive GUI teardown. */
   readonly notifyElectronTabHandoff: (
     windowId: string,
     change: BrowserViewElectronTabHandoffChange,
-  ) => void;
+  ) => boolean;
   readonly notifyAnnotationEvent: (
     windowId: string,
     change: BrowserAnnotationSessionIpcEvent,
@@ -316,7 +244,7 @@ export interface BrowserViewManagerOptions {
   readonly hostPlatform: HostPlatform;
 }
 
-export interface BrowserViewScheduledTask {
+interface BrowserViewScheduledTask {
   cancel(): void;
 }
 
@@ -381,7 +309,6 @@ interface BrowserViewEntry {
    * `upsertTile` call for this exact key.
    */
   rendererResetPending: boolean;
-  control: BrowserViewControlSession | null;
   internalNavigation: boolean;
   /** One teardown shared by every close trigger for this guest. */
   closePromise: Promise<void> | null;
@@ -396,8 +323,8 @@ type BrowserViewGuestIdentity =
       readonly kind: "native";
       readonly key: BrowserViewNativeTabKey;
       readonly registrationId: string;
-      /** Renderer that established this guest and owns its lifecycle stream. */
-      readonly lifecycleOwnerWindowId: string;
+      /** Current renderer connection that owns this guest's lifecycle stream. */
+      lifecycleWindowId: string;
       readonly lifecycle: NativeBrowserViewLifecycle;
     };
 
@@ -418,16 +345,10 @@ interface BrowserViewEntryFindSession {
 }
 
 interface BrowserViewListeners {
-  readonly beforeInputEvent: (
-    event: BrowserViewEvent,
-    input: BrowserViewInput,
-  ) => void;
-  readonly inputEvent: () => void;
-  readonly contextMenu: () => void;
-  readonly blur: () => void;
+  readonly beforeInputEvent: (event: Event, input: Input) => void;
   readonly didCreateWindow: (window: BrowserViewPopupWindow) => void;
   readonly didFrameNavigate: (
-    event: BrowserViewEvent,
+    event: Event,
     url: string,
     httpResponseCode: number,
     httpStatusText: string,
@@ -436,31 +357,28 @@ interface BrowserViewListeners {
   readonly didFrameFinishLoad: () => void;
   readonly didFinishLoad: () => void;
   readonly didNavigate: (
-    event: BrowserViewEvent,
+    event: Event,
     url: string,
     httpResponseCode: number,
     httpStatusText: string,
   ) => void;
   readonly didStartNavigation: (
-    event: BrowserViewEvent,
+    event: Event,
     url: string,
     isInPlace: boolean,
     isMainFrame: boolean,
   ) => void;
   readonly didNavigateInPage: (
-    event: BrowserViewEvent,
+    event: Event,
     url: string,
     isMainFrame: boolean,
   ) => void;
-  readonly foundInPage: (
-    event: BrowserViewEvent,
-    result: BrowserViewFoundInPageResult,
-  ) => void;
+  readonly foundInPage: (event: Event, result: Result) => void;
   readonly pageTitleUpdated: () => void;
   readonly paint: () => void;
   readonly renderProcessGone: (
-    event: BrowserViewEvent,
-    details: BrowserViewRenderProcessGoneDetails,
+    event: Event,
+    details: RenderProcessGoneDetails,
   ) => void;
 }
 
@@ -474,8 +392,8 @@ interface BrowserViewPopupEntry {
 interface BrowserViewPopupListeners {
   readonly closed: () => void;
   readonly renderProcessGone: (
-    event: BrowserViewEvent,
-    details: BrowserViewRenderProcessGoneDetails,
+    event: Event,
+    details: RenderProcessGoneDetails,
   ) => void;
 }
 
@@ -523,30 +441,10 @@ export class BrowserViewManager {
     windowId: string,
     change: BrowserViewDebugSnapshotChange,
   ) => void;
-  private readonly notifyControlRevoked: (
-    windowId: string,
-    change: BrowserViewControlRevokedChange,
-  ) => void;
-  private readonly notifyCdpSessionEnded: (
-    windowId: string,
-    change: BrowserViewCdpSessionEndedChange,
-  ) => void;
-  private readonly notifyCdpTargetAttached: (
-    windowId: string,
-    change: BrowserViewCdpTargetAttachedChange,
-  ) => void;
-  private readonly notifyNativeTabCdpSessionEnded: (
-    windowId: string,
-    change: BrowserViewNativeTabCdpSessionEndedChange,
-  ) => void;
-  private readonly notifyNativeTabCdpTargetAttached: (
-    windowId: string,
-    change: BrowserViewNativeTabCdpTargetAttachedChange,
-  ) => void;
   private readonly notifyElectronTabHandoff: (
     windowId: string,
     change: BrowserViewElectronTabHandoffChange,
-  ) => void;
+  ) => boolean;
   private readonly notifyAnnotationEvent: (
     windowId: string,
     change: BrowserAnnotationSessionIpcEvent,
@@ -597,14 +495,14 @@ export class BrowserViewManager {
     {
       readonly webContents: BrowserViewHostWebContents;
       readonly onNavigate: (
-        event: BrowserViewEvent,
+        event: Event,
         url: string,
         isInPlace: boolean,
         isMainFrame: boolean,
       ) => void;
       readonly onGone: (
-        event: BrowserViewEvent,
-        details: BrowserViewRenderProcessGoneDetails,
+        event: Event,
+        details: RenderProcessGoneDetails,
       ) => void;
     }
   >();
@@ -651,13 +549,6 @@ export class BrowserViewManager {
     this.notifyOpenTileRequest = options.notifyOpenTileRequest;
     this.notifySnapshotInvalidated = options.notifySnapshotInvalidated;
     this.notifyDebugSnapshot = options.notifyDebugSnapshot;
-    this.notifyControlRevoked = options.notifyControlRevoked;
-    this.notifyCdpSessionEnded = options.notifyCdpSessionEnded;
-    this.notifyCdpTargetAttached = options.notifyCdpTargetAttached;
-    this.notifyNativeTabCdpSessionEnded =
-      options.notifyNativeTabCdpSessionEnded;
-    this.notifyNativeTabCdpTargetAttached =
-      options.notifyNativeTabCdpTargetAttached;
     this.notifyElectronTabHandoff = options.notifyElectronTabHandoff;
     this.notifyAnnotationEvent = options.notifyAnnotationEvent;
     this.notifyAnnotationAttached = options.notifyAnnotationAttached;
@@ -740,7 +631,7 @@ export class BrowserViewManager {
   ensureTab(
     windowId: string,
     input: BrowserViewEnsureTab,
-  ): Promise<BrowserViewProvisionedTab> {
+  ): Promise<BrowserViewNativeTabCapability> {
     const startedAt = Date.now();
     const guestKey = nativeGuestKey(input);
     const existing = this.entries.getGuest(guestKey);
@@ -753,13 +644,7 @@ export class BrowserViewManager {
           this.ensureTab(windowId, input),
         );
       }
-      return existing.identity.lifecycle.provisioned.then(() => {
-        const provisioned = this.resolveNativeTabProvisioned(existing);
-        // A renderer reload reuses the guest without causing navigation, so
-        // replay the state that the new renderer could not have observed.
-        this.emitStatus(existing);
-        return provisioned;
-      });
+      return this.restoreExistingNativeTab(windowId, input, existing);
     }
 
     log.info("[browser-view] native tab ensure stage", {
@@ -776,7 +661,7 @@ export class BrowserViewManager {
       kind: "native",
       key: toNativeTabKey(input),
       registrationId: randomUUID(),
-      lifecycleOwnerWindowId: windowId,
+      lifecycleWindowId: windowId,
       lifecycle,
     };
     const ownerWindow = this.getWindow(windowId);
@@ -801,6 +686,50 @@ export class BrowserViewManager {
     });
     void this.settleNativeTabInitialization(entry, input, startedAt);
     return lifecycle.provisioned;
+  }
+
+  private async restoreExistingNativeTab(
+    windowId: string,
+    input: BrowserViewEnsureTab,
+    entry: BrowserViewEntry,
+  ): Promise<BrowserViewNativeTabCapability> {
+    if (entry.identity.kind !== "native") {
+      throw new Error("Cannot restore an unmanaged browser guest as native.");
+    }
+    this.transferNativeLifecycle(entry, windowId);
+    await entry.identity.lifecycle.provisioned;
+    if (!this.isNativeTabAvailable(entry)) {
+      await this.closeEntry(entry, null);
+      return this.ensureTab(windowId, input);
+    }
+    try {
+      await this.ensureDebugSession(entry).enableAfterCommit();
+      const provisioned = this.resolveNativeTabProvisioned(entry);
+      // A renderer reload reuses the guest without causing navigation, so
+      // replay the state that the new renderer could not have observed.
+      this.emitStatus(entry);
+      return provisioned;
+    } catch (error) {
+      log.warn("[browser-view] native tab debugger recovery failed", {
+        error: describeLogError(error),
+        guestKey: guestEntryKey(entry),
+      });
+      await this.closeEntry(entry, null);
+      return this.ensureTab(windowId, input);
+    }
+  }
+
+  private transferNativeLifecycle(
+    entry: BrowserViewEntry,
+    windowId: string,
+  ): void {
+    if (entry.identity.kind !== "native") return;
+    const previousWindowId = entry.identity.lifecycleWindowId;
+    if (previousWindowId === windowId) return;
+    entry.identity.lifecycleWindowId = windowId;
+    const window = this.getWindow(windowId);
+    if (window !== null) this.ensureHostWindowResetListener(windowId, window);
+    this.detachHostWindowResetListenerIfUnused(previousWindowId);
   }
 
   private async settleNativeTabInitialization(
@@ -890,7 +819,7 @@ export class BrowserViewManager {
     return true;
   }
 
-  async releaseTab(input: BrowserViewReleaseTab): Promise<boolean> {
+  async releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean> {
     const entry = this.entries.getGuest(nativeGuestKey(input));
     if (
       entry?.identity.kind !== "native" ||
@@ -944,7 +873,7 @@ export class BrowserViewManager {
     entry: BrowserViewEntry,
     input: BrowserViewEnsureTab,
     startedAt: number,
-  ): Promise<BrowserViewProvisionedTab> {
+  ): Promise<BrowserViewNativeTabCapability> {
     if (entry.identity.kind !== "native") {
       throw new Error("Cannot initialize an unmanaged browser guest.");
     }
@@ -1023,13 +952,13 @@ export class BrowserViewManager {
 
   private resolveNativeTabProvisioned(
     entry: BrowserViewEntry,
-  ): BrowserViewProvisionedTab {
+  ): BrowserViewNativeTabCapability {
     if (entry.identity.kind !== "native") {
       throw new Error("Cannot provision an unmanaged browser guest.");
     }
     if (
       !this.isNativeTabAvailable(entry) ||
-      !entry.view.webContents.debugger.isAttached()
+      entry.debugSession?.isReady() !== true
     ) {
       throw new Error("Native browser tab CDP route is no longer available.");
     }
@@ -1544,6 +1473,7 @@ export class BrowserViewManager {
           };
     const session = new BrowserAnnotationSession({
       webContents: entry.view.webContents,
+      debugSession: this.ensureDebugSession(entry),
       identity: {
         tabId: annotationIdentity.tabId,
         sessionId: annotationIdentity.sessionId,
@@ -1667,121 +1597,9 @@ export class BrowserViewManager {
     });
   }
 
-  grantControl(
-    windowId: string,
-    input: BrowserViewControlGrant,
-  ): BrowserViewControlGrantResult {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
-    if (entry === undefined) {
-      return { status: "denied", reason: "Browser tile is not available." };
-    }
-    if (entry.control !== null && !entry.control.matches(input.controlId)) {
-      return { status: "queued", controlId: input.controlId };
-    }
-    entry.control?.cancel();
-    entry.control = new BrowserViewControlSession(
-      input.controlId,
-      input.expiresAt,
-      entry.view.webContents.debugger,
-    );
-    return { status: "granted", controlId: input.controlId };
-  }
-
-  revokeControl(windowId: string, input: BrowserViewControlRevoke): void {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
-    if (entry === undefined) return;
-    this.cancelControl(entry, input.reason, input.controlId);
-  }
-
-  executeControlAction(
-    windowId: string,
-    input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult> {
-    const entry = this.entries.getSurfaceByKey(
-      entryKeyId({ ...input, windowId }),
-    );
-    if (entry === undefined) {
-      return Promise.resolve({
-        status: "denied",
-        reason: "Browser tile is not available.",
-      });
-    }
-    const control = entry.control;
-    if (control === null || !control.matches(input.controlId)) {
-      return Promise.resolve({
-        status: "denied",
-        reason: "Browser control lock is not active.",
-      });
-    }
-    if (control.isExpired(Date.now())) {
-      this.cancelControl(entry, "control grant expired", input.controlId);
-      return Promise.resolve({
-        status: "cancelled",
-        reason: "control grant expired",
-      });
-    }
-    return control.execute(input);
-  }
-
-  /**
-   * Surface-keyed CDP exists only for unmanaged tiles explicitly borrowed
-   * by the host. Native tabs use `dispatchElectronTabCdp`; accepting their
-   * presentation key here would recreate the identity fallback this registry
-   * is designed to remove.
-   */
-  async dispatchCdp(
-    windowId: string,
-    input: BrowserViewCdpDispatch,
-  ): Promise<BrowserViewCdpResult> {
-    const key = { ...input, windowId };
-    const entry =
-      this.findUnmanagedSurfaceEntry(windowId, input) ??
-      this.findTransferableEntry(key);
-    if (entry === null) {
-      return {
-        kind: input.command.kind,
-        ok: false,
-        error: {
-          kind: "tile_not_found",
-          message: "Agent browser tile is not available.",
-          code: null,
-        },
-      };
-    }
-    const browserDebugger = entry.view.webContents.debugger;
-    if (!browserDebugger.isAttached()) {
-      return {
-        kind: input.command.kind,
-        ok: false,
-        error: {
-          kind: "not_attached",
-          message: "Agent browser tile's debugger is not attached.",
-          code: null,
-        },
-      };
-    }
-    try {
-      return await sendCdpCommand(
-        browserDebugger,
-        input.sessionId ?? undefined,
-        input.command,
-      );
-    } catch (err) {
-      return {
-        kind: input.command.kind,
-        ok: false,
-        error: classifyCdpError(err),
-      };
-    }
-  }
-
   async dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
-  ): Promise<BrowserViewCdpResult> {
+  ): Promise<BrowserCdpResult> {
     const entry = this.findExactNativeEntry(input);
     if (entry === null) {
       return {
@@ -1794,31 +1612,9 @@ export class BrowserViewManager {
         },
       };
     }
-    const browserDebugger = entry.view.webContents.debugger;
-    if (!browserDebugger.isAttached()) {
-      return {
-        kind: input.command.kind,
-        ok: false,
-        error: {
-          kind: "not_attached",
-          message: "Electron browser tab debugger is not attached.",
-          code: null,
-        },
-      };
-    }
-    try {
-      return await sendCdpCommand(
-        browserDebugger,
-        input.cdpSessionId ?? undefined,
-        input.command,
-      );
-    } catch (error) {
-      return {
-        kind: input.command.kind,
-        ok: false,
-        error: classifyCdpError(error),
-      };
-    }
+    const debugSession = this.ensureDebugSession(entry);
+    await debugSession.enableAfterCommit().catch(() => undefined);
+    return debugSession.dispatch(input.target, input.command);
   }
 
   private endAnnotationSession(
@@ -1878,30 +1674,6 @@ export class BrowserViewManager {
     );
   }
 
-  snapshotForTests(): ReadonlyArray<{
-    readonly key: BrowserViewEntryKey;
-    readonly webContentsId: number;
-    readonly parentWindowId: string | null;
-    readonly visible: boolean;
-    readonly status: BrowserViewStatus;
-    readonly requestedUrl: string;
-    readonly bounds: BrowserViewBounds | null;
-    readonly overlayOwnerIds: readonly string[];
-    readonly overlaySnapshotStale: boolean;
-  }> {
-    return Array.from(this.entries.surfaceValues()).map((entry) => ({
-      key: requireSurface(entry),
-      webContentsId: entry.view.webContents.id,
-      parentWindowId: entry.parentWindowId,
-      visible: entry.desiredVisible,
-      status: entry.status,
-      requestedUrl: entry.requestedUrl,
-      bounds: entry.bounds,
-      overlayOwnerIds: entry.overlayOwnerIds,
-      overlaySnapshotStale: entry.overlaySnapshotStale,
-    }));
-  }
-
   private createEntry(
     surface: BrowserViewEntryKey | null,
     requestedUrl: string,
@@ -1922,20 +1694,6 @@ export class BrowserViewManager {
       listeners: {
         beforeInputEvent: (event, input) => {
           this.handleBeforeInputEvent(entry, event, input);
-        },
-        inputEvent: () => {
-          this.handleNativeUserInput(entry, "user took over");
-        },
-        contextMenu: () => {
-          this.handleNativeUserInput(entry, "user took over");
-        },
-        blur: () => {
-          // Electron does not expose every file-picker/native-modal seam for
-          // embedded views, so focus loss revokes control conservatively.
-          this.handleNativeUserInput(
-            entry,
-            "user took over via native dialog or focus change",
-          );
         },
         didCreateWindow: (window) => {
           this.handleDidCreateWindow(entry, window);
@@ -2004,7 +1762,6 @@ export class BrowserViewManager {
       overlayParked: false,
       lastLoggedVisible: null,
       rendererResetPending: false,
-      control: null,
       closePromise: null,
       internalNavigation: false,
     };
@@ -2013,9 +1770,6 @@ export class BrowserViewManager {
       this.handleWindowOpen(entry, details),
     );
     webContents.on("before-input-event", entry.listeners.beforeInputEvent);
-    webContents.on("input-event", entry.listeners.inputEvent);
-    webContents.on("context-menu", entry.listeners.contextMenu);
-    webContents.on("blur", entry.listeners.blur);
     webContents.on("did-create-window", entry.listeners.didCreateWindow);
     webContents.on("did-frame-navigate", entry.listeners.didFrameNavigate);
     webContents.on("did-frame-finish-load", entry.listeners.didFrameFinishLoad);
@@ -2141,7 +1895,6 @@ export class BrowserViewManager {
     entry.currentTitle = entry.view.webContents.getTitle();
     this.rememberPrimaryProfileOrigin(entry);
     entry.certificateError = null;
-    this.cancelControl(entry, "navigation committed", null);
     this.invalidateOverlaySnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
     this.enableDebugAfterCommit(entry);
@@ -2160,7 +1913,6 @@ export class BrowserViewManager {
     entry.currentTitle = entry.view.webContents.getTitle();
     this.rememberPrimaryProfileOrigin(entry);
     this.endAnnotationSession(entry, "navigation");
-    this.cancelControl(entry, "navigation committed", null);
     this.invalidateOverlaySnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
   }
@@ -2170,7 +1922,6 @@ export class BrowserViewManager {
     detail: string,
   ): void {
     this.endAnnotationSession(entry, "crash");
-    this.cancelControl(entry, "renderer process gone", null);
     this.invalidateOverlaySnapshot(entry, "render-process-gone");
     this.setStatus(entry, "dead", detail);
     this.applyEntryVisibility(entry);
@@ -2212,10 +1963,7 @@ export class BrowserViewManager {
       });
   }
 
-  private handleFoundInPage(
-    entry: BrowserViewEntry,
-    result: BrowserViewFoundInPageResult,
-  ): void {
+  private handleFoundInPage(entry: BrowserViewEntry, result: Result): void {
     const session = entry.findState.sessionsByElectronRequestId.get(
       result.requestId,
     );
@@ -2234,8 +1982,8 @@ export class BrowserViewManager {
 
   private handleBeforeInputEvent(
     entry: BrowserViewEntry,
-    event: BrowserViewEvent,
-    input: BrowserViewInput,
+    event: Event,
+    input: Input,
   ): void {
     if (input.type !== "keyDown") return;
     // BT-302: reserved app chords win before the guest sees them. The chord
@@ -2244,11 +1992,9 @@ export class BrowserViewManager {
     const reserved = this.matchReservedChord(input);
     if (reserved !== null) {
       event.preventDefault();
-      this.handleNativeUserInput(entry, "reserved app chord");
       this.forwardReservedChordToHostWindow(entry, reserved);
       return;
     }
-    this.handleNativeUserInput(entry, "user took over");
     if (!(input.control || input.meta || input.shift || input.alt)) return;
     const step = browserZoomStepForKey(input.key);
     if (step === null) return;
@@ -2260,7 +2006,7 @@ export class BrowserViewManager {
     this.applyZoomStep(entry, step);
   }
 
-  private matchReservedChord(input: BrowserViewInput): ReservedChord | null {
+  private matchReservedChord(input: Input): ReservedChord | null {
     if (this.reservedChords.length === 0) return null;
     const event = reservedChordFromKeyEvent(
       {
@@ -2635,29 +2381,6 @@ export class BrowserViewManager {
       onDetached: (reason) => {
         this.handleDebugSessionDetached(entry, reason);
       },
-      onTargetAttached: (event) => {
-        if (entry.identity.kind === "native") {
-          this.notifyNativeTabCdpTargetAttached(
-            entry.identity.lifecycleOwnerWindowId,
-            {
-              ...entry.identity.key,
-              registrationId: entry.identity.registrationId,
-              cdpSessionId: event.sessionId,
-              targetId: event.targetId,
-              targetType: event.targetType,
-              url: event.url,
-              waitingForDebugger: event.waitingForDebugger,
-            },
-          );
-          return;
-        }
-        if (entry.surface !== null) {
-          this.notifyCdpTargetAttached(entry.surface.windowId, {
-            ...toTileKey(entry.surface),
-            ...event,
-          });
-        }
-      },
     });
     entry.debugSession = session;
     return session;
@@ -2666,26 +2389,15 @@ export class BrowserViewManager {
   /**
    * A tile's CDP debugger can detach for reasons outside our control - the
    * target being destroyed, a renderer crash, or an explicit
-   * `Target.detachFromTarget`/`Debugger.detach`. A detached debugger means
-   * whatever was driving the tile has a stale view of it, so detach must end
-   * that access rather than only be logged (ticket 03). This is generic
-   * across both consumers of `BrowserViewManager`: the visible tile's T18
-   * control grant (if one is active) is revoked through the same path
-   * user-initiated cancellation already uses, and the agent tile's CDP
-   * bridge is notified so the host can fail fast instead of discovering the
-   * detach lazily on the next dispatch. `BrowserDebugSession` re-attaches on
-   * the next committed navigation on its own; this only closes the gap in
-   * between.
+   * `Debugger.detach`. BrowserDebugSession synchronously drops its ready
+   * state; the next native ensure or CDP dispatch reattaches and enables
+   * domains before using the existing incarnation.
    *
    * Verified 2026-07-28, live: opening DevTools does NOT trigger this path
    * on Electron 42.7.1/Chromium 148 - `webContents.debugger.attach()` and
    * `openDevTools()` coexist there (confirmed via a real `devtools://`
    * target plus 8s of post-open polling with no detach, twice, independent
-   * tile keys). That is a design upgrade, not a gap: a user can open
-   * DevTools to watch the agent drive without ending its access, and
-   * revocation still has its own paths (`revokeControl`, `releaseTile`). Do
-   * not cite DevTools-open as a trigger for this path; it remains correct
-   * for the causes above.
+   * tile keys). A user can therefore open DevTools while an agent drives.
    */
   private handleDebugSessionDetached(
     entry: BrowserViewEntry,
@@ -2695,25 +2407,8 @@ export class BrowserViewManager {
       reason,
       webContentsId: entry.view.webContents.id,
     });
+    this.endAnnotationSession(entry, "crash");
     if (this.pipCaptureEntry === entry) this.stopPipCapture();
-    if (entry.control !== null) {
-      this.cancelControl(entry, `debugger detached: ${reason}`, null);
-    }
-    if (entry.identity.kind === "native") {
-      this.notifyNativeTabCdpSessionEnded(
-        entry.identity.lifecycleOwnerWindowId,
-        {
-          ...entry.identity.key,
-          registrationId: entry.identity.registrationId,
-          reason,
-        },
-      );
-    } else if (entry.surface !== null) {
-      this.notifyCdpSessionEnded(entry.surface.windowId, {
-        ...toTileKey(entry.surface),
-        reason,
-      });
-    }
   }
 
   private readDebugSnapshot(
@@ -2767,7 +2462,6 @@ export class BrowserViewManager {
     // invalidates the isolated world the overlay runs in.
     if (status !== "ready") {
       this.endAnnotationSession(entry, status === "dead" ? "crash" : "reload");
-      this.cancelControl(entry, reason ?? "browser tile is not ready", null);
     }
     entry.status = status;
     entry.statusReason = reason;
@@ -2792,7 +2486,7 @@ export class BrowserViewManager {
       zoomPercent,
     };
     if (entry.identity.kind === "native") {
-      this.notifyNativeTabStatus(entry.identity.lifecycleOwnerWindowId, {
+      this.notifyNativeTabStatus(entry.identity.lifecycleWindowId, {
         ...entry.identity.key,
         registrationId: entry.identity.registrationId,
         ...status,
@@ -3016,7 +2710,7 @@ export class BrowserViewManager {
     const webContents = window.webContents;
     if (webContents === null) return;
     const onNavigate = (
-      _event: BrowserViewEvent,
+      _event: Event,
       _url: string,
       isInPlace: boolean,
       isMainFrame: boolean,
@@ -3024,10 +2718,7 @@ export class BrowserViewManager {
       if (!isMainFrame || isInPlace) return;
       this.handleHostWindowRendererReset(windowId, "navigation", null);
     };
-    const onGone = (
-      _event: BrowserViewEvent,
-      details: BrowserViewRenderProcessGoneDetails,
-    ): void => {
+    const onGone = (_event: Event, details: RenderProcessGoneDetails): void => {
       this.handleHostWindowRendererReset(windowId, "crash", details.reason);
     };
     webContents.on("did-start-navigation", onNavigate);
@@ -3044,7 +2735,7 @@ export class BrowserViewManager {
       (entry) =>
         entry.surface?.windowId === windowId ||
         (entry.identity.kind === "native" &&
-          entry.identity.lifecycleOwnerWindowId === windowId),
+          entry.identity.lifecycleWindowId === windowId),
     );
     if (stillUsed) return;
     const listeners = this.hostWindowResetListenersByWindowId.get(windowId);
@@ -3063,7 +2754,7 @@ export class BrowserViewManager {
     for (const entry of this.entries.guestValues()) {
       if (
         entry.identity.kind !== "native" ||
-        entry.identity.lifecycleOwnerWindowId !== windowId ||
+        entry.identity.lifecycleWindowId !== windowId ||
         entry.identity.lifecycle.accepted
       ) {
         continue;
@@ -3240,10 +2931,8 @@ export class BrowserViewManager {
   private isEntryEvictionExempt(entry: BrowserViewEntry): boolean {
     if (entry.identity.kind === "native") return true;
     if (entry.overlayOwnerIds.length > 0) return true; // parked (BT-202)
-    if (entry.control !== null) return true; // agent holds control grant
     if (entry.annotationSession !== null) return true;
     if (this.pipCaptureEntry === entry) return true;
-    if (isAgentBrowserPostureActive(entry.view.webContents)) return true;
     return false;
   }
 
@@ -3398,7 +3087,6 @@ export class BrowserViewManager {
       status: entry.status,
     });
     this.destroyDevToolsWindow(entry);
-    this.cancelControl(entry, "browser tile closed", null);
     this.failPendingAnnotationAttachResultsForEntry(entry);
     this.entries.detachSurface(entry);
     if (surface !== null) {
@@ -3436,10 +3124,7 @@ export class BrowserViewManager {
         ? entry.identity.lifecycle.pendingHandoffCapture
         : null;
     if (pendingHandoffCapture !== null) {
-      await Promise.race([
-        pendingHandoffCapture,
-        delay(HANDOFF_CAPTURE_TIMEOUT_MS),
-      ]);
+      await pendingHandoffCapture;
     }
     const window =
       entry.parentWindowId === null
@@ -3451,9 +3136,6 @@ export class BrowserViewManager {
     this.cancelDebugSnapshot(entry);
     const webContents = entry.view.webContents;
     webContents.off("before-input-event", entry.listeners.beforeInputEvent);
-    webContents.off("input-event", entry.listeners.inputEvent);
-    webContents.off("context-menu", entry.listeners.contextMenu);
-    webContents.off("blur", entry.listeners.blur);
     webContents.off("did-create-window", entry.listeners.didCreateWindow);
     webContents.off("did-frame-navigate", entry.listeners.didFrameNavigate);
     webContents.off(
@@ -3478,7 +3160,7 @@ export class BrowserViewManager {
     this.entries.remove(entry);
     if (entry.identity.kind === "native") {
       this.detachHostWindowResetListenerIfUnused(
-        entry.identity.lifecycleOwnerWindowId,
+        entry.identity.lifecycleWindowId,
       );
     }
     log.info("[browser-view] view destroy requested", { keyId });
@@ -3514,10 +3196,6 @@ export class BrowserViewManager {
     });
   }
 
-  private handleNativeUserInput(entry: BrowserViewEntry, reason: string): void {
-    this.cancelControl(entry, reason, null);
-  }
-
   /**
    * Claims every still-live native tab in the same host session before the
    * first await, then captures one atomic handoff. The shared promise keeps
@@ -3551,6 +3229,7 @@ export class BrowserViewManager {
       entry: sibling,
       url: this.readHandoffUrl(sibling),
     }));
+    let delivered = false;
     try {
       const capturedStorageState = await this.captureHandoffStorageState(
         entry,
@@ -3574,7 +3253,7 @@ export class BrowserViewManager {
           };
         }),
       );
-      this.notifyElectronTabHandoff(identity.lifecycleOwnerWindowId, {
+      delivered = this.notifyElectronTabHandoff(identity.lifecycleWindowId, {
         ...identity.key,
         registrationId: identity.registrationId,
         capturedUrl,
@@ -3582,11 +3261,19 @@ export class BrowserViewManager {
         siblingTabs,
         reason,
       });
+      if (!delivered) {
+        throw new Error(
+          "Electron tab handoff could not be delivered to its renderer window.",
+        );
+      }
     } finally {
-      identity.lifecycle.finishHandoffCapture(aggregationPromise);
+      identity.lifecycle.finishHandoffCapture(aggregationPromise, delivered);
       for (const sibling of siblings) {
         if (sibling.identity.kind === "native") {
-          sibling.identity.lifecycle.finishHandoffCapture(aggregationPromise);
+          sibling.identity.lifecycle.finishHandoffCapture(
+            aggregationPromise,
+            delivered,
+          );
         }
       }
       resolveAggregation();
@@ -3627,35 +3314,6 @@ export class BrowserViewManager {
       return entry.currentUrl;
     }
   }
-
-  private cancelControl(
-    entry: BrowserViewEntry,
-    reason: string,
-    controlId: string | null,
-  ): void {
-    const control = entry.control;
-    if (control === null) return;
-    if (controlId !== null && !control.matches(controlId)) return;
-    control.cancel();
-    entry.control = null;
-    if (entry.surface === null) return;
-    this.notifyControlRevoked(entry.surface.windowId, {
-      ...entry.surface,
-      controlId: control.controlId,
-      reason,
-    });
-    log.info("[browser-view] visible tile control revoked", {
-      tileInstanceId: entry.surface.tileInstanceId,
-      controlId: control.controlId,
-      reason,
-    });
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function guestEntryKey(entry: BrowserViewEntry): string {
@@ -3848,331 +3506,4 @@ function parseCapturedDataUrl(dataUrl: string): {
     byteLength: bytes.byteLength,
     sha256: createHash("sha256").update(bytes).digest("hex"),
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Enumerated CDP dispatch. Each `BrowserViewCdpCommand` kind
- * maps to exactly one CDP method - deliberately not a generic
- * `sendCommand(method, params)` passthrough, so growth here always means
- * adding a case, never widening what a single case accepts.
- */
-async function sendCdpCommand(
-  browserDebugger: BrowserViewDebugger,
-  sessionId: string | undefined,
-  command: BrowserViewCdpCommand,
-): Promise<BrowserViewCdpResult> {
-  switch (command.kind) {
-    case "cdpNavigate": {
-      const value = await browserDebugger.sendCommand(
-        "Page.navigate",
-        { url: command.url },
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      return {
-        kind: "cdpNavigate",
-        ok: true,
-        frameId: stringOrNull(record.frameId),
-        loaderId: stringOrNull(record.loaderId),
-        errorText: stringOrNull(record.errorText),
-      };
-    }
-    case "cdpCaptureScreenshot": {
-      const params: Record<string, unknown> = { format: command.format };
-      if (command.quality !== null) params.quality = command.quality;
-      const value = await browserDebugger.sendCommand(
-        "Page.captureScreenshot",
-        params,
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      return {
-        kind: "cdpCaptureScreenshot",
-        ok: true,
-        dataBase64: stringOrNull(record.data) ?? "",
-      };
-    }
-    case "cdpGetFrameTree": {
-      const value = await browserDebugger.sendCommand(
-        "Page.getFrameTree",
-        {},
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      return {
-        kind: "cdpGetFrameTree",
-        ok: true,
-        frames: flattenFrameTree(record.frameTree),
-      };
-    }
-    case "cdpCreateIsolatedWorld": {
-      const value = await browserDebugger.sendCommand(
-        "Page.createIsolatedWorld",
-        {
-          frameId: command.frameId,
-          worldName: command.worldName,
-          grantUniveralAccess: command.grantUniversalAccess,
-        },
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      return {
-        kind: "cdpCreateIsolatedWorld",
-        ok: true,
-        executionContextId: numberOrNull(record.executionContextId),
-      };
-    }
-    case "cdpEvaluate": {
-      const params: Record<string, unknown> = {
-        expression: command.expression,
-        awaitPromise: command.awaitPromise,
-        returnByValue: command.returnByValue,
-      };
-      if (command.contextId !== null) params.contextId = command.contextId;
-      const value = await browserDebugger.sendCommand(
-        "Runtime.evaluate",
-        params,
-        sessionId,
-      );
-      return remoteObjectResult("cdpEvaluate", value);
-    }
-    case "cdpCallFunctionOn": {
-      const params: Record<string, unknown> = {
-        functionDeclaration: command.functionDeclaration,
-        returnByValue: command.returnByValue,
-      };
-      if (command.objectId !== null) params.objectId = command.objectId;
-      if (command.executionContextId !== null) {
-        params.executionContextId = command.executionContextId;
-      }
-      if (command.argumentsJson !== null) {
-        params.arguments = command.argumentsJson;
-      }
-      const value = await browserDebugger.sendCommand(
-        "Runtime.callFunctionOn",
-        params,
-        sessionId,
-      );
-      return remoteObjectResult("cdpCallFunctionOn", value);
-    }
-    case "cdpReleaseObject": {
-      await browserDebugger.sendCommand(
-        "Runtime.releaseObject",
-        { objectId: command.objectId },
-        sessionId,
-      );
-      return { kind: "cdpReleaseObject", ok: true };
-    }
-    case "cdpDispatchMouseEvent": {
-      const params: Record<string, unknown> = {
-        type: command.type,
-        x: command.x,
-        y: command.y,
-      };
-      if (command.button !== null) params.button = command.button;
-      if (command.clickCount !== null) params.clickCount = command.clickCount;
-      if (command.deltaX !== null) params.deltaX = command.deltaX;
-      if (command.deltaY !== null) params.deltaY = command.deltaY;
-      await browserDebugger.sendCommand(
-        "Input.dispatchMouseEvent",
-        params,
-        sessionId,
-      );
-      return { kind: "cdpDispatchMouseEvent", ok: true };
-    }
-    case "cdpInsertText": {
-      await browserDebugger.sendCommand(
-        "Input.insertText",
-        { text: command.text },
-        sessionId,
-      );
-      return { kind: "cdpInsertText", ok: true };
-    }
-    case "cdpDispatchKeyEvent": {
-      const params: Record<string, unknown> = { type: command.type };
-      if (command.key !== null) params.key = command.key;
-      if (command.code !== null) params.code = command.code;
-      if (command.text !== null) params.text = command.text;
-      if (command.modifiers !== null) params.modifiers = command.modifiers;
-      if (command.unmodifiedText !== null)
-        params.unmodifiedText = command.unmodifiedText;
-      if (command.windowsVirtualKeyCode !== null)
-        params.windowsVirtualKeyCode = command.windowsVirtualKeyCode;
-      if (command.location !== null) params.location = command.location;
-      if (command.isKeypad !== null) params.isKeypad = command.isKeypad;
-      if (command.autoRepeat !== null) params.autoRepeat = command.autoRepeat;
-      if (command.commands !== null) params.commands = command.commands;
-      await browserDebugger.sendCommand(
-        "Input.dispatchKeyEvent",
-        params,
-        sessionId,
-      );
-      return { kind: "cdpDispatchKeyEvent", ok: true };
-    }
-    case "cdpSetDeviceMetricsOverride": {
-      await browserDebugger.sendCommand(
-        "Emulation.setDeviceMetricsOverride",
-        {
-          width: command.width,
-          height: command.height,
-          deviceScaleFactor: command.deviceScaleFactor,
-          mobile: command.mobile,
-        },
-        sessionId,
-      );
-      return { kind: "cdpSetDeviceMetricsOverride", ok: true };
-    }
-    case "cdpSetAutoAttach": {
-      await browserDebugger.sendCommand(
-        "Target.setAutoAttach",
-        {
-          autoAttach: command.autoAttach,
-          flatten: true,
-          waitForDebuggerOnStart: command.waitForDebuggerOnStart,
-        },
-        sessionId,
-      );
-      return { kind: "cdpSetAutoAttach", ok: true };
-    }
-    case "cdpDescribeNode": {
-      const params: Record<string, unknown> = {
-        objectId: command.objectId,
-        pierce: command.pierce,
-      };
-      if (command.depth !== null) params.depth = command.depth;
-      const value = await browserDebugger.sendCommand(
-        "DOM.describeNode",
-        params,
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      const node = isRecord(record.node) ? record.node : null;
-      return {
-        kind: "cdpDescribeNode",
-        ok: true,
-        nodeId: node === null ? null : numberOrNull(node.nodeId),
-        backendNodeId: node === null ? null : numberOrNull(node.backendNodeId),
-        nodeName: node === null ? null : stringOrNull(node.nodeName),
-        frameId: node === null ? null : stringOrNull(node.frameId),
-      };
-    }
-    case "cdpGetFullAXTree": {
-      const params: Record<string, unknown> = {};
-      if (command.depth !== null) params.depth = command.depth;
-      const value = await browserDebugger.sendCommand(
-        "Accessibility.getFullAXTree",
-        params,
-        sessionId,
-      );
-      const record = isRecord(value) ? value : {};
-      return {
-        kind: "cdpGetFullAXTree",
-        ok: true,
-        nodesJson: record.nodes ?? null,
-      };
-    }
-    default: {
-      const exhaustive: never = command;
-      throw new Error(
-        `Unhandled browser CDP command: ${JSON.stringify(exhaustive)}`,
-      );
-    }
-  }
-}
-
-function remoteObjectResult(
-  kind: "cdpEvaluate" | "cdpCallFunctionOn",
-  value: unknown,
-): BrowserViewCdpResult {
-  const record = isRecord(value) ? value : {};
-  const result = isRecord(record.result) ? record.result : null;
-  const exceptionDetails = isRecord(record.exceptionDetails)
-    ? record.exceptionDetails
-    : null;
-  return {
-    kind,
-    ok: true,
-    resultJson: result === null ? null : (result.value ?? null),
-    objectId: result === null ? null : stringOrNull(result.objectId),
-    exceptionDescription:
-      exceptionDetails === null ? null : describeException(exceptionDetails),
-  };
-}
-
-/**
- * `exceptionDetails.text` alone is a generic CDP placeholder ("Uncaught" /
- * "Uncaught (in promise)") whenever the thrown/rejected value isn't itself an
- * `Error` with a message baked into that placeholder - a syntax error's real
- * reason lives only in `exceptionDetails.exception.description`, and a
- * rejected primitive (`Promise.reject("boom")`) has no `description` at all
- * and would otherwise vanish entirely behind the bare placeholder. Enriching
- * only when `text` is one of the known-generic placeholders leaves the
- * already-informative case (a thrown `Error`, whose `text` already includes
- * its message) untouched. Mirrors `traycer-host`'s
- * `playwright-cdp-dispatch.ts`'s `describeException` for the same CDP shape
- * on the other runtime - kept as a parallel implementation rather than a
- * shared one, per this module's cross-repo boundary with `traycer-host`.
- */
-const GENERIC_EXCEPTION_TEXT = new Set(["Uncaught", "Uncaught (in promise)"]);
-
-function describeException(exceptionDetails: Record<string, unknown>): string {
-  const text = stringOrNull(exceptionDetails.text) ?? "Uncaught exception";
-  if (!GENERIC_EXCEPTION_TEXT.has(text)) return text;
-  const exception = isRecord(exceptionDetails.exception)
-    ? exceptionDetails.exception
-    : null;
-  if (exception === null) return text;
-  const description = stringOrNull(exception.description);
-  if (description !== null) return `${text}: ${description}`;
-  if ("value" in exception)
-    return `${text}: ${JSON.stringify(exception.value)}`;
-  return text;
-}
-
-function flattenFrameTree(value: unknown): BrowserViewCdpFrameInfo[] {
-  const root = isRecord(value) ? value : null;
-  if (root === null) return [];
-  const out: BrowserViewCdpFrameInfo[] = [];
-  collectFrameTreeNode(root, out);
-  return out;
-}
-
-function collectFrameTreeNode(
-  node: Record<string, unknown>,
-  out: BrowserViewCdpFrameInfo[],
-): void {
-  const frame = isRecord(node.frame) ? node.frame : null;
-  if (frame !== null) {
-    out.push({
-      frameId: stringOrNull(frame.id) ?? "",
-      parentFrameId: stringOrNull(frame.parentId),
-      url: stringOrNull(frame.url) ?? "",
-      securityOrigin: stringOrNull(frame.securityOrigin),
-    });
-  }
-  const childFrames = Array.isArray(node.childFrames) ? node.childFrames : [];
-  for (const child of childFrames) {
-    if (isRecord(child)) collectFrameTreeNode(child, out);
-  }
-}
-
-function classifyCdpError(err: unknown): BrowserViewCdpErrorInfo {
-  const message = err instanceof Error ? err.message : String(err);
-  if (message.toLowerCase().includes("not attached")) {
-    return { kind: "not_attached", message, code: null };
-  }
-  const code = isRecord(err) && typeof err.code === "number" ? err.code : null;
-  return { kind: "cdp_error", message, code };
-}
-
-function stringOrNull(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
 }

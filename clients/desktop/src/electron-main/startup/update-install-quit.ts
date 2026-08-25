@@ -24,23 +24,6 @@ import { log } from "../app/logger";
 // so its value is directly assertable in a unit test, since actually waiting
 // out a multi-second drain isn't practical for a unit suite.
 export const QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS = 10_000;
-export const QUIT_BROWSER_HANDOFF_DRAIN_TIMEOUT_MS = 2_500;
-
-export async function drainBrowserHandoffsForQuit(
-  drain: () => Promise<void>,
-): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, QUIT_BROWSER_HANDOFF_DRAIN_TIMEOUT_MS);
-    void drain()
-      .catch((err) => {
-        log.warn("[desktop] browser handoff drain failed", err);
-      })
-      .finally(() => {
-        clearTimeout(timer);
-        resolve();
-      });
-  });
-}
 
 export interface UpdateInstallQuitDeps {
   // Bounded wait for whatever `HostController` mutation is CURRENTLY in

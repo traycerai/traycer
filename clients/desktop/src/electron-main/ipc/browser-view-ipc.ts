@@ -18,9 +18,11 @@ import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
   BrowserViewManager,
   scheduleBrowserViewDebugSnapshot,
-  type BrowserViewWindow,
-  type ManagedBrowserView,
 } from "../browser-view/browser-view-manager";
+import type {
+  BrowserViewWindow,
+  ManagedBrowserView,
+} from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../../ipc-contracts/reserved-chords";
 import { installBrowserViewManagerDebug } from "../browser-view/browser-view-manager-debug";
 import {
@@ -123,50 +125,8 @@ export function registerBrowserViewIpc(
         change,
       );
     },
-    notifyControlRevoked: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewControlRevoked,
-        change,
-      );
-    },
-    // Ticket 09: a visible tile CAN now be driven over the ticket-03 CDP
-    // bridge, as a *borrowed* tile the user asked the agent to drive, so
-    // these are real rather than the no-ops they were when the agent's own
-    // tile was the bridge's only consumer. The T18 control-grant revocation
-    // through `notifyControlRevoked` above still fires independently - the
-    // two mechanisms address the same tile but are separate surfaces, and a
-    // detached debugger has to end both.
-    notifyCdpSessionEnded: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewCdpSessionEnded,
-        change,
-      );
-    },
-    notifyCdpTargetAttached: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewCdpTargetAttached,
-        change,
-      );
-    },
-    notifyNativeTabCdpSessionEnded: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewNativeTabCdpSessionEnded,
-        change,
-      );
-    },
-    notifyNativeTabCdpTargetAttached: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewNativeTabCdpTargetAttached,
-        change,
-      );
-    },
     notifyElectronTabHandoff: (windowId, change) => {
-      bridge.safeSendToWindow(
+      return bridge.safeSendToWindow(
         windowId,
         RunnerHostEvent.browserViewElectronTabHandoff,
         change,
@@ -207,7 +167,10 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewUpsert, (event, payload) => {
     const windowId = readSenderWindowId(bridge, event);
-    manager.upsertTile(windowId, browserViewIpcPayload.tileUpsert.parse(payload));
+    manager.upsertTile(
+      windowId,
+      browserViewIpcPayload.tileUpsert.parse(payload),
+    );
   });
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
@@ -220,7 +183,9 @@ export function registerBrowserViewIpc(
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewAcceptTab,
     (_event, payload) =>
-      manager.acceptTab(browserViewIpcPayload.nativeTabCapability.parse(payload)),
+      manager.acceptTab(
+        browserViewIpcPayload.nativeTabCapability.parse(payload),
+      ),
   );
 
   bridge.handleInvoke(
@@ -490,39 +455,6 @@ export function registerBrowserViewIpc(
   );
 
   bridge.handleInvoke(
-    RunnerHostInvoke.browserViewControlGrant,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.grantControl(
-        windowId,
-        browserViewIpcPayload.controlGrant.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewControlRevoke,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.revokeControl(
-        windowId,
-        browserViewIpcPayload.controlRevoke.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewControlAction,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.executeControlAction(
-        windowId,
-        browserViewIpcPayload.controlAction.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
     RunnerHostInvoke.browserViewStartAnnotation,
     (event, payload) => {
       const windowId = readSenderWindowId(bridge, event);
@@ -573,20 +505,6 @@ export function registerBrowserViewIpc(
       manager.openDevTools(
         windowId,
         browserViewIpcPayload.tileKey.parse(payload),
-      );
-    },
-  );
-
-  // Borrowed-surface CDP remains presentation-keyed by design. Host-owned
-  // Electron tabs use browserViewElectronTabCdpDispatch above and never
-  // fall back through this route.
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewCdpDispatch,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.dispatchCdp(
-        windowId,
-        browserViewIpcPayload.cdpDispatch.parse(payload),
       );
     },
   );

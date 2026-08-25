@@ -26,12 +26,10 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
-  BrowserViewTileCdpDispatch,
   BrowserViewTileKey,
   BrowserViewNetworkEntry,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
-import type { BrowserCdpResult } from "@/lib/browser-view/browser-cdp-contract";
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 
 const TILE: BrowserViewTileKey = {
   viewTabId: "view-tab",
@@ -89,7 +87,7 @@ function snapshot(
 
 const disposable = { dispose: () => undefined };
 
-class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
+class FakeBrowserViewBridge implements BrowserViewBridge {
   private snapshotState = snapshot([], []);
   private readonly debugHandlers = new Set<
     (change: BrowserViewDebugSnapshotChange) => void
@@ -242,21 +240,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     });
   }
 
-  grantControl(input: { readonly controlId: string }) {
-    return Promise.resolve({
-      status: "granted" as const,
-      controlId: input.controlId,
-    });
-  }
-
-  revokeControl(): Promise<void> {
-    return Promise.resolve();
-  }
-
-  executeControlAction() {
-    return Promise.resolve({ status: "completed" as const, value: null });
-  }
-
   onStatusChange(_handler: (change: BrowserViewStatusChange) => void) {
     return disposable;
   }
@@ -296,35 +279,84 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     };
   }
 
-  dispatchCdp(_input: BrowserViewTileCdpDispatch): Promise<BrowserCdpResult> {
-    return Promise.resolve({
-      kind: "cdpGetFrameTree",
-      ok: false,
-      error: {
-        kind: "tile_not_found",
-        message: "Not used by this test.",
-        code: null,
-      },
-    });
-  }
-
-  onCdpSessionEnded() {
-    return disposable;
-  }
-
-  onCdpTargetAttached() {
-    return disposable;
-  }
-
-  onControlRevoked() {
-    return disposable;
-  }
-
   onAnnotationEvent() {
     return disposable;
   }
 
   onAnnotationAttached() {
+    return disposable;
+  }
+
+  setReservedChords(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  overlayPaintAck(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  capturePrimaryProfile() {
+    return Promise.resolve({
+      status: "unavailable" as const,
+      storageState: null,
+      reason: "test",
+    });
+  }
+
+  ensureTab() {
+    return Promise.resolve({
+      hostId: "host-test",
+      sessionId: "session-test",
+      tabId: "tab-test",
+      registrationId: "registration-test",
+    });
+  }
+
+  acceptTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  attachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  detachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  releaseTab(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  controlElectronTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispatchElectronTabCdp() {
+    return Promise.resolve({
+      kind: "cdpGetFrameTree" as const,
+      ok: true as const,
+      frames: [],
+    });
+  }
+
+  startPipCapture(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  stopPipCapture(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  onPipCaptureFrame() {
+    return disposable;
+  }
+
+  onNativeTabStatusChange() {
+    return disposable;
+  }
+
+  onElectronTabHandoff() {
     return disposable;
   }
 

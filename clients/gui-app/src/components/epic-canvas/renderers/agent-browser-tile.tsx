@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/visible-tile-registry";
@@ -20,33 +19,22 @@ import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/rend
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
 import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/browser-overlay-coordinator";
-import {
-  resolveDesktopBrowserViewBridge,
-  resolveDesktopElectronTabLifecycleBridge,
-  type BrowserViewStatus,
-  type BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+import type {
+  BrowserViewStatus,
+  BrowserViewTileKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/electron-tabs";
 import { openFreshBrowserTileFromBrowserPage } from "@/lib/browser-view/browser-link-routing-core";
-import { useBrowserTileControlState } from "@/lib/browser-view/browser-tile-control-store";
 import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
 
-/**
- * How long a tile can sit in `"loading"` before the placeholder stops
- * reading as "still connecting" and switches to "gave up, offer a way out."
- * The host has no typed timeout/failure status for this today (only
- * loading/ready/dead), so this is a client-side ceiling, not a host signal.
- */
-const AGENT_BROWSER_UNREACHABLE_TIMEOUT_MS = 12_000;
-
-export interface ElectronTabSurfaceNode {
+interface ElectronTabSurfaceNode {
   readonly id: string;
   readonly instanceId: string;
   readonly name: string;
@@ -56,7 +44,7 @@ export interface ElectronTabSurfaceNode {
   readonly viewportPreset: string;
 }
 
-export interface ElectronTabSurfaceProps {
+interface ElectronTabSurfaceProps {
   readonly node: ElectronTabSurfaceNode;
   readonly binding: ElectronTabBinding;
   readonly viewTabId: string;
@@ -71,14 +59,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const hostId = props.binding.hostId;
   const runnerHost = useRunnerHost();
   const visible = useTileBodyVisible();
-  const browserView = useMemo(
-    () => resolveDesktopBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
-  const electronTabLifecycle = useMemo(
-    () => resolveDesktopElectronTabLifecycleBridge(runnerHost),
-    [runnerHost],
-  );
+  const browserView = runnerHost.browserView;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<BrowserViewStatus>("loading");
   const [statusReason, setStatusReason] = useState<string | null>(null);
@@ -96,8 +77,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     tabId: props.binding.tabId,
     visible,
   });
-  const [unreachable, setUnreachable] = useState(false);
-  const [retryNonce, setRetryNonce] = useState(0);
   const browserSessions = useMaybeBrowserSessionsContext();
   const epicId = useEpicCanvasStore(
     (state) => state.tabsById[props.viewTabId]?.epicId ?? null,
@@ -109,12 +88,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     (item) => item.tabId === props.binding.tabId,
   );
   const annotationDriverChatId = annotationTab?.drivenBy.at(-1)?.chatId ?? null;
-  const controlState = useBrowserTileControlState(props.node.instanceId);
-  const annotationPreferredChatId =
-    annotationDriverChatId ??
-    controlState.active?.chatId ??
-    controlState.pending?.chatId ??
-    null;
+  const annotationPreferredChatId = annotationDriverChatId;
 
   const tileKey = useMemo<BrowserViewTileKey>(
     () => ({
@@ -136,75 +110,44 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 
   const { status: effectiveStatus, reason: effectiveStatusReason } =
     effectiveAgentTileStatus(
-      browserView !== null && electronTabLifecycle !== null,
+      browserView !== null,
       surfaceError,
       status,
       statusReason,
     );
-
-  // The host reports only loading/ready/dead - no typed timeout, so a session
-  // that never activates sits in "loading" forever with nothing to tell the
-  // user apart "still connecting" from "never coming back." This ceiling
-  // makes that call locally: past it, the placeholder offers a way out.
-  // `unreachable` only reads as true while still loading (see
-  // `effectiveUnreachable` below), so leaving "loading" doesn't need its own
-  // reset here - only the timer firing needs to set state.
-  // ponytail: doesn't re-arm if the host bounces loading -> ready -> loading
-  // again without a Retry click in between (stale `unreachable` would read
-  // true immediately on the new attempt); add an explicit reset keyed off a
-  // fresh loading transition if that ever proves to happen in practice.
-  useEffect(() => {
-    if (status !== "loading") return;
-    const timer = window.setTimeout(() => {
-      setUnreachable(true);
-    }, AGENT_BROWSER_UNREACHABLE_TIMEOUT_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [status, retryNonce]);
-  const effectiveUnreachable = status === "loading" && unreachable;
 
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.paneId,
     props.node.instanceId,
   );
-  const retry = useCallback(() => {
-    setUnreachable(false);
-    setSurfaceError(null);
-    setStatus("loading");
-    setRetryNonce((current) => current + 1);
-  }, []);
-
   useEffect(() => {
-    if (electronTabLifecycle === null) return;
-    const subscription = electronTabLifecycle.onNativeTabStatusChange(
-      (change) => {
-        if (
-          change.hostId !== props.binding.hostId ||
-          change.sessionId !== props.binding.sessionId ||
-          change.tabId !== props.binding.tabId
-        ) {
-          return;
-        }
-        const current = attemptedNavigationRef.current;
-        if (!isStaleSettleBeforeEcho(current, change.status)) {
-          setStatus(change.status);
-          setStatusReason(change.reason);
-          setStatusUrl(change.url);
-          setCanGoBack(change.canGoBack);
-          setCanGoForward(change.canGoForward);
-          setZoomPercent(change.zoomPercent);
-        }
-        const next = nextAttemptedNavigationAfterStatus(current, change.status);
-        attemptedNavigationRef.current = next;
-      },
-    );
+    if (browserView === null) return;
+    const subscription = browserView.onNativeTabStatusChange((change) => {
+      if (
+        change.hostId !== props.binding.hostId ||
+        change.sessionId !== props.binding.sessionId ||
+        change.tabId !== props.binding.tabId
+      ) {
+        return;
+      }
+      const current = attemptedNavigationRef.current;
+      if (!isStaleSettleBeforeEcho(current, change.status)) {
+        setStatus(change.status);
+        setStatusReason(change.reason);
+        setStatusUrl(change.url);
+        setCanGoBack(change.canGoBack);
+        setCanGoForward(change.canGoForward);
+        setZoomPercent(change.zoomPercent);
+      }
+      const next = nextAttemptedNavigationAfterStatus(current, change.status);
+      attemptedNavigationRef.current = next;
+    });
     return () => {
       subscription.dispose();
     };
   }, [
-    electronTabLifecycle,
+    browserView,
     props.binding.hostId,
     props.binding.sessionId,
     props.binding.tabId,
@@ -311,7 +254,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     bindingId,
     props.binding.bindSurface,
     props.binding.registrationId,
-    retryNonce,
     tileKey,
   ]);
 
@@ -374,25 +316,14 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
             "absolute inset-0 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
             effectiveStatus === "ready" && "pointer-events-none opacity-0",
           )}
-          role={
-            effectiveStatus === "dead" || effectiveUnreachable
-              ? "alert"
-              : "status"
-          }
-          aria-live={
-            effectiveStatus === "dead" || effectiveUnreachable
-              ? "assertive"
-              : "polite"
-          }
-          aria-busy={effectiveStatus === "loading" && !effectiveUnreachable}
+          role={effectiveStatus === "dead" ? "alert" : "status"}
+          aria-live={effectiveStatus === "dead" ? "assertive" : "polite"}
+          aria-busy={effectiveStatus === "loading"}
         >
           <ElectronTabSurfaceStatus
             status={effectiveStatus}
             reason={effectiveStatusReason}
-            unreachable={effectiveUnreachable}
             hostId={hostId}
-            onRetry={retry}
-            onClose={closeCanvasTile}
           />
         </div>
         <BrowserViewSnapshotLayer snapshot={snapshot} />
@@ -413,17 +344,10 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
 interface ElectronTabSurfaceStatusProps {
   readonly status: BrowserViewStatus;
   readonly reason: string | null;
-  readonly unreachable: boolean;
   readonly hostId: string;
-  readonly onRetry: () => void;
-  readonly onClose: () => void;
 }
 
-/**
- * Splits the old single indefinite "Loading page" placeholder into states a
- * user can actually tell apart: still connecting (spinner), gave up waiting
- * (Retry/Close), or the native view is unavailable in this environment.
- */
+/** Shows only lifecycle states reported by the native browser owner. */
 function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
   if (props.status === "dead") {
     return (
@@ -432,34 +356,6 @@ function ElectronTabSurfaceStatus(props: ElectronTabSurfaceStatusProps) {
           Agent browser unavailable
         </div>
         <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
-      </>
-    );
-  }
-  if (props.status === "loading" && props.unreachable) {
-    return (
-      <>
-        <div className="text-ui-base font-medium">
-          This session&apos;s host isn&apos;t responding
-        </div>
-        <ElectronTabSurfaceReason reason={props.reason} hostId={props.hostId} />
-        <div className="flex flex-wrap justify-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={props.onRetry}
-          >
-            Retry
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={props.onClose}
-          >
-            Close tab
-          </Button>
-        </div>
       </>
     );
   }

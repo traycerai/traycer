@@ -151,6 +151,7 @@ function session(
     createdAt: 1,
     lastActivityAt: 2,
     ...overrides,
+    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
   };
 }
 
@@ -162,12 +163,8 @@ function sessionsState(
     inventoryReady: true,
     items,
     errorMessage: null,
-    routingChatId: null,
     retry: vi.fn(),
-    closeSession: vi.fn(),
     closeTab: vi.fn(() => Promise.resolve()),
-    requestPromoteState: vi.fn(),
-    requestLendStorage: vi.fn(),
   };
 }
 

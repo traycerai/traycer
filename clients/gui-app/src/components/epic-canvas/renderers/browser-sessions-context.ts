@@ -1,24 +1,5 @@
 import { createContext, useContext } from "react";
-import type {
-  BrowserSessionInfo,
-  BrowserSessionsClientFrame,
-  BrowserSessionsServerFrame,
-} from "@traycer/protocol/host/browser/contracts";
-
-type PromoteStateFrame = Extract<
-  BrowserSessionsServerFrame,
-  { readonly kind: "promoteState" }
->;
-
-type LendResultFrame = Extract<
-  BrowserSessionsServerFrame,
-  { readonly kind: "lendResult" }
->;
-
-type BrowserStorageLendPayload = Extract<
-  BrowserSessionsClientFrame,
-  { readonly kind: "lendStorage" }
->["storage"];
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 
 export type BrowserSessionsLifecycle =
   "connecting" | "live" | "reconnecting" | "closed" | "failed";
@@ -29,18 +10,8 @@ export interface BrowserSessionsState {
   readonly inventoryReady: boolean;
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
-  readonly routingChatId: string | null;
   readonly retry: () => void;
-  readonly closeSession: (sessionId: string) => void;
   readonly closeTab: (sessionId: string, tabId: string) => Promise<void>;
-  readonly requestPromoteState: (
-    sessionId: string,
-  ) => Promise<PromoteStateFrame>;
-  readonly requestLendStorage: (
-    sessionId: string,
-    origin: string,
-    storage: BrowserStorageLendPayload,
-  ) => Promise<LendResultFrame>;
 }
 
 export const BrowserSessionsContext =

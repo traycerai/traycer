@@ -5,9 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PerWindowSnapshot } from "../../../ipc-contracts/window-types";
 import { DesktopStateStore } from "../../windows/desktop-state-store";
 import {
-  QUIT_BROWSER_HANDOFF_DRAIN_TIMEOUT_MS,
   QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
-  drainBrowserHandoffsForQuit,
   runUpdateInstallQuitSequence,
 } from "../update-install-quit";
 
@@ -37,33 +35,6 @@ describe("QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS", () => {
   it("is bounded at 10 seconds, per the tech plan's quit-time drain exception", () => {
     expect(QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(10_000);
     expect(QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS).toBeGreaterThan(0);
-  });
-});
-
-describe("drainBrowserHandoffsForQuit", () => {
-  it("releases a hanging drain at QUIT_BROWSER_HANDOFF_DRAIN_TIMEOUT_MS", async () => {
-    vi.useFakeTimers();
-    try {
-      let settled = false;
-      const drain = drainBrowserHandoffsForQuit(
-        () => new Promise<void>(() => undefined),
-      ).then(() => {
-        settled = true;
-      });
-
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(
-        QUIT_BROWSER_HANDOFF_DRAIN_TIMEOUT_MS - 1,
-      );
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(drain).resolves.toBeUndefined();
-      expect(settled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 

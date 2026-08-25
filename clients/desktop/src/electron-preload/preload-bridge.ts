@@ -28,7 +28,6 @@ import {
 } from "./file-drops-bridge";
 import { buildZoomBridge } from "./zoom-bridge";
 import { buildBrowserViewBridge } from "./browser-view-bridge";
-import { buildPipCaptureBridge } from "./pip-capture-bridge";
 import {
   buildSelectionAuthorityBridge,
   buildSelectionFleetRefresh,
@@ -85,7 +84,6 @@ contextBridge.exposeInMainWorld("runnerHost", {
   power: buildPowerBridge(),
   ...buildZoomBridge(),
   ...buildBrowserViewBridge(),
-  ...buildPipCaptureBridge(),
   selectionAuthority: buildSelectionAuthorityBridge(),
   refreshSelectionFleet: buildSelectionFleetRefresh(),
   hostManagement: buildHostManagementBridge(),

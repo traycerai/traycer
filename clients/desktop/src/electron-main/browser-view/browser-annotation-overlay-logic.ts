@@ -7,7 +7,7 @@ import type {
 
 export const ANNOTATION_BUNDLE_ELEMENT_CAP = 30;
 export const ANNOTATION_BUNDLE_BYTE_BUDGET = 256_000;
-export const ANNOTATION_TINY_DRAG_PX = 4;
+const ANNOTATION_TINY_DRAG_PX = 4;
 export const ANNOTATION_STROKE_SIZE_PX = 4;
 export const ANNOTATION_STROKE_HALO_SIZE_PX = 8;
 
@@ -22,12 +22,10 @@ export function isAnnotationMode(
   );
 }
 
-export type AnnotationCssRect = BrowserAnnotationCssRect;
-
 export interface OverlayMarkModel {
   readonly id: string;
   readonly kind: BrowserAnnotationMarkKind;
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
   readonly selector: string | null;
   readonly elementKey: string | null;
 }
@@ -35,30 +33,30 @@ export interface OverlayMarkModel {
 export interface RegionCandidate {
   readonly id: string;
   readonly ancestorIds: readonly string[];
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
   readonly visible: boolean;
   readonly alreadyMarked: boolean;
 }
 
-export interface RegionResolveResult {
+interface RegionResolveResult {
   readonly selected: readonly RegionCandidate[];
   readonly refusedCount: number;
   readonly reason: "empty" | "capped" | "ok";
 }
 
-export interface CommentBoxPlacement {
+interface CommentBoxPlacement {
   readonly x: number;
   readonly y: number;
 }
 
-export type ElementMarkValidation = "ok" | "disconnected" | "hidden" | "moved";
+type ElementMarkValidation = "ok" | "disconnected" | "hidden" | "moved";
 
 export function normalizeDragRect(
   startX: number,
   startY: number,
   endX: number,
   endY: number,
-): AnnotationCssRect {
+): BrowserAnnotationCssRect {
   const x = Math.min(startX, endX);
   const y = Math.min(startY, endY);
   return {
@@ -69,21 +67,21 @@ export function normalizeDragRect(
   };
 }
 
-export function isTinyDrag(rect: AnnotationCssRect): boolean {
+export function isTinyDrag(rect: BrowserAnnotationCssRect): boolean {
   return (
     rect.width < ANNOTATION_TINY_DRAG_PX ||
     rect.height < ANNOTATION_TINY_DRAG_PX
   );
 }
 
-function rectArea(rect: AnnotationCssRect): number {
+function rectArea(rect: BrowserAnnotationCssRect): number {
   return Math.max(0, rect.width) * Math.max(0, rect.height);
 }
 
 function rectIntersection(
-  a: AnnotationCssRect,
-  b: AnnotationCssRect,
-): AnnotationCssRect | null {
+  a: BrowserAnnotationCssRect,
+  b: BrowserAnnotationCssRect,
+): BrowserAnnotationCssRect | null {
   const x = Math.max(a.x, b.x);
   const y = Math.max(a.y, b.y);
   const right = Math.min(a.x + a.width, b.x + b.width);
@@ -92,7 +90,11 @@ function rectIntersection(
   return { x, y, width: right - x, height: bottom - y };
 }
 
-function pointInRect(x: number, y: number, rect: AnnotationCssRect): boolean {
+function pointInRect(
+  x: number,
+  y: number,
+  rect: BrowserAnnotationCssRect,
+): boolean {
   return (
     x >= rect.x &&
     y >= rect.y &&
@@ -102,13 +104,13 @@ function pointInRect(x: number, y: number, rect: AnnotationCssRect): boolean {
 }
 
 export function rectsOverlap(
-  a: AnnotationCssRect,
-  b: AnnotationCssRect,
+  a: BrowserAnnotationCssRect,
+  b: BrowserAnnotationCssRect,
 ): boolean {
   return rectIntersection(a, b) !== null;
 }
 
-function centerOf(rect: AnnotationCssRect): { x: number; y: number } {
+function centerOf(rect: BrowserAnnotationCssRect): { x: number; y: number } {
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
 
@@ -117,8 +119,8 @@ function centerOf(rect: AnnotationCssRect): { x: number; y: number } {
  * of the candidate's area is inside the region.
  */
 function isContainedInRegion(
-  candidate: AnnotationCssRect,
-  region: AnnotationCssRect,
+  candidate: BrowserAnnotationCssRect,
+  region: BrowserAnnotationCssRect,
 ): boolean {
   const center = centerOf(candidate);
   if (!pointInRect(center.x, center.y, region)) return false;
@@ -131,7 +133,7 @@ function isContainedInRegion(
 
 function isVisibleRegionCandidate(input: {
   readonly visible: boolean;
-  readonly bounds: AnnotationCssRect;
+  readonly bounds: BrowserAnnotationCssRect;
 }): boolean {
   if (!input.visible) return false;
   return input.bounds.width >= 2 && input.bounds.height >= 2;
@@ -171,7 +173,7 @@ function sortSmallestFirst(
  */
 export function resolveRegionSelection(input: {
   readonly candidates: readonly RegionCandidate[];
-  readonly region: AnnotationCssRect;
+  readonly region: BrowserAnnotationCssRect;
   readonly existingElementCount: number;
   readonly elementCap: number;
 }): RegionResolveResult {
@@ -239,8 +241,8 @@ export function eraseNewestAtPoint(
 }
 
 export function unionRects(
-  rects: readonly AnnotationCssRect[],
-): AnnotationCssRect | null {
+  rects: readonly BrowserAnnotationCssRect[],
+): BrowserAnnotationCssRect | null {
   if (rects.length === 0) return null;
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -292,8 +294,8 @@ export function isElementVisuallyPresent(input: {
 export function validateElementMark(input: {
   readonly connected: boolean;
   readonly visible: boolean;
-  readonly currentBox: AnnotationCssRect;
-  readonly markBox: AnnotationCssRect;
+  readonly currentBox: BrowserAnnotationCssRect;
+  readonly markBox: BrowserAnnotationCssRect;
 }): ElementMarkValidation {
   if (!input.connected) return "disconnected";
   if (!input.visible) return "hidden";
@@ -332,7 +334,7 @@ export function applyByteBudget<T>(input: {
 export function strokeBoundsFromPoints(
   points: readonly { readonly x: number; readonly y: number }[],
   pad: number,
-): AnnotationCssRect | null {
+): BrowserAnnotationCssRect | null {
   const first = points[0];
   if (first === undefined) return null;
   let minX = Number.POSITIVE_INFINITY;
@@ -384,7 +386,7 @@ export function svgPathFromPolygon(
 }
 
 export function placeCommentBox(input: {
-  readonly union: AnnotationCssRect | null;
+  readonly union: BrowserAnnotationCssRect | null;
   readonly viewport: { readonly width: number; readonly height: number };
   readonly box: { readonly width: number; readonly height: number };
   readonly pillBottom: number;

@@ -1,15 +1,11 @@
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  useBrowserAnnotationSession,
-  type BrowserAnnotationSessionBridge,
-} from "@/hooks/browser/use-browser-annotation-session";
+import { useBrowserAnnotationSession } from "@/hooks/browser/use-browser-annotation-session";
 import type { AnnotationRoute } from "@/lib/browser-view/browser-annotation-router";
-import type {
-  BrowserAnnotationAttachResultInput,
-  BrowserAnnotationAttachedIpcEvent,
-} from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserAnnotationAttachedIpcEvent } from "@traycer-clients/shared/platform/browser-annotation";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
@@ -51,7 +47,7 @@ function attachedEvent(
   return { ...TILE, targetChatId, payload, pngBytes: png };
 }
 
-function sessionArgs(browserView: BrowserAnnotationSessionBridge) {
+function sessionArgs(browserView: BrowserViewBridge) {
   return {
     browserView,
     tileKey: TILE,
@@ -63,32 +59,42 @@ function sessionArgs(browserView: BrowserAnnotationSessionBridge) {
   };
 }
 
-type AttachReport = (
-  input: BrowserAnnotationAttachResultInput,
-) => Promise<void>;
-
 function createBridge(): {
-  readonly browserView: BrowserAnnotationSessionBridge;
+  readonly browserView: BrowserViewBridge;
   readonly attachedHandlers: Array<
     (change: BrowserAnnotationAttachedIpcEvent) => void
   >;
-  readonly report: AttachReport;
+  readonly report: BrowserViewBridge["reportAnnotationAttachResult"];
 } {
   const attachedHandlers: Array<
     (change: BrowserAnnotationAttachedIpcEvent) => void
   > = [];
-  const report: AttachReport = vi.fn(() => Promise.resolve());
-  const browserView: BrowserAnnotationSessionBridge = {
-    startAnnotation: () => Promise.resolve({ ok: true }),
-    cancelAnnotation: () => Promise.resolve(),
-    setAnnotationTargetChatLabel: () => Promise.resolve(),
-    reportAnnotationAttachResult: report,
-    onAnnotationEvent: () => ({ dispose: () => undefined }),
-    onAnnotationAttached: (handler) => {
-      attachedHandlers.push(handler);
-      return { dispose: () => undefined };
-    },
-  };
+  const report = vi.fn<BrowserViewBridge["reportAnnotationAttachResult"]>(() =>
+    Promise.resolve(),
+  );
+  const browserView = Object.assign(createFakeRunnerHost({}), {
+    browserView: new Proxy<Record<string, unknown>>(
+      {
+        startAnnotation: () => Promise.resolve({ ok: true }),
+        cancelAnnotation: () => Promise.resolve(),
+        setAnnotationTargetChatLabel: () => Promise.resolve(),
+        reportAnnotationAttachResult: report,
+        onAnnotationEvent: () => ({ dispose: () => undefined }),
+        onAnnotationAttached: (
+          handler: (change: BrowserAnnotationAttachedIpcEvent) => void,
+        ) => {
+          attachedHandlers.push(handler);
+          return { dispose: () => undefined };
+        },
+      },
+      {
+        get: (target, property) =>
+          Reflect.has(target, property)
+            ? Reflect.get(target, property)
+            : () => undefined,
+      },
+    ),
+  }).browserView;
   return { browserView, attachedHandlers, report };
 }
 

@@ -1,8 +1,8 @@
 import type {
   BrowserCdpCommand,
-  BrowserCdpError,
-  BrowserCdpFrameInfo,
   BrowserCdpResult,
+  BrowserCdpTarget,
+  BrowserScreencastServerFrame,
   BrowserStorageState,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
@@ -39,8 +39,6 @@ export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
   readonly seedStorageState: BrowserStorageState | null;
 }
 
-export type BrowserViewProvisionedTab = BrowserViewNativeTabCapability;
-
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
   readonly bindingId: string;
   readonly surface: BrowserViewTileKey;
@@ -51,26 +49,29 @@ export interface BrowserViewDetachSurface extends BrowserViewNativeTabCapability
   readonly bindingId: string;
 }
 
-export type BrowserViewReleaseTab = BrowserViewNativeTabCapability;
-
-export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
-  readonly action:
-    | { readonly kind: "navigate"; readonly url: string }
-    | { readonly kind: "reload" }
-    | { readonly kind: "goBack" }
-    | { readonly kind: "goForward" }
-    | {
-        readonly kind: "setViewportPreset";
-        readonly viewportPreset: BrowserViewViewportPresetId;
-      }
-    | { readonly kind: "zoomIn" }
-    | { readonly kind: "zoomOut" }
-    | { readonly kind: "resetZoom" }
-    | { readonly kind: "openDevTools" };
-};
+export interface PipCaptureStartInput extends BrowserViewNativeTabCapability {
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly quality: number;
+}
 
 export type BrowserViewElectronTabControlAction =
-  BrowserViewElectronTabControl["action"];
+  | { readonly kind: "navigate"; readonly url: string }
+  | { readonly kind: "reload" }
+  | { readonly kind: "goBack" }
+  | { readonly kind: "goForward" }
+  | {
+      readonly kind: "setViewportPreset";
+      readonly viewportPreset: BrowserViewViewportPresetId;
+    }
+  | { readonly kind: "zoomIn" }
+  | { readonly kind: "zoomOut" }
+  | { readonly kind: "resetZoom" }
+  | { readonly kind: "openDevTools" };
+
+export type BrowserViewElectronTabControl = BrowserViewNativeTabCapability & {
+  readonly action: BrowserViewElectronTabControlAction;
+};
 
 export interface BrowserViewBounds {
   readonly x: number;
@@ -124,7 +125,7 @@ export interface BrowserViewFindStop extends BrowserViewTileKey {
   readonly requestId: number;
 }
 
-export type BrowserViewFindStatus = "idle" | "searching" | "ready" | "error";
+type BrowserViewFindStatus = "idle" | "searching" | "ready" | "error";
 
 export interface BrowserViewFindChange extends BrowserViewTileKey {
   readonly requestId: number;
@@ -235,125 +236,12 @@ export type BrowserPrimaryProfileCaptureResult =
       readonly reason: string;
     };
 
-export interface BrowserViewControlGrant extends BrowserViewTileKey {
-  readonly controlId: string;
-  readonly chatId: string;
-  readonly agentRunId: string | null;
-  readonly agentLabel: string;
-  readonly origin: string;
-  readonly expiresAt: number;
-}
-
-export interface BrowserViewControlRevoke extends BrowserViewTileKey {
-  readonly controlId: string;
-  readonly reason: string;
-}
-
-export type BrowserViewControlActionCommand =
-  | {
-      readonly kind: "click";
-      readonly selector: string;
-    }
-  | {
-      readonly kind: "type";
-      readonly selector: string;
-      readonly text: string;
-    }
-  | {
-      readonly kind: "scroll";
-      readonly deltaX: number;
-      readonly deltaY: number;
-    }
-  | {
-      readonly kind: "navigate";
-      readonly url: string;
-    };
-
-export interface BrowserViewControlAction extends BrowserViewTileKey {
-  readonly controlId: string;
-  readonly actionId: string;
-  readonly sensitiveApprovalId: string | null;
-  readonly action: BrowserViewControlActionCommand;
-}
-
-export interface BrowserViewControlRevokedChange extends BrowserViewTileKey {
-  readonly controlId: string;
-  readonly reason: string;
-}
-
-export type BrowserViewControlGrantResult =
-  | { readonly status: "granted"; readonly controlId: string }
-  | { readonly status: "queued"; readonly controlId: string }
-  | { readonly status: "denied"; readonly reason: string };
-
-export type BrowserViewControlActionResult =
-  | { readonly status: "completed"; readonly value: unknown }
-  | {
-      readonly status: "needs-approval";
-      readonly approvalId: string;
-      readonly reason: string;
-    }
-  | { readonly status: "cancelled"; readonly reason: string }
-  | { readonly status: "denied"; readonly reason: string };
-
-export type BrowserViewCdpCommand = BrowserCdpCommand;
-
-export interface BrowserViewCdpDispatch extends BrowserViewTileKey {
-  readonly sessionId: string | null;
-  readonly command: BrowserViewCdpCommand;
-}
-
-/** Renderer name retained for compatibility; both address the same tile seam. */
-export type BrowserViewTileCdpDispatch = BrowserViewCdpDispatch;
-
 export interface BrowserViewElectronTabCdpDispatch extends BrowserViewNativeTabCapability {
-  /** Flattened child-target session; unrelated to the browser sessionId. */
-  readonly cdpSessionId: string | null;
-  readonly command: BrowserViewCdpCommand;
+  readonly target: BrowserCdpTarget;
+  readonly command: BrowserCdpCommand;
 }
 
-export type BrowserViewCdpFrameInfo = BrowserCdpFrameInfo;
-export type BrowserViewCdpErrorInfo = BrowserCdpError;
-export type BrowserViewCdpResult = BrowserCdpResult;
-
-export interface BrowserViewCdpSessionEndedChange extends BrowserViewTileKey {
-  readonly reason: string;
-}
-
-export type BrowserViewTileCdpSessionEndedChange =
-  BrowserViewCdpSessionEndedChange;
-
-export interface BrowserViewNativeTabCdpSessionEndedChange extends BrowserViewNativeTabCapability {
-  readonly reason: string;
-}
-
-/**
- * Push notification (electron-main -> renderer -> host), not a response to a
- * specific request - mirrors `BrowserViewCdpSessionEndedChange`'s shape.
- * Fired whenever CDP's own `Target.attachedToTarget` fires on the tile's
- * root session, so the host can discover a flattened child (OOPIF/worker)
- * session id to address further dispatches at.
- */
-export interface BrowserViewCdpTargetAttachedChange extends BrowserViewTileKey {
-  readonly sessionId: string;
-  readonly targetId: string;
-  readonly targetType: string;
-  readonly url: string;
-  readonly waitingForDebugger: boolean;
-}
-
-export type BrowserViewTileCdpTargetAttachedChange =
-  BrowserViewCdpTargetAttachedChange;
-
-export interface BrowserViewNativeTabCdpTargetAttachedChange extends BrowserViewNativeTabCapability {
-  readonly cdpSessionId: string;
-  readonly targetId: string;
-  readonly targetType: string;
-  readonly url: string;
-  readonly waitingForDebugger: boolean;
-}
-
-export interface BrowserViewElectronTabHandoffSibling {
+interface BrowserViewElectronTabHandoffSibling {
   readonly tabId: string;
   readonly registrationId: string;
   readonly url: string;
@@ -381,8 +269,8 @@ export type BrowserViewStorageStateApplyResult =
       readonly reason: BrowserCookieCryptoReason;
     };
 
-export type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
-export type BrowserCookiePersistence = "persistent" | "ephemeral";
+type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
+type BrowserCookiePersistence = "persistent" | "ephemeral";
 export type BrowserCookieStorageBackend =
   | "basic_text"
   | "gnome_libsecret"
@@ -482,7 +370,7 @@ export interface BrowserViewBridge {
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
   setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
   releaseTile(input: BrowserViewTileKey): Promise<void>;
-  setReservedChords?(tokens: readonly string[]): Promise<void>;
+  setReservedChords(tokens: readonly string[]): Promise<void>;
   reloadTile(input: BrowserViewTileKey): Promise<void>;
   goBack(input: BrowserViewTileKey): Promise<void>;
   goForward(input: BrowserViewTileKey): Promise<void>;
@@ -505,7 +393,7 @@ export interface BrowserViewBridge {
   setAnnotationTargetChatLabel(
     input: BrowserAnnotationSetTargetChatLabelInput,
   ): Promise<void>;
-  reportAnnotationAttachResult?(
+  reportAnnotationAttachResult(
     input: BrowserAnnotationAttachResultInput,
   ): Promise<void>;
   openDevTools(input: BrowserViewTileKey): Promise<void>;
@@ -517,26 +405,15 @@ export interface BrowserViewBridge {
   ): Promise<BrowserViewOverlayReleaseResult>;
   getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
   setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
-  /**
-   * BT-202 flicker fix: renderer confirms the replacement frame for
-   * `overlayId` is decoded and on screen; main then parks the native view.
-   * Capability-gated (older preloads lack it) — callers must guard.
-   */
-  readonly overlayPaintAck?: (overlayId: string) => Promise<void>;
+  /** Renderer confirms the replacement frame is painted before main parks the view. */
+  readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   applyStorageState(
     input: BrowserViewStorageStateApply,
   ): Promise<BrowserViewStorageStateApplyResult>;
   captureStorageState(
     input: BrowserViewStorageStateCapture,
   ): Promise<BrowserViewStorageStateCaptureResult>;
-  capturePrimaryProfile?: () => Promise<BrowserPrimaryProfileCaptureResult>;
-  grantControl(
-    input: BrowserViewControlGrant,
-  ): Promise<BrowserViewControlGrantResult>;
-  revokeControl(input: BrowserViewControlRevoke): Promise<void>;
-  executeControlAction(
-    input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult>;
+  capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
   onStatusChange(handler: (change: BrowserViewStatusChange) => void): {
     dispose: () => void;
   };
@@ -564,23 +441,6 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
-  /** Typed CDP bridge shared by every host-registered Electron tab. */
-  dispatchCdp(input: BrowserViewTileCdpDispatch): Promise<BrowserViewCdpResult>;
-  onCdpSessionEnded(
-    handler: (change: BrowserViewTileCdpSessionEndedChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onCdpTargetAttached(
-    handler: (change: BrowserViewTileCdpTargetAttachedChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onControlRevoked(
-    handler: (change: BrowserViewControlRevokedChange) => void,
-  ): {
-    dispose: () => void;
-  };
   onAnnotationEvent(
     handler: (change: BrowserAnnotationSessionIpcEvent) => void,
   ): {
@@ -591,27 +451,27 @@ export interface BrowserViewBridge {
   ): {
     dispose: () => void;
   };
-}
-
-/** Complete native-tab lifecycle capability. It is never inferred from the general tile bridge. */
-export interface BrowserViewElectronTabLifecycleBridge {
-  ensureTab(input: BrowserViewEnsureTab): Promise<BrowserViewProvisionedTab>;
+  ensureTab(
+    input: BrowserViewEnsureTab,
+  ): Promise<BrowserViewNativeTabCapability>;
   acceptTab(input: BrowserViewNativeTabCapability): Promise<void>;
   attachSurface(input: BrowserViewAttachSurface): Promise<void>;
   detachSurface(input: BrowserViewDetachSurface): Promise<void>;
-  releaseTab(input: BrowserViewReleaseTab): Promise<boolean>;
+  releaseTab(input: BrowserViewNativeTabCapability): Promise<boolean>;
   controlElectronTab(input: BrowserViewElectronTabControl): Promise<void>;
   dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
-  ): Promise<BrowserViewCdpResult>;
+  ): Promise<BrowserCdpResult>;
+  startPipCapture(input: PipCaptureStartInput): Promise<void>;
+  stopPipCapture(): Promise<void>;
+  onPipCaptureFrame(
+    handler: (
+      frame: BrowserScreencastServerFrame,
+      jpegBytes: Uint8Array | null,
+    ) => void,
+  ): { dispose: () => void };
   onNativeTabStatusChange(
     handler: (change: BrowserViewNativeTabStatusChange) => void,
-  ): { dispose: () => void };
-  onNativeTabCdpSessionEnded(
-    handler: (change: BrowserViewNativeTabCdpSessionEndedChange) => void,
-  ): { dispose: () => void };
-  onNativeTabCdpTargetAttached(
-    handler: (change: BrowserViewNativeTabCdpTargetAttachedChange) => void,
   ): { dispose: () => void };
   onElectronTabHandoff(
     handler: (change: BrowserViewElectronTabHandoffChange) => void,

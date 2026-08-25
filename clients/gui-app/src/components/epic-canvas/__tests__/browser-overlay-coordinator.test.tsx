@@ -7,8 +7,6 @@ import {
   clearBrowserViewSnapshot,
   getBrowserViewSnapshot,
   registerBrowserOverlayTile,
-  resetBrowserOverlayCoordinatorForTests,
-  type BrowserOverlayRect,
 } from "@/lib/browser-view/browser-overlay-coordinator";
 import type {
   BrowserViewOverlayOcclusion,
@@ -18,12 +16,6 @@ import type {
   BrowserViewCertificateErrorChange,
   BrowserViewCertificateTrust,
   BrowserViewCapturePageResult,
-  BrowserViewControlAction,
-  BrowserViewControlActionResult,
-  BrowserViewControlGrant,
-  BrowserViewControlGrantResult,
-  BrowserViewControlRevokedChange,
-  BrowserViewControlRevoke,
   BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
   BrowserViewDebugSnapshotChange,
@@ -34,9 +26,8 @@ import type {
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
   BrowserViewTileKey,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
-import type { BrowserCdpResult } from "@/lib/browser-view/browser-cdp-contract";
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 const BASE_KEY: BrowserViewTileKey = {
@@ -46,7 +37,16 @@ const BASE_KEY: BrowserViewTileKey = {
   pageSessionId: "page-1",
 };
 
-class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
+const unregisterTiles = new Set<() => void>();
+
+function registerTestBrowserOverlayTile(input: {
+  readonly key: BrowserViewTileKey;
+  readonly rect: DOMRectReadOnly;
+}): void {
+  unregisterTiles.add(registerBrowserOverlayTile(input));
+}
+
+class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly occludeCalls: BrowserViewOverlayOcclusion[] = [];
   readonly releaseCalls: BrowserViewOverlayRelease[] = [];
   readonly paintAckCalls: string[] = [];
@@ -182,22 +182,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return Promise.resolve({ restoredTiles: [BASE_KEY] });
   }
 
-  grantControl(
-    input: BrowserViewControlGrant,
-  ): Promise<BrowserViewControlGrantResult> {
-    return Promise.resolve({ status: "granted", controlId: input.controlId });
-  }
-
-  revokeControl(_input: BrowserViewControlRevoke): Promise<void> {
-    return Promise.resolve();
-  }
-
-  executeControlAction(
-    _input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult> {
-    return Promise.resolve({ status: "completed", value: null });
-  }
-
   getCookieCryptoState(): Promise<{
     readonly mode: "real";
     readonly persistence: "persistent";
@@ -305,14 +289,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  onControlRevoked(
-    _handler: (change: BrowserViewControlRevokedChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
-  }
-
   onAnnotationEvent(): { dispose: () => void } {
     return { dispose: () => undefined };
   }
@@ -321,27 +297,72 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  // Ticket 09's borrowed-tile CDP members. This fake exists to exercise the
-  // overlay coordinator, which never drives a tile, so they are inert here -
-  // the borrowed-tile behaviour has its own tests rather than riding on this
-  // one's fake.
-  dispatchCdp(): Promise<BrowserCdpResult> {
+  setReservedChords(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  capturePrimaryProfile() {
     return Promise.resolve({
-      kind: "cdpGetFrameTree",
-      ok: false,
-      error: {
-        kind: "tile_not_found",
-        message: "Fake bridge does not dispatch CDP.",
-        code: null,
-      },
+      status: "unavailable" as const,
+      storageState: null,
+      reason: "test",
     });
   }
 
-  onCdpSessionEnded(): { dispose: () => void } {
+  ensureTab() {
+    return Promise.resolve({
+      hostId: "host-test",
+      sessionId: "session-test",
+      tabId: "tab-test",
+      registrationId: "registration-test",
+    });
+  }
+
+  acceptTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  attachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  detachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  releaseTab(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  controlElectronTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispatchElectronTabCdp() {
+    return Promise.resolve({
+      kind: "cdpGetFrameTree" as const,
+      ok: true as const,
+      frames: [],
+    });
+  }
+
+  startPipCapture(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  stopPipCapture(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  onPipCaptureFrame() {
     return { dispose: () => undefined };
   }
 
-  onCdpTargetAttached(): { dispose: () => void } {
+  onNativeTabStatusChange() {
+    return { dispose: () => undefined };
+  }
+
+  onElectronTabHandoff() {
     return { dispose: () => undefined };
   }
 
@@ -370,14 +391,15 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   afterEach(() => {
     cleanup();
+    unregisterTiles.forEach((unregister) => unregister());
+    unregisterTiles.clear();
     clearBrowserViewSnapshot(BASE_KEY);
-    resetBrowserOverlayCoordinatorForTests();
     vi.restoreAllMocks();
   });
 
   it("does not hide browser views for non-overlapping overlays", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -392,7 +414,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("occludes every overlapping overlay through the desktop bridge", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -437,7 +459,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("routes the registered overlay categories through one occlusion path", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -469,7 +491,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("measures Sonner's fixed toaster container as toast overlay geometry", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -488,7 +510,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("releases and clears snapshots when an overlay stops intersecting", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -515,7 +537,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("marks a rendered snapshot stale from desktop invalidation events", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -540,7 +562,7 @@ describe("<BrowserOverlayCoordinator />", () => {
 
   it("occludes through the native browser bridge", async () => {
     const bridge = new FakeBrowserViewBridge();
-    registerBrowserOverlayTile({
+    registerTestBrowserOverlayTile({
       key: BASE_KEY,
       rect: rect(0, 0, 100, 100),
     });
@@ -556,9 +578,7 @@ describe("<BrowserOverlayCoordinator />", () => {
   });
 });
 
-function renderBrowserOverlayCoordinator(
-  browserView: DesktopBrowserViewBridge,
-): void {
+function renderBrowserOverlayCoordinator(browserView: BrowserViewBridge): void {
   const runnerHost = Object.assign(
     new MockRunnerHost({
       signInUrl: "https://example.com",
@@ -580,7 +600,7 @@ function renderBrowserOverlayCoordinator(
 
 function appendOverlay(
   kind: string,
-  overlayRect: BrowserOverlayRect,
+  overlayRect: DOMRectReadOnly,
 ): HTMLElement {
   const element = document.createElement("div");
   element.setAttribute("data-browser-overlay", kind);
@@ -590,7 +610,7 @@ function appendOverlay(
   return element;
 }
 
-function appendSonnerToaster(overlayRect: BrowserOverlayRect): HTMLElement {
+function appendSonnerToaster(overlayRect: DOMRectReadOnly): HTMLElement {
   const element = document.createElement("ol");
   element.setAttribute("data-sonner-toaster", "");
   setElementRect(element, overlayRect);
@@ -600,11 +620,11 @@ function appendSonnerToaster(overlayRect: BrowserOverlayRect): HTMLElement {
 
 function setElementRect(
   element: HTMLElement,
-  overlayRect: BrowserOverlayRect,
+  overlayRect: DOMRectReadOnly,
 ): void {
   Object.defineProperty(element, "getBoundingClientRect", {
     configurable: true,
-    value: () => toDomRect(overlayRect),
+    value: () => overlayRect,
   });
 }
 
@@ -613,27 +633,16 @@ function rect(
   top: number,
   width: number,
   height: number,
-): BrowserOverlayRect {
+): DOMRectReadOnly {
   return {
+    x: left,
+    y: top,
     left,
     top,
     width,
     height,
     right: left + width,
     bottom: top + height,
-  };
-}
-
-function toDomRect(overlayRect: BrowserOverlayRect): DOMRect {
-  return {
-    x: overlayRect.left,
-    y: overlayRect.top,
-    width: overlayRect.width,
-    height: overlayRect.height,
-    top: overlayRect.top,
-    right: overlayRect.right,
-    bottom: overlayRect.bottom,
-    left: overlayRect.left,
     toJSON: () => ({}),
   };
 }

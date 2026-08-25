@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { Bug, Camera, Globe2, Send } from "lucide-react";
 import { toast } from "sonner";
 
@@ -14,14 +14,13 @@ import {
   requestBrowserContextAttachment,
   type BrowserContextAttachmentPayload,
 } from "@/lib/browser-view/browser-context-attachments";
-import {
-  type BrowserViewConsoleEntry,
-  type BrowserViewDebugSnapshotChange,
-  type BrowserViewNetworkEntry,
-  type BrowserViewTileKey,
-  type DesktopBrowserViewBridge,
-  resolveDesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+import type {
+  BrowserViewBridge,
+  BrowserViewConsoleEntry,
+  BrowserViewDebugSnapshotChange,
+  BrowserViewNetworkEntry,
+  BrowserViewTileKey,
+} from "@traycer-clients/shared/platform/browser-view";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isBrowserTileRef } from "@/stores/epics/canvas/types";
@@ -54,10 +53,7 @@ export function BrowserComposerContextChip(props: {
   readonly viewTabId: string;
 }) {
   const runnerHost = useRunnerHost();
-  const browserView = useMemo(
-    () => resolveDesktopBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
+  const browserView = runnerHost.browserView;
   const candidate = useEpicCanvasStore((state) =>
     selectStableBrowserContextCandidate(
       state.canvasByTabId[props.viewTabId] ?? null,
@@ -132,7 +128,7 @@ export function BrowserComposerContextChip(props: {
 }
 
 async function captureBrowserContext(
-  browserView: DesktopBrowserViewBridge,
+  browserView: BrowserViewBridge,
   candidate: BrowserContextCandidate,
   level: BrowserAttachLevel,
 ): Promise<BrowserContextAttachmentPayload> {

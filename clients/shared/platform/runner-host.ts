@@ -24,6 +24,7 @@ import type {
   HostGetInstallationInfoResponse,
   HostUpdateCheckResponse,
 } from "@traycer/protocol/host/maintenance/index";
+import type { BrowserViewBridge } from "./browser-view";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -60,6 +61,9 @@ export type { StoredCredentials } from "@traycer/protocol/config/credentials";
  * register it through module-level globals.
  */
 export interface IRunnerHost {
+  /** Complete native browser capability, or null on shells without one. */
+  readonly browserView: BrowserViewBridge | null;
+
   /**
    * Browser-safe sign-in URL the shell wants `gui-app` to open when the
    * user initiates auth. Shells embed their own callback scheme (custom

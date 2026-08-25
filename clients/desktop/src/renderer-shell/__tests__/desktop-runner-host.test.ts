@@ -586,15 +586,6 @@ function buildFakeBridge(
         mockKeychainEnabled: false,
       }),
       setLabsState: async () => undefined,
-      grantControl: async (input) => ({
-        status: "granted" as const,
-        controlId: input.controlId,
-      }),
-      revokeControl: async () => undefined,
-      executeControlAction: async () => ({
-        status: "completed" as const,
-        value: null,
-      }),
       onStatusChange: (_handler) => ({ dispose: () => undefined }),
       onFindChange: (_handler) => ({ dispose: () => undefined }),
       onDownloadChange: (_handler) => ({ dispose: () => undefined }),
@@ -602,30 +593,14 @@ function buildFakeBridge(
       onOpenTileRequest: (_handler) => ({ dispose: () => undefined }),
       onSnapshotInvalidated: (_handler) => ({ dispose: () => undefined }),
       onDebugSnapshotChange: (_handler) => ({ dispose: () => undefined }),
-      onControlRevoked: (_handler) => ({ dispose: () => undefined }),
       onAnnotationEvent: (_handler) => ({ dispose: () => undefined }),
       onAnnotationAttached: (_handler) => ({ dispose: () => undefined }),
-      dispatchCdp: async () => ({
-        kind: "cdpGetFrameTree" as const,
-        ok: true as const,
-        frames: [],
-      }),
+      startPipCapture: async () => undefined,
+      stopPipCapture: async () => undefined,
+      onPipCaptureFrame: (_handler) => ({ dispose: () => undefined }),
       onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
-      onNativeTabCdpSessionEnded: (_handler) => ({
-        dispose: () => undefined,
-      }),
-      onNativeTabCdpTargetAttached: (_handler) => ({
-        dispose: () => undefined,
-      }),
       onElectronTabHandoff: (_handler) => ({ dispose: () => undefined }),
-      onCdpSessionEnded: (_handler) => ({ dispose: () => undefined }),
-      onCdpTargetAttached: (_handler) => ({ dispose: () => undefined }),
       reportAnnotationAttachResult: async () => undefined,
-    },
-    pipCapture: {
-      start: async () => undefined,
-      stop: async () => undefined,
-      onFrame: (_handler) => ({ dispose: () => undefined }),
     },
     hostManagement: {
       getHostControllerStatus: async () => {

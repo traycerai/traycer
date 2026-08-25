@@ -10,7 +10,7 @@ import { createBrowserConsoleAttachment } from "@/lib/browser-view/browser-conte
 import type {
   BrowserViewConsoleEntry,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { markLandingDraftsReady } from "@/lib/composer/landing-image-gc";
 import {

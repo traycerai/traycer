@@ -1,10 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 
-import type { BrowserAnnotationAttachPayload } from "@/lib/browser-view/browser-annotation-attach";
-import {
-  attachBrowserAnnotation,
-  type AttachBrowserAnnotationResult,
-} from "@/lib/browser-view/browser-annotation-attach";
+import type { BrowserAnnotationAttachPayload } from "@traycer-clients/shared/platform/browser-annotation";
+import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
 
 const STUB_PNG_SIGNATURE = new Uint8Array([
@@ -87,9 +84,7 @@ export function createStubBrowserAnnotationPayloadFor(input: {
   return stubPayload(input);
 }
 
-export async function attachStubBrowserAnnotation(
-  chatId: string,
-): Promise<AttachBrowserAnnotationResult> {
+export async function attachStubBrowserAnnotation(chatId: string) {
   const stub = createStubBrowserAnnotationPayload();
   return attachBrowserAnnotation({
     chatId,

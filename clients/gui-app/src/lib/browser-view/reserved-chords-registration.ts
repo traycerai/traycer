@@ -14,27 +14,13 @@ const RESERVED_APP_CHORD_TOKENS: readonly string[] = [
   "mod+k", // app.palette.open
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
- * Push the reserved set into the desktop preload bridge when present.
+ * Push the reserved set into the complete desktop preload bridge when present.
  * Idempotent and HMR-safe: main REPLACES its whole set on every call, so a
  * re-registration after hot reload can never duplicate or drift.
  */
-export function registerReservedBrowserChords(
-  runnerHost: IRunnerHost,
-): void {
-  if (!isRecord(runnerHost)) return;
+export function registerReservedBrowserChords(runnerHost: IRunnerHost): void {
   const browserView = runnerHost.browserView;
-  if (!isRecord(browserView)) return;
-  const setter = browserView.setReservedChords;
-  if (typeof setter !== "function") return;
-  try {
-    const result = setter.call(browserView, RESERVED_APP_CHORD_TOKENS);
-    void Promise.resolve(result).catch(() => undefined);
-  } catch {
-    // A stale preload without this capability must never break startup.
-  }
+  if (browserView === null) return;
+  void browserView.setReservedChords(RESERVED_APP_CHORD_TOKENS).catch(() => {});
 }

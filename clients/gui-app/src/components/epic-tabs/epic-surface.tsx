@@ -1,5 +1,5 @@
 import { useMatch } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import {
@@ -11,16 +11,9 @@ import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/agent-tab-surfacing";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
-import { PipEpicSessionsFeed } from "@/lib/browser-view/use-pip-epic-sessions";
-import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-session-dock";
-import {
-  BrowserSessionsContext,
-  type BrowserSessionsState,
-} from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { useEpicChatRecords } from "@/lib/epic-selectors";
-import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 
-export interface EpicSurfaceProps {
+interface EpicSurfaceProps {
   readonly epicId: string;
   readonly tabId: string;
 }
@@ -58,7 +51,7 @@ export function EpicSurface(props: EpicSurfaceProps) {
     <PaneSurfaceActivityContext.Provider value={activity}>
       <PaneVisibilityContext.Provider value={activity.visible}>
         <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
-          <EpicBrowserSessionsScope epicId={props.epicId}>
+          <BrowserSessionsProvider epicId={props.epicId}>
             <EpicViewTabContext.Provider value={props.tabId}>
               <div
                 className="flex min-h-0 min-w-0 flex-1 flex-row"
@@ -79,72 +72,14 @@ export function EpicSurface(props: EpicSurfaceProps) {
                 </div>
               </div>
             </EpicViewTabContext.Provider>
-          </EpicBrowserSessionsScope>
-          <AgentBrowserPip
-            epicId={props.epicId}
-            viewTabId={props.tabId}
-            surfaceVisible={activity.visible}
-          />
+            <AgentBrowserPip
+              epicId={props.epicId}
+              viewTabId={props.tabId}
+              surfaceVisible={activity.visible}
+            />
+          </BrowserSessionsProvider>
         </EpicSessionProvider>
       </PaneVisibilityContext.Provider>
     </PaneSurfaceActivityContext.Provider>
-  );
-}
-
-const COLD_BROWSER_SESSIONS: BrowserSessionsState = {
-  lifecycle: "connecting",
-  inventoryReady: false,
-  items: [],
-  errorMessage: null,
-  routingChatId: null,
-  retry: () => undefined,
-  closeSession: () => undefined,
-  closeTab: () =>
-    Promise.reject(new Error("Browser sessions are not ready.")),
-  requestPromoteState: () =>
-    Promise.reject(new Error("Browser sessions are not ready.")),
-  requestLendStorage: () =>
-    Promise.reject(new Error("Browser sessions are not ready.")),
-};
-
-function EpicBrowserSessionsScope(props: {
-  readonly epicId: string;
-  readonly children: ReactNode;
-}) {
-  const epicHandle = useMaybeOpenEpicHandle();
-  if (epicHandle === null) {
-    return (
-      <BrowserSessionsContext.Provider value={COLD_BROWSER_SESSIONS}>
-        {props.children}
-      </BrowserSessionsContext.Provider>
-    );
-  }
-  return <ReadyEpicBrowserSessionsScope {...props} />;
-}
-
-function ReadyEpicBrowserSessionsScope(props: {
-  readonly epicId: string;
-  readonly children: ReactNode;
-}) {
-  const chats = useEpicChatRecords();
-  // The stream's chat id is transport routing metadata, not authorization.
-  // Lexicographic selection makes reconnects deterministic; if the chosen chat
-  // disappears, the next render reopens the one epic stream and Electron tabs
-  // re-register against the replacement route.
-  const routingChatId =
-    chats
-      .map((chat) => chat.id)
-      .toSorted((left, right) => left.localeCompare(right))[0] ?? null;
-  // Residual seam: a zero-chat epic cannot open browser.sessions because its
-  // current request schema requires chatId. The future fix is a nullable open
-  // chatId plus subscriber-id-based delivery for every routed response.
-  return (
-    <BrowserSessionsProvider
-      epicId={props.epicId}
-      routingChatId={routingChatId}
-    >
-      <PipEpicSessionsFeed epicId={props.epicId} />
-      {props.children}
-    </BrowserSessionsProvider>
   );
 }

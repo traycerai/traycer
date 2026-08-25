@@ -1,4 +1,4 @@
-import type { BrowserCookieCryptoState } from "@/lib/browser-view/desktop-browser-view";
+import type { BrowserCookieCryptoState } from "@traycer-clients/shared/platform/browser-view";
 
 export function browserCookieDegradedMessage(
   cryptoState: BrowserCookieCryptoState,

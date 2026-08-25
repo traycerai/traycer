@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
@@ -21,7 +21,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { resolveDesktopBrowserViewBridge } from "@/lib/browser-view/desktop-browser-view";
 import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
@@ -95,10 +94,7 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 
 export function GeneralSettingsPanel() {
   const runnerHost = useRunnerHost();
-  const browserView = useMemo(
-    () => resolveDesktopBrowserViewBridge(runnerHost),
-    [runnerHost],
-  );
+  const browserView = runnerHost.browserView;
   const browserCookieCryptoState = useBrowserCookieCryptoState(browserView);
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
@@ -529,9 +525,7 @@ interface AgentTabSurfacingModeSelectProps {
   readonly onValueChange: (value: AgentTabSurfacingMode) => void;
 }
 
-function AgentTabSurfacingModeSelect(
-  props: AgentTabSurfacingModeSelectProps,
-) {
+function AgentTabSurfacingModeSelect(props: AgentTabSurfacingModeSelectProps) {
   return (
     <Select
       value={props.value}

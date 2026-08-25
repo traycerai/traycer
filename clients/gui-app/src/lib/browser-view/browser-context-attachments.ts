@@ -4,7 +4,7 @@ import type {
   BrowserViewElementCapture,
   BrowserViewNetworkEntry,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserContextAttachmentWire } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";

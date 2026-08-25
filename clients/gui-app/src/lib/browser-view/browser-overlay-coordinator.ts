@@ -1,7 +1,7 @@
 import type {
   BrowserViewOverlaySnapshot,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
 
 export const BROWSER_VIEW_SURFACE_ATTRIBUTE = "data-browser-view-surface";
 
@@ -9,7 +9,7 @@ const BROWSER_OVERLAY_ATTRIBUTE = "data-browser-overlay";
 const BROWSER_OVERLAY_ID_ATTRIBUTE = "data-browser-overlay-id";
 const BROWSER_OVERLAY_IGNORE_ATTRIBUTE = "data-browser-overlay-ignore";
 
-export interface BrowserOverlayRect {
+interface BrowserOverlayRect {
   readonly left: number;
   readonly top: number;
   readonly right: number;
@@ -18,19 +18,19 @@ export interface BrowserOverlayRect {
   readonly height: number;
 }
 
-export interface BrowserOverlaySurface {
+interface BrowserOverlaySurface {
   readonly id: string;
   readonly kind: string;
   readonly rect: BrowserOverlayRect;
 }
 
-export interface BrowserOverlayTile {
+interface BrowserOverlayTile {
   readonly key: BrowserViewTileKey;
   readonly keyId: string;
   readonly rect: BrowserOverlayRect;
 }
 
-export interface BrowserOverlayOcclusionTarget {
+interface BrowserOverlayOcclusionTarget {
   readonly overlayId: string;
   readonly tiles: readonly BrowserViewTileKey[];
   readonly signature: string;
@@ -255,14 +255,6 @@ function rectsIntersect(
     first.top < second.bottom &&
     first.bottom > second.top
   );
-}
-
-export function resetBrowserOverlayCoordinatorForTests(): void {
-  tilesByKeyId.clear();
-  snapshotsByKeyId.clear();
-  layoutListeners.clear();
-  snapshotListenersByKeyId.clear();
-  nextOverlayId = 1;
 }
 
 function resolveOverlayElementId(element: HTMLElement): string {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   browserSessionsClientFrameSchema,
   browserSessionsServerFrameSchema,
-  browserStorageStateSchema,
 } from "@traycer/protocol/host/browser/contracts";
 
 const CAPTURE_REQUEST = {
@@ -11,16 +10,9 @@ const CAPTURE_REQUEST = {
   requestId: "req-capture-1",
 } as const;
 
-const CAPTURE_READY = {
-  kind: "primaryProfileCaptureReady",
-  hasBinaryPayload: false,
-  requestId: "req-ready-1",
-} as const;
-
 const ELECTRON_LIFECYCLE_READY = {
   kind: "electronTabLifecycleReady",
   hasBinaryPayload: false,
-  requestId: "req-electron-ready-1",
 } as const;
 
 const CAPTURED_RESPONSE = {
@@ -58,13 +50,7 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     ).toBe(true);
   });
 
-  it("parses primaryProfileCaptureReady client frames", () => {
-    expect(
-      browserSessionsClientFrameSchema.safeParse(CAPTURE_READY).success,
-    ).toBe(true);
-  });
-
-  it("advertises Electron lifecycle readiness independently of profile capture", () => {
+  it("advertises the complete Electron lifecycle capability", () => {
     expect(
       browserSessionsClientFrameSchema.safeParse(ELECTRON_LIFECYCLE_READY)
         .success,
@@ -87,17 +73,22 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
     }
   });
 
-  it("validates the semantic storage state independently of its opaque frame", () => {
+  it("validates storage state at the capture-frame boundary", () => {
     expect(
-      browserStorageStateSchema.safeParse(CAPTURED_RESPONSE.storageState)
-        .success,
+      browserSessionsClientFrameSchema.safeParse(CAPTURED_RESPONSE).success,
     ).toBe(true);
     expect(
-      browserStorageStateSchema.safeParse({
-        ...CAPTURED_RESPONSE.storageState,
-        cookies: [
-          { ...CAPTURED_RESPONSE.storageState.cookies[0], sameSite: "Invalid" },
-        ],
+      browserSessionsClientFrameSchema.safeParse({
+        ...CAPTURED_RESPONSE,
+        storageState: {
+          ...CAPTURED_RESPONSE.storageState,
+          cookies: [
+            {
+              ...CAPTURED_RESPONSE.storageState.cookies[0],
+              sameSite: "Invalid",
+            },
+          ],
+        },
       }).success,
     ).toBe(false);
   });
@@ -132,7 +123,6 @@ describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () =
       (option): string => String(option.shape.kind.def.values[0]),
     );
     expect(serverKinds).toContain("capturePrimaryProfile");
-    expect(clientKinds).toContain("primaryProfileCaptureReady");
     expect(clientKinds).toContain("electronTabLifecycleReady");
     expect(clientKinds).toContain("primaryProfileCaptured");
   });

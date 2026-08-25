@@ -5,6 +5,7 @@ import {
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
 
 /**
@@ -192,13 +193,7 @@ interface PreloadBridge {
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
   };
-  browserView: {
-    getCookieCryptoState(): Promise<unknown>;
-    setLabsState(input: unknown): Promise<void>;
-    applyStorageState(input: unknown): Promise<unknown>;
-    captureStorageState(input: unknown): Promise<unknown>;
-    capturePrimaryProfile(): Promise<unknown>;
-  };
+  browserView: BrowserViewBridge;
   service: {
     install(): Promise<void>;
     uninstall(purge: boolean): Promise<void>;
@@ -954,6 +949,9 @@ describe("preload new-capability wiring", () => {
     await expect(
       bridge.browserView.applyStorageState({
         storageState: { cookies: [], origins: [] },
+        sessionId: null,
+        tabId: null,
+        purpose: "sync-back",
       }),
     ).resolves.toEqual(replayResult);
     await expect(
@@ -975,7 +973,12 @@ describe("preload new-capability wiring", () => {
     );
     expect(invokeFn).toHaveBeenCalledWith(
       RunnerHostInvoke.browserViewStorageStateApply,
-      { storageState: { cookies: [], origins: [] } },
+      {
+        storageState: { cookies: [], origins: [] },
+        sessionId: null,
+        tabId: null,
+        purpose: "sync-back",
+      },
     );
     expect(invokeFn).toHaveBeenCalledWith(
       RunnerHostInvoke.browserViewStorageStateCapture,
@@ -1030,6 +1033,55 @@ describe("preload new-capability wiring", () => {
       RunnerHostInvoke.browserViewPrimaryProfileCapture,
     );
     expect(invokeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes native PiP capture through the browser view bridge", async () => {
+    const invokeFn = vi.fn(() => Promise.resolve(undefined));
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      maxWidth: 640,
+      maxHeight: 360,
+      quality: 70,
+    };
+    const frames: string[] = [];
+    const subscription = bridge.browserView.onPipCaptureFrame((frame) => {
+      frames.push(frame.kind);
+    });
+
+    await bridge.browserView.startPipCapture(input);
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    await bridge.browserView.stopPipCapture();
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.pipCaptureStart,
+      input,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.pipCaptureStop);
+    expect(frames).toEqual(["stalled"]);
   });
 });
 

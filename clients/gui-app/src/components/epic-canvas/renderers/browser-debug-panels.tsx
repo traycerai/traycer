@@ -17,12 +17,12 @@ import {
   type BrowserViewNetworkEntry,
   type BrowserViewStatus,
   type BrowserViewTileKey,
-  type DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+  type BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 import { cn } from "@/lib/utils";
 
 interface BrowserDebugPanelsProps {
-  readonly browserView: DesktopBrowserViewBridge | null;
+  readonly browserView: BrowserViewBridge | null;
   readonly tileKey: BrowserViewTileKey;
   readonly pageUrl: string;
   readonly status: BrowserViewStatus;

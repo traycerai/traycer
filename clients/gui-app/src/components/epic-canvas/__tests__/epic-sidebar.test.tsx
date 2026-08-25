@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { EpicLeftPanelHost } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { EpicLeftPanelRail } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
@@ -49,12 +50,8 @@ const browserPanelState = vi.hoisted(() => ({
     lifecycle: "live" as const,
     items: [],
     errorMessage: null,
-    routingChatId: null,
     retry: vi.fn(),
-    closeSession: vi.fn(),
     closeTab: vi.fn(() => Promise.resolve()),
-    requestPromoteState: vi.fn(),
-    requestLendStorage: vi.fn(),
   },
 }));
 
@@ -98,22 +95,24 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 
 vi.mock("@/stores/epics/canvas/store", () => ({
   useActiveEpicArtifactId: () => testState.activeArtifactId,
-  useEpicCanvasStore: (selector: (state: typeof browserCanvasState) => unknown) =>
-    selector(browserCanvasState),
+  useEpicCanvasStore: (
+    selector: (state: typeof browserCanvasState) => unknown,
+  ) => selector(browserCanvasState),
   findOpenArtifactInTab: () => null,
 }));
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => browserPanelState.value,
 }));
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
+  BrowserSessionsHostProvider: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
 
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
-  useEpicNestedFocusNavigation: () =>
-    (
-      _epicId: string,
-      _tabId: string,
-      prepare: () => unknown,
-    ) => prepare(),
+  useEpicNestedFocusNavigation:
+    () => (_epicId: string, _tabId: string, prepare: () => unknown) =>
+      prepare(),
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
@@ -139,6 +138,10 @@ vi.mock("@/lib/epic-selectors", () => ({
 // which is exactly the producer/consumer split the re-point fixed.
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => HOST_ID,
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostDirectoryEntryForHostId: () => ({ label: "Test host" }),
+  useHostClientForHostId: () => null,
 }));
 
 const EPIC_ID = "epic-sidebar-test";
@@ -747,12 +750,8 @@ describe("Browsers panel registration", () => {
       lifecycle: "live",
       items: [],
       errorMessage: null,
-      routingChatId: null,
       retry: vi.fn(),
-      closeSession: vi.fn(),
       closeTab: vi.fn(() => Promise.resolve()),
-      requestPromoteState: vi.fn(),
-      requestLendStorage: vi.fn(),
     };
     browserCanvasState.prepareOpenTileInTabFocusTarget.mockReset();
     browserCanvasState.prepareSetActiveTileTabFocusTarget.mockReset();
@@ -823,14 +822,16 @@ describe("Browsers panel registration", () => {
     expect(screen.getByTestId("epic-browsers-panel-empty")).toBeTruthy();
 
     act(() => {
-      useLeftPanelStore.getState().applyPanelGroups(
-        moveLeftPanelGroup(
-          useLeftPanelStore.getState().getPanelGroups(),
-          "terminals",
-          "browsers",
-          "combine",
-        ),
-      );
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups(
+          moveLeftPanelGroup(
+            useLeftPanelStore.getState().getPanelGroups(),
+            "terminals",
+            "browsers",
+            "combine",
+          ),
+        );
     });
     expect(
       screen
@@ -844,13 +845,20 @@ describe("Browsers panel registration", () => {
     ).toBe("epic-left-panel-sections");
 
     act(() => {
-      useLeftPanelStore.getState().applyPanelGroups(
-        moveLeftPanelGroup(DEFAULT_LEFT_PANEL_GROUPS, "browsers", "terminals", "before"),
-      );
+      useLeftPanelStore
+        .getState()
+        .applyPanelGroups(
+          moveLeftPanelGroup(
+            DEFAULT_LEFT_PANEL_GROUPS,
+            "browsers",
+            "terminals",
+            "before",
+          ),
+        );
     });
-    const reorderedRailIds = Array.from(screen.getByTestId("epic-sidebar-rail").children).map(
-      (child) => child.getAttribute("data-testid"),
-    );
+    const reorderedRailIds = Array.from(
+      screen.getByTestId("epic-sidebar-rail").children,
+    ).map((child) => child.getAttribute("data-testid"));
     expect(reorderedRailIds.indexOf("epic-rail-browsers")).toBeLessThan(
       reorderedRailIds.indexOf("epic-rail-terminals"),
     );

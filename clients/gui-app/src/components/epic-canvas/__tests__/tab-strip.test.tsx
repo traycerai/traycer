@@ -190,12 +190,8 @@ function browserSessionsState(
     inventoryReady: true,
     items,
     errorMessage: null,
-    routingChatId: "chat-1",
     retry: () => undefined,
-    closeSession: () => undefined,
     closeTab: () => Promise.resolve(),
-    requestPromoteState: () => Promise.reject(new Error("unused")),
-    requestLendStorage: () => Promise.reject(new Error("unused")),
   };
 }
 
@@ -332,6 +328,7 @@ describe("<TabStrip />", () => {
           createdBy: { chatId: "chat-1", agentRunId: "run-1" },
           createdAt: 1,
           lastActivityAt: 2,
+          runtime: { kind: "electron", revision: 0 },
           tabs: [
             {
               tabId: "browser-tab-1",

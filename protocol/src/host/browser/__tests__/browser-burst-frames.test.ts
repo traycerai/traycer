@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   browserScreencastOpenRequestSchema,
-  browserScreencastV10,
+  browserScreencastV1,
   browserSessionsServerFrameSchema,
   browserSessionsV1,
 } from "@traycer/protocol/host/browser/contracts";
@@ -42,9 +42,9 @@ describe("browser.sessions@1.0 burst and caption frames", () => {
     expect(
       browserSessionsV1.serverFrameSchema.safeParse(BURST_STARTED).success,
     ).toBe(true);
-    expect(browserSessionsServerFrameSchema.safeParse(BURST_ENDED).success).toBe(
-      true,
-    );
+    expect(
+      browserSessionsServerFrameSchema.safeParse(BURST_ENDED).success,
+    ).toBe(true);
     expect(browserSessionsServerFrameSchema.safeParse(CAPTION).success).toBe(
       true,
     );
@@ -81,7 +81,7 @@ describe("browser.sessions@1.0 burst and caption frames", () => {
     expect(sessions.latestMinor).toBe(0);
     expect(sessions.versions[0]?.contract).toBe(browserSessionsV1);
     expect(screencast.latestMinor).toBe(0);
-    expect(screencast.versions[0]?.contract).toBe(browserScreencastV10);
+    expect(screencast.versions[0]?.contract).toBe(browserScreencastV1);
   });
 });
 
@@ -96,9 +96,10 @@ describe("browser.screencast@1.0 viewer role", () => {
     format: "jpeg" as const,
   };
 
-  it("defaults an omitted role to tile", () => {
-    const parsed = browserScreencastOpenRequestSchema.parse(baseOpen);
-    expect(parsed.role).toBe("tile");
+  it("requires the caller to name its viewer role", () => {
+    expect(browserScreencastOpenRequestSchema.safeParse(baseOpen).success).toBe(
+      false,
+    );
   });
 
   it("accepts an explicit pip role", () => {

@@ -398,10 +398,9 @@ import {
   terminalSubscribeV15,
 } from "@traycer/protocol/host/terminal/contracts";
 import {
-  browserScreencastV10,
+  browserScreencastV1,
   browserSessionsV1,
 } from "@traycer/protocol/host/browser/contracts";
-import { browserStopAgentActivityV10 } from "@traycer/protocol/host/browser/stop-contract";
 import {
   terminalPlainCloseV10,
   terminalPlainCreateV10,
@@ -3475,8 +3474,7 @@ export const workspacePrepareFoldersUpgradeV11ToV12 = defineUpgradePath<
   to: workspacePrepareFoldersV12.schemaVersion,
   upgradeRequest: (request) => ({
     ...request,
-    bumpRecency:
-      request.operation === "recordRecentWorkspace" ? true : null,
+    bumpRecency: request.operation === "recordRecentWorkspace" ? true : null,
   }),
   upgradeResponse: (response) => response,
 });
@@ -4912,22 +4910,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: agentStopV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "browser.stopAgentActivity": {
-    // Ticket 12: a new method, not part of the host-v1.0.0 floor channel -
-    // an older host that predates it degrades to unsupported rather than
-    // needing a floor-channel fallback.
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: browserStopAgentActivityV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -7784,7 +7766,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: browserScreencastV10,
+          contract: browserScreencastV1,
         },
       },
     },

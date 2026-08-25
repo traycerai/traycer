@@ -19,7 +19,6 @@ import {
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 import type {
   BrowserCookieCryptoState,
-  BrowserViewControlAction,
   BrowserViewCapturePageResult,
   BrowserViewConsoleEntry,
   BrowserViewDebugSnapshotChange,
@@ -28,11 +27,11 @@ import type {
   BrowserViewFindStop,
   BrowserViewNetworkEntry,
   BrowserViewTileKey,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 
 const bridgeHarness = vi.hoisted<{
-  current: DesktopBrowserViewBridge | null;
+  current: BrowserViewBridge | null;
 }>(() => ({ current: null }));
 
 const canvasHarness = vi.hoisted<{
@@ -322,7 +321,7 @@ function canvasWithSiblingBrowser(): EpicCanvasState {
   };
 }
 
-interface FakeBridge extends DesktopBrowserViewBridge {
+interface FakeBridge extends BrowserViewBridge {
   readonly capturePageMock: Mock<() => Promise<BrowserViewCapturePageResult>>;
   readonly getDebugSnapshotMock: Mock<
     () => Promise<BrowserViewDebugSnapshotChange>
@@ -344,6 +343,8 @@ function createFakeBridge(): FakeBridge {
     setViewportPreset: vi.fn(() => Promise.resolve()),
     updateBounds: vi.fn(() => Promise.resolve()),
     releaseTile: vi.fn(() => Promise.resolve()),
+    setReservedChords: vi.fn(() => Promise.resolve()),
+    overlayPaintAck: vi.fn(() => Promise.resolve()),
     reloadTile: vi.fn(() => Promise.resolve()),
     goBack: vi.fn(() => Promise.resolve()),
     goForward: vi.fn(() => Promise.resolve()),
@@ -397,15 +398,12 @@ function createFakeBridge(): FakeBridge {
         localStorageReason: null,
       }),
     ),
-    grantControl: vi.fn((input: { readonly controlId: string }) =>
+    capturePrimaryProfile: vi.fn(() =>
       Promise.resolve({
-        status: "granted" as const,
-        controlId: input.controlId,
+        status: "unavailable" as const,
+        storageState: null,
+        reason: "test",
       }),
-    ),
-    revokeControl: vi.fn(() => Promise.resolve()),
-    executeControlAction: vi.fn((_input: BrowserViewControlAction) =>
-      Promise.resolve({ status: "completed" as const, value: null }),
     ),
     onStatusChange: vi.fn(() => ({ dispose: () => undefined })),
     onFindChange: vi.fn(() => ({ dispose: () => undefined })),
@@ -414,23 +412,32 @@ function createFakeBridge(): FakeBridge {
     onOpenTileRequest: vi.fn(() => ({ dispose: () => undefined })),
     onSnapshotInvalidated: vi.fn(() => ({ dispose: () => undefined })),
     onDebugSnapshotChange: vi.fn(() => ({ dispose: () => undefined })),
-    onControlRevoked: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationEvent: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationAttached: vi.fn(() => ({ dispose: () => undefined })),
-    // Ticket 09's borrowed-tile CDP members. Inert here - this fake exists
-    // for the composer context chip, which never drives a tile.
-    dispatchCdp: vi.fn(() =>
+    ensureTab: vi.fn((input) =>
       Promise.resolve({
-        kind: "cdpGetFrameTree" as const,
-        ok: false as const,
-        error: {
-          kind: "tile_not_found" as const,
-          message: "Fake bridge does not dispatch CDP.",
-          code: null,
-        },
+        hostId: input.hostId,
+        sessionId: input.sessionId,
+        tabId: input.tabId,
+        registrationId: `test:${input.tabId}`,
       }),
     ),
-    onCdpSessionEnded: vi.fn(() => ({ dispose: () => undefined })),
-    onCdpTargetAttached: vi.fn(() => ({ dispose: () => undefined })),
+    acceptTab: vi.fn(() => Promise.resolve()),
+    attachSurface: vi.fn(() => Promise.resolve()),
+    detachSurface: vi.fn(() => Promise.resolve()),
+    releaseTab: vi.fn(() => Promise.resolve(true)),
+    controlElectronTab: vi.fn(() => Promise.resolve()),
+    dispatchElectronTabCdp: vi.fn(() =>
+      Promise.resolve({
+        kind: "cdpGetFrameTree" as const,
+        ok: true as const,
+        frames: [],
+      }),
+    ),
+    startPipCapture: vi.fn(() => Promise.resolve()),
+    stopPipCapture: vi.fn(() => Promise.resolve()),
+    onPipCaptureFrame: vi.fn(() => ({ dispose: () => undefined })),
+    onNativeTabStatusChange: vi.fn(() => ({ dispose: () => undefined })),
+    onElectronTabHandoff: vi.fn(() => ({ dispose: () => undefined })),
   };
 }

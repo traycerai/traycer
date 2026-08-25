@@ -9,7 +9,8 @@ import {
 import type {
   BrowserViewBoundsUpdate,
   BrowserViewTileKey,
-} from "@/lib/browser-view/desktop-browser-view";
+} from "@traycer-clients/shared/platform/browser-view";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
 
 vi.mock("@/lib/browser-view/browser-overlay-coordinator", () => ({
   rectFromDomRect: (rect: {
@@ -135,17 +136,25 @@ function renderBridge(withBridge: boolean): Harness {
   );
   const surfaceRef: RefObject<HTMLDivElement | null> = { current: surface };
   const sentBounds: BrowserViewBoundsUpdate[] = [];
+  const browserView = Object.assign(createFakeRunnerHost({}), {
+    browserView: new Proxy<Record<string, unknown>>(
+      {
+        updateBounds: async (input: BrowserViewBoundsUpdate) => {
+          sentBounds.push(input);
+        },
+      },
+      {
+        get: (target, property) =>
+          Reflect.has(target, property)
+            ? Reflect.get(target, property)
+            : () => undefined,
+      },
+    ),
+  }).browserView;
 
   renderHook(() =>
     useBrowserViewBoundsBridge({
-      browserView:
-        withBridge === false
-          ? null
-          : {
-              updateBounds: async (input: BrowserViewBoundsUpdate) => {
-                sentBounds.push(input);
-              },
-            },
+      browserView: withBridge ? browserView : null,
       surfaceRef,
       tileKey: TILE_KEY,
       visible: true,

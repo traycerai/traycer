@@ -1243,7 +1243,6 @@ describe("WsStreamClient", () => {
 
     const sessionsSubscription = client.subscribe("browser.sessions", {
       epicId: "epic-1",
-      chatId: "chat-1",
     });
     const screencastSubscription = client.subscribe("browser.screencast", {
       epicId: "epic-1",

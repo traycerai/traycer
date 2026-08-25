@@ -35,7 +35,6 @@ import {
 } from "../ipc/host-management-ipc";
 import { onHostControllerStatusBroadcast } from "../ipc/host-controller-status-broadcast";
 import {
-  drainBrowserHandoffsForQuit,
   QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS,
   runUpdateInstallQuitSequence,
 } from "./update-install-quit";
@@ -1056,15 +1055,27 @@ function wireAppLifecycle(state: BootState, services: LifecycleServices): void {
   };
 
   const authorizeQuitAfterFlush = (): void => {
+    const browserHandoffDrain =
+      state.bridge?.drainBrowserHandoffs() ?? Promise.resolve();
     void Promise.all([
       flushShellState(),
-      drainBrowserHandoffsForQuit(
-        () => state.bridge?.drainBrowserHandoffs() ?? Promise.resolve(),
-      ),
-    ]).finally(() => {
-      quitAuthorized = true;
-      app.quit();
-    });
+      browserHandoffDrain.catch((error) => {
+        log.warn(
+          "[desktop] browser handoff drain failed - quitting anyway",
+          error,
+        );
+      }),
+    ])
+      .then(() => {
+        quitAuthorized = true;
+        app.quit();
+      })
+      .catch((error) => {
+        log.error(
+          "[desktop] failed to authorize quit after state flush",
+          error,
+        );
+      });
   };
 
   app.on("before-quit", (event) => {

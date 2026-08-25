@@ -5,33 +5,16 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
-import {
-  BrowserTile,
-  SENSITIVE_ACTION_APPROVAL_WINDOW_MS,
-} from "@/components/epic-canvas/renderers/browser-tile";
+import { BrowserTile } from "@/components/epic-canvas/renderers/browser-tile";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  activateBrowserTileControl,
-  publishBrowserTileControlActionRequest,
-  publishBrowserTileControlRequest,
-  resetBrowserTileControlStoreForTests,
-} from "@/lib/browser-view/browser-tile-control-store";
 import type {
   BrowserCookieCryptoState,
   BrowserViewCertificateErrorChange,
   BrowserViewCertificateTrust,
   BrowserViewCapturePageResult,
-  BrowserViewControlAction,
-  BrowserViewControlActionResult,
-  BrowserViewControlGrant,
-  BrowserViewControlGrantResult,
-  BrowserViewControlRevokedChange,
-  BrowserViewControlRevoke,
   BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
   BrowserViewDebugSnapshotChange,
@@ -45,21 +28,17 @@ import type {
   BrowserViewOverlayReleaseResult,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewStatusChange,
-  BrowserViewTileCdpDispatch,
-  BrowserViewTileCdpSessionEndedChange,
-  BrowserViewTileCdpTargetAttachedChange,
   BrowserViewTileKey,
   BrowserViewViewportPresetChange,
-  DesktopBrowserViewBridge,
-} from "@/lib/browser-view/desktop-browser-view";
-import type { BrowserCdpResult } from "@/lib/browser-view/browser-cdp-contract";
+  BrowserViewBridge,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { TILE_KIND_BROWSER } from "@/stores/epics/canvas/tile-kinds";
 import type { BrowserTileRef } from "@/stores/epics/canvas/types";
 
 const bridgeHarness = vi.hoisted<{
-  current: DesktopBrowserViewBridge | null;
+  current: BrowserViewBridge | null;
 }>(() => ({ current: null }));
 
 const updateBrowserTileDocumentMock = vi.hoisted(() => ({
@@ -199,7 +178,7 @@ const REAL_STATE: BrowserCookieCryptoState = {
   mockKeychainEnabled: false,
 };
 
-class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
+class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly findInPageCalls: BrowserViewFindRequest[] = [];
   readonly stopFindInPageCalls: BrowserViewFindStop[] = [];
   readonly cancelDownloadCalls: BrowserViewDownloadCancel[] = [];
@@ -209,13 +188,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   readonly resetZoomCalls: BrowserViewTileKey[] = [];
   readonly viewportPresetCalls: BrowserViewViewportPresetChange[] = [];
   readonly openDevToolsCalls: BrowserViewTileKey[] = [];
-  readonly grantControlCalls: BrowserViewControlGrant[] = [];
-  readonly revokeControlCalls: BrowserViewControlRevoke[] = [];
-  readonly controlActionCalls: BrowserViewControlAction[] = [];
-  readonly controlActionResults: BrowserViewControlActionResult[] = [];
-  // Ticket 09: recorded rather than inert, because "did a CDP dispatch
-  // actually reach this tile" is the question the borrowed-tile tests ask.
-  readonly cdpDispatchCalls: BrowserViewTileCdpDispatch[] = [];
   private readonly statusHandlers = new Set<
     (change: BrowserViewStatusChange) => void
   >();
@@ -230,15 +202,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
   >();
   private readonly openTileHandlers = new Set<
     (change: BrowserViewOpenTileRequest) => void
-  >();
-  private readonly controlRevokedHandlers = new Set<
-    (change: BrowserViewControlRevokedChange) => void
-  >();
-  private readonly cdpSessionEndedHandlers = new Set<
-    (change: BrowserViewTileCdpSessionEndedChange) => void
-  >();
-  private readonly cdpTargetAttachedHandlers = new Set<
-    (change: BrowserViewTileCdpTargetAttachedChange) => void
   >();
 
   constructor(private readonly cryptoState: BrowserCookieCryptoState) {}
@@ -406,27 +369,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     });
   }
 
-  grantControl(
-    input: BrowserViewControlGrant,
-  ): Promise<BrowserViewControlGrantResult> {
-    this.grantControlCalls.push(input);
-    return Promise.resolve({ status: "granted", controlId: input.controlId });
-  }
-
-  revokeControl(input: BrowserViewControlRevoke): Promise<void> {
-    this.revokeControlCalls.push(input);
-    return Promise.resolve();
-  }
-
-  executeControlAction(
-    input: BrowserViewControlAction,
-  ): Promise<BrowserViewControlActionResult> {
-    this.controlActionCalls.push(input);
-    return Promise.resolve(
-      this.controlActionResults.shift() ?? { status: "completed", value: null },
-    );
-  }
-
   onStatusChange(handler: (change: BrowserViewStatusChange) => void): {
     dispose: () => void;
   } {
@@ -500,19 +442,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  onControlRevoked(
-    handler: (change: BrowserViewControlRevokedChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    this.controlRevokedHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.controlRevokedHandlers.delete(handler);
-      },
-    };
-  }
-
   onAnnotationEvent(): { dispose: () => void } {
     return { dispose: () => undefined };
   }
@@ -521,8 +450,52 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     return { dispose: () => undefined };
   }
 
-  dispatchCdp(input: BrowserViewTileCdpDispatch): Promise<BrowserCdpResult> {
-    this.cdpDispatchCalls.push(input);
+  setReservedChords(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  overlayPaintAck(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  capturePrimaryProfile() {
+    return Promise.resolve({
+      status: "unavailable" as const,
+      storageState: null,
+      reason: "test",
+    });
+  }
+
+  ensureTab() {
+    return Promise.resolve({
+      hostId: "host-test",
+      sessionId: "session-test",
+      tabId: "tab-test",
+      registrationId: "registration-test",
+    });
+  }
+
+  acceptTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  attachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  detachSurface(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  releaseTab(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  controlElectronTab(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  dispatchElectronTabCdp() {
     return Promise.resolve({
       kind: "cdpGetFrameTree" as const,
       ok: true as const,
@@ -530,34 +503,24 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
     });
   }
 
-  onCdpSessionEnded(
-    handler: (change: BrowserViewTileCdpSessionEndedChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    this.cdpSessionEndedHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.cdpSessionEndedHandlers.delete(handler);
-      },
-    };
+  startPipCapture(): Promise<void> {
+    return Promise.resolve();
   }
 
-  onCdpTargetAttached(
-    handler: (change: BrowserViewTileCdpTargetAttachedChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    this.cdpTargetAttachedHandlers.add(handler);
-    return {
-      dispose: () => {
-        this.cdpTargetAttachedHandlers.delete(handler);
-      },
-    };
+  stopPipCapture(): Promise<void> {
+    return Promise.resolve();
   }
 
-  emitCdpSessionEnded(change: BrowserViewTileCdpSessionEndedChange): void {
-    this.cdpSessionEndedHandlers.forEach((handler) => handler(change));
+  onPipCaptureFrame() {
+    return { dispose: () => undefined };
+  }
+
+  onNativeTabStatusChange() {
+    return { dispose: () => undefined };
+  }
+
+  onElectronTabHandoff() {
+    return { dispose: () => undefined };
   }
 
   emitStatus(change: BrowserViewStatusChange): void {
@@ -578,10 +541,6 @@ class FakeBrowserViewBridge implements DesktopBrowserViewBridge {
 
   emitOpenTileRequest(change: BrowserViewOpenTileRequest): void {
     this.openTileHandlers.forEach((handler) => handler(change));
-  }
-
-  emitControlRevoked(change: BrowserViewControlRevokedChange): void {
-    this.controlRevokedHandlers.forEach((handler) => handler(change));
   }
 }
 
@@ -642,7 +601,6 @@ describe("<BrowserTile /> cookie crypto banner", () => {
 
   afterEach(() => {
     cleanup();
-    resetBrowserTileControlStoreForTests();
   });
 
   it("renders the degraded-mode ephemeral login banner pointing at the beta setting", async () => {
@@ -1079,517 +1037,5 @@ describe("<BrowserTile /> cookie crypto banner", () => {
       hostId: NODE.hostId,
       url: "https://docs.example/",
     });
-  });
-
-  it("executes granted visible tile actions through the desktop bridge and returns the stream result", async () => {
-    const bridge = new FakeBrowserViewBridge(REAL_STATE);
-    const sendFrame = vi.fn();
-    bridgeHarness.current = bridge;
-
-    renderBrowserTile(null, NODE);
-    const request = {
-      requestId: "control-request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "Agent One",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 1,
-      expiresAt: Date.now() + 60_000,
-      sendFrame,
-    };
-    const grant = {
-      grantId: "grant-1",
-      chatId: "chat-1",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      dataLevel: "control" as const,
-      expiresAt: request.expiresAt,
-    };
-    act(() => {
-      publishBrowserTileControlRequest(request);
-      activateBrowserTileControl({ request, grant });
-    });
-    await screen.findByText(/Agent One is controlling this browser/);
-    act(() => {
-      publishBrowserTileControlActionRequest({
-        requestId: "action-1",
-        grantId: "grant-1",
-        tileInstanceId: NODE.instanceId,
-        action: { kind: "scroll", deltaX: 0, deltaY: 120 },
-        sendFrame,
-      });
-    });
-
-    await waitFor(() => {
-      expect(bridge.controlActionCalls).toEqual([
-        {
-          ...tileKey(),
-          controlId: "control-request-1",
-          actionId: "action-1",
-          sensitiveApprovalId: null,
-          action: { kind: "scroll", deltaX: 0, deltaY: 120 },
-        },
-      ]);
-    });
-    expect(sendFrame).toHaveBeenCalledWith({
-      kind: "visibleTileControlActionResult",
-      hasBinaryPayload: false,
-      requestId: "action-1",
-      grantId: "grant-1",
-      ok: true,
-      reason: null,
-      value: null,
-    });
-  });
-
-  it("approves sensitive visible tile typing through a per-action prompt", async () => {
-    const bridge = new FakeBrowserViewBridge(REAL_STATE);
-    const sendFrame = vi.fn();
-    bridge.controlActionResults.push(
-      {
-        status: "needs-approval",
-        approvalId: "approval-1",
-        reason: "Typing into a password field requires explicit approval.",
-      },
-      { status: "completed", value: null },
-    );
-    bridgeHarness.current = bridge;
-
-    renderBrowserTile(null, NODE);
-    const request = {
-      requestId: "control-request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "Agent One",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 1,
-      expiresAt: Date.now() + 60_000,
-      sendFrame,
-    };
-    act(() => {
-      publishBrowserTileControlRequest(request);
-      activateBrowserTileControl({
-        request,
-        grant: {
-          grantId: "grant-1",
-          chatId: "chat-1",
-          tileInstanceId: NODE.instanceId,
-          origin: "http://localhost:3000",
-          dataLevel: "control",
-          expiresAt: request.expiresAt,
-        },
-      });
-    });
-    await screen.findByText(/Agent One is controlling this browser/);
-    act(() => {
-      publishBrowserTileControlActionRequest({
-        requestId: "action-password",
-        grantId: "grant-1",
-        tileInstanceId: NODE.instanceId,
-        action: {
-          kind: "type",
-          selector: "input[type=password]",
-          text: "secret",
-        },
-        sendFrame,
-      });
-    });
-
-    expect(
-      await screen.findByText("Sensitive browser typing requires approval"),
-    ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-
-    await waitFor(() => {
-      expect(bridge.controlActionCalls).toHaveLength(2);
-    });
-    expect(bridge.controlActionCalls[1]).toMatchObject({
-      actionId: "action-password",
-      sensitiveApprovalId: "approval-1",
-    });
-    expect(sendFrame).toHaveBeenCalledWith({
-      kind: "visibleTileControlActionResult",
-      hasBinaryPayload: false,
-      requestId: "action-password",
-      grantId: "grant-1",
-      ok: true,
-      reason: null,
-      value: null,
-    });
-  });
-
-  it("denies sensitive visible tile typing from the per-action prompt", async () => {
-    const bridge = new FakeBrowserViewBridge(REAL_STATE);
-    const sendFrame = vi.fn();
-    bridge.controlActionResults.push({
-      status: "needs-approval",
-      approvalId: "approval-1",
-      reason: "Typing into a password field requires explicit approval.",
-    });
-    bridgeHarness.current = bridge;
-
-    renderBrowserTile(null, NODE);
-    const request = {
-      requestId: "control-request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "Agent One",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 1,
-      expiresAt: Date.now() + 60_000,
-      sendFrame,
-    };
-    act(() => {
-      publishBrowserTileControlRequest(request);
-      activateBrowserTileControl({
-        request,
-        grant: {
-          grantId: "grant-1",
-          chatId: "chat-1",
-          tileInstanceId: NODE.instanceId,
-          origin: "http://localhost:3000",
-          dataLevel: "control",
-          expiresAt: request.expiresAt,
-        },
-      });
-    });
-    await screen.findByText(/Agent One is controlling this browser/);
-    act(() => {
-      publishBrowserTileControlActionRequest({
-        requestId: "action-password",
-        grantId: "grant-1",
-        tileInstanceId: NODE.instanceId,
-        action: {
-          kind: "type",
-          selector: "input[type=password]",
-          text: "secret",
-        },
-        sendFrame,
-      });
-    });
-    await screen.findByText("Sensitive browser typing requires approval");
-
-    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
-
-    expect(bridge.controlActionCalls).toHaveLength(1);
-    expect(sendFrame).toHaveBeenCalledWith({
-      kind: "visibleTileControlActionResult",
-      hasBinaryPayload: false,
-      requestId: "action-password",
-      grantId: "grant-1",
-      ok: false,
-      reason: "User denied sensitive browser action.",
-      value: null,
-    });
-  });
-
-  it("times out sensitive visible tile typing prompts", async () => {
-    const scheduledTimeouts: Array<{
-      readonly callback: () => void;
-      readonly delayMs: number;
-    }> = [];
-    const realSetTimeout = globalThis.setTimeout;
-    let setTimeoutSpy: { readonly mockRestore: () => void } | null = null;
-    let windowSetTimeoutSpy: { readonly mockRestore: () => void } | null = null;
-    const captureSensitiveTimeout = (
-      handler: TimerHandler,
-      timeout: number | undefined,
-    ): void => {
-      if (
-        typeof handler !== "function" ||
-        timeout === undefined ||
-        timeout < SENSITIVE_ACTION_APPROVAL_WINDOW_MS - 1_000
-      ) {
-        return;
-      }
-      scheduledTimeouts.push({
-        callback: () => {
-          Reflect.apply(handler, globalThis, []);
-        },
-        delayMs: timeout,
-      });
-    };
-    try {
-      const bridge = new FakeBrowserViewBridge(REAL_STATE);
-      const sendFrame = vi.fn();
-      bridge.controlActionResults.push({
-        status: "needs-approval",
-        approvalId: "approval-1",
-        reason: "Typing into a password field requires explicit approval.",
-      });
-      bridgeHarness.current = bridge;
-
-      renderBrowserTile(null, NODE);
-      const request = {
-        requestId: "control-request-1",
-        grantId: "grant-1",
-        chatId: "chat-1",
-        agentRunId: "agent-1",
-        agentLabel: "Agent One",
-        tileInstanceId: NODE.instanceId,
-        origin: "http://localhost:3000",
-        url: "http://localhost:3000/app",
-        requestedAt: 1,
-        expiresAt: Date.now() + 60_000,
-        sendFrame,
-      };
-      act(() => {
-        publishBrowserTileControlRequest(request);
-        activateBrowserTileControl({
-          request,
-          grant: {
-            grantId: "grant-1",
-            chatId: "chat-1",
-            tileInstanceId: NODE.instanceId,
-            origin: "http://localhost:3000",
-            dataLevel: "control",
-            expiresAt: request.expiresAt,
-          },
-        });
-      });
-      expect(document.body.textContent).toContain(
-        "Agent One is controlling this browser",
-      );
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, 0);
-      });
-      setTimeoutSpy = vi
-        .spyOn(globalThis, "setTimeout")
-        .mockImplementation(
-          (handler: TimerHandler, timeout: number | undefined) => {
-            const callback = (): void => {
-              if (typeof handler === "function") {
-                Reflect.apply(handler, globalThis, []);
-              }
-            };
-            captureSensitiveTimeout(callback, timeout);
-            return realSetTimeout(callback, timeout);
-          },
-        );
-      windowSetTimeoutSpy = vi
-        .spyOn(window, "setTimeout")
-        .mockImplementation(
-          (handler: TimerHandler, timeout: number | undefined) => {
-            const callback = (): void => {
-              if (typeof handler === "function") {
-                Reflect.apply(handler, globalThis, []);
-              }
-            };
-            captureSensitiveTimeout(callback, timeout);
-            return realSetTimeout(callback, timeout);
-          },
-        );
-      act(() => {
-        publishBrowserTileControlActionRequest({
-          requestId: "action-password",
-          grantId: "grant-1",
-          tileInstanceId: NODE.instanceId,
-          action: {
-            kind: "type",
-            selector: "input[type=password]",
-            text: "secret",
-          },
-          sendFrame,
-        });
-      });
-      expect(bridge.controlActionCalls).toHaveLength(1);
-      expect(
-        await screen.findByText("Sensitive browser typing requires approval"),
-      ).toBeTruthy();
-      await new Promise<void>((resolve) => {
-        realSetTimeout(resolve, 0);
-      });
-      const scheduledTimeout = scheduledTimeouts[0];
-      expect(scheduledTimeout.delayMs).toBeGreaterThanOrEqual(
-        SENSITIVE_ACTION_APPROVAL_WINDOW_MS - 1_000,
-      );
-      expect(scheduledTimeout.delayMs).toBeLessThanOrEqual(
-        SENSITIVE_ACTION_APPROVAL_WINDOW_MS,
-      );
-      act(() => {
-        scheduledTimeout.callback();
-      });
-      await Promise.resolve();
-
-      expect(sendFrame).toHaveBeenCalledWith({
-        kind: "visibleTileControlActionResult",
-        hasBinaryPayload: false,
-        requestId: "action-password",
-        grantId: "grant-1",
-        ok: false,
-        reason: "Timed out waiting for sensitive browser action approval.",
-        value: null,
-      });
-    } finally {
-      setTimeoutSpy?.mockRestore();
-      windowSetTimeoutSpy?.mockRestore();
-    }
-  });
-
-  it("rejects late Approve clicks after the local approval window without re-typing", async () => {
-    const bridge = new FakeBrowserViewBridge(REAL_STATE);
-    const sendFrame = vi.fn();
-    bridge.controlActionResults.push(
-      {
-        status: "needs-approval",
-        approvalId: "approval-1",
-        reason: "Typing into a password field requires explicit approval.",
-      },
-      { status: "completed", value: null },
-    );
-    bridgeHarness.current = bridge;
-
-    renderBrowserTile(null, NODE);
-    const request = {
-      requestId: "control-request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "Agent One",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 1,
-      expiresAt: Date.now() + 60_000,
-      sendFrame,
-    };
-    act(() => {
-      publishBrowserTileControlRequest(request);
-      activateBrowserTileControl({
-        request,
-        grant: {
-          grantId: "grant-1",
-          chatId: "chat-1",
-          tileInstanceId: NODE.instanceId,
-          origin: "http://localhost:3000",
-          dataLevel: "control",
-          expiresAt: request.expiresAt,
-        },
-      });
-    });
-    await screen.findByText(/Agent One is controlling this browser/);
-    act(() => {
-      publishBrowserTileControlActionRequest({
-        requestId: "action-password",
-        grantId: "grant-1",
-        tileInstanceId: NODE.instanceId,
-        action: {
-          kind: "type",
-          selector: "input[type=password]",
-          text: "secret",
-        },
-        sendFrame,
-      });
-    });
-    expect(
-      await screen.findByText("Sensitive browser typing requires approval"),
-    ).toBeTruthy();
-    expect(bridge.controlActionCalls).toHaveLength(1);
-    expect(bridge.controlActionCalls[0]?.sensitiveApprovalId).toBeNull();
-
-    // Move wall-clock past the prompt's expiresAt without firing the
-    // auto-expiry setTimeout, so this exercises approveSensitiveAction's
-    // click-time guard (not the useEffect timeout path).
-    const pastApprovalWindow =
-      Date.now() + SENSITIVE_ACTION_APPROVAL_WINDOW_MS + 1_000;
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockReturnValue(pastApprovalWindow);
-    try {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-
-      expect(bridge.controlActionCalls).toHaveLength(1);
-      expect(
-        bridge.controlActionCalls.some(
-          (call) => call.sensitiveApprovalId === "approval-1",
-        ),
-      ).toBe(false);
-      expect(sendFrame).toHaveBeenCalledWith({
-        kind: "visibleTileControlActionResult",
-        hasBinaryPayload: false,
-        requestId: "action-password",
-        grantId: "grant-1",
-        ok: false,
-        reason: "Sensitive browser action approval window expired.",
-        value: null,
-      });
-      expect(
-        screen.queryByText("Sensitive browser typing requires approval"),
-      ).toBeNull();
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-  });
-
-  it("notifies the host and clears active control when desktop revokes the lock", () => {
-    const bridge = new FakeBrowserViewBridge(REAL_STATE);
-    const sendFrame = vi.fn<(frame: BrowserSessionsClientFrame) => void>();
-    bridgeHarness.current = bridge;
-
-    renderBrowserTile(null, NODE);
-    const request = {
-      requestId: "control-request-1",
-      grantId: "grant-1",
-      chatId: "chat-1",
-      agentRunId: "agent-1",
-      agentLabel: "Agent One",
-      tileInstanceId: NODE.instanceId,
-      origin: "http://localhost:3000",
-      url: "http://localhost:3000/app",
-      requestedAt: 1,
-      expiresAt: Date.now() + 60_000,
-      sendFrame,
-    };
-    act(() => {
-      publishBrowserTileControlRequest(request);
-      activateBrowserTileControl({
-        request,
-        grant: {
-          grantId: "grant-1",
-          chatId: "chat-1",
-          tileInstanceId: NODE.instanceId,
-          origin: "http://localhost:3000",
-          dataLevel: "control",
-          expiresAt: request.expiresAt,
-        },
-      });
-    });
-    expect(
-      screen.getByText(/Agent One is controlling this browser/),
-    ).toBeTruthy();
-
-    act(() => {
-      bridge.emitControlRevoked({
-        ...tileKey(),
-        controlId: "control-request-1",
-        reason: "user took over",
-      });
-    });
-
-    expect(sendFrame).toHaveBeenCalledTimes(1);
-    const revokedFrame = sendFrame.mock.calls[0][0];
-    expect(revokedFrame).toMatchObject({
-      kind: "visibleTileControlRevoked",
-      hasBinaryPayload: false,
-      grantId: "grant-1",
-      tileInstanceId: NODE.instanceId,
-      reason: "user took over",
-    });
-    if (revokedFrame.kind !== "visibleTileControlRevoked") {
-      throw new Error("expected visible tile control revocation frame");
-    }
-    expect(typeof revokedFrame.requestId).toBe("string");
-    expect(
-      screen.queryByText(/Agent One is controlling this browser/),
-    ).toBeNull();
   });
 });

@@ -32,7 +32,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { BROWSER_TAB_AGENT_ACTIVITY_MS } from "@/lib/browser-view/browser-tab-display";
-import { resetPipStoreForTests } from "@/lib/browser-view/pip-store";
+import { dismissPip } from "@/lib/browser-view/pip-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
 
@@ -100,7 +100,7 @@ vi.mock("@/components/settings/host-scope/host-option-row", () => ({
   ),
 }));
 
-vi.mock("@/components/epic-canvas/renderers/browser-session-dock", () => ({
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   BrowserSessionsHostProvider: (props: {
     readonly hostId: string | null;
     readonly children: ReactNode;
@@ -131,15 +131,10 @@ vi.mock("@dnd-kit/core", () => ({
   },
 }));
 
-const closeSession = vi.fn<(sessionId: string) => void>();
 const closeTab = vi.fn<(sessionId: string, tabId: string) => Promise<void>>();
 const navigateNested = vi.fn(
   (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
 );
-
-function forwardCloseSession(sessionId: string): void {
-  closeSession(sessionId);
-}
 
 function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
   return closeTab(sessionId, tabId);
@@ -153,12 +148,8 @@ const sessionsState = vi.hoisted<{
     inventoryReady: true,
     items: [],
     errorMessage: null,
-    routingChatId: "chat-driver",
     retry: vi.fn(),
-    closeSession: forwardCloseSession,
     closeTab: forwardCloseTab,
-    requestPromoteState: vi.fn(),
-    requestLendStorage: vi.fn(),
   },
 }));
 
@@ -209,6 +200,7 @@ function session(
     createdAt: 1,
     lastActivityAt: 2,
     ...overrides,
+    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
   };
 }
 
@@ -237,7 +229,7 @@ function setLiveDrivenBy(drivenBy: readonly BrowserTabDriver[]): void {
   const first = current[0];
   const liveTab = first.tabs[0];
   replaceSessions([
-    { ...first, tabs: [{ ...liveTab, drivenBy }] },
+    { ...first, tabs: [{ ...liveTab, drivenBy: [...drivenBy] }] },
     ...current.slice(1),
   ]);
 }
@@ -268,7 +260,6 @@ describe("BrowsersPanelBody", () => {
     browserHostOptionsState.isLoading = false;
     browserHostOptionsState.listsFailed = false;
     browserHostOptionsState.retryLists.mockClear();
-    closeSession.mockReset();
     closeTab.mockReset();
     closeTab.mockResolvedValue(undefined);
     vi.mocked(toast.error).mockClear();
@@ -334,12 +325,8 @@ describe("BrowsersPanelBody", () => {
         }),
       ],
       errorMessage: null,
-      routingChatId: "chat-driver",
       retry: vi.fn(),
-      closeSession: forwardCloseSession,
       closeTab: forwardCloseTab,
-      requestPromoteState: vi.fn(),
-      requestLendStorage: vi.fn(),
     };
   });
 
@@ -347,7 +334,7 @@ describe("BrowsersPanelBody", () => {
     vi.useRealTimers();
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-    resetPipStoreForTests();
+    dismissPip("epic-1");
   });
 
   it("lists every tab as a flat peer row, with dormant styling and isolated-only badges", () => {
@@ -793,7 +780,6 @@ describe("BrowsersPanelBody", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close Live page" }));
     expect(closeTab).toHaveBeenCalledWith("sess-primary", "tab-live");
-    expect(closeSession).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(findOpenArtifactInTab("view-tab-1", pointer.id)).toBeNull();
     });
@@ -1078,13 +1064,13 @@ describe("BrowsersPanelBody", () => {
     expect(pendingClose.querySelector(".font-mono")).not.toBeNull();
     expect(pendingClose.querySelector(".lucide-x")).toBeNull();
     expect(findOpenArtifactInTab("view-tab-1", expected.id)).not.toBeNull();
-    expect(closeSession).not.toHaveBeenCalled();
     if (rejectClose === undefined) {
       throw new Error("expected pending close rejection");
     }
+    const rejectPendingClose = rejectClose;
 
     act(() => {
-      rejectClose(new Error("Browser sessions stream closed."));
+      rejectPendingClose(new Error("Browser sessions stream closed."));
     });
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
@@ -1278,12 +1264,8 @@ describe("BrowsersPanelActions", () => {
       inventoryReady: true,
       items: [],
       errorMessage: null,
-      routingChatId: null,
       retry: vi.fn(),
-      closeSession: forwardCloseSession,
       closeTab: forwardCloseTab,
-      requestPromoteState: vi.fn(),
-      requestLendStorage: vi.fn(),
     };
   });
 

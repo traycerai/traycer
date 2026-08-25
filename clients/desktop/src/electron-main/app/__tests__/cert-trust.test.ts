@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { Certificate, CertificatePrincipal } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserViewCertificateErrorChange } from "../../browser-view/browser-session";
+import type { BrowserSessionCertificateErrorChange } from "../../browser-view/browser-session";
 
 type CertificateErrorListener = (
   event: { readonly preventDefault: () => void },
@@ -140,7 +140,7 @@ describe("certificate trust routing", () => {
     const certTrust = await import("../cert-trust");
     const browserSession = await import("../../browser-view/browser-session");
     const webContents = new FakeTrackedWebContents(9);
-    const browserPending: BrowserViewCertificateErrorChange[] = [];
+    const browserPending: BrowserSessionCertificateErrorChange[] = [];
     const offBrowserPending = browserSession.onBrowserViewCertificateError(
       (change) => {
         browserPending.push(change);
@@ -228,7 +228,7 @@ describe("certificate trust routing", () => {
     const certTrust = await import("../cert-trust");
     const browserSession = await import("../../browser-view/browser-session");
     const webContents = new FakeTrackedWebContents(12);
-    const browserPending: BrowserViewCertificateErrorChange[] = [];
+    const browserPending: BrowserSessionCertificateErrorChange[] = [];
     const offBrowserPending = browserSession.onBrowserViewCertificateError(
       (change) => {
         browserPending.push(change);

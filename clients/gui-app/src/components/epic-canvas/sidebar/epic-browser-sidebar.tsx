@@ -62,7 +62,7 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { BrowserSessionsHostProvider } from "@/components/epic-canvas/renderers/browser-session-dock";
+import { BrowserSessionsHostProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { HostOptionRow } from "@/components/settings/host-scope/host-option-row";
 import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
@@ -376,7 +376,6 @@ function BrowserHostFilterChoices(props: { readonly surfaceKey: string }) {
 }
 
 export function BrowsersPanelBody(props: LeftPanelSlotProps) {
-  const currentSessions = useBrowserSessionsContext();
   const canvasHostId = useCanvasHostId();
   const surfaceKey = useTabSurfaceKey("browsers", props.tabId);
   const hostPin = useSurfaceHostPin(surfaceKey);
@@ -390,7 +389,6 @@ export function BrowsersPanelBody(props: LeftPanelSlotProps) {
       hostId={hostPin.resolvedHostId}
       hostClient={hostClient}
       epicId={props.epicId}
-      routingChatId={currentSessions.routingChatId}
     >
       {body}
     </BrowserSessionsHostProvider>

@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type Dispatch,
@@ -9,17 +8,13 @@ import {
 import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
-import {
-  resolveDesktopPipCaptureBridge,
-  type DesktopPipCaptureBridge,
-} from "@/lib/browser-view/desktop-pip-capture";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
 } from "@/lib/browser-view/electron-tabs";
-import { incrementPipHeadlessArmRunsForTests } from "@/lib/browser-view/pip-capture-arm-counts";
 import {
   openPipHeadlessStream,
   PIP_HEADLESS_MAX_HEIGHT,
@@ -61,11 +56,7 @@ export function usePipOwnedFrame(
     captureTarget === null ? null : hostEntry,
     auth,
   );
-  const bridge = useMemo(
-    () =>
-      runnerHost === null ? null : resolveDesktopPipCaptureBridge(runnerHost),
-    [runnerHost],
-  );
+  const bridge = runnerHost?.browserView ?? null;
   const useNative = binding !== null && bridge !== null;
   const enabled = captureTarget !== null;
   const { owned, setOwned } = usePipFrameOwner(
@@ -162,7 +153,7 @@ function nativeTabBindingKey(binding: ElectronTabBinding): string {
 function usePipNativeCaptureArm(input: {
   readonly enabled: boolean;
   readonly binding: ElectronTabBinding | null;
-  readonly bridge: DesktopPipCaptureBridge | null;
+  readonly bridge: BrowserViewBridge | null;
   readonly selectionId: string | null;
   readonly epicId: string;
   readonly setOwned: Dispatch<SetStateAction<OwnedPipFrame | null>>;
@@ -225,7 +216,6 @@ function usePipHeadlessCaptureArm(input: {
   });
   useEffect(() => {
     if (latchKey === null) return;
-    incrementPipHeadlessArmRunsForTests();
     const handle = argsRef.current.clientHandle;
     let disposed = false;
     let closeStream: (() => void) | undefined;
@@ -317,7 +307,7 @@ function usePipFrameOwner(
 
 function startNativePipCapture(input: {
   readonly binding: ElectronTabBinding;
-  readonly bridge: DesktopPipCaptureBridge;
+  readonly bridge: BrowserViewBridge;
   readonly epicId: string;
   readonly selectionId: string;
   readonly onUrl: (src: string) => void;
@@ -336,9 +326,9 @@ function startNativePipCapture(input: {
       onUrl: input.onUrl,
     });
   };
-  const subscription = input.bridge.onFrame(applyFrame);
+  const subscription = input.bridge.onPipCaptureFrame(applyFrame);
   void input.bridge
-    .start({
+    .startPipCapture({
       hostId: input.binding.hostId,
       sessionId: input.binding.sessionId,
       tabId: input.binding.tabId,
@@ -357,7 +347,7 @@ function startNativePipCapture(input: {
   return () => {
     disposed = true;
     subscription.dispose();
-    void input.bridge.stop();
+    void input.bridge.stopPipCapture();
   };
 }
 
