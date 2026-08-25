@@ -14,10 +14,9 @@ import { defineRpcContract } from "@traycer/protocol/framework/index";
  * avoids inventing new owner-resolution logic on the stream.
  *
  * Stop is inherently owner-scoped, not tile-scoped: `stopAgentActivity`
- * terminates the owner's one cell-runner JS execution
- * (`Runtime.terminateExecution`), which by construction ends whatever every
- * target that cell was driving was doing - there is no way to interrupt the
- * JS for just one target while leaving it running for another.
+ * terminates the owner's one cell-runner JavaScript execution. Host calls
+ * already admitted by that cell are allowed to settle and are reflected as
+ * `outcome_unknown`; new calls are refused once Stop begins.
  */
 export const browserStopAgentActivityRequestSchema = z.object({
   epicId: z.string(),
@@ -29,20 +28,13 @@ export type BrowserStopAgentActivityRequest = z.infer<
 >;
 
 /**
- * Honest per-call outcome, not per-target: the caller (a passive-indicator
- * Stop button) never learns individual `TabHandle`s, only whether stopping
- * this owner's activity left anything genuinely uncertain.
- *
- * `stoppedTargetCount` covers targets that had nothing in flight when Stop
- * ran - correctness holds regardless of whatever was still queued behind
- * them, since nothing queued had reached the browser yet.
- * `outcomeUnknownTargetCount` covers targets that had a command already
- * in flight - it may have already landed on the browser, and claiming
- * "stopped" for those would be the exact lie the ticket exists to prevent.
+ * Stop reports the one lifecycle it controls: the owner's active REPL cell.
+ * `idle` means there was no cell, `stopped` means no browser host call had
+ * crossed the seam, and `outcome_unknown` means a host call was already in
+ * flight and may have changed the page before the cell was interrupted.
  */
 export const browserStopAgentActivityResponseSchema = z.object({
-  stoppedTargetCount: z.number().int().nonnegative(),
-  outcomeUnknownTargetCount: z.number().int().nonnegative(),
+  status: z.enum(["idle", "stopped", "outcome_unknown"]),
 });
 export type BrowserStopAgentActivityResponse = z.infer<
   typeof browserStopAgentActivityResponseSchema

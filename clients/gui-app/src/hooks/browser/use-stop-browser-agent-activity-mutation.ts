@@ -10,12 +10,10 @@ import { browserMutationKeys } from "@/lib/query-keys";
 
 /**
  * Ticket 12 - the one-click Stop on the passive borrowed-tile indicator.
- * `browser.stopAgentActivity` interrupts the owner's one cell-runner JS
- * execution and clears its `BrowserAgentFifo` queue; nothing here reads
- * back via a host query, so there is nothing to invalidate on success.
- * `data.{stoppedTargetCount, outcomeUnknownTargetCount}` is the honest
- * "stopped" vs "outcome unknown" split the caller must surface, not
- * collapse into a single "stopped" toast.
+ * `browser.stopAgentActivity` interrupts the owner's active browser cell.
+ * Nothing here reads back via a host query, so there is nothing to invalidate
+ * on success. `data.status` distinguishes an idle owner, a clean stop, and a
+ * host call whose page outcome is unknown.
  */
 export function useStopBrowserAgentActivity(): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, "browser.stopAgentActivity">,
