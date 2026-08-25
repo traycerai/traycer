@@ -18,6 +18,7 @@ interface FixtureRecord {
  * fixture that dropped it is why a wrong-host ref went unnoticed here.
  */
 interface ActivateRef {
+  readonly id: string;
   readonly type: string;
   readonly hostId: string;
 }
@@ -101,14 +102,12 @@ vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
   findOpenArtifactInTab: () => null,
 }));
 vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
-  useSwitcherActivate:
-    () =>
-    (
-      id: string,
-      buildRef: () => { readonly type: string; readonly hostId: string },
-    ) => {
-      holder.activateCalls.push({ id, ref: buildRef() });
-    },
+  // The row hands over the REF alone; the content id it names is the ref's own
+  // `id`, which is also what the canvas dedups against.
+  useSwitcherActivate: () => (buildRef: () => ActivateRef) => {
+    const ref = buildRef();
+    holder.activateCalls.push({ id: ref.id, ref });
+  },
 }));
 vi.mock("@/lib/host", () => ({ useHostClient: () => null }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
