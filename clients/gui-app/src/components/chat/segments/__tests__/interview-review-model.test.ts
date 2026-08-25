@@ -622,6 +622,17 @@ describe("deriveInterviewReviewModel", () => {
     });
   });
 
+  it("suppresses contradictory legacy errors for canonical answered history", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({ outcome: "answered", error: "Stale provider error" }),
+    );
+
+    expect(model.reason).toBeNull();
+    expect(model.searchableFields.map((field) => field.text)).not.toContain(
+      "Stale provider error",
+    );
+  });
+
   it.each(["pending", "delivering"] as const)(
     "qualifies an answered result while delivery is %s",
     (status) => {
@@ -788,5 +799,28 @@ describe("displayInterviewFraming", () => {
       title: "Deployment strategy",
       description: "Choose how the rollout should proceed.",
     });
+  });
+
+  it("preserves distinct non-ASCII framing", () => {
+    expect(
+      displayInterviewFraming({
+        toolName: "質問ツール",
+        title: "展開戦略",
+        description: "段階的な公開方法を選択してください。",
+      }),
+    ).toEqual({
+      title: "展開戦略",
+      description: "段階的な公開方法を選択してください。",
+    });
+  });
+
+  it("does not equate framing that normalizes to an empty string", () => {
+    expect(
+      displayInterviewFraming({
+        toolName: "🛠️",
+        title: "🚀",
+        description: null,
+      }),
+    ).toEqual({ title: "🚀", description: null });
   });
 });

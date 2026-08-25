@@ -140,8 +140,9 @@ function meaningfulText(value: string | null): string | null {
 
 function normalizedFraming(value: string): string {
   return value
+    .normalize("NFKC")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 }
 
@@ -151,7 +152,9 @@ function isGenericInterviewFraming(
 ): boolean {
   const normalized = normalizedFraming(value);
   if (GENERIC_INTERVIEW_FRAMING.has(normalized)) return true;
-  return toolName !== null && normalized === normalizedFraming(toolName);
+  if (toolName === null || normalized.length === 0) return false;
+  const normalizedToolName = normalizedFraming(toolName);
+  return normalizedToolName.length > 0 && normalized === normalizedToolName;
 }
 
 /**
@@ -808,7 +811,7 @@ export function deriveInterviewReviewModel(
     drafts: draftCount,
     delivery,
   });
-  const reason = meaningfulText(input.error);
+  const reason = outcome === "answered" ? null : meaningfulText(input.error);
   return {
     framing,
     outcome,

@@ -59,21 +59,24 @@ export function questionIdentity(question: InterviewQuestion): string {
 }
 
 function questionAssociationIdentity(question: InterviewQuestion): string {
-  return question.questionId !== null && question.questionId.length > 0
-    ? JSON.stringify(["question-id", question.questionId])
+  if (question.questionId !== null && question.questionId.length > 0) {
+    return JSON.stringify(["question-id", question.questionId]);
+  }
+  return question.question.trim().length > 0
+    ? JSON.stringify(["anonymous-question", question.question])
     : questionIdentity(question);
 }
 
 function storedQuestionAssociationIdentity(identity: string): string {
   try {
     const decoded: unknown = JSON.parse(identity);
-    if (
-      Array.isArray(decoded) &&
-      decoded[0] === "question" &&
-      typeof decoded[1] === "string" &&
-      decoded[1].length > 0
-    ) {
-      return JSON.stringify(["question-id", decoded[1]]);
+    if (Array.isArray(decoded) && decoded[0] === "question") {
+      if (typeof decoded[1] === "string" && decoded[1].length > 0) {
+        return JSON.stringify(["question-id", decoded[1]]);
+      }
+      if (typeof decoded[2] === "string" && decoded[2].trim().length > 0) {
+        return JSON.stringify(["anonymous-question", decoded[2]]);
+      }
     }
   } catch {
     // A future or corrupt identity cannot prove more than exact string

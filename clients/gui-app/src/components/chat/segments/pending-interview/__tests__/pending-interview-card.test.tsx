@@ -181,6 +181,37 @@ describe("draftFromStoredAnswer", () => {
     expect(restored.selectionEvidenceExact).toBe(false);
   });
 
+  it("preserves ID-less draft content across cosmetic framing updates", () => {
+    const original = {
+      ...singleSelect(null, "Choose", ["Yes", "No"]),
+      header: "Original header",
+    };
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "anonymous custom text",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        preview: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.otherText).toBe("anonymous custom text");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
   it("does not positionally attach an unmatched modern draft", () => {
     const stored = [
       draftToStoredAnswer(
