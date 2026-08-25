@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -11,18 +10,13 @@ afterEach(() => {
 
 describe("AttachmentStrip", () => {
   it("renders document-order badges for duplicate image filenames", () => {
-    const queryClient = new QueryClient({
-      defaultOptions: { mutations: { retry: false } },
-    });
     render(
-      <QueryClientProvider client={queryClient}>
-        <AttachmentStrip
-          content={duplicateImageContent()}
-          onRemoveImage={() => undefined}
-          fetcher={() => Promise.reject(new Error("unused"))}
-          sessionObjectUrl={() => null}
-        />
-      </QueryClientProvider>,
+      <AttachmentStrip
+        content={duplicateImageContent()}
+        onRemoveImage={() => undefined}
+        fetcher={() => Promise.reject(new Error("unused"))}
+        sessionObjectUrl={() => null}
+      />,
     );
 
     expect(

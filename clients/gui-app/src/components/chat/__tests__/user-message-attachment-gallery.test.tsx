@@ -1,6 +1,4 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UserMessageAttachmentGallery } from "@/components/chat/user-message-attachment-gallery";
@@ -21,15 +19,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderWithQueryClient(children: ReactNode) {
-  const queryClient = new QueryClient({
-    defaultOptions: { mutations: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
-  );
-}
-
 describe("UserMessageAttachmentGallery", () => {
   it("surfaces an unavailable image in both the thumbnail and dialog", async () => {
     vi.mocked(useChatAttachmentBlobSrc).mockReturnValue({
@@ -37,7 +26,7 @@ describe("UserMessageAttachmentGallery", () => {
       src: null,
     });
 
-    const { container } = renderWithQueryClient(
+    const { container } = render(
       <UserMessageAttachmentGallery
         align="end"
         attachments={[
