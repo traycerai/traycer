@@ -24,8 +24,8 @@ const PREPARED: PreparedWorkspaceFolder = {
  * hands them, so a caller that passed a completion-time host would still
  * satisfy every assertion below. Proving the race needs
  * `useWorkspaceFolderActionsForClient` driven with a client whose active host
- * changes across `pickFolders`, asserting it refuses (returns null) instead of
- * stamping; that harness does not exist yet.
+ * changes across the awaited picker, asserting it refuses (returns null)
+ * instead of stamping; that harness does not exist yet.
  */
 describe("prepared-folder host stamping (pure mappers)", () => {
   it("applies the given host id to every folder it stamps", () => {

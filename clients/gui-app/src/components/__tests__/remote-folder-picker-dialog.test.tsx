@@ -8,12 +8,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
-  WorkspaceBrowseFoldersResponse,
-  WorkspacePrepareFoldersResponseV12,
+  WorkspaceBrowseFoldersResponseV11,
+  WorkspacePrepareFoldersResponseV13,
   WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
@@ -21,8 +22,39 @@ import { modLabel } from "@/lib/keybindings/platform";
 import { RemoteFolderPickerDialog } from "@/components/remote-folder-picker-dialog";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
 
+const nativePicker = vi.hoisted(() => ({
+  canPickNatively: true,
+  pickFolders: vi.fn(),
+}));
+const negotiatedVersion = vi.hoisted(() => ({ minor: 4 }));
+let pickerQueryClient: QueryClient;
+const FOLDER_PICKER_STORAGE_KEY = "traycer-gui-app:folder-picker-preferences";
+
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>(
+    "@tanstack/react-query",
+  );
+  return { ...actual, useQueryClient: () => pickerQueryClient };
+});
+
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => ({
+    major: 1,
+    minor: negotiatedVersion.minor,
+  }),
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => ({
+    workspaceFolders: {
+      canPickNatively: nativePicker.canPickNatively,
+      pickFolders: nativePicker.pickFolders,
+    },
+  }),
+}));
+
 interface FakeQueryState {
-  readonly data: WorkspaceBrowseFoldersResponse | undefined;
+  readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly refetch: () => Promise<unknown>;
@@ -63,9 +95,10 @@ vi.mock("@/hooks/workspace/use-workspace-browse-folders-query", () => ({
  */
 let recentEntries: readonly WorkspaceRecentEntry[] | undefined;
 let reportedHomeDir: string | null | undefined;
+const homeDirEnabledCalls: boolean[] = [];
 function prepareFoldersResponse(
-  fields: Partial<WorkspacePrepareFoldersResponseV12>,
-): WorkspacePrepareFoldersResponseV12 {
+  fields: Partial<WorkspacePrepareFoldersResponseV13>,
+): WorkspacePrepareFoldersResponseV13 {
   return {
     operation: "prepare",
     folders: [],
@@ -90,15 +123,18 @@ vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
 }));
 
 vi.mock("@/hooks/workspace/use-workspace-get-home-dir-query", () => ({
-  useWorkspaceGetHomeDir: () => ({
-    data:
-      reportedHomeDir === undefined
-        ? undefined
-        : prepareFoldersResponse({
-            operation: "getHomeDir",
-            homeDir: reportedHomeDir,
-          }),
-  }),
+  useWorkspaceGetHomeDir: (args: { enabled: boolean }) => {
+    homeDirEnabledCalls.push(args.enabled);
+    return {
+      data:
+        !args.enabled || reportedHomeDir === undefined
+          ? undefined
+          : prepareFoldersResponse({
+              operation: "getHomeDir",
+              homeDir: reportedHomeDir,
+            }),
+    };
+  },
 }));
 
 /**
@@ -117,7 +153,33 @@ function makeClient(): HostClient<HostRpcRegistry> {
   });
 }
 
-function readyLevel(response: WorkspaceBrowseFoldersResponse): FakeQueryState {
+const LOCAL_HOST: HostDirectoryEntry = {
+  hostId: "host-local",
+  label: "This computer",
+  kind: "local",
+  websocketUrl: null,
+  version: "1.0.0",
+  transportDialability: "dialable",
+};
+
+const REMOTE_HOST: HostDirectoryEntry = {
+  hostId: "host-remote",
+  label: "Remote computer",
+  kind: "remote",
+  websocketUrl: "wss://example.invalid/rpc",
+  version: "1.0.0",
+  transportDialability: "dialable",
+};
+
+function makeBoundClient(
+  host: HostDirectoryEntry,
+): HostClient<HostRpcRegistry> {
+  return makeClient().createRequester(host);
+}
+
+function readyLevel(
+  response: WorkspaceBrowseFoldersResponseV11,
+): FakeQueryState {
   return {
     data: response,
     isPending: false,
@@ -126,18 +188,26 @@ function readyLevel(response: WorkspaceBrowseFoldersResponse): FakeQueryState {
   };
 }
 
-const HOME_RESPONSE: WorkspaceBrowseFoldersResponse = {
+const HOME_RESPONSE: WorkspaceBrowseFoldersResponseV11 = {
   directoryPath: "/Users/tester",
   parentPath: "/Users",
   entries: [
-    { path: "/Users/tester/.config", name: ".config" },
-    { path: "/Users/tester/code", name: "code" },
-    { path: "/Users/tester/consulting", name: "consulting" },
-    { path: "/Users/tester/Documents", name: "Documents" },
+    { path: "/Users/tester/.config", name: ".config", hidden: true },
+    { path: "/Users/tester/code", name: "code", hidden: false },
+    {
+      path: "/Users/tester/consulting",
+      name: "consulting",
+      hidden: false,
+    },
+    {
+      path: "/Users/tester/Documents",
+      name: "Documents",
+      hidden: false,
+    },
   ],
 };
 
-const CODE_RESPONSE: WorkspaceBrowseFoldersResponse = {
+const CODE_RESPONSE: WorkspaceBrowseFoldersResponseV11 = {
   directoryPath: "/Users/tester/code",
   parentPath: "/Users/tester",
   entries: [],
@@ -159,6 +229,8 @@ function rowNames(): string[] {
 
 describe("<RemoteFolderPickerDialog />", () => {
   beforeEach(() => {
+    pickerQueryClient = new QueryClient();
+    negotiatedVersion.minor = 4;
     queryByPath.clear();
     requestedPaths.length = 0;
     lastClient = undefined;
@@ -179,25 +251,42 @@ describe("<RemoteFolderPickerDialog />", () => {
     // pre-existing expectation describes the picker WITHOUT recents.
     recentEntries = undefined;
     reportedHomeDir = undefined;
+    homeDirEnabledCalls.length = 0;
+    window.localStorage.removeItem(FOLDER_PICKER_STORAGE_KEY);
+    nativePicker.canPickNatively = true;
+    nativePicker.pickFolders.mockReset();
+    nativePicker.pickFolders.mockResolvedValue([]);
     useRemoteFolderPickerStore.setState({
       open: false,
       client: null,
       resolvePick: null,
+      showHiddenFolders: false,
     });
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useRemoteFolderPickerStore.setState({ showHiddenFolders: false });
+    window.localStorage.removeItem(FOLDER_PICKER_STORAGE_KEY);
+  });
 
   it("stays unmounted until a pick is requested", () => {
     render(<RemoteFolderPickerDialog />);
     expect(screen.queryByTestId("remote-folder-picker-dialog")).toBeNull();
   });
 
-  it("seeds the field with the host home; hidden folders stay hidden unfiltered", async () => {
+  it("uses a capped desktop surface and a safe full-screen narrow layout", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-    expect(
-      await screen.findByTestId("remote-folder-picker-dialog"),
-    ).toBeTruthy();
+    const dialog = await screen.findByTestId("remote-folder-picker-dialog");
+    expect(dialog.className).toContain("max-h-[45svh]");
+    expect(dialog.className).toContain("md:top-[18svh]");
+    expect(dialog.className).toContain("md:max-w-2xl");
+    expect(dialog.className).toContain("md:translate-y-0");
+    expect(dialog.className).toContain("max-md:h-safe-dvh");
+    expect(dialog.className).toContain("max-md:w-safe-dvw");
+    expect(dialog.className).toContain("max-md:max-h-none");
+    expect(dialog.className).toContain("max-w-none");
+    expect(dialog.className).toContain("sm:max-w-none");
     expect(pathInput().value).toBe("/Users/tester/");
     // .config was sent by the host but the empty filter hides dot folders;
     // Documents renders like any other row (no lock affordance).
@@ -209,8 +298,112 @@ describe("<RemoteFolderPickerDialog />", () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
     await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Folder picker settings" }),
+    );
+    expect(
+      screen
+        .getByRole("switch", { name: "Show hidden folders" })
+        .getAttribute("data-state"),
+    ).toBe("unchecked");
     fireEvent.change(pathInput(), { target: { value: "/Users/tester/.co" } });
     expect(rowNames()).toEqual([".config"]);
+  });
+
+  it("shows hidden folders on demand and remembers the preference locally", async () => {
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Folder picker settings" }),
+    );
+    const toggle = screen.getByRole("switch", {
+      name: "Show hidden folders",
+    });
+    expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("data-state")).toBe("checked");
+    expect(rowNames()).toEqual([".config", "code", "consulting", "Documents"]);
+    expect(
+      window.localStorage.getItem(FOLDER_PICKER_STORAGE_KEY) ?? "",
+    ).toContain('"showHiddenFolders":true');
+  });
+
+  it("returns every folder chosen through the native picker", async () => {
+    nativePicker.pickFolders.mockResolvedValue([
+      "/Users/tester/code",
+      "/Users/tester/Documents",
+    ]);
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeBoundClient(LOCAL_HOST));
+    const button = await screen.findByTestId("remote-folder-picker-native");
+    const invalidate = vi.spyOn(pickerQueryClient, "invalidateQueries");
+    expect(button.getAttribute("aria-disabled")).toBeNull();
+    expect(button.textContent).toBe("Open native picker");
+    expect(button.getAttribute("data-variant")).toBe("outline");
+
+    fireEvent.click(button);
+
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code", "/Users/tester/Documents"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["host", LOCAL_HOST.hostId, "workspace.browseFolders"],
+      refetchType: "none",
+    });
+  });
+
+  it("keeps the native picker single-flight and refreshes after cancellation", async () => {
+    const pending = {
+      resolve: (_paths: readonly string[]): void => {},
+    };
+    nativePicker.pickFolders.mockImplementation(
+      () =>
+        new Promise<readonly string[]>((resolvePromise) => {
+          pending.resolve = resolvePromise;
+        }),
+    );
+    const refetch = vi.fn(() => Promise.resolve());
+    queryByPath.set(pathKey(null), { ...readyLevel(HOME_RESPONSE), refetch });
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeBoundClient(LOCAL_HOST));
+    const button = await screen.findByTestId("remote-folder-picker-native");
+
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(nativePicker.pickFolders).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      pending.resolve([]);
+      await Promise.resolve();
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains why the native picker is unavailable for a remote host", async () => {
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeBoundClient(REMOTE_HOST));
+    const button = await screen.findByTestId("remote-folder-picker-native");
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.focus(button);
+
+    expect(
+      await screen.findByText(
+        "Switch to this computer's host to use the system folder picker.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(button);
+    expect(nativePicker.pickFolders).not.toHaveBeenCalled();
   });
 
   it("a timed-out listing shows the host's message with Retry", async () => {
@@ -319,7 +512,8 @@ describe("<RemoteFolderPickerDialog />", () => {
       target: { value: "/Users/tester/co" },
     });
     // Filtering happens against the parent listing - no new directory browse.
-    expect(requestedPaths.at(-1)).toBe("/Users/tester");
+    expect(requestedPaths.at(-1)).toBeNull();
+    expect(requestedPaths).not.toContain("/Users/tester");
     expect(rowNames()).toEqual(["code", "consulting"]);
     fireEvent.change(pathInput(), {
       target: { value: "/Users/tester/cod" },
@@ -335,9 +529,29 @@ describe("<RemoteFolderPickerDialog />", () => {
       target: { value: "/Users/tester/code/" },
     });
     expect(requestedPaths.at(-1)).toBe("/Users/tester/code");
-    // Empty folder: only the ".." row remains (matching T3's layout).
+    // Empty folder: only the ".." row remains.
     expect(rowNames()).toEqual([]);
     expect(screen.getByTestId("remote-folder-picker-up-row")).toBeTruthy();
+  });
+
+  it("delays the directory skeleton so fast loads do not flash it", () => {
+    queryByPath.set(pathKey("/Users/tester/code"), {
+      data: undefined,
+      isPending: true,
+      error: null,
+      refetch: () => Promise.resolve(),
+    });
+    render(<RemoteFolderPickerDialog />);
+    act(() => {
+      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    });
+    fireEvent.click(screen.getAllByTestId("remote-folder-picker-row")[0]);
+
+    const loading = screen.getByTestId("remote-folder-picker-loading");
+    expect(loading.className).toContain("fade-in-0");
+    expect(loading.className).toContain("fill-mode-backwards");
+    expect(loading.className).toContain("delay-150");
+    expect(loading.className).toContain("motion-reduce:duration-0");
   });
 
   it("expands ~ against the host home", async () => {
@@ -366,7 +580,10 @@ describe("<RemoteFolderPickerDialog />", () => {
       (await screen.findAllByTestId("remote-folder-picker-row"))[0],
     );
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester/code");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
+    });
     expect(useRemoteFolderPickerStore.getState().open).toBe(false);
     expect(useRemoteFolderPickerStore.getState().client).toBeNull();
   });
@@ -381,7 +598,46 @@ describe("<RemoteFolderPickerDialog />", () => {
       target: { value: "~/projects/deep" },
     });
     fireEvent.keyDown(pathInput(), { key: "Enter", metaKey: true });
-    await expect(pick).resolves.toBe("/Users/tester/projects/deep");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/projects/deep"],
+    });
+  });
+
+  it("offers to create and add a missing final directory", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/new-app" },
+    });
+
+    expect(
+      screen.getByTestId("remote-folder-picker-add").textContent,
+    ).toContain("Create & Add");
+    expect(screen.queryByText("No subfolders.")).toBeNull();
+    fireEvent.keyDown(pathInput(), { key: "Enter" });
+
+    await expect(pick).resolves.toEqual({
+      kind: "createAndPrepare",
+      path: "/Users/tester/new-app",
+    });
+  });
+
+  it("does not offer directory creation to a v1.2 host", async () => {
+    negotiatedVersion.minor = 2;
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    await screen.findAllByTestId("remote-folder-picker-row");
+    fireEvent.change(pathInput(), {
+      target: { value: "/Users/tester/new-app" },
+    });
+
+    const add = screen.getByTestId("remote-folder-picker-add");
+    expect(add.textContent).not.toContain("Create & Add");
+    expect(add.getAttribute("disabled")).not.toBeNull();
   });
 
   it("a gated folder lists as a short no-access line and can still be added", async () => {
@@ -397,7 +653,10 @@ describe("<RemoteFolderPickerDialog />", () => {
     );
     // Selecting needs no read - Add picks the gated folder.
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester/Documents");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/Documents"],
+    });
   });
 
   it("backs out of an unlistable folder via the up button", async () => {
@@ -419,28 +678,38 @@ describe("<RemoteFolderPickerDialog />", () => {
     await screen.findAllByTestId("remote-folder-picker-row");
     fireEvent.keyDown(pathInput(), { key: "Enter", isComposing: true });
     expect(pathInput().value).toBe("/Users/tester/");
-    // The same key OUTSIDE composition still opens the selected row (the
-    // `..` row is selected by default, so it navigates up).
+    // Activate the `..` row, then the same key outside composition opens it.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
     fireEvent.keyDown(pathInput(), { key: "Enter" });
     expect(pathInput().value).toBe("/Users/");
   });
 
-  it("advertises the platform modifier on Add, not a fixed glyph", async () => {
+  it("uses plain Enter until a row is active, then shows the platform modifier", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
     await screen.findAllByTestId("remote-folder-picker-row");
-    // jsdom is not a Mac, so a hardcoded ⌘ would fail this on the very
-    // platforms whose working shortcut is Ctrl+Enter.
-    expect(
-      screen.getByTestId("remote-folder-picker-add").textContent,
-    ).toContain(modLabel());
+    const add = screen.getByTestId("remote-folder-picker-add");
+    expect(add.textContent).not.toContain(modLabel());
+    expect(add.querySelectorAll('[data-slot="kbd"]')).toHaveLength(1);
+    const plainKeyClass = add.querySelector('[data-slot="kbd"]')?.className;
+    fireEvent.mouseEnter(screen.getByTestId("remote-folder-picker-up-row"));
+    // jsdom is not a Mac, so a hardcoded glyph would fail on platforms where
+    // the working shortcut is Ctrl+Enter.
+    expect(add.textContent).toContain(modLabel());
+    const chord = add.querySelectorAll('[data-slot="kbd"]');
+    expect(chord).toHaveLength(2);
+    for (const key of chord) {
+      expect(key.className).toBe(plainKeyClass);
+    }
   });
 
   it("arrow keys move the active option and Enter opens it", async () => {
     render(<RemoteFolderPickerDialog />);
     void useRemoteFolderPickerStore.getState().requestPick(makeClient());
     await screen.findAllByTestId("remote-folder-picker-row");
-    // Home has a ".." row at index 0 now, so the first entry is option 1.
+    // No row starts active. The first arrow activates `..`, the next the first
+    // directory.
+    fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
     fireEvent.keyDown(pathInput(), { key: "ArrowDown" });
     expect(pathInput().getAttribute("aria-activedescendant")).toBe(
       "remote-folder-picker-option-1",
@@ -508,7 +777,9 @@ describe("<RemoteFolderPickerDialog />", () => {
       data: {
         directoryPath: "/Users/tester/code",
         parentPath: "/Users/tester",
-        entries: [{ path: "/Users/tester/code/api", name: "api" }],
+        entries: [
+          { path: "/Users/tester/code/api", name: "api", hidden: false },
+        ],
       },
       isPending: false,
       error: new Error("Timed out listing this folder"),
@@ -542,6 +813,18 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(pathInput().value).toBe("/Users/tester/");
   });
 
+  it("Backspace at the end of an exact directory path walks up", async () => {
+    render(<RemoteFolderPickerDialog />);
+    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
+    fireEvent.click(
+      (await screen.findAllByTestId("remote-folder-picker-row"))[0],
+    );
+    const input = pathInput();
+    input.setSelectionRange(input.value.length, input.value.length);
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(input.value).toBe("/Users/tester/");
+  });
+
   it("a second requestPick cancels the first", async () => {
     render(<RemoteFolderPickerDialog />);
     const first = useRemoteFolderPickerStore
@@ -552,7 +835,21 @@ describe("<RemoteFolderPickerDialog />", () => {
       .requestPick(makeClient());
     await expect(first).resolves.toBeNull();
     fireEvent.click(await screen.findByTestId("remote-folder-picker-add"));
-    await expect(second).resolves.toBe("/Users/tester");
+    await expect(second).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
+  });
+
+  it("can be cancelled without a keyboard", async () => {
+    render(<RemoteFolderPickerDialog />);
+    const pick = useRemoteFolderPickerStore
+      .getState()
+      .requestPick(makeClient());
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Close folder picker" }),
+    );
+    await expect(pick).resolves.toBeNull();
   });
 
   it("a second requestPick after drilling down starts back at the home", async () => {
@@ -584,6 +881,12 @@ describe("<RemoteFolderPickerDialog />", () => {
       "/srv/app",
       "/srv/api",
     ]);
+    const pathText = chips[0]?.querySelector("span");
+    expect(pathText).toBeInstanceOf(HTMLSpanElement);
+    expect(pathText?.getAttribute("style")).toContain("direction: rtl");
+    expect(pathText?.getAttribute("style")).toContain(
+      "text-overflow: ellipsis",
+    );
   });
 
   it("picking a recent fills the field and arms Add with exactly it", async () => {
@@ -601,7 +904,10 @@ describe("<RemoteFolderPickerDialog />", () => {
     // in context (its parent, filtered to it).
     expect(pathInput().value).toBe("/srv/app");
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/srv/app");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/srv/app"],
+    });
   });
 
   it("keeps focus on the field when a recent is picked by keyboard", async () => {
@@ -628,69 +934,6 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(document.activeElement).toBe(pathInput());
   });
 
-  it("treats a backslash as an ordinary character in a POSIX folder name", async () => {
-    // A POSIX host may legitimately have a folder named `foo\bar`; splitting
-    // at the backslash would browse `/Users/tester/foo` instead.
-    queryByPath.set(
-      pathKey("/Users/tester"),
-      readyLevel({
-        directoryPath: "/Users/tester",
-        parentPath: "/Users",
-        entries: [
-          { path: "/Users/tester/foo\\bar", name: "foo\\bar" },
-          { path: "/Users/tester/code", name: "code" },
-        ],
-      }),
-    );
-    render(<RemoteFolderPickerDialog />);
-    const pick = useRemoteFolderPickerStore
-      .getState()
-      .requestPick(makeClient());
-    await screen.findAllByTestId("remote-folder-picker-row");
-    fireEvent.change(pathInput(), {
-      target: { value: "/Users/tester/foo\\bar" },
-    });
-    // Browsed /Users/tester filtered by "foo\bar" - never /Users/tester/foo.
-    expect(requestedPaths).toContain("/Users/tester");
-    expect(requestedPaths).not.toContain("/Users/tester/foo");
-    expect(rowNames()).toEqual(["foo\\bar"]);
-    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester/foo\\bar");
-  });
-
-  it("preserves trailing whitespace in a directory name through Add", async () => {
-    // `/srv/project ` and `/srv/project` are distinct POSIX siblings, so
-    // trimming before submit would silently pick the one the field never
-    // showed. Reachable by typing too, but a recent is how it arrives verbatim.
-    recentEntries = [
-      { path: "/srv/project ", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
-    ];
-    render(<RemoteFolderPickerDialog />);
-    const pick = useRemoteFolderPickerStore
-      .getState()
-      .requestPick(makeClient());
-    fireEvent.click(
-      (await screen.findAllByTestId("remote-folder-picker-recent"))[0],
-    );
-    expect(pathInput().value).toBe("/srv/project ");
-    fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/srv/project ");
-  });
-
-  it("whitespace-only input is still no path at all", async () => {
-    // Trailing whitespace being significant must not promote a field holding
-    // ONLY whitespace into a filter or an addable path.
-    render(<RemoteFolderPickerDialog />);
-    void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-    await screen.findAllByTestId("remote-folder-picker-row");
-    fireEvent.change(pathInput(), { target: { value: "   " } });
-    expect(screen.queryByTestId("remote-folder-picker-invalid")).toBeNull();
-    expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
-    expect(
-      screen.getByTestId("remote-folder-picker-add").hasAttribute("disabled"),
-    ).toBe(true);
-  });
-
   it("hides the recents once the field is edited", async () => {
     recentEntries = [
       { path: "/srv/app", lastOpenedAt: "2026-08-01T00:00:00.000Z" },
@@ -711,7 +954,10 @@ describe("<RemoteFolderPickerDialog />", () => {
       (await screen.findAllByTestId("remote-folder-picker-row"))[0],
     );
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester/code");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
+    });
   });
 
   it("a host that answers neither convenience operation still browses", async () => {
@@ -725,6 +971,7 @@ describe("<RemoteFolderPickerDialog />", () => {
     expect(screen.queryByTestId("remote-folder-picker-recents")).toBeNull();
     expect(screen.queryByTestId("remote-folder-picker-error")).toBeNull();
     expect(rowNames()).toEqual(["code", "consulting", "Documents"]);
+    expect(homeDirEnabledCalls).not.toContain(true);
   });
 
   it("shows the getHomeDir fallback rather than arming Add over a blank field", async () => {
@@ -745,12 +992,16 @@ describe("<RemoteFolderPickerDialog />", () => {
       .getState()
       .requestPick(makeClient());
     await screen.findByTestId("remote-folder-picker-path");
+    expect(homeDirEnabledCalls).toContain(true);
     expect(pathInput().value).toBe("/Users/tester/");
     expect(
       screen.getByTestId("remote-folder-picker-add").hasAttribute("disabled"),
     ).toBe(false);
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester");
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester"],
+    });
   });
 
   it("expands ~ off getHomeDir when the home listing never answers", async () => {
@@ -773,195 +1024,9 @@ describe("<RemoteFolderPickerDialog />", () => {
     await screen.findByTestId("remote-folder-picker-path");
     fireEvent.change(pathInput(), { target: { value: "~/code" } });
     fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-    await expect(pick).resolves.toBe("/Users/tester/code");
-  });
-  /**
-   * Paths are HOST-native: `workspace.browseFolders` runs on the host, so a
-   * Windows host answers `C:\Users\tester` and the picker has to browse,
-   * filter, walk up and Add with those - no POSIX rewriting anywhere.
-   */
-  describe("against a Windows host", () => {
-    const WINDOWS_HOME: WorkspaceBrowseFoldersResponse = {
-      directoryPath: "C:\\Users\\tester",
-      parentPath: "C:\\Users",
-      entries: [
-        { path: "C:\\Users\\tester\\code", name: "code" },
-        { path: "C:\\Users\\tester\\Documents", name: "Documents" },
-      ],
-    };
-
-    beforeEach(() => {
-      queryByPath.clear();
-      queryByPath.set(pathKey(null), readyLevel(WINDOWS_HOME));
-      queryByPath.set(pathKey("C:\\Users\\tester"), readyLevel(WINDOWS_HOME));
-      queryByPath.set(
-        pathKey("C:\\Users"),
-        readyLevel({
-          directoryPath: "C:\\Users",
-          parentPath: "C:\\",
-          entries: [{ path: "C:\\Users\\tester", name: "tester" }],
-        }),
-      );
-      queryByPath.set(
-        pathKey("C:\\"),
-        readyLevel({
-          directoryPath: "C:\\",
-          parentPath: null,
-          entries: [{ path: "C:\\Users", name: "Users" }],
-        }),
-      );
-      queryByPath.set(
-        pathKey("C:\\Users\\tester\\code"),
-        readyLevel({
-          directoryPath: "C:\\Users\\tester\\code",
-          parentPath: "C:\\Users\\tester",
-          entries: [],
-        }),
-      );
-    });
-
-    it("seeds the field with the host home and descends with backslashes", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      expect(
-        await screen.findByTestId("remote-folder-picker-dialog"),
-      ).toBeTruthy();
-      expect(pathInput().value).toBe("C:\\Users\\tester\\");
-      expect(rowNames()).toEqual(["code", "Documents"]);
-      fireEvent.click(screen.getAllByTestId("remote-folder-picker-row")[0]);
-      expect(pathInput().value).toBe("C:\\Users\\tester\\code\\");
-    });
-
-    it("live-filters the segment after the last backslash", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), {
-        target: { value: "C:\\Users\\tester\\co" },
-      });
-      expect(rowNames()).toEqual(["code"]);
-    });
-
-    it("walking up stops at the drive root", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.click(screen.getByTestId("remote-folder-picker-up-row"));
-      expect(pathInput().value).toBe("C:\\Users\\");
-      fireEvent.click(screen.getByTestId("remote-folder-picker-up-row"));
-      // `C:\` is the fixpoint - never `C:`, which is drive-RELATIVE and would
-      // resolve against the host's working directory instead of the root.
-      expect(pathInput().value).toBe("C:\\");
-      expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
-    });
-
-    it("Add returns the host path with the trailing separator dropped", async () => {
-      render(<RemoteFolderPickerDialog />);
-      const pick = useRemoteFolderPickerStore
-        .getState()
-        .requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-      await expect(pick).resolves.toBe("C:\\Users\\tester");
-    });
-
-    it("keeps the drive root itself addable", async () => {
-      render(<RemoteFolderPickerDialog />);
-      const pick = useRemoteFolderPickerStore
-        .getState()
-        .requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), { target: { value: "C:\\" } });
-      fireEvent.click(screen.getByTestId("remote-folder-picker-add"));
-      await expect(pick).resolves.toBe("C:\\");
-    });
-
-    it("expands ~ against the Windows home", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), { target: { value: "~\\co" } });
-      expect(rowNames()).toEqual(["code"]);
-    });
-
-    it("accepts forward slashes too, because the host does", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      // Windows resolves `/` as a separator, so the picker must not reject
-      // what the user can legitimately type.
-      fireEvent.change(pathInput(), { target: { value: "~/co" } });
-      expect(screen.queryByTestId("remote-folder-picker-invalid")).toBeNull();
-      expect(rowNames()).toEqual(["code"]);
-    });
-
-    it("browses a UNC share and stops walking up at it", async () => {
-      queryByPath.set(
-        pathKey("\\\\build\\shared"),
-        readyLevel({
-          directoryPath: "\\\\build\\shared",
-          parentPath: null,
-          entries: [{ path: "\\\\build\\shared\\web", name: "web" }],
-        }),
-      );
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), {
-        target: { value: "\\\\build\\shared\\" },
-      });
-      expect(rowNames()).toEqual(["web"]);
-      expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
-    });
-
-    it("browses a UNC share root typed WITHOUT a trailing separator", async () => {
-      // The form a user types first. Unlike `/` and `C:\`, a share root does
-      // not end in a separator, so deriving the filter from the last one would
-      // filter the share by its own name ("shared") and hide every row.
-      queryByPath.set(
-        pathKey("\\\\build\\shared"),
-        readyLevel({
-          directoryPath: "\\\\build\\shared",
-          parentPath: null,
-          entries: [{ path: "\\\\build\\shared\\web", name: "web" }],
-        }),
-      );
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), { target: { value: "\\\\build\\shared" } });
-      expect(rowNames()).toEqual(["web"]);
-    });
-
-    it("recognizes a UNC root typed with forward slashes", async () => {
-      // Windows resolves `//build/shared` as UNC just like the backslash
-      // form. Falling through to POSIX handling would browse `//build`
-      // filtered by "shared" and never list the share itself.
-      queryByPath.set(
-        pathKey("//build/shared"),
-        readyLevel({
-          directoryPath: "//build/shared",
-          parentPath: null,
-          entries: [{ path: "//build/shared/web", name: "web" }],
-        }),
-      );
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), { target: { value: "//build/shared" } });
-      expect(requestedPaths).toContain("//build/shared");
-      expect(requestedPaths).not.toContain("//build");
-      expect(rowNames()).toEqual(["web"]);
-      // The share root is the walking-up fixpoint in this spelling too.
-      expect(screen.queryByTestId("remote-folder-picker-up-row")).toBeNull();
-    });
-
-    it("still rejects a drive-relative path", async () => {
-      render(<RemoteFolderPickerDialog />);
-      void useRemoteFolderPickerStore.getState().requestPick(makeClient());
-      await screen.findAllByTestId("remote-folder-picker-row");
-      fireEvent.change(pathInput(), { target: { value: "Users\\tester" } });
-      expect(screen.getByTestId("remote-folder-picker-invalid")).toBeTruthy();
+    await expect(pick).resolves.toEqual({
+      kind: "prepare",
+      folderPaths: ["/Users/tester/code"],
     });
   });
 });

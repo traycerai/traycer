@@ -367,6 +367,7 @@ import {
 import { epicListTuiAgentsV10 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
+  workspaceBrowseFoldersV11,
   workspaceMentionFilesV10,
   workspaceMentionFoldersV10,
   workspaceMentionWorktreesV10,
@@ -378,6 +379,8 @@ import {
   workspacePrepareFoldersV10,
   workspacePrepareFoldersV11,
   workspacePrepareFoldersV12,
+  workspacePrepareFoldersV13,
+  workspacePrepareFoldersV14,
   workspaceReadFileV10,
   workspaceWriteFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
@@ -3666,6 +3669,43 @@ export const workspacePrepareFoldersUpgradeV11ToV12 = defineUpgradePath<
   }),
   upgradeResponse: (response) => response,
 });
+
+export const workspacePrepareFoldersUpgradeV12ToV13 = defineUpgradePath<
+  typeof workspacePrepareFoldersV12,
+  typeof workspacePrepareFoldersV13
+>({
+  from: workspacePrepareFoldersV12.schemaVersion,
+  to: workspacePrepareFoldersV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const workspacePrepareFoldersUpgradeV13ToV14 = defineUpgradePath<
+  typeof workspacePrepareFoldersV13,
+  typeof workspacePrepareFoldersV14
+>({
+  from: workspacePrepareFoldersV13.schemaVersion,
+  to: workspacePrepareFoldersV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const workspaceBrowseFoldersUpgradeV10ToV11 = defineUpgradePath<
+  typeof workspaceBrowseFoldersV10,
+  typeof workspaceBrowseFoldersV11
+>({
+  from: workspaceBrowseFoldersV10.schemaVersion,
+  to: workspaceBrowseFoldersV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    entries: response.entries.map((entry) => ({
+      ...entry,
+      hidden: entry.name.startsWith("."),
+    })),
+  }),
+});
+
 // Additive upgrade from v1.0: a peer on the frozen v1.0 line predates fork
 // provenance entirely, so its creates carry no fork source. The newer side
 // runs this when bridging a v1.0 peer up to canonical (host: inbound v1.0
@@ -5259,7 +5299,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "workspace.prepareFolders": {
     1: {
-      latestMinor: 2,
+      latestMinor: 4,
       versions: {
         0: {
           contract: workspacePrepareFoldersV10,
@@ -5273,6 +5313,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: workspacePrepareFoldersV12,
           upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV11ToV12,
           responseGrowthProjectionGated: true,
+        },
+        3: {
+          contract: workspacePrepareFoldersV13,
+          upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV12ToV13,
+          responseGrowthProjectionGated: true,
+        },
+        4: {
+          contract: workspacePrepareFoldersV14,
+          upgradeFromPreviousVersion: workspacePrepareFoldersUpgradeV13ToV14,
         },
       },
       downgradePathsFromLatest: {},
@@ -5311,11 +5360,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "workspace.browseFolders": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: workspaceBrowseFoldersV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: workspaceBrowseFoldersV11,
+          upgradeFromPreviousVersion: workspaceBrowseFoldersUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

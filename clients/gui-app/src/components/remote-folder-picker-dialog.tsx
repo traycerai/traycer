@@ -4,37 +4,67 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type RefObject,
   type ReactNode,
 } from "react";
-import { ArrowLeft, CornerLeftUp, Folder } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, CornerLeftUp, Folder, Settings2, X } from "lucide-react";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostKind } from "@traycer-clients/shared/host-client/host-directory";
 import type {
-  WorkspaceBrowseFolderEntry,
-  WorkspaceBrowseFoldersResponse,
-  WorkspacePrepareFoldersResponseV12,
+  WorkspaceBrowseFolderEntryV11,
+  WorkspaceBrowseFoldersResponseV11,
   WorkspaceRecentEntry,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { Button } from "@/components/ui/button";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Kbd } from "@/components/ui/kbd";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
-import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
+import { modLabel } from "@/lib/keybindings/platform";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { useWorkspaceBrowseFolders } from "@/hooks/workspace/use-workspace-browse-folders-query";
 import { useWorkspaceGetHomeDir } from "@/hooks/workspace/use-workspace-get-home-dir-query";
 import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
+import {
+  type NegotiatedMethodVersion,
+  useHostNegotiatedMethodVersion,
+} from "@/hooks/host/use-host-negotiated-method-version";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useRemoteFolderPickerStore } from "@/stores/workspace/remote-folder-picker-store";
+import {
+  filterEntries,
+  parseBrowseInput,
+  type ParsedBrowseInput,
+  readAddTarget,
+  readShownInput,
+  readUpPath,
+  separatorOf,
+  shouldCreateDirectory,
+  startsWithTilde,
+  withTrailingSeparator,
+} from "@/components/remote-folder-picker-path";
 
 /**
- * Folder picker for hosts the client cannot open a native OS dialog for
- * (remote hosts - phone/browser clients, or a desktop pointed at another
- * machine). Browses the HOST's filesystem via `workspace.browseFolders`.
+ * Folder picker for every host. Browses the selected HOST's filesystem via
+ * `workspace.browseFolders`, so local, remote, desktop, browser and mobile
+ * surfaces all share the same path-aware flow.
  *
  * The path field is the single source of truth: everything up to the last
  * `/` is the directory being browsed, the segment after it live-filters the
@@ -61,12 +91,13 @@ export function RemoteFolderPickerDialog(): ReactNode {
       }}
     >
       <DialogContent
-        className="flex max-h-[min(80dvh,36rem)] w-[min(92vw,34rem)] max-w-[min(92vw,34rem)] flex-col gap-0 p-0"
+        className="flex w-full max-w-none max-h-[45svh] flex-col gap-0 overflow-hidden p-0 shadow-2xl sm:max-w-none md:top-[18svh] md:max-w-2xl md:translate-y-0 max-md:h-safe-dvh max-md:w-safe-dvw max-md:max-h-none max-md:rounded-none max-md:pb-safe-bottom"
         data-testid="remote-folder-picker-dialog"
         // Phone-facing portal outside HomePage's touch scope: re-apply the
         // coarse-pointer hit-slop rules (home-touch-targets.css) so every
         // control hits >=44px.
         data-home-touch-scope=""
+        overlayClassName="bg-black/70 supports-backdrop-filter:backdrop-blur-sm"
         showCloseButton={false}
       >
         <DialogTitle className="sr-only">Add folder</DialogTitle>
@@ -84,118 +115,215 @@ export function RemoteFolderPickerDialog(): ReactNode {
 
 function RemoteFolderPickerBody(): ReactNode {
   const settle = useRemoteFolderPickerStore((state) => state.settle);
-  // The requester's client (tab-bound where the pick started in a tab) - the
-  // dialog must browse the same host the picked path is submitted to.
+  const showHiddenFolders = useRemoteFolderPickerStore(
+    (state) => state.showHiddenFolders,
+  );
+  const setShowHiddenFolders = useRemoteFolderPickerStore(
+    (state) => state.setShowHiddenFolders,
+  );
+  const browse = useRemoteFolderPickerBrowse();
+  const selection = useRemoteFolderPickerSelection({
+    setRawInput: browse.setRawInput,
+    parsed: browse.parsed,
+    data: browse.data,
+    listingError: browse.listingError,
+    showHiddenFolders,
+  });
+  const { addTarget, createDirectory } = readFolderPickerAddState({
+    canCreateDirectory: browse.canCreateDirectory,
+    rawInput: browse.rawInput,
+    parsed: browse.parsed,
+    data: browse.data,
+    listingError: browse.listingError,
+    homePath: browse.homePath,
+  });
+  const addCurrent = (): void => {
+    if (addTarget === null) return;
+    settle(
+      createDirectory
+        ? { kind: "createAndPrepare", path: addTarget }
+        : { kind: "prepare", folderPaths: [addTarget] },
+    );
+  };
+  const nativePicker = useRemoteFolderPickerNative({
+    canRefresh: browse.parsed.valid,
+    refetch: browse.query.refetch,
+  });
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <RemoteFolderPickerHeader
+        activeIndex={selection.activeIndex}
+        addCurrent={addCurrent}
+        addTarget={addTarget}
+        canGoBack={selection.upPath !== null}
+        createDirectory={createDirectory}
+        goBack={selection.goUp}
+        inputRef={browse.inputRef}
+        moveSelection={selection.moveSelection}
+        onChange={(value) => {
+          browse.setRawInput(value);
+          selection.setSelectedIndex(null);
+        }}
+        onClose={() => settle(null)}
+        onOpenSelectedRow={selection.openSelectedRow}
+        shownInput={browse.shownInput}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+        <RemoteFolderPickerRecents
+          entries={browse.recentEntries}
+          onPick={(path) => {
+            // Picking a recent makes the field non-pristine, which unmounts
+            // the whole row - including the button that was just activated.
+            // `onMouseDown` keeps focus for a pointer, but a keyboard user
+            // (Enter/Space) never triggers that, so focus would land nowhere
+            // and the field would stop accepting typing, arrows and cmd+Enter.
+            selection.setPath(path);
+            browse.inputRef.current?.focus();
+          }}
+        />
+        <p className="px-2 pb-1 text-ui-xs text-muted-foreground">
+          Directories
+        </p>
+        <RemoteFolderPickerListing
+          key={browse.browseDirectoryPath}
+          invalid={!browse.parsed.valid}
+          isPending={browse.parsed.valid ? browse.query.isPending : false}
+          error={browse.listingError}
+          entries={
+            browse.data === undefined ? undefined : selection.filteredEntries
+          }
+          upPresent={selection.upPath !== null}
+          activeIndex={selection.activeIndex}
+          hideEmptyMessage={createDirectory}
+          onActivate={selection.setSelectedIndex}
+          onUp={selection.goUp}
+          onEnter={selection.enterEntry}
+          onRetry={() => {
+            // Retry receives focus and disappears when it succeeds - hand
+            // the keyboard back to the combobox field either way.
+            void browse.query.refetch().finally(() => {
+              browse.inputRef.current?.focus();
+            });
+          }}
+        />
+      </div>
+      <RemoteFolderPickerFooter
+        activeIndex={selection.activeIndex}
+        chooseNatively={nativePicker.chooseNatively}
+        nativePickerDisabledReason={nativePicker.nativePickerDisabledReason}
+        rowCount={selection.rowCount}
+        showHiddenFolders={showHiddenFolders}
+        upPath={selection.upPath}
+        onShowHiddenFoldersChange={(checked) => {
+          selection.setSelectedIndex(null);
+          setShowHiddenFolders(checked);
+        }}
+      />
+    </div>
+  );
+}
+
+function useRemoteFolderPickerBrowse() {
   const client = useRemoteFolderPickerStore((state) => state.client);
-  // null = not edited yet; the field then shows the host home once known.
   const [rawInput, setRawInput] = useState<string | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  // The host's home, learned from the root (null-path) response; anchors `~`.
   const [homePath, setHomePath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const prepareFoldersVersion = useHostNegotiatedMethodVersion(
+    client,
+    "workspace.prepareFolders",
+  );
 
-  // Focus the field on mount: Radix focuses it when the dialog opens, but a
-  // second requestPick remounts this keyed body inside an already-open
-  // dialog, which Radix does not refocus.
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // Both are conveniences that must never gate browsing: each fails closed
-  // against a v1.0 host and is read here as "absent", never as an error.
-  const homeDirQuery = useWorkspaceGetHomeDir({ client, enabled: true });
   const recentsQuery = useWorkspaceListRecentWorkspaces({
     client,
     enabled: true,
   });
-
-  // Where `~` points. The root browse response is preferred - it is the
-  // directory actually being shown - and `getHomeDir` is the fallback that
-  // keeps `~` working when home is UNLISTABLE, so the root browse never
-  // answers and can never teach it. Add needs no listing, so picking out of an
-  // unlistable home still works. Null when neither answered (a v1.0 host fails
-  // `getHomeDir` closed); `~` then simply does not expand.
-  //
-  // Deliberately inline rather than extracted into a helper: routing it
-  // through a function makes `parsed` opaque to the React Compiler, which then
-  // bails out of preserving the `filteredEntries` memo below.
-  const effectiveHome = homePath ?? homeDirQuery.data?.homeDir ?? null;
-
-  const parsed = parseBrowseInput(rawInput, effectiveHome);
+  const parsed = parseBrowseInput(rawInput, homePath);
+  const browseDirectoryPath = readBrowseDirectoryPath(parsed, homePath);
   const query = useWorkspaceBrowseFolders({
     client,
-    directoryPath: parsed.directoryPath,
+    directoryPath: browseDirectoryPath,
     enabled: parsed.valid,
   });
   const data = parsed.valid ? query.data : undefined;
-  // A FAILED REFETCH keeps the last successful `data` in the cache (this
-  // query is `staleTime: 10_000`, so stepping back into a directory serves
-  // cache and refetches behind it). The listing renders no rows at all while
-  // this is set, so navigation has to agree with what is on screen - counting
-  // the stale rows below would let the arrow keys address option ids that are
-  // not rendered and let Enter open a directory the user cannot see.
   const listingError = parsed.valid ? query.error : null;
-
-  // Derived-state adjustment during render (React's sanctioned pattern):
-  // remember the home directory as soon as the root response is in.
-  if (
-    parsed.directoryPath === null &&
-    data !== undefined &&
-    homePath === null
-  ) {
-    setHomePath(data.directoryPath);
+  const homeDirQuery = useWorkspaceGetHomeDir({
+    client,
+    enabled: readHomeQueryEnabled(rawInput, homePath, parsed, listingError),
+  });
+  const discoveredHome = readDiscoveredHome(
+    parsed,
+    data,
+    homeDirQuery.data?.homeDir ?? null,
+  );
+  if (homePath === null && discoveredHome !== null) {
+    setHomePath(discoveredHome);
   }
 
-  const recentEntries = readRecentShortcuts(rawInput, recentsQuery.data);
+  return {
+    browseDirectoryPath,
+    canCreateDirectory: supportsDirectoryCreation(prepareFoldersVersion),
+    data,
+    homePath,
+    inputRef,
+    listingError,
+    parsed,
+    query,
+    rawInput,
+    recentEntries:
+      rawInput === null ? (recentsQuery.data?.recentWorkspaces ?? []) : [],
+    setRawInput,
+    shownInput: readShownInput(rawInput, data, homePath),
+  };
+}
 
-  const shownInput = readShownInput(rawInput, data, effectiveHome);
+function useRemoteFolderPickerSelection(args: {
+  readonly setRawInput: (value: string | null) => void;
+  readonly parsed: ParsedBrowseInput;
+  readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
+  readonly listingError: Error | null;
+  readonly showHiddenFolders: boolean;
+}) {
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const filteredEntries = useMemo(
     () =>
       filterEntries(
-        listingError !== null ? undefined : data?.entries,
-        parsed.filter,
+        readVisibleEntries(args.data, args.listingError),
+        args.parsed.filter,
+        args.showHiddenFolders,
       ),
-    [listingError, data?.entries, parsed.filter],
+    [args.data, args.listingError, args.parsed.filter, args.showHiddenFolders],
   );
-  const upPath = readUpPath(data, parsed);
-  // Row 0 is the ".." row whenever there is somewhere to go up to.
-  const rowCount = (upPath !== null ? 1 : 0) + filteredEntries.length;
-  const clampedIndex = Math.min(selectedIndex, Math.max(rowCount - 1, 0));
+  const upPath = readUpPath(args.data, args.parsed);
+  const rowCount = (upPath === null ? 0 : 1) + filteredEntries.length;
+  const activeIndex = readActiveIndex(selectedIndex, rowCount);
 
   const setPath = (path: string): void => {
-    setRawInput(path);
-    setSelectedIndex(0);
+    args.setRawInput(path);
+    setSelectedIndex(null);
   };
-
-  const enterEntry = (entry: WorkspaceBrowseFolderEntry): void => {
+  const enterEntry = (entry: WorkspaceBrowseFolderEntryV11): void => {
     setPath(withTrailingSeparator(entry.path));
   };
-
   const goUp = (): void => {
     if (upPath !== null) setPath(withTrailingSeparator(upPath));
   };
-
-  const addTarget = readAddTarget(rawInput, effectiveHome, data);
-
-  const addCurrent = (): void => {
-    if (addTarget === null) return;
-    settle(addTarget);
-  };
-
   const openSelectedRow = (): void => {
-    if (upPath !== null && clampedIndex === 0) {
+    if (activeIndex === null) return;
+    if (upPath !== null && activeIndex === 0) {
       goUp();
       return;
     }
-    const entry = filteredEntries.at(clampedIndex - (upPath !== null ? 1 : 0));
+    const entry = filteredEntries.at(activeIndex - (upPath !== null ? 1 : 0));
     if (entry !== undefined) enterEntry(entry);
   };
-
   const moveSelection = (delta: number): void => {
-    const next = Math.min(
-      Math.max(clampedIndex + delta, 0),
-      Math.max(rowCount - 1, 0),
-    );
+    if (rowCount === 0) return;
+    const next = readNextSelectionIndex(activeIndex, delta, rowCount);
     setSelectedIndex(next);
     const option = document.getElementById(pickerOptionId(next));
     if (option !== null && typeof option.scrollIntoView === "function") {
@@ -203,113 +331,369 @@ function RemoteFolderPickerBody(): ReactNode {
     }
   };
 
+  return {
+    activeIndex,
+    enterEntry,
+    filteredEntries,
+    goUp,
+    moveSelection,
+    openSelectedRow,
+    rowCount,
+    setPath,
+    setSelectedIndex,
+    upPath,
+  };
+}
+
+function readFolderPickerAddState(args: {
+  readonly canCreateDirectory: boolean;
+  readonly rawInput: string | null;
+  readonly parsed: ParsedBrowseInput;
+  readonly data: WorkspaceBrowseFoldersResponseV11 | undefined;
+  readonly listingError: Error | null;
+  readonly homePath: string | null;
+}): { readonly addTarget: string | null; readonly createDirectory: boolean } {
+  const wantsCreateDirectory = shouldCreateDirectory(
+    args.rawInput,
+    args.parsed,
+    args.data,
+    args.listingError,
+  );
+  if (wantsCreateDirectory && !args.canCreateDirectory) {
+    return { addTarget: null, createDirectory: false };
+  }
+  return {
+    addTarget: readAddTarget(args.rawInput, args.homePath, args.data),
+    createDirectory: wantsCreateDirectory,
+  };
+}
+
+function useRemoteFolderPickerNative(args: {
+  readonly canRefresh: boolean;
+  readonly refetch: () => Promise<unknown>;
+}) {
+  const requestId = useRemoteFolderPickerStore((state) => state.requestId);
+  const settle = useRemoteFolderPickerStore((state) => state.settle);
+  const client = useRemoteFolderPickerStore((state) => state.client);
+  const runnerHost = useRunnerHostOrNull();
+  const queryClient = useQueryClient();
+  const [nativePickerPending, setNativePickerPending] = useState(false);
+  const nativePickerPendingRef = useRef(false);
+  const activeHost = client?.getActiveHost() ?? null;
+  const nativePickerDisabledReason = readNativePickerDisabledReason(
+    nativePickerPending,
+    activeHost?.kind ?? null,
+    runnerHost?.workspaceFolders.canPickNatively === true,
+  );
+
+  const chooseNatively = async (): Promise<void> => {
+    if (
+      nativePickerDisabledReason !== null ||
+      runnerHost === null ||
+      nativePickerPendingRef.current
+    ) {
+      return;
+    }
+    nativePickerPendingRef.current = true;
+    setNativePickerPending(true);
+    const hostId = client?.getActiveHostId() ?? null;
+    try {
+      const paths = await runnerHost.workspaceFolders.pickFolders();
+      if (!isCurrentPickerRequest(requestId)) return;
+      if (paths.length === 0) {
+        if (args.canRefresh) void args.refetch();
+        return;
+      }
+      await queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(hostId, "workspace.browseFolders"),
+        refetchType: "none",
+      });
+      settle({ kind: "prepare", folderPaths: paths });
+    } catch {
+      if (isCurrentPickerRequest(requestId)) {
+        reportableErrorToast("Couldn't open the folder picker.", undefined, {
+          title: "Could not add workspace folders",
+          message: "The folder picker failed to open.",
+          code: null,
+          source: "Workspace folders",
+        });
+      }
+    } finally {
+      if (isCurrentPickerRequest(requestId)) {
+        nativePickerPendingRef.current = false;
+        setNativePickerPending(false);
+      }
+    }
+  };
+
+  return { chooseNatively, nativePickerDisabledReason };
+}
+
+function readBrowseDirectoryPath(
+  parsed: ParsedBrowseInput,
+  homePath: string | null,
+): string | null {
+  return parsed.directoryPath === homePath ? null : parsed.directoryPath;
+}
+
+function readHomeQueryEnabled(
+  rawInput: string | null,
+  homePath: string | null,
+  parsed: ParsedBrowseInput,
+  listingError: Error | null,
+): boolean {
+  if (homePath !== null) return false;
   return (
-    <div className="flex min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-3 py-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Up one folder"
-          data-testid="remote-folder-picker-up"
-          disabled={upPath === null}
-          onClick={goUp}
-        >
-          <ArrowLeft className="size-4" />
-        </Button>
-        <input
-          // Bare input, command-palette style: the dialog frame is the field.
-          className="min-w-0 flex-1 bg-transparent font-mono text-ui-sm outline-none placeholder:text-muted-foreground"
-          ref={inputRef}
-          role="combobox"
-          aria-label="Folder path"
-          aria-controls="remote-folder-picker-listbox"
-          // The listbox popup is always presented while the dialog is open
-          // (it may be empty); only the active option comes and goes.
-          aria-expanded
-          aria-activedescendant={
-            rowCount > 0 ? pickerOptionId(clampedIndex) : undefined
-          }
-          data-testid="remote-folder-picker-path"
-          value={shownInput}
-          placeholder="/path/on/the/host"
-          spellCheck={false}
-          onChange={(event) => {
-            setRawInput(event.target.value);
-            setSelectedIndex(0);
-          }}
-          onKeyDown={(event) => {
-            handlePickerFieldKeys(event, {
-              addCurrent,
-              openSelectedRow,
-              moveSelection,
-            });
-          }}
-        />
-        <Button
-          type="button"
-          size="sm"
-          data-testid="remote-folder-picker-add"
-          disabled={addTarget === null}
-          onClick={addCurrent}
-        >
-          Add
-          <PrimaryActionShortcutHint />
-        </Button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <RemoteFolderPickerRecents
-          entries={recentEntries}
-          onPick={(path) => {
-            // Picking a recent makes the field non-pristine, which unmounts
-            // the whole row - including the button that was just activated.
-            // `onMouseDown` keeps focus for a pointer, but a keyboard user
-            // (Enter/Space) never triggers that, so focus would land nowhere
-            // and the field would stop accepting typing, arrows and cmd+Enter.
-            setPath(path);
-            inputRef.current?.focus();
-          }}
-        />
-        <p className="px-2 pb-1 text-ui-xs text-muted-foreground">
-          Directories
-        </p>
-        <RemoteFolderPickerListing
-          invalid={!parsed.valid}
-          isPending={parsed.valid ? query.isPending : false}
-          error={listingError}
-          entries={data === undefined ? undefined : filteredEntries}
-          upPresent={upPath !== null}
-          selectedIndex={clampedIndex}
-          onUp={goUp}
-          onEnter={enterEntry}
-          onRetry={() => {
-            // Retry receives focus and disappears when it succeeds - hand
-            // the keyboard back to the combobox field either way.
-            void query.refetch().finally(() => {
-              inputRef.current?.focus();
-            });
-          }}
-        />
-      </div>
-      {/* The whole strip is the hint - hiding only the caps would leave a
-          bordered band of orphaned verbs. */}
+    (rawInput !== null && startsWithTilde(rawInput.trimStart())) ||
+    (parsed.directoryPath === null && listingError !== null)
+  );
+}
+
+function readDiscoveredHome(
+  parsed: ParsedBrowseInput,
+  data: WorkspaceBrowseFoldersResponseV11 | undefined,
+  fallbackHome: string | null,
+): string | null {
+  if (parsed.directoryPath === null && data !== undefined) {
+    return data.directoryPath;
+  }
+  return fallbackHome;
+}
+
+function supportsDirectoryCreation(version: NegotiatedMethodVersion): boolean {
+  return (
+    version !== null &&
+    version !== false &&
+    version.major === 1 &&
+    version.minor >= 3
+  );
+}
+
+function readVisibleEntries(
+  data: WorkspaceBrowseFoldersResponseV11 | undefined,
+  listingError: Error | null,
+): ReadonlyArray<WorkspaceBrowseFolderEntryV11> | undefined {
+  return listingError === null ? data?.entries : undefined;
+}
+
+function readActiveIndex(
+  selectedIndex: number | null,
+  rowCount: number,
+): number | null {
+  if (selectedIndex === null || rowCount === 0) return null;
+  return Math.min(selectedIndex, rowCount - 1);
+}
+
+function isCurrentPickerRequest(requestId: number): boolean {
+  const picker = useRemoteFolderPickerStore.getState();
+  return picker.open && picker.requestId === requestId;
+}
+
+function RemoteFolderPickerHeader({
+  activeIndex,
+  addCurrent,
+  addTarget,
+  canGoBack,
+  createDirectory,
+  goBack,
+  inputRef,
+  moveSelection,
+  onChange,
+  onClose,
+  onOpenSelectedRow,
+  shownInput,
+}: {
+  readonly activeIndex: number | null;
+  readonly addCurrent: () => void;
+  readonly addTarget: string | null;
+  readonly canGoBack: boolean;
+  readonly createDirectory: boolean;
+  readonly goBack: () => void;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
+  readonly moveSelection: (delta: number) => void;
+  readonly onChange: (value: string) => void;
+  readonly onClose: () => void;
+  readonly onOpenSelectedRow: () => void;
+  readonly shownInput: string;
+}): ReactNode {
+  return (
+    <div className="flex shrink-0 items-center gap-2 px-3 py-3">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Up one folder"
+        data-testid="remote-folder-picker-up"
+        disabled={!canGoBack}
+        onClick={goBack}
+      >
+        <ArrowLeft className="size-4" />
+      </Button>
+      <input
+        // Bare input, command-palette style: the dialog frame is the field.
+        className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground sm:text-ui-sm"
+        ref={inputRef}
+        role="combobox"
+        aria-label="Folder path"
+        aria-controls="remote-folder-picker-listbox"
+        // The listbox popup is always presented while the dialog is open
+        // (it may be empty); only the active option comes and goes.
+        aria-expanded
+        aria-activedescendant={
+          activeIndex === null ? undefined : pickerOptionId(activeIndex)
+        }
+        data-testid="remote-folder-picker-path"
+        value={shownInput}
+        placeholder="/path/on/the/host"
+        spellCheck={false}
+        onChange={(event) => {
+          onChange(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          handlePickerFieldKeys(event, {
+            addCurrent,
+            canGoBack,
+            goBack,
+            hasActiveRow: activeIndex !== null,
+            openSelectedRow: onOpenSelectedRow,
+            moveSelection,
+          });
+        }}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="remote-folder-picker-add"
+        disabled={addTarget === null}
+        onClick={addCurrent}
+      >
+        {createDirectory ? "Create & Add" : "Add"}
+        <ShortcutHint>
+          {activeIndex === null ? (
+            <Kbd aria-hidden>↵</Kbd>
+          ) : (
+            <KbdGroup aria-hidden>
+              <Kbd>{modLabel()}</Kbd>
+              <Kbd>↵</Kbd>
+            </KbdGroup>
+          )}
+        </ShortcutHint>
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="md:hidden"
+        aria-label="Close folder picker"
+        onClick={onClose}
+      >
+        <X className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
+function RemoteFolderPickerFooter(props: {
+  readonly activeIndex: number | null;
+  readonly chooseNatively: () => Promise<void>;
+  readonly nativePickerDisabledReason: string | null;
+  readonly rowCount: number;
+  readonly showHiddenFolders: boolean;
+  readonly upPath: string | null;
+  readonly onShowHiddenFoldersChange: (checked: boolean) => void;
+}): ReactNode {
+  return (
+    <div className="flex shrink-0 items-center gap-3 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground">
+      {/* Hide the whole legend, not just its caps, when shortcut hints are
+          unavailable. The footer actions remain independently reachable at
+          the right edge. */}
       <ShortcutHint>
-        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <Kbd>↑</Kbd>
-            <Kbd>↓</Kbd> Navigate
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Kbd>⏎</Kbd> Open
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Kbd>⌫</Kbd> Back
-          </span>
+        <div className="hidden min-w-0 flex-wrap items-center gap-x-3 gap-y-1 min-[36rem]:flex">
+          {props.rowCount > 0 ? (
+            <span className="inline-flex items-center gap-1">
+              <Kbd>↑</Kbd>
+              <Kbd>↓</Kbd> Navigate
+            </span>
+          ) : null}
+          {props.activeIndex !== null ? (
+            <span className="inline-flex items-center gap-1">
+              <Kbd>⏎</Kbd> Open
+            </span>
+          ) : null}
+          {props.upPath !== null ? (
+            <span className="inline-flex items-center gap-1">
+              <Kbd>⌫</Kbd> Back
+            </span>
+          ) : null}
           <span className="inline-flex items-center gap-1">
             <Kbd>Esc</Kbd> Close
           </span>
         </div>
       </ShortcutHint>
+      <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
+        <TooltipWrapper
+          label={props.nativePickerDisabledReason}
+          side="top"
+          sideOffset={4}
+          align="end"
+        >
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            aria-disabled={
+              props.nativePickerDisabledReason === null ? undefined : true
+            }
+            data-testid="remote-folder-picker-native"
+            onClick={() => {
+              void props.chooseNatively();
+            }}
+          >
+            Open native picker
+          </Button>
+        </TooltipWrapper>
+        <Popover>
+          <PopoverTrigger asChild>
+            <TooltipWrapper
+              label="Folder picker settings"
+              side="top"
+              sideOffset={4}
+              align="end"
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Folder picker settings"
+              >
+                <Settings2 aria-hidden />
+              </Button>
+            </TooltipWrapper>
+          </PopoverTrigger>
+          <PopoverContent
+            side="right"
+            sideOffset={8}
+            align="end"
+            className="w-[min(86vw,16rem)]"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <label
+                htmlFor="folder-picker-show-hidden"
+                className="text-ui-sm font-medium"
+              >
+                Show hidden folders
+              </label>
+              <Switch
+                id="folder-picker-show-hidden"
+                checked={props.showHiddenFolders}
+                onCheckedChange={props.onShowHiddenFoldersChange}
+              />
+            </div>
+          </PopoverContent>
+        </Popover>
+      </div>
     </div>
   );
 }
@@ -330,27 +714,30 @@ function RemoteFolderPickerRecents(props: {
 }): ReactNode {
   if (props.entries.length === 0) return null;
   return (
-    <div data-testid="remote-folder-picker-recents">
+    <div className="pb-2" data-testid="remote-folder-picker-recents">
       <p className="px-2 pb-1 text-ui-xs text-muted-foreground">Recent</p>
-      <div className="flex flex-wrap gap-1 px-2 pb-3">
+      <div className="flex flex-col">
         {props.entries.map((entry) => (
-          <Button
-            key={entry.path}
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 max-w-full min-w-0 font-mono font-normal"
-            data-testid="remote-folder-picker-recent"
-            // Keep focus (and the keyboard model) on the combobox field.
-            onMouseDown={(event) => {
-              event.preventDefault();
-            }}
-            onClick={() => {
-              props.onPick(entry.path);
-            }}
-          >
-            <span className="min-w-0 truncate">{entry.path}</span>
-          </Button>
+          <FilePathTooltip key={entry.path} content={entry.path} side="bottom">
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-10 w-full min-w-0 justify-start gap-2 px-2 font-normal"
+              data-testid="remote-folder-picker-recent"
+              // Keep focus (and the keyboard model) on the combobox field.
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                props.onPick(entry.path);
+              }}
+            >
+              <Folder className="size-4 shrink-0 text-muted-foreground" />
+              <StartTruncatedText className="block min-w-0 flex-1">
+                {entry.path}
+              </StartTruncatedText>
+            </Button>
+          </FilePathTooltip>
         ))}
       </div>
     </div>
@@ -361,11 +748,13 @@ function RemoteFolderPickerListing(props: {
   readonly invalid: boolean;
   readonly isPending: boolean;
   readonly error: Error | null;
-  readonly entries: ReadonlyArray<WorkspaceBrowseFolderEntry> | undefined;
+  readonly entries: ReadonlyArray<WorkspaceBrowseFolderEntryV11> | undefined;
   readonly upPresent: boolean;
-  readonly selectedIndex: number;
+  readonly activeIndex: number | null;
+  readonly hideEmptyMessage: boolean;
+  readonly onActivate: (index: number | null) => void;
   readonly onUp: () => void;
-  readonly onEnter: (entry: WorkspaceBrowseFolderEntry) => void;
+  readonly onEnter: (entry: WorkspaceBrowseFolderEntryV11) => void;
   readonly onRetry: () => void;
 }): ReactNode {
   // The `..` option renders in every state (error/loading included): the
@@ -386,15 +775,18 @@ function RemoteFolderPickerListing(props: {
           tabIndex={-1}
           role="option"
           id={pickerOptionId(0)}
-          aria-selected={props.selectedIndex === 0}
+          aria-selected={props.activeIndex === 0}
           className={cn(
             "h-10 w-full justify-start gap-2 px-2",
-            props.selectedIndex === 0 && "bg-accent",
+            props.activeIndex === 0 && "bg-accent",
           )}
           data-testid="remote-folder-picker-up-row"
           // Keep focus (and the keyboard model) on the combobox field.
           onMouseDown={(event) => {
             event.preventDefault();
+          }}
+          onMouseEnter={() => {
+            props.onActivate(0);
           }}
           onClick={props.onUp}
         >
@@ -417,15 +809,18 @@ function RemoteFolderPickerListing(props: {
             tabIndex={-1}
             role="option"
             id={pickerOptionId(index + offset)}
-            aria-selected={props.selectedIndex === index + offset}
+            aria-selected={props.activeIndex === index + offset}
             className={cn(
               "h-10 w-full justify-start gap-2 px-2",
-              props.selectedIndex === index + offset && "bg-accent",
+              props.activeIndex === index + offset && "bg-accent",
             )}
             data-testid="remote-folder-picker-row"
             // Keep focus (and the keyboard model) on the combobox field.
             onMouseDown={(event) => {
               event.preventDefault();
+            }}
+            onMouseEnter={() => {
+              props.onActivate(index + offset);
             }}
             onClick={() => {
               props.onEnter(entry);
@@ -450,6 +845,9 @@ function RemoteFolderPickerListing(props: {
         id="remote-folder-picker-listbox"
         aria-label="Directories"
         data-testid="remote-folder-picker-rows"
+        onMouseLeave={() => {
+          props.onActivate(null);
+        }}
       >
         {rows}
       </ul>
@@ -458,6 +856,7 @@ function RemoteFolderPickerListing(props: {
         isPending={props.isPending}
         error={props.error}
         entries={props.entries}
+        hideEmptyMessage={props.hideEmptyMessage}
         onRetry={props.onRetry}
       />
     </>
@@ -468,9 +867,15 @@ function RemoteFolderPickerListingStatus(props: {
   readonly invalid: boolean;
   readonly isPending: boolean;
   readonly error: Error | null;
-  readonly entries: ReadonlyArray<WorkspaceBrowseFolderEntry> | undefined;
+  readonly entries: ReadonlyArray<WorkspaceBrowseFolderEntryV11> | undefined;
+  readonly hideEmptyMessage: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
+  const pending =
+    !props.invalid &&
+    props.error === null &&
+    (props.isPending || props.entries === undefined);
+
   if (props.invalid) {
     // Not loading - nothing was requested for a non-absolute path.
     return (
@@ -559,10 +964,10 @@ function RemoteFolderPickerListingStatus(props: {
       </div>
     );
   }
-  if (props.isPending || props.entries === undefined) {
+  if (pending) {
     return (
       <div
-        className="flex flex-col gap-1"
+        className="flex animate-in flex-col gap-1 fade-in-0 fill-mode-backwards delay-150 duration-150 motion-reduce:duration-0"
         data-testid="remote-folder-picker-loading"
         aria-busy="true"
         aria-label="Loading folders"
@@ -573,7 +978,7 @@ function RemoteFolderPickerListingStatus(props: {
       </div>
     );
   }
-  if (props.entries.length === 0) {
+  if (props.entries?.length === 0 && !props.hideEmptyMessage) {
     return (
       <p className="p-2 text-ui-sm text-muted-foreground">No subfolders.</p>
     );
@@ -601,16 +1006,43 @@ function pickerOptionId(index: number): string {
   return `remote-folder-picker-option-${String(index)}`;
 }
 
+function readNativePickerDisabledReason(
+  pending: boolean,
+  hostKind: HostKind | null,
+  canPickNatively: boolean,
+): string | null {
+  if (pending) return "The system folder picker is already open.";
+  if (hostKind === null) return "Choose a host first.";
+  if (hostKind === "remote") {
+    return "Switch to this computer's host to use the system folder picker.";
+  }
+  return canPickNatively
+    ? null
+    : "The system folder picker is unavailable in this app.";
+}
+
+function readNextSelectionIndex(
+  activeIndex: number | null,
+  delta: number,
+  rowCount: number,
+): number {
+  if (activeIndex === null) return delta > 0 ? 0 : rowCount - 1;
+  return Math.min(Math.max(activeIndex + delta, 0), rowCount - 1);
+}
+
 /**
  * Keyboard model on the path field (the dialog auto-focuses it): arrows move
- * the row selection, Enter opens the selected row, cmd/ctrl+Enter adds the
- * current path. Backspace needs no handler - deleting characters past a `/`
- * IS up-navigation, because the field is the source of truth.
+ * the row selection, Enter opens the active row or commits the current path,
+ * and cmd/ctrl+Enter always commits. At the end of an exact directory path,
+ * Backspace walks up one level.
  */
 function handlePickerFieldKeys(
   event: KeyboardEvent<HTMLInputElement>,
   actions: {
     readonly addCurrent: () => void;
+    readonly canGoBack: boolean;
+    readonly goBack: () => void;
+    readonly hasActiveRow: boolean;
     readonly openSelectedRow: () => void;
     readonly moveSelection: (delta: number) => void;
   },
@@ -627,7 +1059,19 @@ function handlePickerFieldKeys(
   }
   if (event.key === "Enter") {
     event.preventDefault();
-    actions.openSelectedRow();
+    if (actions.hasActiveRow) actions.openSelectedRow();
+    else actions.addCurrent();
+    return;
+  }
+  if (
+    event.key === "Backspace" &&
+    actions.canGoBack &&
+    event.currentTarget.selectionStart === event.currentTarget.value.length &&
+    event.currentTarget.selectionEnd === event.currentTarget.value.length &&
+    event.currentTarget.value.endsWith(separatorOf(event.currentTarget.value))
+  ) {
+    event.preventDefault();
+    actions.goBack();
     return;
   }
   if (event.key === "ArrowDown") {
@@ -639,261 +1083,4 @@ function handlePickerFieldKeys(
     event.preventDefault();
     actions.moveSelection(-1);
   }
-}
-
-interface ParsedBrowseInput {
-  /** False when the field holds something that is not a browsable path yet. */
-  readonly valid: boolean;
-  /** RPC path of the directory segment; null = the host's home. */
-  readonly directoryPath: string | null;
-  /** Live filter: the segment after the last `/`. */
-  readonly filter: string;
-}
-
-const INVALID_INPUT: ParsedBrowseInput = {
-  valid: false,
-  directoryPath: null,
-  filter: "",
-};
-
-/**
- * Paths here are HOST-native, not client-native: `workspace.browseFolders`
- * runs on the host and answers in whatever that OS writes, so a Windows host
- * sends `C:\Users\alice` and a POSIX host sends `/Users/alice`. The picker
- * therefore accepts BOTH separators everywhere and echoes back the one a path
- * is already written with.
- *
- * It never has to CONVERT: Windows accepts `/` as a separator too, so a path
- * the user types with forward slashes still resolves on the host, and mixing
- * them (`~/proj` expanded against `C:\Users\alice`) is fine.
- */
-const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
-
-/**
- * `\\server\share` - the shortest thing on a UNC path that is still a root.
- * Windows accepts forward slashes here too (`//server/share`), so both lead-in
- * separators count; a genuine POSIX path virtually never starts with a doubled
- * slash, and POSIX itself leaves that prefix implementation-defined.
- */
-const WINDOWS_UNC_ROOT = /^[\\/]{2}[^\\/]+[\\/][^\\/]+/;
-
-function isAbsolutePath(path: string): boolean {
-  return (
-    path.startsWith("/") ||
-    WINDOWS_DRIVE_ROOT.test(path) ||
-    WINDOWS_UNC_ROOT.test(path)
-  );
-}
-
-/**
- * Length of the leading run that navigation may never chop into: `/`, `C:\`,
- * or `\\server\share`. Without it, going up from `C:\Users` would land on
- * `C:` (a drive-relative path, not a folder) instead of stopping at `C:\`.
- */
-function rootLengthOf(path: string): number {
-  const unc = WINDOWS_UNC_ROOT.exec(path);
-  if (unc !== null) return unc[0].length;
-  if (WINDOWS_DRIVE_ROOT.test(path)) return 3;
-  return 1;
-}
-
-/**
- * `\` counts as a separator only once the path is known to be Windows-native.
- * On a POSIX host a backslash is an ordinary filename character, so a folder
- * genuinely named `foo\bar` must not be split at it - `/srv/foo\bar` browses
- * `/srv` filtered by `foo\bar`, never `/srv/foo` filtered by `bar`.
- */
-function lastSeparatorIndex(path: string): number {
-  if (path.startsWith("/") && !WINDOWS_UNC_ROOT.test(path)) {
-    return path.lastIndexOf("/");
-  }
-  return Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-}
-
-/**
- * The separator a path already uses. A POSIX absolute path always wins, so a
- * directory legitimately NAMED with a backslash cannot flip the whole path to
- * Windows separators.
- */
-function separatorOf(path: string): string {
-  if (path.startsWith("/")) return "/";
-  return path.includes("\\") ? "\\" : "/";
-}
-
-/** Descending appends a separator; a root already ends in one. */
-function withTrailingSeparator(path: string): string {
-  // Only the path's OWN separator counts as already-terminated: a POSIX
-  // folder named `foo\` still needs its `/`.
-  const separator = separatorOf(path);
-  return path.endsWith(separator) ? path : path + separator;
-}
-
-function isTildeOnly(raw: string): boolean {
-  return raw === "~" || raw === "~/" || raw === "~\\";
-}
-
-function startsWithTilde(path: string): boolean {
-  return path.startsWith("~/") || path.startsWith("~\\");
-}
-
-/**
- * Split the field into the directory to browse (up to the last separator) and
- * the live filter after it, expanding a leading `~` against the host home. An
- * unedited field (null) browses the home directory unfiltered.
- */
-function parseBrowseInput(
-  rawInput: string | null,
-  homePath: string | null,
-): ParsedBrowseInput {
-  if (rawInput === null) {
-    return { valid: true, directoryPath: null, filter: "" };
-  }
-  // Trailing whitespace is SIGNIFICANT: a POSIX directory may legitimately end
-  // in one, so only the leading side is forgiven (nothing absolute starts with
-  // whitespace). Emptiness and tilde-only are judged on a fully-trimmed copy -
-  // whitespace alone is still "no path yet", not a filter.
-  const raw = rawInput.trimStart();
-  const collapsed = raw.trimEnd();
-  if (collapsed === "" || isTildeOnly(collapsed)) {
-    return { valid: true, directoryPath: null, filter: "" };
-  }
-  let path = raw;
-  if (startsWithTilde(path)) {
-    // Home not learned yet: keep the root browse running (it is the only
-    // request that can teach us home), unfiltered; the next render reparses
-    // once the response lands.
-    if (homePath === null) {
-      return { valid: true, directoryPath: null, filter: "" };
-    }
-    path = homePath + path.slice(1);
-  }
-  if (!isAbsolutePath(path)) return INVALID_INPUT;
-  const lastSlash = lastSeparatorIndex(path);
-  const rootLength = rootLengthOf(path);
-  if (lastSlash < rootLength) {
-    // Still inside the root itself, so the root IS the directory and whatever
-    // follows it is the filter. This cannot be derived from the last
-    // separator: `/` and `C:\` end in theirs so the two happen to agree, but
-    // a UNC share root does not - `\\server\share` would take its filter from
-    // the separator before `share` and filter the share by its own name,
-    // hiding every row.
-    return {
-      valid: true,
-      directoryPath: path.slice(0, rootLength),
-      filter: path.slice(rootLength),
-    };
-  }
-  return {
-    valid: true,
-    directoryPath: path.slice(0, lastSlash),
-    filter: path.slice(lastSlash + 1),
-  };
-}
-
-/**
- * Recent-workspace shortcuts to offer: only on the PRISTINE field - the "just
- * opened the picker" moment they are for - because once the user types, the
- * listing is the subject and the shortcuts would only crowd it. Empty when the
- * host did not answer the operation (v1.0 fails it closed), which renders
- * nothing rather than an error.
- */
-function readRecentShortcuts(
-  rawInput: string | null,
-  recentsData: WorkspacePrepareFoldersResponseV12 | undefined,
-): ReadonlyArray<WorkspaceRecentEntry> {
-  if (rawInput !== null) return [];
-  return recentsData?.recentWorkspaces ?? [];
-}
-
-function parentOf(path: string): string {
-  const rootLength = rootLengthOf(path);
-  const index = lastSeparatorIndex(path);
-  // At (or inside) the root the parent is the root itself - the fixpoint the
-  // caller reads as "nowhere further up".
-  return index < rootLength ? path.slice(0, rootLength) : path.slice(0, index);
-}
-
-/** Field text when unedited: the current location with a trailing separator. */
-function readShownInput(
-  rawInput: string | null,
-  data: WorkspaceBrowseFoldersResponse | undefined,
-  homePath: string | null,
-): string {
-  if (rawInput !== null) return rawInput;
-  if (data !== undefined) return withTrailingSeparator(data.directoryPath);
-  // The root listing FAILED but `getHomeDir` answered - the supported
-  // unlistable-home case. Add is armed with that home, so it has to be
-  // visible: showing a blank field under an enabled Add would submit a path
-  // the user was never shown. `readAddTarget` falls back the same way.
-  return homePath === null ? "" : withTrailingSeparator(homePath);
-}
-
-/**
- * Up-navigation target. While a directory is unlistable (loading, or no
- * access) the response carries no parent - fall back to the lexical parent
- * so the user can still back out with the button or the `..` row.
- */
-function readUpPath(
-  data: WorkspaceBrowseFoldersResponse | undefined,
-  parsed: ParsedBrowseInput,
-): string | null {
-  if (data !== undefined) return data.parentPath;
-  if (parsed.valid && parsed.directoryPath !== null) {
-    return parentOf(parsed.directoryPath);
-  }
-  return null;
-}
-
-/**
- * Prefix-filter the listing by the segment being typed. The host sends
- * hidden (dot) directories too; they surface only while the filter itself
- * starts with "." (T3-style).
- */
-function filterEntries(
-  entries: ReadonlyArray<WorkspaceBrowseFolderEntry> | undefined,
-  filter: string,
-): ReadonlyArray<WorkspaceBrowseFolderEntry> {
-  if (entries === undefined) return [];
-  const showHidden = filter.startsWith(".");
-  const folded = filter.toLowerCase();
-  return entries.filter(
-    (entry) =>
-      entry.name.toLowerCase().startsWith(folded) &&
-      (showHidden || !entry.name.startsWith(".")),
-  );
-}
-
-/**
- * What Add picks: exactly what the field shows (with `~` expanded and any
- * trailing `/` dropped), whether or not that folder was ever listed -
- * selecting a folder needs no read. An unedited field picks the home the
- * field displays; a field the user explicitly cleared picks nothing.
- */
-function readAddTarget(
-  rawInput: string | null,
-  homePath: string | null,
-  data: WorkspaceBrowseFoldersResponse | undefined,
-): string | null {
-  if (rawInput === null) return data?.directoryPath ?? homePath;
-  // Same discipline as `parseBrowseInput`: trailing whitespace stays part of
-  // the path - `/srv/project ` and `/srv/project` are distinct siblings, and
-  // Add must submit exactly what the field shows.
-  const raw = rawInput.trimStart();
-  const collapsed = raw.trimEnd();
-  if (collapsed === "") return null;
-  if (isTildeOnly(collapsed)) return homePath ?? data?.directoryPath ?? null;
-  let path = raw;
-  if (startsWithTilde(path)) {
-    if (homePath === null) return null;
-    path = homePath + path.slice(1);
-  }
-  if (!isAbsolutePath(path)) return null;
-  const rootLength = rootLengthOf(path);
-  // Same discipline as `withTrailingSeparator`: strip only this path's own
-  // separator, so a POSIX folder named `foo\` keeps its backslash.
-  const separator = separatorOf(path);
-  while (path.length > rootLength && path.endsWith(separator)) {
-    path = path.slice(0, -1);
-  }
-  return path;
 }

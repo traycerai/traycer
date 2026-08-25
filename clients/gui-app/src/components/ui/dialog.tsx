@@ -51,10 +51,12 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  overlayClassName,
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  overlayClassName?: string;
 }) {
   // Dialog roots retain their logical open state so operation/staging state
   // survives split focus changes. A modal dialog kept mounted in the background
@@ -72,7 +74,7 @@ function DialogContent({
   if (!paneFocused || concealed) return null;
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
