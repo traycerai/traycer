@@ -1,12 +1,8 @@
 import { useRef } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
+import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
@@ -109,9 +105,15 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           <X className="size-3" aria-hidden />
         </Button>
       </div>
-      <DialogContent
-        className="w-[min(90vw,56rem)] max-w-[min(90vw,56rem)] sm:max-w-[min(90vw,56rem)] p-2"
-        showCloseButton
+      <ExpandedImageDialogContent
+        title={label.title}
+        alt={alt}
+        image={
+          src === null
+            ? { status: "loading" }
+            : { status: "ready", src, mediaType: atom.mimeType }
+        }
+        suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           const shell = wrapperRef.current?.closest<HTMLElement>(
@@ -122,22 +124,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           );
           editor?.focus();
         }}
-      >
-        <DialogTitle className="sr-only">{label.title}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-md bg-foreground/10"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block size-full max-h-[min(85vh,48rem)] w-full rounded-md object-contain"
-            draggable={false}
-          />
-        )}
-      </DialogContent>
+      />
     </Dialog>
   );
 }
