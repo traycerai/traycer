@@ -76,9 +76,12 @@ function RootSensorRow() {
     data: { kind: "probe" },
   });
   return (
-    <div ref={setNodeRef} {...listeners} data-testid="row">
+    // A button, like the real chat and background rows this stands in for -
+    // the sensor's only element-level condition is the left-button press it
+    // already checks, so the tag does not change what is under test.
+    <button ref={setNodeRef} {...listeners} type="button">
       row
-    </div>
+    </button>
   );
 }
 
@@ -97,7 +100,7 @@ function RootSensorProbe(props: { readonly onDragStart: () => void }) {
 
 /** Press the row and drag past the sensor's activation distance. */
 function pressAndDrag(pointerType: string): void {
-  fireEvent.pointerDown(screen.getByTestId("row"), {
+  fireEvent.pointerDown(screen.getByRole("button", { name: "row" }), {
     pointerType,
     isPrimary: true,
     button: 0,
