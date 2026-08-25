@@ -12,26 +12,29 @@ const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   const terminalsById: Readonly<Record<string, unknown>> = {};
-  // The registry-settled fleet the GC reads, held in a cell so `binding` can
-  // stay one stable object: it sits in the GC effect's dependency list, and a
-  // fresh identity per render would re-run the pass on every commit.
-  const settledFleet: { current: ReadonlySet<string> | null } = {
-    current: null,
-  };
+  // Whether the registry has answered for the fleet, held in a cell so
+  // `binding` can stay one stable object: it sits in a dependency list, and a
+  // fresh identity per render would recompute on every commit. The fleet ITSELF
+  // is `entries`, exactly as the bridge reads it.
+  const fleetSettled: { current: boolean } = { current: false };
   return {
     entries: [] as readonly HostDirectoryEntry[],
-    kill: vi.fn(),
+    // The bridge's legacy drain now dispatches through `mutateAsync` so a
+    // rejection can be retried; one fn backs both so existing call
+    // assertions keep describing the same dispatch.
+    kill: vi.fn(() => Promise.resolve()),
     readySessionHosts: new Set<string>(),
     authorityStatus: initialAuthorityStatus(),
     canMutate: false,
     terminalsById,
     closeAsync: vi.fn(() => Promise.resolve()),
-    /** `null` models a registry nobody has successfully reached yet. */
-    settledFleet,
+    /** The host ids the authority fleet was last asked to probe. */
+    probedHostIds: [] as readonly string[],
+    /** `false` models a registry nobody has successfully reached yet. */
+    fleetSettled,
     binding: {
       directory: {
-        settledFleetHostIds: (): ReadonlySet<string> | null =>
-          settledFleet.current,
+        hasSettledFleet: (): boolean => fleetSettled.current,
       },
     },
   };
@@ -47,7 +50,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
 vi.mock(
   "@/components/home/terminal-panel/use-landing-terminal-kill-mutation",
   () => ({
-    useLandingTerminalKill: () => ({ mutate: mocks.kill }),
+    useLandingTerminalKill: () => ({
+      mutate: mocks.kill,
+      mutateAsync: mocks.kill,
+    }),
   }),
 );
 vi.mock(
@@ -63,6 +69,7 @@ vi.mock(
         const hostKey = props.hostIds.join("\u0000");
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
+          mocks.probedHostIds = hostIds;
           hostIds.forEach((hostId) => {
             onEntry(hostId, {
               authority: {
@@ -150,15 +157,16 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   beforeEach(() => {
     mocks.entries = [offlineHost];
     mocks.kill.mockReset();
+    mocks.kill.mockImplementation(() => Promise.resolve());
     mocks.readySessionHosts = new Set();
     mocks.authorityStatus = "legacy";
     mocks.canMutate = false;
     mocks.terminalsById = {};
     mocks.closeAsync.mockReset();
     mocks.closeAsync.mockImplementation(() => Promise.resolve());
-    // Drain cases run with the registry unanswered, so the GC never fires and
-    // cannot be confused for the behaviour they assert.
-    mocks.settledFleet.current = null;
+    // Drain cases run with the registry unanswered, so every tombstoned host
+    // is probed and probe scoping cannot be confused for what they assert.
+    mocks.fleetSettled.current = false;
     useLandingTerminalStore.getState().resetForTests();
   });
 
@@ -302,6 +310,50 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
     expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+  });
+
+  it("retries a LEGACY kill after a transient rejection", async () => {
+    // The legacy arm used to be a bare `mutate` with no rejection handling.
+    // That was survivable only while an offline close was impossible; now this
+    // is the path a legacy host's deferred kill travels, so a single transient
+    // failure would otherwise strand the PTY until a route flap or a reload.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(undefined);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "legacy-retry-tab",
+      sessionId: "session-legacy-retry",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "legacy-retry-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(2);
+    expect(mocks.kill).toHaveBeenLastCalledWith({
+      hostId: "host-b",
+      sessionId: "session-legacy-retry",
+    });
   });
 
   it("backs off repeated capable close failures without concurrent retries", async () => {
@@ -582,12 +634,14 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     }
   });
 
-  it("drops a tombstone once the registry-settled fleet no longer lists its host", async () => {
+  it("withholds the authority probe for a host that left the account, and keeps its tombstone", async () => {
     // host-b stays listed (the default fixture); the tombstone below names a
-    // DIFFERENT host that has left the account entirely - deregistration,
-    // not merely offline.
+    // DIFFERENT host that has left the account entirely - deregistration, not
+    // merely offline. Nothing is destroyed: deregistration revokes a credential
+    // and leaves the machine untouched, so the record that its shell needs
+    // killing has to outlive the probe that would have delivered it.
     mocks.entries = [offlineHost];
-    mocks.settledFleet.current = new Set(["host-b"]);
+    mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
       instanceId: "gone-tab",
       sessionId: "session-gone",
@@ -597,26 +651,54 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       titleSource: "default",
     });
     useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-gone", sessionId: "session-gone" },
     ]);
-
-    render(<LandingTerminalTombstoneRecoveryBridge />);
-
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    });
   });
 
-  it("does not drop a tombstone while the registry is unanswered, even though a local host keeps the snapshot non-empty", async () => {
-    // The regression that made emptiness the wrong guard. A directory snapshot
-    // is `localEntry` + `remoteEntries`, so a machine running a local host
-    // renders one ordinary row whether the registry answered or not - a failed
-    // first fetch is indistinguishable from a one-host account by row count
-    // alone. Pruning here would abandon the live shell on host-b at every
-    // launch that starts offline.
+  it("probes again, and drains, when a deregistered host is re-enrolled under the same id", async () => {
+    // `host-deregister-fetcher` documents that removal revokes the credential
+    // and nothing else - "the hostId survives" and "re-enrollment re-adopts the
+    // SAME id". Deleting the tombstone would have destroyed the kill record at
+    // the exact moment it became useful again.
+    mocks.entries = [offlineHost];
+    mocks.fleetSettled.current = true;
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "gone-tab",
+      sessionId: "session-gone",
+      hostId: "host-gone",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "gone-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.probedHostIds).toEqual([]);
+
+    // The machine is set up again and re-adopts its old id.
+    mocks.fleetSettled.current = true;
+    mocks.entries = [offlineHost, { ...offlineHost, hostId: "host-gone" }];
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.probedHostIds).toEqual(["host-gone"]);
+  });
+
+  it("probes every tombstoned host while the registry is unanswered, even though a local host keeps the snapshot non-empty", async () => {
+    // Absence from a fleet nobody has answered for is not evidence of
+    // anything. A directory snapshot is `localEntry` + `remoteEntries`, so a
+    // machine running a local host renders one ordinary row whether the
+    // registry answered or not - scoping on row count would strand host-b's
+    // drain at every launch that started offline.
     mocks.entries = [localHost];
-    mocks.settledFleet.current = null;
+    mocks.fleetSettled.current = false;
     useLandingTerminalStore.getState().addTab({
       instanceId: "boot-tab",
       sessionId: "session-boot",
@@ -630,14 +712,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
+    expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-b", sessionId: "session-boot" },
     ]);
   });
 
-  it("keeps a tombstone for a host that is offline but still listed in the settled fleet", async () => {
+  it("keeps probing a host that is offline but still listed in the settled fleet", async () => {
     mocks.entries = [offlineHost];
-    mocks.settledFleet.current = new Set(["host-b"]);
+    mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
       instanceId: "offline-tab",
       sessionId: "session-offline",
@@ -651,6 +734,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     render(<LandingTerminalTombstoneRecoveryBridge />);
     await act(async () => Promise.resolve());
 
+    expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-b", sessionId: "session-offline" },
     ]);
@@ -658,44 +742,13 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
-  it("collects a tombstone recorded after the fleet already settled", async () => {
-    // The trigger gap. Closing a tab whose host had already left the account
-    // moves neither the binding nor the directory rows, so a GC keyed on those
-    // alone would leave the tombstone - and the authority probe it keeps
-    // mounted - resting until something unrelated happened to change.
-    mocks.entries = [offlineHost];
-    mocks.settledFleet.current = new Set(["host-b"]);
-
-    render(<LandingTerminalTombstoneRecoveryBridge />);
-    await act(async () => Promise.resolve());
-
-    act(() => {
-      useLandingTerminalStore.getState().addTab({
-        instanceId: "late-tab",
-        sessionId: "session-late",
-        hostId: "host-gone",
-        cwd: "/workspace/project",
-        name: "project",
-        titleSource: "default",
-      });
-      useLandingTerminalStore.getState().closeTab("landing-page", "late-tab");
-    });
-
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    });
-  });
-
-  it("prunes against an ANSWERED empty fleet, which is how a single-host account deregisters", async () => {
-    // Deliberate, and the asymmetry is documented rather than accidental:
-    // `dropsAsOutsideFleet` gates on whether the port ANSWERED, never on
-    // `length === 0`, because keying on emptiness is precisely what lets the
-    // one-host account that just deregistered keep its evidence alive forever.
-    // The empty-fleet guard belongs to `clearPreferredOutsideFleet`, whose
-    // subject is a preference - destroying one on a non-answer is
-    // unrecoverable. A tombstone is evidence and prunes with the evidence rule.
+  it("withholds probes for an ANSWERED empty fleet without discarding the tombstones", async () => {
+    // An answered `[]` is knowledge - it is how a single-host account
+    // deregisters - so the probe is withheld. The tombstone is still not
+    // destroyed, because that same account can re-enroll the machine under the
+    // id the tombstone already names.
     mocks.entries = [];
-    mocks.settledFleet.current = new Set();
+    mocks.fleetSettled.current = true;
     useLandingTerminalStore.getState().addTab({
       instanceId: "solo-tab",
       sessionId: "session-solo",
@@ -707,9 +760,11 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     useLandingTerminalStore.getState().closeTab("landing-page", "solo-tab");
 
     render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
 
-    await waitFor(() => {
-      expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-    });
+    expect(mocks.probedHostIds).toEqual([]);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-solo" },
+    ]);
   });
 });

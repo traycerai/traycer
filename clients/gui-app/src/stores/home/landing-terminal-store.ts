@@ -88,20 +88,6 @@ export interface LandingTerminalStoreState {
     collapseWhenEmpty: boolean,
   ) => void;
   readonly clearPendingKill: (hostId: string, sessionId: string) => void;
-  /**
-   * Drops tombstones whose host is no longer in the account's fleet.
-   *
-   * A tombstone is drained by the host it names; one for a DEREGISTERED host
-   * can never drain, so it would sit in persisted state forever and keep an
-   * authority probe mounted for a machine that will never answer. Deregistration
-   * is the only clearing condition, mirroring how a surface host pin is cleared:
-   * an offline host is still in the fleet and its tombstone must survive, since
-   * draining on its return is the entire point.
-   *
-   * Callers must pass a SETTLED fleet - never a loading or empty directory
-   * snapshot, which would read as "every host left" and abandon live shells.
-   */
-  readonly retainPendingKillsForHosts: (hostIds: ReadonlySet<string>) => void;
   readonly rekeyTab: (instanceId: string, sessionId: string) => void;
   readonly adoptHostTerminal: (
     instanceId: string,
@@ -355,14 +341,6 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
               pending.hostId !== hostId || pending.sessionId !== sessionId,
           ),
         })),
-      retainPendingKillsForHosts: (hostIds) =>
-        set((state) => {
-          const pendingKills = state.pendingKills.filter((pending) =>
-            hostIds.has(pending.hostId),
-          );
-          if (pendingKills.length === state.pendingKills.length) return state;
-          return { pendingKills };
-        }),
       rekeyTab: (instanceId, sessionId) =>
         set((state) => ({
           tabs: state.tabs.map((tab) =>

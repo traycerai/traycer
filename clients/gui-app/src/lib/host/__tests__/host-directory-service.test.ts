@@ -587,13 +587,15 @@ describe("HostDirectoryService", () => {
 
     // Non-empty, and still no answer about the fleet.
     expect((await directory.list()).length).toBe(1);
-    expect(directory.settledFleetHostIds()).toBeNull();
+    expect(directory.hasSettledFleet()).toBe(false);
 
     await directory.refresh();
 
-    expect(directory.settledFleetHostIds()).toEqual(
-      new Set([localSnapshot.hostId, mockRemoteHostEntry.hostId]),
-    );
+    expect(directory.hasSettledFleet()).toBe(true);
+    expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+      localSnapshot.hostId,
+      mockRemoteHostEntry.hostId,
+    ]);
   });
 
   it("withdraws the settled fleet when a later fetch comes back signed-out", async () => {
@@ -614,13 +616,11 @@ describe("HostDirectoryService", () => {
     });
     await directory.start();
 
-    expect(directory.settledFleetHostIds()).toEqual(
-      new Set([mockRemoteHostEntry.hostId]),
-    );
+    expect(directory.hasSettledFleet()).toBe(true);
 
     await directory.refresh();
 
-    expect(directory.settledFleetHostIds()).toBeNull();
+    expect(directory.hasSettledFleet()).toBe(false);
   });
 
   it("un-settles the directory when a later fetch comes back signed-out", async () => {

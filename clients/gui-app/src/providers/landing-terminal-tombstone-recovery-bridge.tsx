@@ -16,7 +16,10 @@ import {
   useLandingTerminalStore,
   type LandingTerminalPendingKill,
 } from "@/stores/home/landing-terminal-store";
-import { useLandingTerminalKill } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
+import {
+  useLandingTerminalKill,
+  type LandingTerminalKillVariables,
+} from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
 import {
   LandingTerminalAuthorityFleet,
   type LandingTerminalAuthorityEntries,
@@ -32,6 +35,16 @@ interface CapableCloseRetry {
   attempt: number;
   timer: number | null;
   due: boolean;
+}
+
+/**
+ * The slice of the kill mutation this file dispatches through. Named rather
+ * than taken off the hook's result so the retry helpers state what they need.
+ */
+interface LandingTerminalKillDispatch {
+  readonly mutateAsync: (
+    variables: LandingTerminalKillVariables,
+  ) => Promise<unknown>;
 }
 
 interface TombstoneRetryRefs {
@@ -87,13 +100,21 @@ function cancelUndrainableCapableCloseRetries(args: {
   }
 }
 
-function scheduleCapableCloseRetry(args: {
-  readonly key: string;
+/**
+ * Whether another attempt at this tombstone could still land.
+ *
+ * Both capabilities require the tombstone to be outstanding and the route to
+ * still be there. Only the CAPABLE arm additionally demands a projection: its
+ * close names a terminal the host is publishing, so a vanished projection means
+ * the session is already gone. Legacy has no projection to consult - the kill
+ * is addressed to the host by session id alone - so requiring one would make
+ * the legacy arm unretryable, which is the state this replaced.
+ */
+function closeRetryStillWarranted(args: {
   readonly pending: LandingTerminalPendingKill;
   readonly refs: TombstoneRetryRefs;
-  readonly signalRetry: () => void;
-}): void {
-  if (!args.refs.mounted.current) return;
+  readonly capability: "capable" | "legacy";
+}): boolean {
   const stillPending = useLandingTerminalStore
     .getState()
     .pendingKills.some(
@@ -101,20 +122,38 @@ function scheduleCapableCloseRetry(args: {
         candidate.hostId === args.pending.hostId &&
         candidate.sessionId === args.pending.sessionId,
     );
+  if (!stillPending) return false;
+  if (args.refs.dialable.current.get(args.pending.hostId) !== true) {
+    return false;
+  }
   const currentEntry = args.refs.authorityEntries.current[args.pending.hostId];
+  if (args.capability === "legacy") {
+    return currentEntry?.authority.capability.status === "legacy";
+  }
   if (
-    !stillPending ||
-    args.refs.dialable.current.get(args.pending.hostId) !== true ||
     currentEntry?.authority.capability.status !== "capable" ||
-    !currentEntry.authority.canMutate ||
+    !currentEntry.authority.canMutate
+  ) {
+    return false;
+  }
+  return (
     getPlainTerminal(
       currentEntry.authority.collection,
       args.pending.hostId,
       args.pending.sessionId,
-    ) === undefined
-  ) {
-    return;
-  }
+    ) !== undefined
+  );
+}
+
+function scheduleCloseRetry(args: {
+  readonly key: string;
+  readonly pending: LandingTerminalPendingKill;
+  readonly refs: TombstoneRetryRefs;
+  readonly capability: "capable" | "legacy";
+  readonly signalRetry: () => void;
+}): void {
+  if (!args.refs.mounted.current) return;
+  if (!closeRetryStillWarranted(args)) return;
   const prior = args.refs.retries.current.get(args.key);
   if (prior !== undefined && prior.timer !== null) return;
   const attempt = (prior?.attempt ?? 0) + 1;
@@ -174,7 +213,50 @@ function dispatchCapableClose(args: {
           .clearPendingKill(args.pending.hostId, args.pending.sessionId);
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
-      () => scheduleCapableCloseRetry(args),
+      () => scheduleCloseRetry({ ...args, capability: "capable" }),
+    )
+    .finally(() => {
+      const next = new Set(args.refs.inFlight.current);
+      next.delete(args.key);
+      args.refs.inFlight.current = next;
+    });
+}
+
+/**
+ * The legacy arm of the same drain, with the same backoff.
+ *
+ * It used to be a bare `mutate` with no rejection handling, which was survivable
+ * only because an offline close could not be recorded in the first place: the
+ * close affordance gated on a resolved authority, so this path ran almost
+ * exclusively for a host that was already answering. Now that a tab bound to an
+ * offline host is closable, this IS the path a legacy host's deferred kill
+ * travels, and one transient rejection would have stranded the PTY until an
+ * unrelated route flap or a reload.
+ *
+ * The tombstone is cleared by the mutation's own `onSuccess`, not here: an
+ * acknowledgement is the durable boundary, and only the mutation sees it.
+ */
+function dispatchLegacyClose(args: {
+  readonly kill: LandingTerminalKillDispatch;
+  readonly key: string;
+  readonly pending: LandingTerminalPendingKill;
+  readonly retry: CapableCloseRetry | undefined;
+  readonly refs: TombstoneRetryRefs;
+  readonly signalRetry: () => void;
+}): void {
+  if (args.retry !== undefined) args.retry.due = false;
+  args.refs.inFlight.current = new Set([
+    ...args.refs.inFlight.current,
+    args.key,
+  ]);
+  void args.kill
+    .mutateAsync({
+      hostId: args.pending.hostId,
+      sessionId: args.pending.sessionId,
+    })
+    .then(
+      () => clearCapableCloseRetry(args.refs.retries.current, args.key),
+      () => scheduleCloseRetry({ ...args, capability: "legacy" }),
     )
     .finally(() => {
       const next = new Set(args.refs.inFlight.current);
@@ -250,10 +332,42 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     () => (directory.data ?? []).map((entry) => entry.hostId),
     [directory.data],
   );
-  const authorityHostIds = useMemo(
-    () => [...new Set(pendingKills.map((pending) => pending.hostId))],
-    [pendingKills],
-  );
+  // Which hosts get an authority probe mounted below. A tombstone names the one
+  // host that can drain it, so ordinarily that is simply "every host with a
+  // tombstone" - but a host that has LEFT the account cannot answer, and
+  // probing it forever is the cost an outstanding tombstone would otherwise
+  // impose indefinitely.
+  //
+  // Scoping the PROBE is the whole remedy; the tombstone itself is never
+  // dropped. Deregistration is not destruction: `host-deregister-fetcher`
+  // revokes the credential and nothing else - "the `hostId` survives, so
+  // nothing about the machine changes", and "re-enrollment re-adopts the SAME
+  // id". So a departed host's PTY can genuinely still be running, and the
+  // machine can come back under the id its tombstone already names. Deleting
+  // the tombstone would destroy the only record that shell needs killing,
+  // exactly when it would have become useful again. Withholding the probe costs
+  // a probe; withholding it wrongly costs nothing, because the host reappears
+  // in the fleet and the probe mounts on the next snapshot.
+  //
+  // An UNSETTLED fleet - nobody has reached the registry yet, including after a
+  // `signed-out` clear while auth settles - probes everything, because absence
+  // from a fleet nobody has answered for is not evidence of anything. The rows
+  // cannot carry that distinction themselves, which is what `hasSettledFleet()`
+  // is for: a machine with a local host renders one ordinary row whether the
+  // registry answered or not.
+  //
+  // The flag and the rows are read separately and the rows can lag it by a
+  // beat. That is fine HERE and only because nothing is destroyed: the worst a
+  // stale pairing does is withhold a probe until the next snapshot, which also
+  // makes an auth-identity transition harmless.
+  const authorityHostIds = useMemo(() => {
+    const tombstoned = [
+      ...new Set(pendingKills.map((pending) => pending.hostId)),
+    ];
+    if (binding?.directory.hasSettledFleet() !== true) return tombstoned;
+    const fleet = new Set(directoryHostIds);
+    return tombstoned.filter((hostId) => fleet.has(hostId));
+  }, [binding, directoryHostIds, pendingKills]);
   const hasReadySessionFor = useRemoteSessionsPollReadiness(directoryHostIds);
   const authorityEntriesRef = useRef(authorityEntries);
 
@@ -276,48 +390,6 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       retries.clear();
     };
   }, []);
-
-  // Tombstone GC. Every tombstone is drained by the host it names, so one for a
-  // host that has LEFT the account can never drain: it would rest in persisted
-  // state forever and keep an authority probe mounted below for a machine that
-  // will never answer.
-  //
-  // Absence from the fleet is read as deregistration, not unreachability - an
-  // offline host stays listed (its picker row says `offline`) and its tombstone
-  // must survive exactly so the drain above can fire when it returns. That
-  // reading is only ever valid against a fleet the REGISTRY has answered for,
-  // which is why the set comes from `settledFleetHostIds()` and not from the
-  // query rows this effect triggers on.
-  //
-  // The rows cannot carry that evidence themselves. A directory snapshot is
-  // `localEntry` + `remoteEntries`, so on a machine running a local host it is
-  // non-empty from the first local snapshot onward - a failed or not-yet-landed
-  // first registry fetch still renders one perfectly ordinary local-only row.
-  // Guarding on emptiness would therefore fire almost never on desktop and read
-  // every remote host as departed at launch: the one failure this GC must never
-  // cause. `null` (nobody has reached the registry, including after a
-  // `signed-out` clear while auth settles) skips the pass entirely.
-  //
-  // An ANSWERED empty fleet is knowledge and DOES prune, deliberately - it is
-  // how a single-host account deregisters, and `dropsAsOutsideFleet` in
-  // `selection-authority-engine` documents that asymmetry as the considered
-  // answer: gate on whether the port answered, never on `length === 0`. The
-  // empty-fleet guard belongs to `clearPreferredOutsideFleet`, whose subject is
-  // a PREFERENCE - destroying one on a non-answer is unrecoverable. A tombstone
-  // is evidence, and it prunes with the evidence rule.
-  //
-  // `directoryHostIds` is a TRIGGER, not the input - a committed listing emits,
-  // which invalidates the query and re-runs this. `pendingKills` is the other
-  // trigger: closing a tab whose host had already left the account changes
-  // neither the binding nor the rows, so without it the new tombstone would
-  // wait for an unrelated directory change. Pruning rewrites `pendingKills` and
-  // re-enters once; the second pass finds nothing to drop and
-  // `retainPendingKillsForHosts` returns the same state, so it settles there.
-  useEffect(() => {
-    const settledFleet = binding?.directory.settledFleetHostIds() ?? null;
-    if (settledFleet === null) return;
-    useLandingTerminalStore.getState().retainPendingKillsForHosts(settledFleet);
-  }, [binding, directoryHostIds, pendingKills]);
 
   useEffect(() => {
     const entries = directory.data ?? [];
@@ -374,7 +446,14 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
         continue;
       }
       if (entry?.authority.capability.status === "legacy") {
-        killRef.current.mutate(pending);
+        dispatchLegacyClose({
+          kill: killRef.current,
+          key,
+          pending,
+          retry,
+          refs: retryRefs,
+          signalRetry: () => setRetryGeneration((current) => current + 1),
+        });
       }
     }
   }, [

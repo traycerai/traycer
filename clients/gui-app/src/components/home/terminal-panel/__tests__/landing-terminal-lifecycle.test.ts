@@ -739,57 +739,6 @@ describe("resolveLandingTerminalLaunchCwd", () => {
   });
 });
 
-describe("retainPendingKillsForHosts", () => {
-  beforeEach(() => {
-    useLandingTerminalStore.getState().resetForTests();
-  });
-
-  it("drops tombstones whose host is outside the retained set", () => {
-    const store = useLandingTerminalStore.getState();
-    store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
-    store.addTab(tab({ instanceId: "b", sessionId: "s-b", hostId: HOST_B }));
-    store.closeTab(LANDING_PAGE_ID, "a");
-    store.closeTab(LANDING_PAGE_ID, "b");
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: HOST_A, sessionId: "s-a" },
-      { hostId: HOST_B, sessionId: "s-b" },
-    ]);
-
-    useLandingTerminalStore
-      .getState()
-      .retainPendingKillsForHosts(new Set([HOST_A]));
-
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: HOST_A, sessionId: "s-a" },
-    ]);
-  });
-
-  it("keeps the same array reference when every tombstoned host is retained", () => {
-    const store = useLandingTerminalStore.getState();
-    store.addTab(tab({ instanceId: "a", sessionId: "s-a", hostId: HOST_A }));
-    store.closeTab(LANDING_PAGE_ID, "a");
-    const before = useLandingTerminalStore.getState().pendingKills;
-
-    useLandingTerminalStore
-      .getState()
-      .retainPendingKillsForHosts(new Set([HOST_A, HOST_B]));
-
-    // No dropped entry means the updater returns the untouched `state`
-    // object, so zustand's `Object.is` bail-out skips the write entirely -
-    // this is what keeps a settled directory from re-rendering every
-    // `pendingKills` subscriber on each poll.
-    expect(useLandingTerminalStore.getState().pendingKills).toBe(before);
-  });
-
-  it("is a no-op when there are no tombstones to retain", () => {
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-
-    useLandingTerminalStore.getState().retainPendingKillsForHosts(new Set());
-
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
-  });
-});
-
 describe("adoptHostTerminal", () => {
   beforeEach(() => {
     useLandingTerminalStore.getState().resetForTests();

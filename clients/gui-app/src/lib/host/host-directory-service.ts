@@ -550,32 +550,30 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The merged fleet's host ids, but ONLY when the registry has actually been
-   * heard from - `null` otherwise.
+   * Whether the fleet this directory reports is one the REGISTRY has actually
+   * answered for - so a caller can tell "not in the list" apart from "nobody
+   * has managed to ask".
    *
-   * For a caller that reads ABSENCE from this directory as a host having left
-   * the account, and destroys durable state on that reading. `list()` cannot
-   * serve them: a snapshot is `localEntry` + `remoteEntries`, so on any machine
-   * running a local host it is non-empty from the first local snapshot onward,
-   * long before - or entirely without - a registry listing. A `failed` first
-   * fetch therefore yields a perfectly ordinary-looking LOCAL-ONLY snapshot,
-   * and "not in this list" there means "the registry was never reached", not
-   * "deregistered". Emptiness is not the guard a caller wants; on desktop it is
-   * nearly unreachable and would let every remote host read as departed.
+   * The rows alone cannot say. A snapshot is `localEntry` + `remoteEntries`, so
+   * on any machine running a local host it is non-empty from the first local
+   * snapshot onward, long before - or entirely without - a registry listing. A
+   * `failed` first fetch therefore yields a perfectly ordinary-looking
+   * LOCAL-ONLY snapshot, and absence from THAT means the registry was never
+   * reached. Emptiness is no substitute: on desktop it is nearly unreachable,
+   * so a caller guarding on it would read every remote host as departed.
    *
-   * `signed-out` clears the flag with the entries (see
-   * `hasObservedRemoteListing`), so an auth-settling race re-closes this rather
-   * than presenting its empty remote set as an answer.
+   * `signed-out` clears this with the entries (see `hasObservedRemoteListing`),
+   * because it is the fetcher reporting it had no bearer to ask WITH - a race
+   * on a shell whose auth is still settling, not an answer.
    *
-   * Returned as a set built from the SAME read as the flag, so a caller can
-   * never pair current evidence with a snapshot taken before the listing
-   * landed.
+   * A caller pairs this with the rows it already renders from. Those can be a
+   * beat behind the flag, so this is for decisions a stale pairing merely
+   * DELAYS - withholding a probe until the next snapshot. Anything that
+   * destroys state on absence needs the fleet and the flag read together, which
+   * this deliberately does not offer.
    */
-  settledFleetHostIds(): ReadonlySet<string> | null {
-    if (!this.hasObservedRemoteListing) {
-      return null;
-    }
-    return new Set(this.snapshot().map((entry) => entry.hostId));
+  hasSettledFleet(): boolean {
+    return this.hasObservedRemoteListing;
   }
 
   onChange(listener: HostDirectoryListener): Disposable {
