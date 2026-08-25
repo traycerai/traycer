@@ -178,6 +178,9 @@ const DECOY_ACTIVE_HOST_CLIENT = buildHostClient("decoy-active-host");
 function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises profile
+    // durability, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

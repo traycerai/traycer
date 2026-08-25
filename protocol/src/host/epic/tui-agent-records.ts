@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/persistence/epic/schemas";
 import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/worktree-schemas";
 
@@ -36,6 +39,25 @@ import { worktreeBindingWorkspaceModeSchema } from "@traycer/protocol/host/workt
  * already has. The two sources never overlap for one record: a host new
  * enough to serve this method has stopped writing the map and swept its own
  * entries.
+ *
+ * ## `@1.1` - why "swept its OWN entries" was not enough
+ *
+ * That last sentence is true and was still load-bearing in the wrong place.
+ * The eviction sweep is gated on the BINDING host: it refuses to touch an
+ * entry another host owns, because that host may still be writing it. So a
+ * serving host's doc map legitimately holds entries bound to un-upgraded
+ * PEER hosts, and `@1.0` answers for none of them - correctly, because the
+ * `@1.0` client had its own doc replica and unioned them in itself.
+ *
+ * `epic.subscribe@2` deletes that replica. The union therefore has to move to
+ * the only party that still has both halves - this host - or those agents
+ * simply stop existing for the user. `@1.1` is that union: registry rows plus
+ * the doc-resident remainder, each row saying which side it came from.
+ *
+ * Emission is gated on the NEGOTIATED version, never post-filtered: a `@1.0`
+ * caller gets byte-identical `@1.0` behaviour, because it still has a doc and
+ * sending it doc rows would be both redundant and indistinguishable from
+ * registry rows once `docResident` is stripped.
  */
 export const listTuiAgentsRequestSchema = z.object({
   epicId: z.string().min(1),
@@ -104,4 +126,69 @@ export const epicListTuiAgentsV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: listTuiAgentsRequestSchema,
   responseSchema: listTuiAgentsResponseSchema,
+});
+
+/**
+ * The `@1.1` row: the `@1.0` summary plus its ORIGIN.
+ *
+ * `docResident: true` means this row was read out of the epic doc's
+ * `tuiAgents` map, not the chat registry - an agent bound to a peer host that
+ * has not upgraded, which this host may read but must never adopt or write.
+ *
+ * ## Why the client is told, rather than handed a seamless union
+ *
+ * A `@1.0` client derived exactly this bit from its own doc replica, and the
+ * GUI still routes on it (`isDocOnlyTerminalAgent`): a doc-resident agent is
+ * NOT addressable through the registry-backed affordances, so a client that
+ * cannot tell the two apart would route its reparent to `epic.reparentChat`
+ * with an id naming no registry chat. Serving the union without the marker
+ * would fix the disappearance and silently introduce that mis-route, which is
+ * the worse bug of the two - it fails on write instead of on render.
+ *
+ * So the marker is not metadata. It is the doc-replica-derived distinction,
+ * preserved for a client that no longer has a doc replica to derive it from.
+ */
+export const tuiAgentRecordSummaryV11Schema =
+  tuiAgentRecordSummarySchema.extend({
+    docResident: z.boolean(),
+  });
+export type TuiAgentRecordSummaryV11 = z.infer<
+  typeof tuiAgentRecordSummaryV11Schema
+>;
+
+export const listTuiAgentsResponseV11Schema = z.object({
+  tuiAgents: z.array(tuiAgentRecordSummaryV11Schema),
+});
+export type ListTuiAgentsResponseV11 = z.infer<
+  typeof listTuiAgentsResponseV11Schema
+>;
+
+export const epicListTuiAgentsV11 = defineRpcContract({
+  method: "epic.listTuiAgents",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: listTuiAgentsRequestSchema,
+  responseSchema: listTuiAgentsResponseV11Schema,
+});
+
+/**
+ * `false` is the only correct fill, and it is a fact rather than a default: a
+ * host serving `@1.0` returns REGISTRY ROWS ONLY by construction, so every row
+ * an older host can produce is registry-backed. A `@1.1` client reading an
+ * older host still has to union that host's doc map itself - the upgrade path
+ * cannot invent rows the wire never carried, and must not pretend it did.
+ */
+export const epicListTuiAgentsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicListTuiAgentsV10,
+  typeof epicListTuiAgentsV11
+>({
+  from: epicListTuiAgentsV10.schemaVersion,
+  to: epicListTuiAgentsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    tuiAgents: response.tuiAgents.map((row) => ({
+      ...row,
+      docResident: false,
+    })),
+  }),
 });

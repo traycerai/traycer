@@ -19,7 +19,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -62,7 +62,22 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function row(overrides: Partial<TuiAgentRecordSummary>): TuiAgentRecordSummary {
+/**
+ * A registry row. Every scenario in this file is about the MERGE (revision
+ * guards, omission fencing) rather than about doc residency, so the default
+ * is `false` - an ordinary registry row.
+ *
+ * Typed as the WIRE `@1.1` row so it satisfies `applyTuiAgentRecords`'s
+ * `TuiAgentRecordSummaryV11[]` directly. It is also assignable to a delta's
+ * `record: TuiAgentRecordSummary` field (the delta plane's wire type, which
+ * carries no `docResident` of its own - see `applyTuiAgentRecordDelta`'s
+ * stamp): `TuiAgentRecordSummaryV11` is a strict superset, and this is a
+ * function return value rather than an object literal, so no excess-property
+ * check applies.
+ */
+function row(
+  overrides: Partial<TuiAgentRecordSummaryV11>,
+): TuiAgentRecordSummaryV11 {
   return {
     tuiAgentId: "tui-1",
     ownerUserId: USER,
@@ -86,6 +101,7 @@ function row(overrides: Partial<TuiAgentRecordSummary>): TuiAgentRecordSummary {
     terminalShellCommand: null,
     terminalShellArgs: null,
     revision: 1,
+    docResident: false,
     ...overrides,
   };
 }
@@ -291,5 +307,84 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
       .applyTuiAgentRecords([row({ tuiAgentId: "tui-1", revision: 9 })], null);
 
     expect(ids(handle)).toEqual([]);
+  });
+});
+
+describe("applyTuiAgentRecordDelta always reports registry provenance", () => {
+  it("stamps docResident: false on every delta-applied row", () => {
+    // The delta plane is REGISTRY-ONLY by construction - a `tuiUpsert` frame
+    // (`TuiAgentRecordDelta` in `chat-records-stream-client.ts`) carries a
+    // `TuiAgentRecordSummary`, which has no `docResident` of its own. So
+    // `false` here is a fact about the SOURCE the store stamps unconditionally,
+    // not a filled-in default.
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1" }),
+    });
+
+    expect(
+      handle.store.getState().tuiAgentRecords.byId["tui-1"].docResident,
+    ).toBe(false);
+  });
+
+  it("converges a frozen doc-resident row through the same revision guard the poll's merge uses", () => {
+    // `epic.listTuiAgents@1.1` can serve a doc-resident remainder at
+    // `revision: 0` (the lowest value the wire admits - see
+    // `tuiAgentRecordSummaryOfDocEntry`): the frozen copy of an agent whose
+    // BINDING host has not upgraded. The delta plane cannot address that row
+    // directly - it is registry-only - but it does not need to: the moment
+    // the binding host upgrades and the eviction sweep imports the entry, the
+    // FIRST real registry delta for that id carries a revision >= 1, which -
+    // through the exact staleness test exercised above ("does not let an
+    // older served row regress a newer pushed revision") - strictly exceeds
+    // the frozen `0` and replaces it, flipping `docResident` to `false` in
+    // the same move.
+    //
+    // Ablation: if the doc-resident poll row were held at any revision other
+    // than the lowest the wire admits, a binding host that upgrades and
+    // imports at a low real revision could lose to the frozen copy and the
+    // agent would stay stuck at `docResident: true`. Pinning the doc-resident
+    // row to `revision: 0` is what guarantees the FIRST real registry write
+    // always wins.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+
+    // The @1.1 poll serving the doc-resident remainder.
+    state.applyTuiAgentRecords(
+      [
+        row({
+          tuiAgentId: "tui-1",
+          docResident: true,
+          revision: 0,
+          title: "Frozen (doc-resident)",
+        }),
+      ],
+      null,
+    );
+    const frozen = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(frozen.docResident).toBe(true);
+    expect(frozen.title).toBe("Frozen (doc-resident)");
+
+    // The binding host upgrades; the sweep imports the row; the push
+    // announces it as an ordinary registry upsert.
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      epicId: "epic-test",
+      record: row({
+        tuiAgentId: "tui-1",
+        revision: 1,
+        title: "Adopted (registry)",
+      }),
+    });
+
+    // Not just a flag flip in isolation: the ENTIRE frozen row was replaced by
+    // the real one (`title` proves it, `docResident` proves what it now is).
+    const after = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(after.docResident).toBe(false);
+    expect(after.title).toBe("Adopted (registry)");
   });
 });

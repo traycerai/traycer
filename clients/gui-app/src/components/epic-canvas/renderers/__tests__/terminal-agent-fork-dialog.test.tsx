@@ -1062,6 +1062,9 @@ function sourceAgentWithTerminalArgs(
 ): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises the fork
+    // dialog's terminal-args plumbing, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

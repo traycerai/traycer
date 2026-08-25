@@ -6,7 +6,7 @@ import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-cli
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 
 /**
  * What the cache holds for one `epic.listTuiAgents` answer: the rows, plus
@@ -17,7 +17,7 @@ import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agen
  * answer is applied. `null` when no session existed to read at dispatch.
  */
 interface TuiAgentListAnswer {
-  readonly tuiAgents: readonly TuiAgentRecordSummary[];
+  readonly tuiAgents: readonly TuiAgentRecordSummaryV11[];
   readonly issuedAtSeq: number | null;
 }
 

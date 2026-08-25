@@ -39,6 +39,13 @@ const seam = vi.hoisted(() => {
     request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
     /** Ids the host serves as terminal-agent RECORDS (`epic.listTuiAgents`). */
     recordIds: [] as string[],
+    /**
+     * Ids present in the terminal-agent UNION (`state.tuiAgents`) with
+     * `docResident: true` - the `@1.1` doc-resident remainder.
+     * `isDocOnlyTerminalAgent` reads the UNION, never `tuiAgentRecords`, so a
+     * routing test seeds this (not `recordIds`) to model that row.
+     */
+    docResidentIds: [] as string[],
     tree: emptyTree(),
     /** null models a session with no serving client. */
     hasClient: true,
@@ -58,6 +65,27 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
               seam.recordIds.map((id) => [id, { id }] as const),
             ),
             allIds: seam.recordIds,
+          },
+          // The UNION `isDocOnlyTerminalAgent` actually reads. A registry id
+          // projects `docResident: false`; a `docResidentIds` entry projects
+          // `true` - the two lists are mutually exclusive in practice, same as
+          // the real resolver (`epic-list-tui-agents-resolver.ts` excludes a
+          // doc entry whose id is already a registry id).
+          tuiAgents: {
+            // The element type is stated because the two spreads below have
+            // DIFFERENT tuple types (`docResident: false` vs `true`), and
+            // `Object.fromEntries` infers `any` off that union rather than
+            // widening it - which `no-unsafe-assignment` then rejects. The
+            // homogeneous `tuiAgentRecords` map above needs no annotation.
+            byId: Object.fromEntries<{ id: string; docResident: boolean }>([
+              ...seam.recordIds.map(
+                (id) => [id, { id, docResident: false }] as const,
+              ),
+              ...seam.docResidentIds.map(
+                (id) => [id, { id, docResident: true }] as const,
+              ),
+            ]),
+            allIds: [...seam.recordIds, ...seam.docResidentIds],
           },
           reparentArtifact: seam.reparentArtifact,
         }),
@@ -119,6 +147,7 @@ beforeEach(() => {
   seam.request.mockClear();
   seam.request.mockResolvedValue({ updated: true });
   seam.recordIds = [];
+  seam.docResidentIds = [];
   seam.hasClient = true;
   seam.tree = seam.emptyTree();
 });
@@ -155,7 +184,9 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
   it("writes the doc for a terminal agent the host serves no record for", () => {
     // The legacy-host case. `epic.listTuiAgents` is unsupported there, so the
     // record slice is empty and the agent renders from the doc's `tuiAgents`
-    // map - which is also where its parent pointer still lives.
+    // map - which is also where its parent pointer still lives. Absent from
+    // the union entirely, exactly like an `@1.0` host that sends no marker at
+    // all - the `agent === undefined` arm of `isDocOnlyTerminalAgent`.
     //
     // Ablation: route every agent-family drop to the RPC and this drag calls a
     // released `@1.0` with a `chatId` naming no chat - a host error, where the
@@ -174,6 +205,33 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     );
     // Q1: doc-only TUI stays Y-only. This RPC names an artifact id, not a
     // tuiAgents map entry — must not start sending `epic.reparentArtifact`.
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", () => {
+    // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
+    // same table `epic.listTuiAgents` records fill, so "absent from the
+    // union" stopped being a reliable doc-only tell - this id is very much
+    // present. `docResident` is the marker that survives the union, and this
+    // pins the routing decision to IT rather than to presence.
+    //
+    // Ablation: revert to the pre-`@1.1` presence check
+    // (`!Object.hasOwn(state.tuiAgentRecords.byId, id)`) and this agent reads
+    // as registry-backed - the drop would call `epic.reparentChat` with a
+    // `chatId` naming no registry chat, the exact host error `docResident`
+    // exists to prevent.
+    seam.tree = treeOf([
+      node("tui-frozen", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.docResidentIds = ["tui-frozen"];
+
+    drop("tui-frozen", "tui-parent");
+
+    expect(seam.reparentArtifact).toHaveBeenCalledWith(
+      "tui-frozen",
+      "tui-parent",
+    );
     expect(seam.request).not.toHaveBeenCalled();
   });
 

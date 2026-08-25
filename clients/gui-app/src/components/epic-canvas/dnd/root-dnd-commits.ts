@@ -614,15 +614,40 @@ export interface SidebarReparentDropInput {
  * chats-off-YJS, and the host resolves a pre-migration chat through the same
  * storage seam, so the RPC is correct for a chat on every host that has the
  * method at all.
+ *
+ * ## ABSENCE STOPPED BEING THE TEST at `epic.listTuiAgents@1.1`
+ *
+ * "Absent from the record slice" was a sound proxy only while the record slice
+ * was registry-only. `@1.1` serves the doc-resident remainder too - it has to,
+ * because `epic.subscribe@2` has no doc replica to union those agents in from
+ * - so a foreign-bound agent now ARRIVES as a record and absence goes quiet.
+ *
+ * Read literally, this function would then answer `false` for exactly the
+ * agents it exists to catch, and route them to `epic.reparentChat` with an id
+ * naming no registry chat: the host error described above, reintroduced by a
+ * change that was fixing a different symptom. The row carries `docResident`
+ * precisely so the distinction survives the union, and both tests are kept -
+ * absence still covers a `@1.0` host, which sends no marker at all.
  */
 function isDocOnlyTerminalAgent(
   state: OpenEpicState,
   node: ProjectedReparentNode,
 ): boolean {
-  return (
-    node.type === "terminal-agent" &&
-    !Object.hasOwn(state.tuiAgentRecords.byId, node.id)
-  );
+  if (node.type !== "terminal-agent") return false;
+  // Read the UNION, not the record slice. Absence from `tuiAgentRecords` is
+  // still a doc-only tell on a `@1.0` host, but it is the union that holds
+  // every agent the user can actually grab, and its `docResident` answers for
+  // both planes on every host version.
+  //
+  // `Object.hasOwn` rather than an `=== undefined` compare, for the same
+  // reason the record-slice version used it: `byId` is a `Record<string, T>`,
+  // so indexing it types as `T` even though a miss is plainly reachable here
+  // - a node id the union does not carry. The undefined check is unreachable
+  // to the type system and reachable at runtime, which is exactly the shape
+  // `no-unnecessary-condition` refuses to let through.
+  const byId = state.tuiAgents.byId;
+  if (!Object.hasOwn(byId, node.id)) return true;
+  return byId[node.id].docResident;
 }
 
 /**

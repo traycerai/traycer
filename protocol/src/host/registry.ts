@@ -366,7 +366,11 @@ import {
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
-import { epicListTuiAgentsV10 } from "@traycer/protocol/host/epic/tui-agent-records";
+import {
+  epicListTuiAgentsUpgradeV10ToV11,
+  epicListTuiAgentsV10,
+  epicListTuiAgentsV11,
+} from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
   workspaceMentionFilesV10,
@@ -6227,11 +6231,33 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own. Never on the unary released floor.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListTuiAgentsV11,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV10ToV11,
+          // NO `responseGrowthProjectionGated` here, and the reason is worth
+          // stating because the instinct to add it is strong: 1.1 does return
+          // MORE ROWS than 1.0 (the doc-resident remainder), and that growth
+          // IS emission-gated on the negotiated version in the resolver.
+          //
+          // But that annotation is not about rows. It covers response VALUE
+          // growth an older peer's schema would actively REFUSE - a new enum
+          // member, a new union arm. `docResident` is a plain added object
+          // key, which zod strips unconditionally, so 1.0 is safe with no
+          // gate to declare. Row COUNT is not something the validator can see
+          // at all; the resolver's `ctx.schemaVersion.minor < 1` early return
+          // is the entire mechanism, and it needs no registry annotation.
+          //
+          // Declaring it anyway is not inert: `assertSchemaCompatibility`
+          // rejects an annotation it cannot justify, and it runs at MODULE
+          // IMPORT, so the registry throws for every consumer - the app, not
+          // just a test. `bun run compile` passes clean through that, because
+          // it is a runtime assertion over registry values, not a type.
         },
       },
       downgradePathsFromLatest: {},

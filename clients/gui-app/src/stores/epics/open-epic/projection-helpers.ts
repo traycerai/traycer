@@ -24,7 +24,7 @@
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -338,6 +338,9 @@ export function projectTerminalAgent(
   const profileId = entry.get("profileId");
   return {
     id,
+    // This IS the doc arm - every entry it reads is by definition still
+    // pointing at the Y.Doc.
+    docResident: true,
     harnessId,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
@@ -454,6 +457,10 @@ export function terminalAgentProjectionsEq(
 ): boolean {
   const scalarFieldsEqual = [
     a.id === b.id,
+    // Adoption flips this with nothing else necessarily changing (the sweep
+    // imports a frozen entry verbatim), so omitting it here would freeze the
+    // stale routing decision behind the change gate.
+    a.docResident === b.docResident,
     a.harnessId === b.harnessId,
     a.title === b.title,
     a.parentId === b.parentId,
@@ -815,12 +822,16 @@ function narrowTuiHarnessId(value: string): TuiHarnessId | null {
  * `updatedAt` stands in when the plane that answered carried no timestamp.
  */
 export function tuiAgentProjectionFromRecord(
-  record: TuiAgentRecordSummary,
+  record: TuiAgentRecordSummaryV11,
 ): TuiAgentProjection | null {
   const harnessId = narrowTuiHarnessId(record.harnessId);
   if (harnessId === null) return null;
   return {
     id: record.tuiAgentId,
+    // Passed through, never assumed false: at `@1.1` the record plane carries
+    // BOTH registry rows and the doc-resident remainder, and the host is the
+    // only party that can still tell them apart.
+    docResident: record.docResident,
     harnessId,
     title: record.title,
     parentId: record.parentId,
@@ -852,7 +863,7 @@ export function tuiAgentProjectionFromRecord(
  * selection frozen at arrival time. Undispatchable rows are dropped here.
  */
 export function tuiAgentRecordsSlice(
-  records: readonly TuiAgentRecordSummary[],
+  records: readonly TuiAgentRecordSummaryV11[],
 ): TerminalAgentsSlice {
   const byId: Record<string, TuiAgentProjection> = {};
   const allIds: string[] = [];
