@@ -344,6 +344,7 @@ export function projectChatServerFrameForVersion(
       const {
         delivery: _delivery,
         settlementId: _settlementId,
+        settlementSource: _settlementSource,
         ...rest
       } = frame;
       return { ...rest, answers: stripAnswerSelection(frame.answers) };
@@ -353,6 +354,7 @@ export function projectChatServerFrameForVersion(
         outcome: _outcome,
         draftAnswers: _draftAnswers,
         settlementId: _settlementId,
+        settlementSource: _settlementSource,
         delivery: _delivery,
         ...rest
       } = frame;

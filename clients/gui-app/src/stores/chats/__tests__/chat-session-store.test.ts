@@ -1348,6 +1348,7 @@ describe("createChatSessionStore", () => {
       ],
       resolvedAt: 5,
       settlementId: "settlement-1",
+      settlementSource: "gui",
       delivery: {
         deliveryId: "delivery-1",
         status: "failed",
@@ -1362,13 +1363,102 @@ describe("createChatSessionStore", () => {
         ? message.blocks.find((candidate) => candidate.type === "interview")
         : undefined;
     expect(block).toMatchObject({
+      settlement: { settlementId: "settlement-1", source: "gui" },
       outcome: "answered",
-      answers: [{ values: ["Beta"] }],
+      answers: [{ values: ["Alpha"] }],
       delivery: {
         deliveryId: "delivery-1",
         status: "failed",
         generation: 1,
       },
+    });
+  });
+
+  it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-new",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-new",
+        status: "failed",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Stale failure",
+      resolvedAt: 6,
+      settlementId: "settlement-stale",
+      settlementSource: "runtime",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "completed",
+      answers: [{ values: ["Beta"] }],
+      error: null,
+      outcome: "answered",
+      settlement: { settlementId: "settlement-new", source: "gui" },
+      delivery: { deliveryId: "delivery-new", status: "failed" },
     });
   });
 
@@ -7287,6 +7377,7 @@ describe("createChatSessionStore", () => {
       answers: [],
       resolvedAt: 4,
       settlementId: null,
+      settlementSource: null,
       delivery: null,
     });
 
@@ -7303,6 +7394,7 @@ describe("createChatSessionStore", () => {
       reason: "Skipped",
       resolvedAt: 5,
       settlementId: null,
+      settlementSource: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7402,6 +7494,7 @@ describe("createChatSessionStore", () => {
       reason: "Skipped by user",
       resolvedAt: 4,
       settlementId: null,
+      settlementSource: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7442,6 +7535,7 @@ describe("createChatSessionStore", () => {
       answers: [],
       resolvedAt: 4,
       settlementId: null,
+      settlementSource: null,
       delivery: null,
     });
 
@@ -7484,6 +7578,7 @@ describe("createChatSessionStore", () => {
       reason: "Skipped by user",
       resolvedAt: 5,
       settlementId: null,
+      settlementSource: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,
@@ -7681,6 +7776,7 @@ describe("createChatSessionStore", () => {
       answers: [],
       resolvedAt: 4,
       settlementId: null,
+      settlementSource: null,
       delivery: null,
     });
 
@@ -7735,6 +7831,7 @@ describe("createChatSessionStore", () => {
       reason: "Skipped by user",
       resolvedAt: 5,
       settlementId: null,
+      settlementSource: null,
       outcome: "skipped",
       draftAnswers: [],
       delivery: null,

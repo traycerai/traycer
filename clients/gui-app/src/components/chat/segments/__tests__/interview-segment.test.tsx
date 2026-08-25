@@ -345,6 +345,47 @@ describe("InterviewSegment", () => {
     expect(screen.queryByRole("button", { name: "Beta" })).toBeNull();
   });
 
+  it("uses a neutral heading for an unlabelled saved draft", () => {
+    render(
+      <InterviewTestProviders>
+        <InterviewSegment
+          blockId="interview-unlabelled-draft"
+          status="completed"
+          toolName="AskUserQuestion"
+          title={null}
+          description={null}
+          questions={[]}
+          answers={[]}
+          draftAnswers={[
+            {
+              questionId: null,
+              question: null,
+              values: ["Private draft"],
+              notes: null,
+              selection: null,
+            },
+          ]}
+          outcome="skipped"
+          settlement={null}
+          error={null}
+          delivery={null}
+          forkedWithoutAnswer={false}
+          interviewDeliveryRetry={null}
+          forkAction={null}
+        />
+      </InterviewTestProviders>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Interview skipped · 1 draft saved/,
+      }),
+    );
+    expect(screen.getByText("Recorded responses")).toBeTruthy();
+    expect(screen.queryByText("Submitted answers")).toBeNull();
+    expect(screen.getByText("Draft — not sent to agent")).toBeTruthy();
+  });
+
   it("clamps a stale review page when the historical projection shrinks", () => {
     const firstQuestion: InterviewQuestion = {
       questionId: "q1",

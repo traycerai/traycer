@@ -1730,6 +1730,7 @@ describe("<ChatTile />", () => {
         reason: "interrupted",
         resolvedAt: 4,
         settlementId: null,
+        settlementSource: null,
         outcome: null,
         draftAnswers: [],
         delivery: null,

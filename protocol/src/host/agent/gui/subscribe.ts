@@ -887,6 +887,7 @@ const interviewAnsweredServerFrameSchema = z.object({
   answers: z.array(runtimeInterviewAnswerSchema),
   resolvedAt: z.number(),
   settlementId: z.string().nullable().default(null),
+  settlementSource: z.enum(["gui", "runtime"]).nullable().default(null),
   delivery: interviewDeliveryProjectionSchema.nullable().default(null),
 });
 
@@ -929,6 +930,7 @@ const interviewErroredServerFrameSchema = z
     outcome: z.enum(["skipped", "failed"]).nullable().default(null),
     draftAnswers: z.array(runtimeInterviewAnswerSchema).default([]),
     settlementId: z.string().nullable().default(null),
+    settlementSource: z.enum(["gui", "runtime"]).nullable().default(null),
     delivery: interviewDeliveryProjectionSchema.nullable().default(null),
   })
   .superRefine((frame, ctx) => {

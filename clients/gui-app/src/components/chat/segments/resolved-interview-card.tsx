@@ -554,7 +554,7 @@ function ReviewFallbackAnswers(props: {
       {unlabelled.length === 0 ? null : (
         <div className="flex min-w-0 flex-col gap-1">
           <div className="text-ui-xs font-medium text-muted-foreground">
-            Submitted answers
+            Recorded responses
           </div>
           {unlabelled.map(({ answer, index }) => (
             <FallbackAnswer

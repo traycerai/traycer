@@ -77,6 +77,10 @@ import {
   reopenStreamingSubagentBlocks,
   type FinalizedActionStatus,
 } from "@traycer/protocol/host/agent/gui/agent-runtime-accumulator";
+import {
+  applyInterviewSettlement,
+  type InterviewSettlementSource,
+} from "@traycer/protocol/host/agent/gui/interview-settlement";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -2591,6 +2595,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             kind: "answered",
             blockId: frame.blockId,
             settlementId: frame.settlementId,
+            settlementSource: frame.settlementSource,
+            resolvedAt: frame.resolvedAt,
             answers: frame.answers,
             reason: null,
             outcome: "answered",
@@ -2603,6 +2609,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               kind: "answered",
               blockId: frame.blockId,
               settlementId: frame.settlementId,
+              settlementSource: frame.settlementSource,
+              resolvedAt: frame.resolvedAt,
               answers: frame.answers,
               reason: null,
               outcome: "answered",
@@ -2646,6 +2654,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             kind: "errored",
             blockId: frame.blockId,
             settlementId: frame.settlementId,
+            settlementSource: frame.settlementSource,
+            resolvedAt: frame.resolvedAt,
             answers: [],
             reason: frame.reason,
             outcome: frame.outcome,
@@ -2658,6 +2668,8 @@ export function createChatSessionStoreWithNotificationDependencies(
               kind: "errored",
               blockId: frame.blockId,
               settlementId: frame.settlementId,
+              settlementSource: frame.settlementSource,
+              resolvedAt: frame.resolvedAt,
               answers: [],
               reason: frame.reason,
               outcome: frame.outcome,
@@ -4799,6 +4811,8 @@ type InterviewLifecycleProjection = {
   readonly kind: "answered" | "errored";
   readonly blockId: string;
   readonly settlementId: string | null;
+  readonly settlementSource: InterviewSettlementSource | null;
+  readonly resolvedAt: number;
   readonly answers: ReadonlyArray<InterviewAnswer>;
   readonly reason: string | null;
   readonly outcome: InterviewBlock["outcome"];
@@ -4814,11 +4828,32 @@ function withInterviewLifecycleBlocks(
     if (block.type !== "interview" || block.blockId !== projection.blockId) {
       return block;
     }
-    const delivery =
+    if (
+      block.settlement !== null &&
       projection.settlementId !== null &&
-      block.settlement?.settlementId === projection.settlementId
-        ? projection.delivery
-        : block.delivery;
+      block.settlement.settlementId !== projection.settlementId
+    ) {
+      return block;
+    }
+    if (
+      projection.settlementId !== null &&
+      projection.settlementSource !== null
+    ) {
+      const reduced = applyInterviewSettlement(block, {
+        settlementId: projection.settlementId,
+        source: projection.settlementSource,
+        outcome: projection.outcome ?? "failed",
+        answers: [...projection.answers],
+        draftAnswers: [...projection.draftAnswers],
+        reason: projection.reason,
+        diagnostic: null,
+        delivery: projection.delivery,
+        timestamp: projection.resolvedAt,
+      });
+      return reduced.changed ? { ...block, ...reduced.patch } : block;
+    }
+    if (block.settlement !== null) return block;
+    const delivery = block.delivery;
     return projection.kind === "answered"
       ? {
           ...block,

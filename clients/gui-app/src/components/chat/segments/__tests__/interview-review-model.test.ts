@@ -204,7 +204,10 @@ describe("deriveInterviewReviewModel", () => {
     const model = deriveInterviewReviewModel(
       reviewInput({
         questions: [
-          question("q1", "Which mode?", ["Alpha", "Beta"], undefined),
+          {
+            ...question("q1", "Which mode?", ["Alpha", "Beta"], undefined),
+            multiSelect: true,
+          },
         ],
         answers: [
           answer(["Beta", "Custom mode"], {
@@ -253,6 +256,32 @@ describe("deriveInterviewReviewModel", () => {
           question("q1", "Which mode?", ["Alpha", "Beta"], undefined),
         ],
         answers: [answer(["Alpha", "Beta"], { question: "Which mode?" })],
+      }),
+    );
+
+    expect(model.pages[0]).toMatchObject({
+      fidelity: "neutral",
+      selectedOptionIndices: [],
+      values: ["Alpha", "Beta"],
+    });
+  });
+
+  it("rejects exact evidence with multiple single-select channels", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        questions: [question("q1", "Which mode?", undefined, undefined)],
+        answers: [
+          answer(["Alpha", "Beta"], {
+            questionId: "q1",
+            question: "Which mode?",
+            selection: {
+              questionIndex: 0,
+              optionIndices: [0, 1],
+              optionLabels: ["Alpha", "Beta"],
+              customText: null,
+            },
+          }),
+        ],
       }),
     );
 

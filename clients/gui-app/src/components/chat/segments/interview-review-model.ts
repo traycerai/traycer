@@ -318,6 +318,12 @@ function exactSelectionFor(
   const distinctOptionIndices = new Set(selection.optionIndices);
   if (distinctOptionIndices.size !== selection.optionIndices.length)
     return null;
+  if (
+    !question.multiSelect &&
+    selection.optionIndices.length + (selection.customText === null ? 0 : 1) > 1
+  ) {
+    return null;
+  }
   const selectedLabels: string[] = [];
   for (let index = 0; index < selection.optionIndices.length; index += 1) {
     const optionIndex = selection.optionIndices.at(index);
