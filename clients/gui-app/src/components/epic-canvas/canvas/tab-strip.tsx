@@ -51,6 +51,7 @@ import {
   type EpicCanvasArtifactTabDragData,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
@@ -616,6 +617,7 @@ function TabItemBody(
     }),
     [epicId, groupId, isPreview, tab.instanceId, tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -623,6 +625,7 @@ function TabItemBody(
   } = useDraggable({
     id: getArtifactTabDragId(groupId, tab.instanceId),
     data: dragData,
+    disabled: dragDisabled,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({

@@ -386,6 +386,40 @@ describe("<SwitcherTerminalsList /> rows", () => {
     expect(tile.hostId).toBe(HOST_B);
     expect("authority" in tile && tile.authority === "host").toBe(true);
     expect(onClose).toHaveBeenCalledTimes(1);
+    // As the pane's PREVIEW: a tap on this surface recycles the one tile it
+    // can show rather than leaving a second one behind it.
+    const root = useEpicCanvasStore.getState().canvasByTabId[tabId]?.root;
+    if (root?.kind !== "pane") throw new Error("expected a single-pane root");
+    expect(root.previewTabId).toBe(tile.instanceId);
+  });
+
+  it("recycles the preview when a second row is tapped", () => {
+    durableCollection.value = completeFleet([
+      durableTerminal({
+        hostId: HOST_B,
+        terminalId: "first-term",
+        title: "First shell",
+        runtime: runningRuntime("first-term"),
+      }),
+      durableTerminal({
+        hostId: HOST_B,
+        terminalId: "second-term",
+        title: "Second shell",
+        runtime: runningRuntime("second-term"),
+      }),
+    ]);
+    const tabId = openEpicTab();
+    renderList(tabId);
+    fireEvent.click(screen.getByRole("button", { name: /^First shell/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Second shell/ }));
+
+    const tiles = Object.values(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId ??
+        {},
+    );
+    // One tile, not two - the count is the whole assertion.
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]?.id).toBe("second-term");
   });
 
   it("carries the resource chip for the row's owner host when stats are on", () => {

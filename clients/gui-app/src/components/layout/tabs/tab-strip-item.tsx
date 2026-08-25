@@ -24,6 +24,7 @@ import {
   type HeaderTabDragData,
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
@@ -502,6 +503,7 @@ function useHeaderTabDnd(
   const dragKey = stripItemId.startsWith("tab:")
     ? tabId
     : `${stripItemId}:${tabId}`;
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -509,7 +511,7 @@ function useHeaderTabDnd(
   } = useDraggable({
     id: getHeaderTabDragId(tabKind, dragKey),
     data: dragData,
-    disabled: config === null,
+    disabled: config === null || dragDisabled,
   });
   const dropData = useMemo<HeaderTabSlotDropData>(
     () => ({
