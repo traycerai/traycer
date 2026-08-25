@@ -485,6 +485,30 @@ describe("deriveInterviewReviewModel", () => {
     });
   });
 
+  it("keeps an associated note-only skipped draft visible and searchable", () => {
+    const model = deriveInterviewReviewModel(
+      reviewInput({
+        outcome: "skipped",
+        questions: [question("q1", "Which mode?", undefined, undefined)],
+        draftAnswers: [
+          answer([], {
+            questionId: "q1",
+            question: "Which mode?",
+            notes: "Decide after the rollout review",
+          }),
+        ],
+      }),
+    );
+
+    expect(model.pages[0]).toMatchObject({
+      fidelity: "draft",
+      notes: ["Decide after the rollout review"],
+    });
+    expect(model.searchableFields.map((field) => field.text)).toContain(
+      "Decide after the rollout review",
+    );
+  });
+
   it("does not let stale drafts hide submitted evidence for answered history", () => {
     const model = deriveInterviewReviewModel(
       reviewInput({

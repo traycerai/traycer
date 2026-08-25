@@ -191,9 +191,9 @@ export interface PendingUserMessage {
 }
 
 /**
- * The durable outbox tuple a retry may requeue. `generation` is renderer-only
- * reconciliation state: the wire contract names the stable delivery id, while
- * this value proves a later host projection superseded the attempted retry.
+ * The durable outbox tuple a retry may requeue. `generation` is the compare-
+ * and-swap guard that prevents a stale card from requeueing a newer attempt;
+ * a later host projection also supersedes the accepted renderer action.
  */
 export interface InterviewDeliveryRetryIdentity {
   readonly blockId: string;
@@ -3904,6 +3904,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           blockId: identity.blockId,
           settlementId: identity.settlementId,
           deliveryId: identity.deliveryId,
+          generation: identity.generation,
         };
         return sendAction({
           set,

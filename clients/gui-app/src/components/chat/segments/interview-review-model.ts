@@ -377,7 +377,10 @@ function pageFromAnswers(
 ): InterviewReviewPage {
   const values = associated.flatMap(({ answer }) => answer.values);
   const notes = notesFromAnswers(associated);
-  if (associated.length === 0 || values.length === 0) {
+  if (
+    associated.length === 0 ||
+    (values.length === 0 && (!draft || notes.length === 0))
+  ) {
     return {
       question,
       fidelity: "no-answer",
@@ -766,7 +769,9 @@ export function deriveInterviewReviewModel(
     const draftForPage = drafts.pages[index] ?? [];
     const submittedForPage = submitted.pages[index] ?? [];
     return outcome === "skipped" &&
-      draftForPage.some(({ answer }) => answer.values.length > 0)
+      draftForPage.some(
+        ({ answer }) => answer.values.length > 0 || answer.notes !== null,
+      )
       ? pageFromAnswers(question, index, draftForPage, true)
       : pageFromAnswers(question, index, submittedForPage, false);
   });

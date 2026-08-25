@@ -25,6 +25,7 @@ const RETRY: ChatSubscribeClientFrame = {
   blockId: "block-1",
   settlementId: "settlement-1",
   deliveryId: "delivery-1",
+  generation: 0,
 };
 
 const RETRY_ACK = {

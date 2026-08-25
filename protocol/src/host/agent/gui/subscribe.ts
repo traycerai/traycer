@@ -1470,8 +1470,8 @@ const interviewErrorClientFrameSchema = z.object({
 
 /**
  * Requeue the SAME durable detached delivery. `blockId` selects the visible
- * card; settlement and delivery ids are the immutable join guard that proves
- * it still names the one outbox item this action is allowed to touch.
+ * card; settlement and delivery ids are the immutable join guard, while the
+ * generation proves the visible failure is still the current attempt.
  */
 const interviewDeliveryRetryClientFrameSchema = z.object({
   kind: z.literal("interviewDeliveryRetry"),
@@ -1479,6 +1479,7 @@ const interviewDeliveryRetryClientFrameSchema = z.object({
   blockId: z.string(),
   settlementId: z.string(),
   deliveryId: z.string(),
+  generation: z.number().int().nonnegative(),
 });
 
 // The client-frame options that follow the interview pair, split out for the

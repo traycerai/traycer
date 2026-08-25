@@ -1260,6 +1260,7 @@ describe("createChatSessionStore", () => {
     expect(first).not.toBeNull();
     expect(harness.sent).toHaveLength(1);
     expect(harness.sent[0]?.kind).toBe("interviewDeliveryRetry");
+    expect(harness.sent[0]).toMatchObject({ generation: 0 });
     expect(
       harness.handle.store.getState().pendingActions[first ?? ""]
         .interviewBlockId,
