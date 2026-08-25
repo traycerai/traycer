@@ -8,8 +8,9 @@
  * host predates the record channel, `epic.reparentChat@1.0` has no
  * terminal-agent arm there, and the call would fail where the doc write used to
  * work. So the commit routes on whether the row is registry-backed, and these
- * tests pin the three answers - registry-backed agent, doc-only terminal agent,
- * artifact.
+ * tests pin the answers - registry-backed agent, doc-only terminal agent
+ * (Y-only; never `epic.reparentArtifact`), artifact (doc write +
+ * `epic.reparentArtifact`; no client keeps the doc write).
  *
  * The registry module is the seam: the commit reads the live epic session
  * imperatively through it, so stubbing it is what lets a drop be committed
@@ -32,7 +33,9 @@ const seam = vi.hoisted(() => {
   });
   return {
     emptyTree,
-    reparentArtifact: vi.fn<(id: string, parentId: string | null) => void>(),
+    reparentArtifact: vi.fn<(id: string, parentId: string | null) => boolean>(
+      () => true,
+    ),
     request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
     /** Ids the host serves as terminal-agent RECORDS (`epic.listTuiAgents`). */
     recordIds: [] as string[],
@@ -112,6 +115,7 @@ function drop(sourceNodeId: string, newParentId: string | null): void {
 
 beforeEach(() => {
   seam.reparentArtifact.mockClear();
+  seam.reparentArtifact.mockReturnValue(true);
   seam.request.mockClear();
   seam.request.mockResolvedValue({ updated: true });
   seam.recordIds = [];
@@ -168,6 +172,8 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       "tui-legacy",
       "tui-parent",
     );
+    // Q1: doc-only TUI stays Y-only. This RPC names an artifact id, not a
+    // tuiAgents map entry — must not start sending `epic.reparentArtifact`.
     expect(seam.request).not.toHaveBeenCalled();
   });
 
@@ -192,11 +198,41 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
   });
 
-  it("leaves artifacts on the doc write they have always used", () => {
+  it("dual-writes an artifact drop to the doc and epic.reparentArtifact", () => {
+    // The store seam alone would stay green on a persist no-op: the RPC
+    // assertion is the one that would have caught shipping the dual-write
+    // with a mock that returned undefined (falsy → mutated guard skips RPC).
     seam.tree = treeOf([
       node("spec-1", "spec", null),
       node("spec-parent", "spec", null),
     ]);
+
+    commitSidebarReparentDrop({
+      epicId: "epic-1",
+      sourceNodeId: "spec-1",
+      newParentId: "spec-parent",
+      panelId: "artifacts",
+      viewTabId: "tab-1",
+      queryClient,
+    });
+
+    expect(seam.reparentArtifact).toHaveBeenCalledWith("spec-1", "spec-parent");
+    expect(seam.request).toHaveBeenCalledTimes(1);
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentArtifact", {
+      epicId: "epic-1",
+      artifactId: "spec-1",
+      newParentId: "spec-parent",
+    });
+  });
+
+  it("keeps the artifact doc write when the session has no client", () => {
+    // Unlike a record-backed agent (silent cancel), an artifact pointer
+    // still lives in the doc: no serving client skips the RPC, not the Y write.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+    seam.hasClient = false;
 
     commitSidebarReparentDrop({
       epicId: "epic-1",

@@ -187,7 +187,6 @@ export interface TreeSlice {
 export interface EpicHeader {
   readonly title: string;
   readonly updatedAt: number;
-  readonly isTitleEditedByUser: boolean;
 }
 
 /**
@@ -236,7 +235,6 @@ export interface EpicProjectedSlices {
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
-  readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_ARRAY: readonly string[] = Object.freeze([]);
@@ -284,7 +282,6 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
   epic: Object.freeze({
     title: "",
     updatedAt: 0,
-    isTitleEditedByUser: false,
   }),
   artifacts: Object.freeze({
     byId: Object.freeze({} as Record<string, ArtifactProjection>),
@@ -304,5 +301,4 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),
     nodeById: Object.freeze({} as Record<string, TreeNode>),
   }),
-  contentRevByArtifactId: Object.freeze({} as Record<string, number>),
 });

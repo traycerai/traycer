@@ -48,7 +48,6 @@ import {
   projectFullState,
   projectTerminalAgent,
   projectTreeSlice,
-  readMaybeBoolean,
   readMaybeNumber,
   readMaybeString,
   terminalAgentProjectionsEq,
@@ -95,7 +94,6 @@ interface ProjectorPatches {
   terminalAgentsCreated: Set<string>;
   titleChanged: boolean;
   updatedAtChanged: boolean;
-  isTitleEditedByUserChanged: boolean;
   structuralTreeDirty: boolean;
   /**
    * True when the `epic.artifacts` container map itself was added /
@@ -127,7 +125,6 @@ function emptyPatches(): ProjectorPatches {
     terminalAgentsCreated: new Set(),
     titleChanged: false,
     updatedAtChanged: false,
-    isTitleEditedByUserChanged: false,
     structuralTreeDirty: false,
     artifactsContainerReseeded: false,
     deletedArtifactsContainerReseeded: false,
@@ -157,7 +154,6 @@ function patchFlagsEmpty(p: ProjectorPatches): boolean {
   return (
     !p.titleChanged &&
     !p.updatedAtChanged &&
-    !p.isTitleEditedByUserChanged &&
     !p.structuralTreeDirty &&
     !p.artifactsContainerReseeded &&
     !p.deletedArtifactsContainerReseeded &&
@@ -363,8 +359,6 @@ function classifyEpicRoot(
       patches.titleChanged = true;
     } else if (key === "updatedAt") {
       patches.updatedAtChanged = true;
-    } else if (key === "isTitleEditedByUser") {
-      patches.isTitleEditedByUserChanged = true;
     } else if (key === "artifacts") {
       patches.artifactsContainerReseeded = true;
       patches.structuralTreeDirty = true;
@@ -543,9 +537,8 @@ function classifyEvent(
     return;
   }
 
-  // Y.Map "epic" root: title / isTitleEditedByUser / artifacts /
-  // chats. Container additions are uncommon (lazy `ensureMap`) but
-  // handled defensively.
+  // Y.Map "epic" root: title / artifacts / chats. Container additions
+  // are uncommon (lazy `ensureMap`) but handled defensively.
   if (path.length === 0 && event instanceof Y.YMapEvent) {
     classifyEpicRoot(event, patches);
     return;
@@ -687,23 +680,17 @@ function applyEpicHeader(
   patches: ProjectorPatches,
   next: MutableProjectedPatch,
 ): void {
-  if (
-    !patches.titleChanged &&
-    !patches.updatedAtChanged &&
-    !patches.isTitleEditedByUserChanged
-  ) {
+  if (!patches.titleChanged && !patches.updatedAtChanged) {
     return;
   }
   const epic = getEpicMap(doc);
   const header = {
     title: readMaybeString(epic, "title"),
     updatedAt: readMaybeNumber(epic, "updatedAt"),
-    isTitleEditedByUser: readMaybeBoolean(epic, "isTitleEditedByUser"),
   };
   if (
     header.title !== state.epic.title ||
-    header.updatedAt !== state.epic.updatedAt ||
-    header.isTitleEditedByUser !== state.epic.isTitleEditedByUser
+    header.updatedAt !== state.epic.updatedAt
   ) {
     next.epic = header;
   }

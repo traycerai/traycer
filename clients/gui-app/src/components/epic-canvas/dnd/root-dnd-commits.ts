@@ -628,12 +628,18 @@ function isDocOnlyTerminalAgent(
 /**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
- * `acquire`), RE-RUNS `canReparent` against the current doc (Decision D: this
- * closes the drag-over→drag-end TOCTOU and keeps the throwing store action
- * unreachable), then flips `parentId` through the standard `reparentArtifact`
- * action (`LOCAL_ORIGIN`, replicated over the Y stream). Silent no-op when the
- * session is gone or the re-check fails - matching the "invalid drop = silent
- * cancel" rule.
+ * `acquire`), RE-RUNS `canReparent` against the projected tree (Decision D:
+ * this closes the drag-over→drag-end TOCTOU and keeps the throwing store
+ * action unreachable), then persists:
+ *   - registry-backed agents → `epic.reparentChat` only
+ *   - artifacts → local `reparentArtifact` (Y stream) **and**
+ *     `epic.reparentArtifact` (host cloud-sync / the persist path that
+ *     survives dropping the doc arm). Dual-write is safe: host `update()`
+ *     skips `validateReparent` when `parentId` is already the target, then
+ *     LWW-sets the same value (same shape as `epic.renameArtifact`).
+ *   - doc-only terminal agents → local `reparentArtifact` only (Q1)
+ * Silent no-op when the session is gone or the re-check fails - matching
+ * the "invalid drop = silent cancel" rule.
  */
 export function commitSidebarReparentDrop(
   input: SidebarReparentDropInput,
@@ -705,12 +711,31 @@ export function commitSidebarReparentDrop(
       });
   } else {
     // Artifacts, whose pointer has always lived in the doc - and the one
-    // agent-family case that still does, a doc-only terminal agent. Both are
-    // the same Y write they were before the record channel existed; see
-    // `isDocOnlyTerminalAgent`.
-    handle.store
+    // agent-family case that still does, a doc-only terminal agent. The Y
+    // write stays until the doc arm dies; artifacts additionally dual-write
+    // `epic.reparentArtifact` so persist does not depend on that arm.
+    // Doc-only TUI stays Y-only until listTuiAgents is on the floor (Q1):
+    // this RPC names an artifact id, not a tuiAgents map entry.
+    const mutated = handle.store
       .getState()
       .reparentArtifact(input.sourceNodeId, input.newParentId);
+    if (mutated && evaluation.node.family === "artifact") {
+      const artifactClient = getEpicSessionHandleHostClient(handle);
+      if (artifactClient !== null) {
+        void artifactClient
+          .request("epic.reparentArtifact", {
+            epicId: input.epicId,
+            artifactId: input.sourceNodeId,
+            newParentId: input.newParentId,
+          })
+          .catch((error: unknown) => {
+            toastFromHostError(
+              toHostRpcError(error, "epic.reparentArtifact"),
+              "Couldn't move this artifact.",
+            );
+          });
+      }
+    }
   }
   // Reveal the moved node under its new parent: a quick drop onto a collapsed
   // or previously-leaf row only flips `parentId`, and spring-load only fires

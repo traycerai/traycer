@@ -77,7 +77,7 @@ function registerSession(title: string): OpenEpicStoreHandle {
     onAuthError: null,
   });
   handle.store.setState({
-    epic: { title, updatedAt: 1, isTitleEditedByUser: false },
+    epic: { title, updatedAt: 1 },
     permissionRole: "owner",
   });
   __getOpenEpicRegistryForTests().acquire(EPIC_ID, () => handle);
@@ -248,7 +248,6 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
       epic: {
         title: "Renamed on the phone",
         updatedAt: 2,
-        isTitleEditedByUser: true,
       },
     });
 

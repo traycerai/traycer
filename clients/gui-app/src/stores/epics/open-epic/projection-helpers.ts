@@ -8,7 +8,6 @@
  *
  *   doc.getMap("epic") = {
  *     title:                    string,
- *     isTitleEditedByUser:      boolean,
  *     artifacts: Y.Map<string, Y.Map<{
  *        id, kind, title, parentId, createdAt, updatedAt,
  *        artifactRoomId?: string, status?: number,
@@ -970,7 +969,6 @@ function projectEpicHeader(doc: Y.Doc): EpicHeader {
   return {
     title: readMaybeString(epic, "title"),
     updatedAt: readMaybeNumber(epic, "updatedAt"),
-    isTitleEditedByUser: readMaybeBoolean(epic, "isTitleEditedByUser"),
   };
 }
 
@@ -1161,10 +1159,6 @@ export function projectFullState(
     tuiAgents,
   );
   const tree = projectTreeSlice(artifacts, chats, tuiAgents);
-  const contentRevByArtifactId: Record<string, number> = {};
-  for (const id of artifacts.allIds) {
-    contentRevByArtifactId[id] = 0;
-  }
   return {
     epic: projectEpicHeader(doc),
     artifacts,
@@ -1175,7 +1169,6 @@ export function projectFullState(
     tuiAgents,
     agentRoles,
     tree,
-    contentRevByArtifactId,
   };
 }
 

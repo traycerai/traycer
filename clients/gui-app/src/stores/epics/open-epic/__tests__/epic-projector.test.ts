@@ -166,7 +166,6 @@ describe("epic-projector", () => {
     expect(state.artifacts.allIds).toEqual([]);
     expect(state.chats.allIds).toEqual([]);
     expect(state.tree.rootIds).toEqual([]);
-    expect(Object.keys(state.contentRevByArtifactId)).toEqual([]);
     expect(state.epic.title).toBe("");
     handle.dispose();
   });

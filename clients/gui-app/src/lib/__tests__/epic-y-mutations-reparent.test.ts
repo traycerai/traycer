@@ -1,10 +1,17 @@
+/**
+ * Coverage for `evaluateReparent` in `@/lib/reparent-rules` (still live —
+ * `OpenEpicState.reparentArtifactAction` calls it). `writeReparent` here is a
+ * test-local helper matching the deleted `epic-y-mutations.ts` adapter: it
+ * must not be reintroduced under `src/lib/`.
+ */
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import {
-  canReparent,
-  writeReparent,
-  type CanReparentResult,
-} from "@/lib/epic-y-mutations";
+  evaluateReparent,
+  reparentRejectionError,
+  type ReparentEvaluation,
+  type ReparentRejectionReason,
+} from "@/lib/reparent-rules";
 import {
   CrossFamilyParentError,
   MissingNodeError,
@@ -90,6 +97,47 @@ function getEntry(
     throw new Error(`expected ${bucket}/${id} to be a Y.Map`);
   }
   return entry as Y.Map<unknown>;
+}
+
+type ReparentDecision =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: ReparentRejectionReason };
+
+function reparentDecision(evaluation: ReparentEvaluation): ReparentDecision {
+  return evaluation.ok
+    ? { ok: true }
+    : { ok: false, reason: evaluation.reason };
+}
+
+/**
+ * Test-local stand-in for the deleted `writeReparent` adapter: transact,
+ * evaluate, mutate on ok, no-op on same-parent, otherwise throw.
+ */
+function writeReparent(args: {
+  readonly doc: Y.Doc;
+  readonly nodeId: string;
+  readonly newParentId: string | null;
+}): boolean {
+  const { doc, nodeId, newParentId } = args;
+  let mutated = false;
+  const pendingErrors: Error[] = [];
+
+  doc.transact(() => {
+    const evaluation = evaluateReparent(doc, nodeId, newParentId);
+    if (!evaluation.ok) {
+      if (evaluation.reason === "same-parent") return;
+      pendingErrors.push(
+        reparentRejectionError(doc, evaluation.reason, nodeId, newParentId),
+      );
+      return;
+    }
+    evaluation.node.entry.set("parentId", newParentId);
+    evaluation.node.entry.set("updatedAt", Date.now());
+    mutated = true;
+  }, "local");
+
+  if (pendingErrors.length > 0) throw pendingErrors[0];
+  return mutated;
 }
 
 describe("writeReparent", () => {
@@ -391,7 +439,7 @@ describe("writeReparent", () => {
   });
 });
 
-describe("canReparent", () => {
+describe("evaluateReparent", () => {
   it("returns ok for a valid artifact move", () => {
     const doc = seedDoc({
       artifacts: [
@@ -411,7 +459,9 @@ describe("canReparent", () => {
         },
       ],
     });
-    expect(canReparent(doc, "spec-a", "spec-b")).toEqual({ ok: true });
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "spec-b"))).toEqual({
+      ok: true,
+    });
   });
 
   it("returns ok for a chat under a chat", () => {
@@ -421,7 +471,9 @@ describe("canReparent", () => {
         { id: "chat-2", title: "C2", parentId: null, createdAt: 2 },
       ],
     });
-    expect(canReparent(doc, "chat-2", "chat-1")).toEqual({ ok: true });
+    expect(reparentDecision(evaluateReparent(doc, "chat-2", "chat-1"))).toEqual({
+      ok: true,
+    });
   });
 
   it("flags missing-node when the node is absent", () => {
@@ -436,7 +488,7 @@ describe("canReparent", () => {
         },
       ],
     });
-    expect(canReparent(doc, "ghost", null)).toEqual({
+    expect(reparentDecision(evaluateReparent(doc, "ghost", null))).toEqual({
       ok: false,
       reason: "missing-node",
     });
@@ -454,7 +506,7 @@ describe("canReparent", () => {
         },
       ],
     });
-    expect(canReparent(doc, "spec-a", "ghost")).toEqual({
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", "ghost"))).toEqual({
       ok: false,
       reason: "missing-node",
     });
@@ -473,7 +525,9 @@ describe("canReparent", () => {
       ],
       chats: [{ id: "chat-1", title: "C", parentId: null, createdAt: 2 }],
     });
-    expect(canReparent(doc, "spec-a", "chat-1")).toEqual({
+    expect(
+      reparentDecision(evaluateReparent(doc, "spec-a", "chat-1")),
+    ).toEqual({
       ok: false,
       reason: "cross-panel",
     });
@@ -492,7 +546,9 @@ describe("canReparent", () => {
       ],
       chats: [{ id: "chat-1", title: "C", parentId: null, createdAt: 2 }],
     });
-    expect(canReparent(doc, "chat-1", "spec-a")).toEqual({
+    expect(
+      reparentDecision(evaluateReparent(doc, "chat-1", "spec-a")),
+    ).toEqual({
       ok: false,
       reason: "cross-panel",
     });
@@ -510,7 +566,9 @@ describe("canReparent", () => {
         },
       ],
     });
-    expect(canReparent(doc, "spec-a", "spec-a")).toEqual({
+    expect(
+      reparentDecision(evaluateReparent(doc, "spec-a", "spec-a")),
+    ).toEqual({
       ok: false,
       reason: "cycle",
     });
@@ -524,7 +582,10 @@ describe("canReparent", () => {
         { id: "c", kind: "story", title: "C", parentId: "b", createdAt: 3 },
       ],
     });
-    expect(canReparent(doc, "a", "c")).toEqual({ ok: false, reason: "cycle" });
+    expect(reparentDecision(evaluateReparent(doc, "a", "c"))).toEqual({
+      ok: false,
+      reason: "cycle",
+    });
   });
 
   it("flags cycle on an agent-family descendant (chat chain)", () => {
@@ -538,7 +599,9 @@ describe("canReparent", () => {
       ],
     });
     // chat-a → agent-c would cycle (agent-c descends from chat-a via chat-b).
-    expect(canReparent(doc, "chat-a", "agent-c")).toEqual({
+    expect(
+      reparentDecision(evaluateReparent(doc, "chat-a", "agent-c")),
+    ).toEqual({
       ok: false,
       reason: "cycle",
     });
@@ -563,12 +626,12 @@ describe("canReparent", () => {
         },
       ],
     });
-    expect(canReparent(doc, "tic-1", "spec-a")).toEqual({
+    expect(reparentDecision(evaluateReparent(doc, "tic-1", "spec-a"))).toEqual({
       ok: false,
       reason: "same-parent",
     });
     // root → root no-op too.
-    expect(canReparent(doc, "spec-a", null)).toEqual({
+    expect(reparentDecision(evaluateReparent(doc, "spec-a", null))).toEqual({
       ok: false,
       reason: "same-parent",
     });
@@ -597,9 +660,9 @@ describe("canReparent", () => {
     doc.on("update", () => {
       updateCount += 1;
     });
-    canReparent(doc, "spec-a", "spec-b");
-    canReparent(doc, "spec-a", "ghost");
-    canReparent(doc, "ghost", null);
+    evaluateReparent(doc, "spec-a", "spec-b");
+    evaluateReparent(doc, "spec-a", "ghost");
+    evaluateReparent(doc, "ghost", null);
     expect(updateCount).toBe(0);
   });
 
@@ -617,10 +680,14 @@ describe("canReparent", () => {
     });
     // Moving l under c walks c -> a -> b -> a (revisit) without ever reaching
     // l, so it must be allowed - the chain looping is not l's descendant.
-    expect(canReparent(doc, "l", "c")).toEqual({ ok: true });
+    expect(reparentDecision(evaluateReparent(doc, "l", "c"))).toEqual({
+      ok: true,
+    });
     // A node caught in the cycle can still escape to a safe parent (the walk
     // from l never revisits a, so a is not flagged as l's descendant).
-    expect(canReparent(doc, "a", "l")).toEqual({ ok: true });
+    expect(reparentDecision(evaluateReparent(doc, "a", "l"))).toEqual({
+      ok: true,
+    });
   });
 
   it("surfaces cross-panel (not same-parent) when re-dropping onto a corrupt cross-family parent", () => {
@@ -639,15 +706,17 @@ describe("canReparent", () => {
     });
     // Re-dropping spec-a back onto chat-1 must report the real cross-family
     // reason, not be masked as a silent same-parent no-op.
-    expect(canReparent(doc, "spec-a", "chat-1")).toEqual({
+    expect(
+      reparentDecision(evaluateReparent(doc, "spec-a", "chat-1")),
+    ).toEqual({
       ok: false,
       reason: "cross-panel",
     });
   });
 
-  // Agreement guard: `canReparent` and `writeReparent` both delegate to the
-  // shared `evaluateReparent` (so does the store's `reparentArtifactAction`),
-  // so their accept/reject decisions must agree on every matrix cell.
+  // Agreement guard: the test-local `writeReparent` and the live
+  // `evaluateReparent` (also used by `reparentArtifactAction`) must agree
+  // on every matrix cell. `writeReparent` is not production code.
   it("mirrors writeReparent decisions across the matrix", () => {
     const setup = () =>
       seedDoc({
@@ -664,7 +733,7 @@ describe("canReparent", () => {
     const cases: ReadonlyArray<{
       nodeId: string;
       newParentId: string | null;
-      expected: CanReparentResult;
+      expected: ReparentDecision;
       writeShouldThrow: boolean;
     }> = [
       // happy path: artifact → root.
@@ -734,7 +803,9 @@ describe("canReparent", () => {
 
     for (const c of cases) {
       const doc = setup();
-      expect(canReparent(doc, c.nodeId, c.newParentId)).toEqual(c.expected);
+      expect(
+        reparentDecision(evaluateReparent(doc, c.nodeId, c.newParentId)),
+      ).toEqual(c.expected);
       if (c.writeShouldThrow) {
         expect(() =>
           writeReparent({

@@ -387,7 +387,6 @@ export interface OpenEpicState {
   readonly tuiAgents: TerminalAgentsSlice;
   readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
-  readonly contentRevByArtifactId: Readonly<Record<string, number>>;
   /**
    * Per-artifact-room availability mirrored from `epic.subscribe@1.0` `artifactRoomState`
    * frames. The body of an artifact is renderable only when the artifactRoom
@@ -883,9 +882,9 @@ function emitCurrentAwareness(
   client.awareness(encodeAwarenessUpdate(awareness, [doc.clientID]));
 }
 
-// Reparent resolution / validation lives in `@/lib/reparent-rules`
-// (`evaluateReparent`), shared verbatim with the DnD pre-flight read in
-// `epic-y-mutations.ts` so the rule can never drift between read and write.
+// Reparent write-path validation lives in `@/lib/reparent-rules`
+// (`evaluateReparent`). DnD preview/commit uses the projected-tree twin in
+// `@/lib/reparent-projection-rules`.
 
 /**
  * Constructs a fresh per-Epic session.
