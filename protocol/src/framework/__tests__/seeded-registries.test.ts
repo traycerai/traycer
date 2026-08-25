@@ -6,6 +6,7 @@ import {
   validateVersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
 
 /**
@@ -32,6 +33,41 @@ describe("seeded protocol registries", () => {
     expect(() =>
       validateVersionedRecordRegistry(persistenceRecordRegistry),
     ).not.toThrow();
+  });
+
+  it("versions the shared Reasonix harness id as a new record major", () => {
+    expect(Object.keys(commonRecordRegistry["harness-id"]).sort()).toEqual([
+      "1",
+      "2",
+    ]);
+    expect(
+      loadRecord(commonRecordRegistry, "harness-id", "claude", {
+        major: 1,
+        minor: 0,
+      }),
+    ).toBe("claude");
+    expect(
+      downgradeRecordAcrossMajors(
+        commonRecordRegistry["harness-id"],
+        2,
+        1,
+        "claude",
+      ),
+    ).toEqual({ ok: true, value: "claude" });
+    expect(
+      downgradeRecordAcrossMajors(
+        commonRecordRegistry["harness-id"],
+        2,
+        1,
+        "reasonix",
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED",
+        message: "Reasonix cannot be represented by harness-id record 1.0",
+      },
+    });
   });
 
   it("persistence owns the epic, room-metadata and chat-sync records", () => {
