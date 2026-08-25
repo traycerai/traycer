@@ -6,7 +6,12 @@
  * a panel the navigation beside it has no row for.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { isRedirect } from "@tanstack/react-router";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { setMobileApp } from "@/lib/mobile-app";
 import { Route as KeybindingsRoute } from "@/routes/settings.keybindings";
 
@@ -14,38 +19,65 @@ afterEach(() => {
   setMobileApp(false);
 });
 
-// TanStack Router's `beforeLoad` signature is parameterized on the full
-// file-route context, but this redirect reads none of those args. A permissive
-// sentinel keeps the test decoupled from that type.
-function runBeforeLoad(): unknown {
-  const beforeLoad = KeybindingsRoute.options.beforeLoad;
-  expect(beforeLoad).toBeTypeOf("function");
-  const invoke = beforeLoad as (args: { context: object }) => void;
-  try {
-    invoke({ context: {} });
-  } catch (err) {
-    return err;
-  }
-  return null;
+// The route's own `beforeLoad`, mounted into a throwaway route tree rather
+// than invoked directly: a redirect is only worth anything if the ROUTER
+// honors it, so matching, redirect handling and history replacement all have
+// to run. TanStack parameterizes the callback on the full file-route context
+// and this one reads none of it, so a permissive sentinel keeps the fixture
+// decoupled from that type.
+const keybindingsBeforeLoad = KeybindingsRoute.options.beforeLoad as (args: {
+  context: object;
+}) => void;
+
+function buildRouter(initialPath: string) {
+  const rootRoute = createRootRoute();
+  const keybindingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/keybindings",
+    beforeLoad: () => keybindingsBeforeLoad({ context: {} }),
+    component: () => <div data-testid="keybindings-panel" />,
+  });
+  const generalRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/settings/general",
+    component: () => <div data-testid="general-panel" />,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([keybindingsRoute, generalRoute]),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
 }
 
 describe("/settings/keybindings route", () => {
-  it("renders the panel on builds that offer the section", () => {
+  it("stays on the section for builds that offer it", async () => {
     setMobileApp(false);
+    const router = buildRouter("/settings/keybindings");
+    await router.load();
+
+    expect(router.state.location.pathname).toBe("/settings/keybindings");
+    // The real route renders the panel; the fixture above substitutes a stub
+    // for it, so what is asserted here is that the route resolves rather than
+    // redirects.
     expect(KeybindingsRoute.options.component).toBeDefined();
-    expect(runBeforeLoad()).toBeNull();
   });
 
-  it("redirects to /settings/general in the installed mobile app", () => {
+  it("lands on General in the installed mobile app", async () => {
     setMobileApp(true);
-    const thrown = runBeforeLoad();
-    expect(isRedirect(thrown)).toBe(true);
-    const response = thrown as Response & {
-      options: { to: string; replace: boolean };
-    };
-    expect(response.options.to).toBe("/settings/general");
-    // `replace`, so Back leaves Settings rather than bouncing off this route
-    // into General again.
-    expect(response.options.replace).toBe(true);
+    const router = buildRouter("/settings/keybindings");
+    await router.load();
+
+    expect(router.state.location.pathname).toBe("/settings/general");
+    // `replace`, so the keybindings entry is overwritten rather than pushed -
+    // Back leaves Settings instead of bouncing off this route into General
+    // again.
+    expect(router.history.length).toBe(1);
+  });
+
+  it("leaves other settings routes alone in the installed mobile app", async () => {
+    setMobileApp(true);
+    const router = buildRouter("/settings/general");
+    await router.load();
+
+    expect(router.state.location.pathname).toBe("/settings/general");
   });
 });
