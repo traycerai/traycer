@@ -38,3 +38,28 @@ export function useOrderedSwitcherRecords(
     });
   }, [records, nodeById, sort]);
 }
+
+/**
+ * The rows a switcher category renders: `records` narrowed to `matchIds`, then
+ * ordered by `sort`. `null` match ids mean no filter is active and the slice
+ * passes through with its identity intact.
+ *
+ * Narrowing is a plain membership test, with no ancestor expansion, because
+ * these lists are flat: there is no parent row whose reachability a match
+ * depends on. The sidebar's tree expands its matches for exactly that reason
+ * and this surface has no equivalent debt.
+ */
+export function useNarrowedSwitcherRecords(
+  records: ReadonlyArray<EpicTreeRecord>,
+  matchIds: ReadonlySet<string> | null,
+  sort: SortMode,
+): ReadonlyArray<EpicTreeRecord> {
+  const narrowed = useMemo(
+    () =>
+      matchIds === null
+        ? records
+        : records.filter((record) => matchIds.has(record.id)),
+    [records, matchIds],
+  );
+  return useOrderedSwitcherRecords(narrowed, sort);
+}

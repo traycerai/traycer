@@ -9,9 +9,18 @@ import {
 import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
 import { SwitcherNewChatRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
-import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
-import { useChatSort } from "@/stores/epics/left-panel-store";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
+import {
+  isChatFilterActive,
+  useChatFilter,
+  useChatSort,
+} from "@/stores/epics/left-panel-store";
 import {
   useEpicArtifactRecords,
   useEpicNodeHostId,
@@ -54,7 +63,12 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
       ),
     [records],
   );
-  const agents = useOrderedSwitcherRecords(filtered, useChatSort(epicId));
+  const chatFilter = useChatFilter(epicId);
+  const agents = useNarrowedSwitcherRecords(
+    filtered,
+    useChatFilterMatchIds(epicId),
+    useChatSort(epicId),
+  );
   const canMutate = isEditableRole(useEpicPermissionRole());
   // Sorted for a stable query key: the list itself re-sorts by recency on every
   // turn, and an order-sensitive key would refetch each time without the set
@@ -98,7 +112,16 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
             />
           ) : null}
           {agents.length === 0 ? (
-            <SwitcherListEmpty message="No agents yet." />
+            // Blame the filter when one is on: an epic full of agents that the
+            // user narrowed to nothing must not read as an epic with none.
+            isChatFilterActive(chatFilter) ? (
+              <SwitcherListEmpty
+                message={FILTERED_EMPTY_TITLE}
+                description={chatFilterEmptyStateDescription(chatFilter)}
+              />
+            ) : (
+              <SwitcherListEmpty message="No agents yet." description={null} />
+            )
           ) : (
             agents.map((record) => (
               <SwitcherAgentRow

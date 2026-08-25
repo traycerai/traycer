@@ -8,9 +8,18 @@ import {
 import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
 import { SwitcherNewArtifactMenu } from "@/components/epic-canvas/mobile/switcher-create-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
-import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
+import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import { SwitcherArtifactsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
-import { useArtifactSort } from "@/stores/epics/left-panel-store";
+import {
+  ARTIFACT_FILTER_EMPTY_DESCRIPTION,
+  FILTERED_EMPTY_TITLE,
+  useArtifactFilterMatchIds,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
+import {
+  isArtifactFilterActive,
+  useArtifactFilter,
+  useArtifactSort,
+} from "@/stores/epics/left-panel-store";
 import {
   useEpicArtifactRecords,
   useEpicPermissionRole,
@@ -54,8 +63,10 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
       ),
     [records],
   );
-  const artifacts = useOrderedSwitcherRecords(
+  const artifactFilter = useArtifactFilter(epicId);
+  const artifacts = useNarrowedSwitcherRecords(
     filtered,
+    useArtifactFilterMatchIds(epicId),
     useArtifactSort(epicId),
   );
   const canMutate = isEditableRole(useEpicPermissionRole());
@@ -75,7 +86,16 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
         viewMenu={<SwitcherArtifactsViewMenu epicId={epicId} />}
       />
       {artifacts.length === 0 ? (
-        <SwitcherListEmpty message="No artifacts yet." />
+        // Blame the filter when one is on, exactly as the sidebar does - an
+        // epic narrowed to nothing must not read as an epic with nothing in it.
+        isArtifactFilterActive(artifactFilter) ? (
+          <SwitcherListEmpty
+            message={FILTERED_EMPTY_TITLE}
+            description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
+          />
+        ) : (
+          <SwitcherListEmpty message="No artifacts yet." description={null} />
+        )
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
           {artifacts.map((record) => (

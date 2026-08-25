@@ -103,10 +103,22 @@ export function SwitcherNewItemRow(props: {
   );
 }
 
-export function SwitcherListEmpty(props: { readonly message: string }) {
+/**
+ * The "nothing to show" body for a category list. `description` carries the
+ * second line a NARROWED empty state needs - which control is doing the hiding
+ * - so an empty list the user filtered into never reads as an epic with nothing
+ * in it. Categories with nothing to add pass null.
+ */
+export function SwitcherListEmpty(props: {
+  readonly message: string;
+  readonly description: string | null;
+}) {
   return (
-    <div className="flex min-h-24 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-      {props.message}
+    <div className="flex min-h-24 flex-col items-center justify-center gap-1 p-6 text-center text-ui-sm text-muted-foreground">
+      <span>{props.message}</span>
+      {props.description === null ? null : (
+        <span className="text-ui-xs">{props.description}</span>
+      )}
     </div>
   );
 }

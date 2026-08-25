@@ -87,7 +87,6 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
-  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
   isChatFilterActive,
   matchesChatOwnershipFilter,
@@ -223,6 +222,11 @@ import {
   useMaybeSidebarBulkSelection,
   useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -581,38 +585,6 @@ function usePanelRootIds(
 }
 
 /**
- * Nodes the active interface and ownership filters MATCH - the raw matches, with
- * no ancestor expansion. Every local agent is owned by the viewer;
- * collaborators' agents arrive only as cloud rows. `null` when neither filter is
- * active.
- *
- * Ancestor expansion is deliberately NOT done here. A path ancestor is a
- * rendering concession, not a match, and expanding before combining with search
- * would let one narrowing's concession satisfy the other's predicate - see
- * {@link intersectMatchIds}.
- */
-function useChatFilterMatchIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useChatFilter(epicId);
-  const liveRecords = useEpicArtifactRecords();
-  return useMemo(() => {
-    if (!isChatFilterActive(filter)) return null;
-    const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
-    return new Set(
-      liveRecords.flatMap((record): string[] =>
-        includeLocal &&
-        CHATS_TREE_FILTER(record.type) &&
-        (filter.origin === CHAT_ORIGIN.All ||
-          (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
-          (filter.origin === CHAT_ORIGIN.Tui &&
-            record.type === "terminal-agent"))
-          ? [record.id]
-          : [],
-      ),
-    );
-  }, [filter, liveRecords]);
-}
-
-/**
  * Whether a cloud row survives the archive filter.
  *
  * The row carries its own `isArchived`, so this is the same question the local
@@ -647,18 +619,6 @@ function cloudRowMatchesOwnershipFilter(
   filter: ChatFilter,
 ): boolean {
   return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
-}
-
-function chatFilterEmptyStateDescription(filter: ChatFilter): string {
-  const interfaceActive = filter.origin !== CHAT_ORIGIN.All;
-  const ownershipActive = filter.ownership !== CHAT_OWNERSHIP.All;
-  if (interfaceActive && !ownershipActive) {
-    return "The Interface filter is hiding the other agents.";
-  }
-  if (ownershipActive && !interfaceActive) {
-    return "The Ownership filter is hiding the other agents.";
-  }
-  return "The current filters are hiding the other agents.";
 }
 
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
@@ -1158,7 +1118,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No matches for the current filters."
+        title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
         testId="epic-chat-sidebar-filter-empty"
       />
