@@ -42,6 +42,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
     ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
+      readonly id: string | undefined;
       readonly onSelect: (() => void) | undefined;
       readonly onClick: (() => void) | undefined;
       readonly onKeyDown:
@@ -57,6 +58,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       <button
         type="button"
         role="menuitem"
+        id={props.id}
         aria-label={props["aria-label"]}
         aria-disabled={props["aria-disabled"]}
         aria-current={props["aria-current"]}
