@@ -15,6 +15,7 @@ import {
   applyWindowedSnapshot,
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
+  holdsEveryRecordFrom,
   hydratedRecords,
   planTranscriptHydration,
   selectHydratedRecords,
@@ -869,6 +870,86 @@ describe("the streaming row's byte charge", () => {
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
     // Settled on the way through, so the next read costs nothing.
     expect(evicted.unsettledByteRowIds).toEqual([]);
+  });
+});
+
+describe("holdsEveryRecordFrom", () => {
+  /**
+   * 30 rows: a cold span at the top (0-4) and a live tail (25-29), with a
+   * 20-row hole between them. The shape a reader who scrolled back to the
+   * start of a long chat is actually in.
+   */
+  function splitWindow(): TranscriptWindow {
+    const seeded = applyWindowedSnapshot(windowWithSkeleton(30), {
+      epoch: 1,
+      rowCount: 30,
+      tail: {
+        fromOrdinal: 25,
+        messages: Array.from({ length: 5 }, (_unused, index) =>
+          userMessage(`m-${25 + index}`, 25 + index),
+        ),
+        events: [],
+      },
+    });
+    return applyRangeResponse(
+      seeded,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1", "row-2", "row-3", "row-4"],
+        messages: Array.from({ length: 5 }, (_unused, index) =>
+          userMessage(`m-${index}`, index),
+        ),
+      }),
+    );
+  }
+
+  it("holds everything from a message in the span that reaches the end", () => {
+    expect(holdsEveryRecordFrom(splitWindow(), "m-25")).toBe(true);
+  });
+
+  it("does NOT hold everything from a message above the hole", () => {
+    // The message itself is hydrated - the user can see it and click edit on
+    // it - and everything below it is not. This is the case that made both
+    // downward scans answer "nothing below" on a transcript full of edits.
+    expect(holdsEveryRecordFrom(splitWindow(), "m-2")).toBe(false);
+  });
+
+  it("does not hold a message the window has never seen", () => {
+    expect(holdsEveryRecordFrom(splitWindow(), "m-12")).toBe(false);
+  });
+
+  it("holds everything from a live record once the tail is in", () => {
+    // An accepted-but-unplaced record is newer than every placed row, so
+    // nothing follows it but other live records.
+    const window = appendLiveRecords(splitWindow(), {
+      messages: [userMessage("m-live", 30)],
+      events: [],
+    });
+    expect(holdsEveryRecordFrom(window, "m-live")).toBe(true);
+  });
+
+  it("does not hold a live record while the tail is still missing", () => {
+    // The rows between the last placed row and this record are the gap, and
+    // a checkpoint captured in one of them is exactly what a scan would miss.
+    const window = appendLiveRecords(windowWithSkeleton(30), {
+      messages: [userMessage("m-live", 30)],
+      events: [],
+    });
+    expect(holdsEveryRecordFrom(window, "m-live")).toBe(false);
+  });
+
+  it("holds everything from the tail of a fully hydrated transcript", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 2,
+      tail: {
+        fromOrdinal: 0,
+        messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+        events: [],
+      },
+    });
+    expect(holdsEveryRecordFrom(window, "m-0")).toBe(true);
   });
 });
 

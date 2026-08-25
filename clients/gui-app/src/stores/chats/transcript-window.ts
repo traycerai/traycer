@@ -816,21 +816,6 @@ export function applyRangeResponse(
 }
 
 /**
- * Whether the LAST row's body is held.
- *
- * The gate the session store gates pending-send reconciliation on, and the
- * reason that gate exists: those reconcilers ask "did the transcript record
- * this message?" by looking in the records they were handed, and on a windowed
- * line "absent" means "not hydrated" rather than "never landed". A pending send
- * is recent by construction, so if it landed it is at the tail — which makes
- * the tail's presence exactly the condition under which their question is
- * answerable. Reconciling without it restores a sent message into the composer
- * and the user sends it twice.
- *
- * An empty transcript is trivially hydrated: there is no tail to wait for, and
- * blocking on one would strand a brand-new chat forever.
- */
-/**
  * Three-state because "not found" is not an answer on this line.
  *
  * The whole `state.messages` sweep is this distinction, and a boolean would
@@ -868,11 +853,75 @@ export function userRowPresence(window: TranscriptWindow): WindowRowPresence {
   return window.skeletonComplete ? "absent" : "unknown";
 }
 
+/**
+ * Whether the LAST row's body is held.
+ *
+ * The gate the session store gates pending-send reconciliation on, and the
+ * reason that gate exists: those reconcilers ask "did the transcript record
+ * this message?" by looking in the records they were handed, and on a windowed
+ * line "absent" means "not hydrated" rather than "never landed". A pending send
+ * is recent by construction, so if it landed it is at the tail — which makes
+ * the tail's presence exactly the condition under which their question is
+ * answerable. Reconciling without it restores a sent message into the composer
+ * and the user sends it twice.
+ *
+ * An empty transcript is trivially hydrated: there is no tail to wait for, and
+ * blocking on one would strand a brand-new chat forever.
+ */
 export function isTailHydrated(window: TranscriptWindow): boolean {
   if (window.rowCount === 0) return true;
   const last = window.rowCount - 1;
   return window.spans.some(
     (span) => span.fromOrdinal <= last && spanEnd(span) > last,
+  );
+}
+
+/**
+ * Does the window hold EVERY record at or after the one carrying `messageId`?
+ *
+ * The precondition of a DOWNWARD scan - "is there an undoable edit below this
+ * message", "how many artifacts would a revert from here touch". Those read
+ * `messages`/`events` as if they were the whole transcript, and on this line
+ * they are a window, so a record below the edit point that is merely cold
+ * reads identically to one that does not exist.
+ *
+ * ## Why this is a question and not a fetch
+ *
+ * The obvious repair - hydrate `[thisRow, rowCount)` before scanning - cannot
+ * be built. A range is addressed by ORDINAL, and nothing maps a message id to
+ * one: the skeleton is keyed by row id and carries no record identity
+ * (`row-skeleton.ts` says so, and says why), and a span's records are a
+ * DEDUPLICATED union rather than a parallel array to its `rowIds`. Even given
+ * an address the request is unbounded - editing the third message of a 20k-row
+ * chat asks for the whole transcript - and it would evict itself while it
+ * streamed, since {@link evictTranscriptWindowToBudget} protects only the tail.
+ * So the scan cannot be made to always succeed; it can only be made to know
+ * when it has succeeded.
+ *
+ * ## The condition
+ *
+ * A record lives in exactly one span - spans that touch are merged on insert,
+ * so two disjoint spans cannot both hold one - which makes "everything after
+ * it is held" precisely "its span runs to the end of the transcript".
+ *
+ * A live record (accepted, not yet placed by the index) is newer than every
+ * placed row by construction, so nothing in the transcript follows it except
+ * other live records, which are held. It still needs the tail: the rows
+ * between the last placed row and it must be there for the span to be
+ * continuous with it.
+ */
+export function holdsEveryRecordFrom(
+  window: TranscriptWindow,
+  messageId: string,
+): boolean {
+  if (!isTailHydrated(window)) return false;
+  if (window.liveMessages.some((message) => message.messageId === messageId)) {
+    return true;
+  }
+  return window.spans.some(
+    (span) =>
+      spanEnd(span) >= window.rowCount &&
+      span.messages.some((message) => message.messageId === messageId),
   );
 }
 

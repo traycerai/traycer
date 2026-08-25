@@ -111,6 +111,8 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
         chatId: "c",
         sourceBlockIds: ["blk-1"],
         filePath: "src/a.ts",
+        beforeHash: null,
+        afterHash: null,
       },
       source,
     );
@@ -128,6 +130,8 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
         chatId: "c",
         sourceBlockIds: ["blk-1", "blk-2"],
         filePath: "src/a.ts",
+        beforeHash: null,
+        afterHash: null,
       },
       source,
     );
@@ -145,6 +149,8 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
         chatId: "c",
         sourceBlockIds: ["live-1"],
         filePath: "src/b.ts",
+        beforeHash: null,
+        afterHash: null,
       },
       {
         messages: [],
@@ -166,7 +172,9 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
     });
   });
 
-  it("returns null when the block id is gone", () => {
+  it("returns null when the block id is gone and nothing was captured", () => {
+    // A tile persisted before the captured endpoints existed. It degrades
+    // exactly as every segment tile used to.
     expect(
       resolveSnapshotSegmentHashes(
         {
@@ -174,10 +182,94 @@ describe("resolveSnapshotSegmentHashes - segment", () => {
           chatId: "c",
           sourceBlockIds: ["missing"],
           filePath: "src/a.ts",
+          beforeHash: null,
+          afterHash: null,
         },
         source,
       ),
     ).toBeNull();
+  });
+
+  /**
+   * The windowed-transcript case, and the whole reason the capture exists: the
+   * tile outlived the hydration of the row it was opened from. Before this it
+   * rendered source-unavailable and there was no way back - a canvas reopened
+   * a week later showed nothing for an edit that is still on disk.
+   */
+  it("falls back to the captured endpoints once the row is no longer hydrated", () => {
+    expect(
+      resolveSnapshotSegmentHashes(
+        {
+          kind: "snapshot-segment",
+          chatId: "c",
+          sourceBlockIds: ["blk-1"],
+          filePath: "src/a.ts",
+          beforeHash: HASH_A,
+          afterHash: HASH_B,
+        },
+        { messages: [], liveAssistantBlocks: null, accumulatedFileChanges: [] },
+      ),
+    ).toEqual({
+      filePath: "src/a.ts",
+      beforeHash: HASH_A,
+      afterHash: HASH_B,
+    });
+  });
+
+  it("falls back for a capture with only one side, as a creation has", () => {
+    expect(
+      resolveSnapshotSegmentHashes(
+        {
+          kind: "snapshot-segment",
+          chatId: "c",
+          sourceBlockIds: ["blk-1"],
+          filePath: "src/new.ts",
+          beforeHash: null,
+          afterHash: HASH_NEW,
+        },
+        { messages: [], liveAssistantBlocks: null, accumulatedFileChanges: [] },
+      ),
+    ).toEqual({
+      filePath: "src/new.ts",
+      beforeHash: null,
+      afterHash: HASH_NEW,
+    });
+  });
+
+  /**
+   * Order matters, and this is the case that fixes it: a streaming edit's
+   * `afterHash` moves, and the capture was taken at the first frame of it. The
+   * blocks win wherever they resolve, so the open tile keeps updating.
+   */
+  it("prefers the live blocks over a capture that has gone stale", () => {
+    expect(
+      resolveSnapshotSegmentHashes(
+        {
+          kind: "snapshot-segment",
+          chatId: "c",
+          sourceBlockIds: ["blk-1"],
+          filePath: "src/a.ts",
+          beforeHash: HASH_A,
+          afterHash: HASH_B,
+        },
+        {
+          messages: [],
+          liveAssistantBlocks: [
+            fileChangeBlock({
+              blockId: "blk-1",
+              filePath: "src/a.ts",
+              beforeHash: HASH_A,
+              afterHash: HASH_NEW,
+            }),
+          ],
+          accumulatedFileChanges: [],
+        },
+      ),
+    ).toEqual({
+      filePath: "src/a.ts",
+      beforeHash: HASH_A,
+      afterHash: HASH_NEW,
+    });
   });
 });
 
@@ -226,6 +318,8 @@ describe("resolveHashBackedEndpoints", () => {
           chatId: "c",
           sourceBlockIds: ["blk-1"],
           filePath: "src/a.ts",
+          beforeHash: null,
+          afterHash: null,
         },
         source,
       ),

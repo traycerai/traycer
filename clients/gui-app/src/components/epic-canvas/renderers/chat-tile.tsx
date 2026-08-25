@@ -85,9 +85,10 @@ import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
 } from "@/stores/composer/chat-store";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+  type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import {
   chatTranscriptEventRowId,
@@ -1016,6 +1017,8 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           chatId: view.node.id,
           sourceBlockIds: request.sourceBlockIds,
           filePath: request.filePath,
+          beforeHash: request.beforeHash,
+          afterHash: request.afterHash,
         });
         return {
           onClick: () =>
@@ -1327,6 +1330,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       access: s.access,
       messages: s.messages,
       events: s.events,
+      // Both already change identity on every windowed frame (they are rebuilt
+      // from the window), so subscribing to the window itself costs no extra
+      // render. The revert-scope resolution needs it to know whether the two
+      // arrays are the whole transcript or a slice of one.
+      transcriptWindow: s.transcriptWindow,
+      transcriptDerived: s.transcriptDerived,
       queue: s.queue,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
@@ -1848,6 +1857,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       chatParentId: state.chat?.parentId ?? null,
       messages: state.messages,
       events: state.events,
+      // `transcriptDerived !== null` is the line discriminator: on the legacy
+      // line the window is an inert empty value and `messages`/`events` are
+      // already whole, so handing it over would make the revert scan think it
+      // was looking at an empty transcript and answer "unknown" forever.
+      transcriptWindow: isWindowedTranscript(state)
+        ? state.transcriptWindow
+        : null,
       profile,
       chatActions,
       confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
