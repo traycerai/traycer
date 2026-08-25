@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
 import {
@@ -11,20 +11,28 @@ import { SwitcherNewChatRow } from "@/components/epic-canvas/mobile/switcher-cre
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
 import { useNarrowedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
+import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
 import {
   chatFilterEmptyStateDescription,
   FILTERED_EMPTY_TITLE,
   useChatFilterMatchIds,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-panel-filters";
 import {
+  chatSearchMatchIds,
+  intersectMatchIds,
+} from "@/components/epic-canvas/sidebar/chat-search-fuzzy";
+import { CHATS_TREE_FILTER } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
+import {
   isChatFilterActive,
   useChatFilter,
   useChatSort,
+  type ChatFilter,
 } from "@/stores/epics/left-panel-store";
 import {
   useEpicArtifactRecords,
   useEpicNodeHostId,
   useEpicPermissionRole,
+  useEpicTreeIndex,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
@@ -64,9 +72,30 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
     [records],
   );
   const chatFilter = useChatFilter(epicId);
+  // Query state is the sheet's, not the store's. The sidebar persists its query
+  // per tab because its panel stays on screen across everything the user does;
+  // this sheet is dismissed the moment a row is tapped, so a query outliving it
+  // would greet the next open with a narrowed list and no memory of why.
+  const [searchQuery, setSearchQuery] = useState("");
+  const tree = useEpicTreeIndex();
+  const searchMatchIds = useMemo(
+    () =>
+      chatSearchMatchIds({
+        query: searchQuery,
+        nodeById: tree.nodeById,
+        treeFilter: CHATS_TREE_FILTER,
+      }),
+    [searchQuery, tree],
+  );
+  // Intersect the two narrowings as MATCHES. Neither is ancestor-expanded here
+  // and neither needs to be: the list is flat.
+  const narrowedMatchIds = intersectMatchIds(
+    useChatFilterMatchIds(epicId),
+    searchMatchIds,
+  );
   const agents = useNarrowedSwitcherRecords(
     filtered,
-    useChatFilterMatchIds(epicId),
+    narrowedMatchIds,
     useChatSort(epicId),
   );
   const canMutate = isEditableRole(useEpicPermissionRole());
@@ -94,9 +123,18 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* Create stays a row inside the list below, so the header carries the
-            view menu alone - unlike Artifacts, whose create is a header "+". */}
+        {/* Create stays a row inside the list below, so the header carries only
+            search and the view menu - unlike Artifacts, whose create is a
+            header "+". */}
         <SwitcherListHeader
+          search={
+            <SwitcherSearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder="Search agents"
+              testId="switcher-agents-search"
+            />
+          }
           action={null}
           viewMenu={<SwitcherAgentsViewMenu epicId={epicId} />}
         />
@@ -112,16 +150,10 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
             />
           ) : null}
           {agents.length === 0 ? (
-            // Blame the filter when one is on: an epic full of agents that the
-            // user narrowed to nothing must not read as an epic with none.
-            isChatFilterActive(chatFilter) ? (
-              <SwitcherListEmpty
-                message={FILTERED_EMPTY_TITLE}
-                description={chatFilterEmptyStateDescription(chatFilter)}
-              />
-            ) : (
-              <SwitcherListEmpty message="No agents yet." description={null} />
-            )
+            <SwitcherAgentsEmpty
+              searchActive={searchQuery.trim().length > 0}
+              filter={chatFilter}
+            />
           ) : (
             agents.map((record) => (
               <SwitcherAgentRow
@@ -138,6 +170,43 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
       </div>
     </NotificationIndicatorsProvider>
   );
+}
+
+/**
+ * Why the list is empty, in the sidebar's own words.
+ *
+ * A search that matched nothing is reported as a search failure even when a
+ * filter is also on, and only mentions the filter as a possible second cause:
+ * blaming the filter for a query that matches nothing would send the user to
+ * the wrong control. With no query, an active filter is named outright, and
+ * only an epic with neither gets the "nothing here yet" reading.
+ */
+function SwitcherAgentsEmpty(props: {
+  readonly searchActive: boolean;
+  readonly filter: ChatFilter;
+}) {
+  const filterActive = isChatFilterActive(props.filter);
+  if (props.searchActive) {
+    return (
+      <SwitcherListEmpty
+        message="No agents match your search."
+        description={
+          filterActive
+            ? "The current filters may also be hiding matches."
+            : null
+        }
+      />
+    );
+  }
+  if (filterActive) {
+    return (
+      <SwitcherListEmpty
+        message={FILTERED_EMPTY_TITLE}
+        description={chatFilterEmptyStateDescription(props.filter)}
+      />
+    );
+  }
+  return <SwitcherListEmpty message="No agents yet." description={null} />;
 }
 
 function SwitcherAgentRow(props: {

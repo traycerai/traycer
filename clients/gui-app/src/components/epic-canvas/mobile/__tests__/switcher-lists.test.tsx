@@ -100,6 +100,14 @@ vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
     holder.activeId === id,
   findOpenArtifactInTab: () => null,
 }));
+// The artifacts list filters against the epic's authoritative artifact map -
+// the same source the sidebar filters - and the real hook throws outside an
+// epic session. Empty is the right answer here: these cases assert row
+// rendering and editor gating with no filter set, where the map is not read.
+vi.mock("@/hooks/use-epic-store", () => ({
+  useEpicStore: (selector: (state: unknown) => unknown) =>
+    selector({ artifacts: { allIds: [], byId: {} } }),
+}));
 vi.mock("@/components/epic-canvas/mobile/use-switcher-activate", () => ({
   useSwitcherActivate:
     () =>

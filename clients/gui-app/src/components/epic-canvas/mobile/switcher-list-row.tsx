@@ -124,21 +124,32 @@ export function SwitcherListEmpty(props: {
 }
 
 /**
- * Right-aligned header bar hosting a category's "+" create affordance and its
- * view (ordering / filter) menu. Renders nothing when both slots are null - a
- * viewer with no create rights in a category that has nothing to narrow.
+ * Header bar for a category: its search field, its "+" create affordance, and
+ * its view (ordering / filter) menu. Renders nothing when every slot is null -
+ * a viewer with no create rights in a category with nothing to search or
+ * narrow.
  *
- * The view menu sits LAST in the cluster, matching the desktop section headers:
- * create is what the user came to the header for, and a control that changes
- * position between surfaces is one the muscle memory has to relearn.
+ * Search takes the row's width and the buttons trail it; with no search field
+ * the buttons sit right, against the edge the thumb reaches. The view menu is
+ * LAST either way, matching the desktop section headers - create is what the
+ * user came to the header for, and a control that changes position between
+ * surfaces is one the muscle memory has to relearn.
  */
 export function SwitcherListHeader(props: {
+  readonly search: ReactNode;
   readonly action: ReactNode;
   readonly viewMenu: ReactNode;
 }) {
-  if (props.action === null && props.viewMenu === null) return null;
+  if (
+    props.search === null &&
+    props.action === null &&
+    props.viewMenu === null
+  ) {
+    return null;
+  }
   return (
     <div className="flex shrink-0 items-center justify-end gap-1 px-2 pt-1.5">
+      {props.search}
       {props.action}
       {props.viewMenu}
     </div>

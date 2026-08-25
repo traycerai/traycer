@@ -19,6 +19,7 @@ import {
   isArtifactFilterActive,
   useArtifactFilter,
   useArtifactSort,
+  type ArtifactFilter,
 } from "@/stores/epics/left-panel-store";
 import {
   useEpicArtifactRecords,
@@ -74,6 +75,12 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SwitcherListHeader
+        // No search field: the sidebar's artifact search is not a narrowing of
+        // this list but a separate ranked-results surface, host-side over
+        // artifact BODIES as well as titles. A title-only filter here would
+        // silently answer a different question than the sidebar does for the
+        // same query, so the affordance waits for the results surface.
+        search={null}
         action={
           canMutate ? (
             <SwitcherNewArtifactMenu
@@ -86,16 +93,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
         viewMenu={<SwitcherArtifactsViewMenu epicId={epicId} />}
       />
       {artifacts.length === 0 ? (
-        // Blame the filter when one is on, exactly as the sidebar does - an
-        // epic narrowed to nothing must not read as an epic with nothing in it.
-        isArtifactFilterActive(artifactFilter) ? (
-          <SwitcherListEmpty
-            message={FILTERED_EMPTY_TITLE}
-            description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
-          />
-        ) : (
-          <SwitcherListEmpty message="No artifacts yet." description={null} />
-        )
+        <SwitcherArtifactsEmpty filter={artifactFilter} />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
           {artifacts.map((record) => (
@@ -112,6 +110,23 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
       )}
     </div>
   );
+}
+
+/**
+ * Why the list is empty, in the sidebar's own words. An epic narrowed to
+ * nothing must not read as an epic with nothing in it - the two states look
+ * identical and only one of them is the user's own doing.
+ */
+function SwitcherArtifactsEmpty(props: { readonly filter: ArtifactFilter }) {
+  if (isArtifactFilterActive(props.filter)) {
+    return (
+      <SwitcherListEmpty
+        message={FILTERED_EMPTY_TITLE}
+        description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
+      />
+    );
+  }
+  return <SwitcherListEmpty message="No artifacts yet." description={null} />;
 }
 
 function SwitcherArtifactRow(props: {
