@@ -245,6 +245,8 @@ import {
   configShellAddV10,
   configShellGetV10,
   configShellListDetectedV10,
+  configShellListDetectedV11,
+  configShellListDetectedUpgradeV10ToV11,
   configShellProbeV10,
   configShellRemoveV10,
   configShellResetV10,
@@ -3771,11 +3773,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.shell.listDetected": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configShellListDetectedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configShellListDetectedV11,
+          upgradeFromPreviousVersion: configShellListDetectedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

@@ -1,4 +1,7 @@
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import {
   configEnvDeleteRequestSchema,
   configEnvDeleteResponseSchema,
@@ -16,6 +19,7 @@ import {
   configShellGetResponseSchema,
   configShellListDetectedRequestSchema,
   configShellListDetectedResponseSchema,
+  configShellListDetectedResponseSchemaV10,
   configShellProbeRequestSchema,
   configShellProbeResponseSchema,
   configShellRemoveRequestSchema,
@@ -76,7 +80,25 @@ export const configShellListDetectedV10 = defineRpcContract({
   method: "config.shell.listDetected",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: configShellListDetectedRequestSchema,
+  responseSchema: configShellListDetectedResponseSchemaV10,
+});
+
+/** v1.1 adds WSL health evidence to affected detected-shell rows. */
+export const configShellListDetectedV11 = defineRpcContract({
+  method: "config.shell.listDetected",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: configShellListDetectedRequestSchema,
   responseSchema: configShellListDetectedResponseSchema,
+});
+
+export const configShellListDetectedUpgradeV10ToV11 = defineUpgradePath<
+  typeof configShellListDetectedV10,
+  typeof configShellListDetectedV11
+>({
+  from: configShellListDetectedV10.schemaVersion,
+  to: configShellListDetectedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Shell executable probing runs against the connected host's filesystem. */

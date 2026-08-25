@@ -109,17 +109,24 @@ export type ConfigShellListDetectedRequest = z.infer<
   typeof configShellListDetectedRequestSchema
 >;
 
-export const configDetectedShellSchema = z.object({
+export const configDetectedShellSchemaV10 = z.object({
   name: z.string(),
   path: shellPathSchema,
   isDefault: z.boolean(),
   source: z.enum(["detected", "added"]),
   missing: z.boolean(),
+});
+
+export const configDetectedShellSchema = configDetectedShellSchemaV10.extend({
   // Optional both ways: absent from hosts predating the probe, and absent on
   // every healthy or non-WSL row. See `DetectedShell.wslHealth`.
   wslHealth: z.enum(["not-installed", "no-distro"]).optional(),
 });
 export type ConfigDetectedShell = z.infer<typeof configDetectedShellSchema>;
+
+export const configShellListDetectedResponseSchemaV10 = z.object({
+  shells: z.array(configDetectedShellSchemaV10),
+});
 
 export const configShellListDetectedResponseSchema = z.object({
   shells: z.array(configDetectedShellSchema),
