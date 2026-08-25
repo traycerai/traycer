@@ -66,14 +66,20 @@ const CAPABLE_CLOSE_RETRY_MAX_MS = 300_000;
  * Unbounded, that is an RPC and a `terminal.list` invalidation every five
  * minutes, forever, for a session that can never appear.
  *
- * Spending the budget on the ATTEMPT LADDER rather than on wall-clock keeps the
- * two bounds in one place: these are exactly the attempts before the backoff
- * saturates, so the reprieve runs the whole un-capped ladder - ~4.25 minutes of
- * the host continuously answering "no such session" - and expires precisely when
- * retrying stops being cheap. A create still unlanded by then is not landing.
+ * Counted in ANSWERS (`CapableCloseRetry.answers`), never in attempts. A
+ * rejection is the transport failing to ask, which is the opposite of the host
+ * reporting the session absent, so spending the budget on one would retire a
+ * tombstone nobody ever answered for - and leak the PTY if the create had in
+ * fact landed. Ten answers is the un-capped ladder, so this costs at least
+ * ~4.25 minutes of the host continuously saying "no such session", and longer
+ * whenever rejections stretch the backoff without earning anything.
  *
- * The budget is counted in ANSWERS, so the record retires on the same pass as
- * the last one rather than arming an eleventh attempt it would only discard.
+ * Counting answers also means the record retires on the same pass as the tenth
+ * rather than arming an eleventh attempt it would only discard.
+ *
+ * A live projection outranks a spent budget - see `intendedCloseAction`. The
+ * budget is absence-based evidence, and a terminal the host is publishing right
+ * now is presence-based evidence that contradicts it.
  *
  * It rides the retry record, so it is scoped to one drain episode: a host that
  * goes undialable and returns starts a fresh ladder. That is deliberate. The
@@ -102,6 +108,17 @@ type TombstoneCloseArm = "plain" | "kill";
 
 interface CapableCloseRetry {
   attempt: number;
+  /**
+   * Settlements where the HOST ANSWERED - a close that resolved and still left
+   * the tombstone outstanding, which for `terminal.kill` is `killed: false`.
+   *
+   * Deliberately not `attempt`. Both settlement arms schedule a retry, so the
+   * attempt ladder counts rejections too, and a rejection is the transport
+   * failing to ask - the opposite of the host reporting the session absent.
+   * Spending an absence-based budget on those would discard a tombstone no one
+   * ever answered for, and leak the PTY if the create had in fact landed.
+   */
+  answers: number;
   timer: number | null;
   due: boolean;
   /**
@@ -254,6 +271,8 @@ function scheduleCloseRetry(args: {
   readonly pending: LandingTerminalPendingKill;
   readonly refs: TombstoneRetryRefs;
   readonly arm: TombstoneCloseArm;
+  /** The host answered and the tombstone survived it. A rejection is not one. */
+  readonly answered: boolean;
   readonly signalRetry: () => void;
 }): void {
   if (!args.refs.mounted.current) return;
@@ -276,6 +295,10 @@ function scheduleCloseRetry(args: {
   );
   const nextRetry: CapableCloseRetry = {
     attempt,
+    // Carried across attempts on the same arm, and reset with the record when
+    // the arm changes - a `plain` rejection says nothing about what `kill` was
+    // told.
+    answers: (prior?.answers ?? 0) + (args.answered ? 1 : 0),
     timer: null,
     due: false,
     arm: args.arm,
@@ -307,39 +330,45 @@ type TombstoneCloseAction = TombstoneCloseArm | "discard" | "wait";
 
 function intendedCloseAction(args: {
   readonly entry: LandingTerminalAuthorityEntry | undefined;
-  readonly killAttempts: number;
+  readonly killAnswers: number;
   readonly pending: LandingTerminalPendingKill;
   readonly plainDrainable: boolean;
 }): TombstoneCloseAction {
   const authority = args.entry?.authority;
   if (authority === undefined) return "wait";
-  // Ahead of the capability split, because an exhausted reprieve retires the
-  // tombstone on EITHER kind of host: a `pendingCreate` record routes to
-  // `terminal.kill` whether the host came back legacy or capable, so bounding
-  // it under only one of them would leave the other asking forever.
+  const capability = authority.capability.status;
+  if (capability !== "legacy" && capability !== "capable") return "wait";
+  // A terminal the host is publishing RIGHT NOW outranks every absence-based
+  // decision below, the spent reprieve included. The final `killed: false` can
+  // race the create landing, and the pass that observes both must believe the
+  // positive evidence: discarding there would drop the tombstone in front of a
+  // PTY the host is actively reporting as live.
+  const projected =
+    capability === "capable" &&
+    args.plainDrainable &&
+    getPlainTerminal(
+      authority.collection,
+      args.pending.hostId,
+      args.pending.sessionId,
+    ) !== undefined;
+  if (projected) return "plain";
+  // Only now, with no live projection to contradict it. Ahead of the capability
+  // split because a `pendingCreate` record routes to `terminal.kill` whether the
+  // host came back legacy or capable, so bounding it under only one of them
+  // would leave the other asking forever.
   if (
     args.pending.pendingCreate &&
-    args.killAttempts >= PENDING_CREATE_KILL_ANSWER_BUDGET
+    args.killAnswers >= PENDING_CREATE_KILL_ANSWER_BUDGET
   ) {
     return "discard";
   }
-  if (authority.capability.status === "legacy") return "kill";
-  if (authority.capability.status !== "capable") return "wait";
+  if (capability === "legacy") return "kill";
   if (!args.plainDrainable) {
     // A stale listing blocks only the arm that READS a listing. A tombstone
     // this host acknowledged is answered by `plain`, so it waits for freshness
     // - the pre-existing decision, unchanged. One that `plain` could never
     // answer has nothing to wait for, and `terminal.kill` is unary.
     return absentListingProvesDeath(args.pending) ? "wait" : "kill";
-  }
-  if (
-    getPlainTerminal(
-      authority.collection,
-      args.pending.hostId,
-      args.pending.sessionId,
-    ) !== undefined
-  ) {
-    return "plain";
   }
   // No projection, and absence proves nothing for this shape - so `kill`, not
   // `plain`. `terminal.plain.close` would REJECT for a terminal this host does
@@ -401,10 +430,10 @@ function tombstoneDispatchDecision(args: {
 }): TombstoneDispatchDecision {
   const action = intendedCloseAction({
     entry: args.entry,
-    // Only a ladder spent on THIS arm counts. A `plain` record's attempts were
-    // spent on a request that answers a different question, and the reprieve is
-    // about how many times the host has said "no such session".
-    killAttempts: args.retry?.arm === "kill" ? args.retry.attempt : 0,
+    // Only answers on THIS arm count. A `plain` record's settlements were spent
+    // on a request that answers a different question, and the reprieve is about
+    // how many times the host has said "no such session".
+    killAnswers: args.retry?.arm === "kill" ? args.retry.answers : 0,
     pending: args.pending,
     plainDrainable: args.drainable.plain,
   });
@@ -457,7 +486,7 @@ function dispatchCapableClose(args: {
           .clearPendingKill(args.pending.hostId, args.pending.sessionId);
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
-      () => scheduleCloseRetry({ ...args, arm: "plain" }),
+      () => scheduleCloseRetry({ ...args, answered: false, arm: "plain" }),
     )
     .finally(() => {
       const next = new Set(args.refs.inFlight.current);
@@ -537,12 +566,12 @@ function dispatchLegacyClose(args: {
                 candidate.sessionId === args.pending.sessionId,
             )
         ) {
-          scheduleCloseRetry({ ...args, arm: "kill" });
+          scheduleCloseRetry({ ...args, answered: true, arm: "kill" });
           return;
         }
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
-      () => scheduleCloseRetry({ ...args, arm: "kill" }),
+      () => scheduleCloseRetry({ ...args, answered: false, arm: "kill" }),
     )
     .finally(() => {
       const next = new Set(args.refs.inFlight.current);

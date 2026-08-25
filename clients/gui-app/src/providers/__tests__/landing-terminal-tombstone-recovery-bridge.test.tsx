@@ -626,6 +626,122 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.kill).toHaveBeenCalledTimes(10);
   });
 
+  it("does not spend the pending-create reprieve on rejected kills", async () => {
+    // A rejection is the transport failing to ask, not the host reporting the
+    // session absent. Both settlement arms schedule a retry, so an
+    // ATTEMPT-counted budget burned down on pure rejections and discarded a
+    // tombstone nobody had answered for - leaking the PTY if the create landed.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockRejectedValue(new Error("transport flap"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "rejected-kill-tab",
+      sessionId: "session-rejected-kill",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "rejected-kill-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Walk well past the budget. Every attempt rejects, so no answer is earned.
+    for (let attempt = 1; attempt <= 12; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(300_000);
+        await Promise.resolve();
+      });
+    }
+    expect(mocks.kill.mock.calls.length).toBeGreaterThan(10);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("closes a terminal that appears after the reprieve is spent", async () => {
+    // The final `killed: false` can race the create landing. A pass that sees
+    // both an exhausted budget and a fresh projection must believe the positive
+    // evidence: discarding there drops the tombstone in front of a live PTY.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "late-create-tab",
+      sessionId: "session-late-create",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "late-create-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Nine answers against an absent projection: one short of the budget.
+    for (let attempt = 1; attempt < 9; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(500 * 2 ** (attempt - 1));
+        await Promise.resolve();
+      });
+    }
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // Hold the TENTH kill in flight - the one whose answer spends the budget.
+    let releaseFinalKill: (() => void) | null = null;
+    mocks.kill.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFinalKill = () => resolve();
+        }),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(128_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+
+    // The create lands WHILE that kill is in flight, so the host is publishing
+    // the terminal by the time the answer comes back.
+    mocks.terminalsById = { "session-late-create": {} };
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Now the tenth answer arrives. This pass holds BOTH a spent budget and a
+    // live projection; the projection has to win.
+    await act(async () => {
+      releaseFinalKill?.();
+      await Promise.resolve();
+    });
+
+    expect(mocks.closeAsync).toHaveBeenCalledWith({
+      hostId: "host-b",
+      terminalId: "session-late-create",
+    });
+  });
+
   it("retries a capable close after rejection and retires on acknowledgement", async () => {
     vi.useFakeTimers();
     mocks.entries = [
