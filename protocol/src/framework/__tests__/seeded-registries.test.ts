@@ -55,9 +55,9 @@ describe("seeded protocol registries", () => {
     // A shard embeds the sub-schemas the head's core is built from, so every
     // change that moves one moves the other. Bound to the SAME constant object,
     // not two equal literals - see `chat-sync/version.ts`.
-    expect(persistenceRecordRegistry["chat-head"][1].versions[1].contract
+    expect(persistenceRecordRegistry["chat-head"][1].versions[2].contract
       .schemaVersion).toBe(
-      persistenceRecordRegistry["chat-shard"][1].versions[1].contract
+      persistenceRecordRegistry["chat-shard"][1].versions[2].contract
         .schemaVersion,
     );
   });

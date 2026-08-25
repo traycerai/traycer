@@ -12,6 +12,7 @@ import {
 } from "@traycer/protocol/persistence/epic/senders";
 import {
   interviewAnswerSchema,
+  interviewAnswerSchemaPreSettlement,
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -313,6 +314,14 @@ export const runtimeInterviewAnswerSchema = interviewAnswerSchema;
 export type RuntimeInterviewAnswer = z.infer<
   typeof runtimeInterviewAnswerSchema
 >;
+
+// Wire-freeze alias of the answer shape from before selection evidence
+// existed. Bound to every `chat.subscribe` line through `@1.6` - both on the
+// frames that carry answers directly (`interviewAnswered`, the
+// `interviewAnswer` client action) and inside the frozen `blockDelta` event
+// unions below.
+export const runtimeInterviewAnswerSchemaPreSettlement =
+  interviewAnswerSchemaPreSettlement;
 
 const baseRuntimeEventFields = {
   blockId: z.string(),
@@ -624,6 +633,18 @@ export const interviewResolvedEventSchema = z.object({
 export type InterviewResolvedEvent = z.infer<
   typeof interviewResolvedEventSchema
 >;
+
+// Wire-freeze copy of `interview.resolved` from before answers carried
+// selection evidence. Bound to the `blockDelta` frame on every
+// `chat.subscribe` line through `@1.6` via the frozen unions below.
+// Hand-frozen field-for-field; NOT derived from the live shape.
+export const interviewResolvedEventSchemaPreSettlement = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("interview.resolved"),
+  answers: z.array(runtimeInterviewAnswerSchemaPreSettlement),
+  output: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 export const interviewErroredEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1274,7 +1295,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
   interviewRequestedEventSchema,
-  interviewResolvedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
   subAgentProgressEventSchema,
@@ -1325,7 +1346,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
   interviewRequestedEventSchema,
-  interviewResolvedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
   subAgentProgressEventSchema,
@@ -1353,4 +1374,58 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
   workflowProgressEventSchema,
   workflowCompletedEventSchema,
   providerNoticeUpsertEventSchema,
+]);
+
+// Wire-freeze copy of the runtime-event union as `chat.subscribe@1.6` shipped
+// it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
+// is the minor that added them) with `interview.resolved` swapped for its
+// pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
+// selection evidence. Explicitly listed rather than derived from the live
+// union, for the same reason `runtimeEventSchemaPreImage` is: a future event
+// must not silently join a line that has shipped peers.
+export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
+  textDeltaEventSchema,
+  textCompletedEventSchema,
+  reasoningDeltaEventSchema,
+  reasoningCompletedEventSchema,
+  toolCallStartedEventSchema,
+  toolCallCompletedEventSchema,
+  toolCallErroredEventSchema,
+  toolCallProgressEventSchema,
+  approvalRequestedEventSchema,
+  approvalResolvedEventSchema,
+  todoUpdatedEventSchema,
+  planDeltaEventSchema,
+  planUpdatedEventSchema,
+  planCompletedEventSchema,
+  compactionStartedEventSchema,
+  compactionCompletedEventSchema,
+  compactionErroredEventSchema,
+  interviewRequestedEventSchema,
+  interviewResolvedEventSchemaPreSettlement,
+  interviewErroredEventSchema,
+  subAgentStartedEventSchema,
+  subAgentProgressEventSchema,
+  subAgentCompletedEventSchema,
+  fileChangeStartedEventSchema,
+  fileChangeCompletedEventSchema,
+  artifactOperationEventSchema,
+  commandStartedEventSchema,
+  commandCompletedEventSchema,
+  sessionCreatedEventSchema,
+  sessionResumedEventSchema,
+  turnStartedEventSchema,
+  userMessageAnchorResolvedEventSchema,
+  turnCompletedEventSchema,
+  turnStoppedEventSchema,
+  turnInterruptedEventSchema,
+  steerSubmittedEventSchema,
+  usageUpdatedEventSchema,
+  errorEventSchema,
+  workflowStartedEventSchema,
+  workflowProgressEventSchema,
+  workflowCompletedEventSchema,
+  providerNoticeUpsertEventSchema,
+  imageResolutionUpdatedEventSchema,
+  userMessageAnchorTailUpdatedEventSchema,
 ]);
