@@ -1043,4 +1043,69 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
       { hostId: "host-b", sessionId: "session-doomed" },
     ]);
   });
+
+  it("gives a capability change a FRESH retry budget rather than an exhausted one", async () => {
+    // A budget spent under one protocol must not silence the first transient
+    // failure of the other. The attempts that failed were a different request
+    // against a different arm.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockImplementation(() =>
+      Promise.reject(new Error("permanently rejected")),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "budget-tab",
+      sessionId: "session-budget",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "budget-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Spend the whole legacy budget.
+    for (let round = 0; round < 20; round += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(8_000);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+    expect(mocks.kill).toHaveBeenCalledTimes(7);
+
+    // The host comes back speaking the plain protocol, still failing.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-budget": {} };
+    mocks.authorityRevision += 1;
+    mocks.closeAsync.mockImplementation(() =>
+      Promise.reject(new Error("still failing")),
+    );
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    for (let round = 0; round < 20; round += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(8_000);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    // A full budget of its own, not one attempt and silence.
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(7);
+  });
 });

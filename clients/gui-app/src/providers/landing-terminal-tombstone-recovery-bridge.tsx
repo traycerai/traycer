@@ -49,6 +49,12 @@ interface CapableCloseRetry {
   attempt: number;
   timer: number | null;
   due: boolean;
+  /**
+   * The protocol these attempts were spent on. The budget is per-protocol: a
+   * host that changes capability gets a fresh one, because the attempts that
+   * failed were spent on a different request against a different arm.
+   */
+  capability: "capable" | "legacy";
 }
 
 /**
@@ -170,7 +176,12 @@ function scheduleCloseRetry(args: {
   if (!closeRetryStillWarranted(args)) return;
   const prior = args.refs.retries.current.get(args.key);
   if (prior !== undefined && prior.timer !== null) return;
-  const attempt = (prior?.attempt ?? 0) + 1;
+  // Only attempts spent on THIS protocol count. Carrying them across a
+  // capability change would let a budget exhausted under the old arm silence
+  // the very first transient failure of the new one, stranding the terminal
+  // until another flap.
+  const spent = prior?.capability === args.capability ? prior.attempt : 0;
+  const attempt = spent + 1;
   if (attempt > CLOSE_RETRY_MAX_ATTEMPTS) return;
   const retryDelay = Math.min(
     CAPABLE_CLOSE_RETRY_BASE_MS * 2 ** (attempt - 1),
@@ -180,6 +191,7 @@ function scheduleCloseRetry(args: {
     attempt,
     timer: null,
     due: false,
+    capability: args.capability,
   };
   nextRetry.timer = window.setTimeout(() => {
     if (!args.refs.mounted.current) return;
