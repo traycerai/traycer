@@ -312,6 +312,7 @@ import {
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
+  epicFetchArtifactAttachmentV10,
   epicListChatRecordsV10,
   epicGetChatRunSettingsV10,
   epicListChatPublicationTargetsV10,
@@ -361,6 +362,7 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -6180,6 +6182,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // Artifact attachment bytes still live in the root-doc attachment map, but
+  // @2 does not replicate that map to clients. This optional read keeps the
+  // artifact/epic authorization subject on the request; a hash alone is never
+  // a capability. Older hosts continue serving attachments through their @1
+  // root-doc replicas, so absence degrades cleanly to that existing path.
+  "epic.fetchArtifactAttachment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicFetchArtifactAttachmentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // The per-chat run-settings tuple the record row above summarises down to a
   // harness id. Optional and host-LOCAL for the same reason as the list - it
   // answers out of this host's own chat store, the only place the tuple lives
@@ -7950,6 +7970,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         3: {
           contract: epicSubscribeV13,
+        },
+      },
+    },
+    // @2 replaces the root Y.Doc and eager room fan-out with a typed metadata
+    // plane plus explicit per-artifact body attaches. @1 remains installed for
+    // released peers; the multi-major handshake selects the shared line before
+    // a resolver is constructed.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSubscribeV20,
         },
       },
     },
