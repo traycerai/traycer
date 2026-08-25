@@ -81,6 +81,7 @@ function renderSegment(args: RenderArgs) {
           restoreActionPending: false,
           restoreCheckpoint: vi.fn().mockReturnValue(null),
           accumulatedFileChanges: [],
+          undeliveredChangeCount: 0,
           revertFileChanges: vi.fn().mockReturnValue(null),
         }}
       >

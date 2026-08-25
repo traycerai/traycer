@@ -476,6 +476,7 @@ function emptyRestore(): ChatRestoreContextValue {
     restoreActionPending: false,
     restoreCheckpoint: vi.fn().mockReturnValue(null),
     accumulatedFileChanges: [],
+    undeliveredChangeCount: 0,
     revertFileChanges: vi.fn().mockReturnValue(null),
   };
 }

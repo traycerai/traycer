@@ -59,7 +59,11 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
-import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
+import {
+  accumulatedChangeRows,
+  hostAccumulatedChangeRows,
+  undeliveredHostChangeCount,
+} from "@/lib/chat/accumulated-change-rows";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
@@ -1345,6 +1349,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingFileEditApprovals: s.pendingFileEditApprovals,
       pendingInterviews: s.pendingInterviews,
       accumulatedFileChanges: s.accumulatedFileChanges,
+      accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
+      accumulatedFileChangeCount: s.accumulatedFileChangeCount,
       backgroundItems: s.backgroundItems,
       pendingBackgroundStops: s.pendingBackgroundStops,
       pendingBackgroundStopAll: s.pendingBackgroundStopAll,
@@ -1625,15 +1631,34 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       ),
     [state.pendingActions],
   );
+  const windowedTranscript = isWindowedTranscript(state);
+  const accumulatedHostRows = useMemo(
+    () =>
+      hostAccumulatedChangeRows({
+        windowed: windowedTranscript,
+        changes: state.accumulatedFileChanges,
+        summaries: state.accumulatedFileChangeSummaries,
+      }),
+    [
+      state.accumulatedFileChangeSummaries,
+      state.accumulatedFileChanges,
+      windowedTranscript,
+    ],
+  );
   const accumulatedFileChanges = useMemo(
     () =>
-      accumulatedFileChangesFromMessages(
+      accumulatedChangeRows(
         renderedMessages,
-        state.accumulatedFileChanges,
+        accumulatedHostRows,
         activeTurnId,
       ),
-    [activeTurnId, renderedMessages, state.accumulatedFileChanges],
+    [accumulatedHostRows, activeTurnId, renderedMessages],
   );
+  const undeliveredChangeCount = undeliveredHostChangeCount({
+    windowed: windowedTranscript,
+    hostChangeCount: state.accumulatedFileChangeCount,
+    deliveredSummaryCount: state.accumulatedFileChangeSummaries.length,
+  });
   const restoreContext = useMemo(
     () => ({
       accessRole: state.access?.role ?? null,
@@ -1653,10 +1678,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       restoreActionPending,
       restoreCheckpoint: chatActions.restoreCheckpoint,
       accumulatedFileChanges,
+      undeliveredChangeCount,
       revertFileChanges: chatActions.revertFileChanges,
     }),
     [
       accumulatedFileChanges,
+      undeliveredChangeCount,
       activeHostId,
       composerActiveTurnStatus,
       chatActions.restoreCheckpoint,

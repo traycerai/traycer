@@ -606,9 +606,10 @@ export interface ChatSessionState {
    *
    * Separate from {@link accumulatedFileChanges} rather than replacing it,
    * because they are different types: a summary carries a digest and counts,
-   * not the before/after CONTENTS the diff surfaces read. Binding those
-   * surfaces to fetch contents on demand is its own ticket, so on the windowed
-   * line `accumulatedFileChanges` stays empty and the panel is not yet wired.
+   * not the before/after CONTENTS. `accumulatedFileChanges` stays empty on this
+   * line and nothing reads it here - the panel takes a content-free row model
+   * both lines produce (`accumulated-change-rows.ts`), and the contents are
+   * fetched by digest only by the diff tile a row click opens.
    */
   readonly accumulatedFileChangeSummaries: ReadonlyArray<ChatAccumulatedFileChangeSummary>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
@@ -2195,10 +2196,10 @@ export function createChatSessionStoreWithNotificationDependencies(
      *
      * `accumulatedFileChanges` is deliberately empty. The windowed line carries
      * SUMMARIES (a digest and counts, no before/after contents), which is a
-     * different type from what this field holds and what the diff surfaces
-     * read; they land in `accumulatedFileChangeSummaries` instead. Binding
-     * those surfaces to fetch contents on demand is its own ticket, and until
-     * it lands the panel is not wired on this line.
+     * different type from what this field holds; they land in
+     * `accumulatedFileChangeSummaries` instead, and every surface that used to
+     * read this field now reads the row model derived from whichever of the two
+     * this line delivers.
      */
     const adaptWindowedSnapshot = (
       frame: ChatWindowedSnapshotFrame,

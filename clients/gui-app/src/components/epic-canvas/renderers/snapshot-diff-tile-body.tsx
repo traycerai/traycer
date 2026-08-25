@@ -4,7 +4,6 @@ import { useShallow } from "zustand/react/shallow";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { buildSnapshotUnifiedPatchBundle } from "@/lib/diff/snapshot-diff-patch";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
 import type {
@@ -16,11 +15,17 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import {
   resolveHashBackedEndpoints,
-  resolveSnapshotDiffContents,
   type ResolvedSnapshotDiff,
   type SnapshotDiffSource,
 } from "@/lib/chat/resolve-snapshot-diff-content";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
+import { useCumulativeSnapshotDiffs } from "@/hooks/snapshots/use-cumulative-snapshot-diffs";
+import { hostAccumulatedChangeRows } from "@/lib/chat/accumulated-change-rows";
+import {
+  isWindowedTranscript,
+  type ChatSessionState,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import {
   DiffContentFrame,
   DiffContentPrimitive,
@@ -191,33 +196,59 @@ function SnapshotDiffTileResolved(props: {
   readonly viewTabId: string;
 }): ReactNode {
   const { node, handle, viewTabId } = props;
+  const tabHostClient = useTabHostClient();
   const diffViewerPreferences = useSettingsStore(
     (s) => s.diffViewerPreferences,
   );
   const source = useStore(
     handle.store,
     useShallow(
-      (s): SnapshotDiffSource & { readonly snapshotLoaded: boolean } => ({
+      (
+        s,
+      ): SnapshotDiffSource & {
+        readonly snapshotLoaded: boolean;
+        readonly accumulatedFileChangeSummaries: ChatSessionState["accumulatedFileChangeSummaries"];
+        readonly windowed: boolean;
+      } => ({
         snapshotLoaded: s.snapshotLoaded,
         messages: s.messages,
         liveAssistantBlocks: s.liveAssistantMessage?.blocks ?? null,
         accumulatedFileChanges: s.accumulatedFileChanges,
+        // Selected RAW and mapped below. Deriving the rows in here would mint a
+        // fresh array on every call, which `useShallow` compares by reference
+        // one level deep - so the selection would never settle and the tile
+        // would re-render until React gave up.
+        accumulatedFileChangeSummaries: s.accumulatedFileChangeSummaries,
+        windowed: isWindowedTranscript(s),
       }),
     ),
   );
   const {
     accumulatedFileChanges,
+    accumulatedFileChangeSummaries,
     liveAssistantBlocks,
     messages,
     snapshotLoaded,
+    windowed,
   } = source;
+  // How the cumulative kinds address their contents: on the windowed line a
+  // row's `digest` is what fetches the file bodies the snapshot no longer
+  // carries.
+  const hostRows = useMemo(
+    () =>
+      hostAccumulatedChangeRows({
+        windowed,
+        changes: accumulatedFileChanges,
+        summaries: accumulatedFileChangeSummaries,
+      }),
+    [accumulatedFileChangeSummaries, accumulatedFileChanges, windowed],
+  );
 
   // A hash-backed tile (segment or artifact-hash) resolves only its content-
   // addressed endpoints, then lazy-fetches the before/after content by hash (the
   // chat doc no longer inlines it). A segment reads its hashes from the
   // file_change blocks; an artifact-hash tile carries them on its payload.
-  // Cumulative/bundle tiles still read content inline from the host-computed
-  // accumulated changes.
+  // Cumulative/bundle tiles address theirs by accumulated-change digest.
   const segmentHashes = useMemo(
     () =>
       resolveHashBackedEndpoints(node.diff, {
@@ -230,10 +261,22 @@ function SnapshotDiffTileResolved(props: {
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
     // same host its `useChatSessionHandle` above is keyed by (D15).
-    client: useTabHostClient(),
+    client: tabHostClient,
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
     enabled: segmentHashes !== null,
+  });
+
+  const cumulative = useCumulativeSnapshotDiffs({
+    payload: node.diff,
+    // Same host as the hash query above, and for the same reason: the chat and
+    // its snapshot blobs live on the host this tile is bound to (D15).
+    client: tabHostClient,
+    epicId: handle.epicId,
+    chatId: handle.chatId,
+    hostRows,
+    inlineChanges: accumulatedFileChanges,
+    enabled: segmentHashes === null,
   });
 
   const resolved = useMemo<ReadonlyArray<ResolvedSnapshotDiff>>(() => {
@@ -248,25 +291,8 @@ function SnapshotDiffTileResolved(props: {
         },
       ];
     }
-    if (
-      node.diff.kind === "snapshot-cumulative" ||
-      node.diff.kind === "snapshot-cumulative-bundle"
-    ) {
-      return resolveSnapshotDiffContents(node.diff, {
-        messages,
-        liveAssistantBlocks,
-        accumulatedFileChanges,
-      });
-    }
-    return [];
-  }, [
-    accumulatedFileChanges,
-    liveAssistantBlocks,
-    messages,
-    node.diff,
-    segmentHashes,
-    segmentQuery.data,
-  ]);
+    return cumulative.resolved;
+  }, [cumulative.resolved, segmentHashes, segmentQuery.data]);
 
   // A hash-backed tile whose content is actively in-flight shows the skeleton.
   // Use isLoading (isPending && isFetching), NOT isPending: a content-less edit
@@ -284,11 +310,11 @@ function SnapshotDiffTileResolved(props: {
     });
   }, [diffViewerPreferences.ignoreWhitespace, node.diff.kind, resolved]);
   const bundleEntries = useMemo(
-    () => snapshotBundleSectionEntries(resolved, accumulatedFileChanges),
-    [accumulatedFileChanges, resolved],
+    () => snapshotBundleSectionEntries(resolved, hostRows),
+    [hostRows, resolved],
   );
 
-  if (!snapshotLoaded || segmentPending) {
+  if (!snapshotLoaded || segmentPending || cumulative.isLoading) {
     return (
       <SnapshotDiffTileShell node={node} viewTabId={viewTabId}>
         <SnapshotDiffFindRegistration
