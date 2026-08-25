@@ -39,6 +39,7 @@ import {
   getPaneScopedDndId,
   type EpicCanvasManagedCommandOutputDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import {
   useHeldManagedCommandsForChat,
@@ -565,13 +566,14 @@ function ManagedCommandRow(props: {
   // copy's node. The occurrence key keeps ids unique per mounted row; the drop
   // reads the payload, never the id.
   const occurrenceId = useId();
+  const dragDisabled = useDragSourceDisabled();
   const { listeners, setNodeRef, isDragging } = useDraggable({
     id: getPaneScopedDndId(
       viewTabId,
       getManagedCommandOutputDragId(`${command.id}:${occurrenceId}`),
     ),
     data: dragData,
-    disabled: false,
+    disabled: dragDisabled,
   });
 
   return (

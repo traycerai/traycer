@@ -9,6 +9,7 @@ import {
   getActiveAgentDragId,
   type EpicCanvasActiveAgentDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
@@ -104,6 +105,7 @@ function AgentStopRow(props: {
       viewTabId,
     ],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -111,7 +113,7 @@ function AgentStopRow(props: {
     isDragging,
   } = useDraggable({
     id: getActiveAgentDragId(occurrenceId),
-    disabled: false,
+    disabled: dragDisabled,
     data: dragData,
   });
   const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);

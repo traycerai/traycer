@@ -53,6 +53,7 @@ import {
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { cn } from "@/lib/utils";
@@ -320,6 +321,7 @@ function TerminalRow(props: TerminalRowProps) {
     }),
     [epicId, tabId, tile],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -331,7 +333,7 @@ function TerminalRow(props: TerminalRowProps) {
       getTerminalTileDragId(session.sessionId, hostId),
     ),
     data: dragData,
-    disabled: isRenaming,
+    disabled: isRenaming || dragDisabled,
   });
 
   useEffect(() => {
