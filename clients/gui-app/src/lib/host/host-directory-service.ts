@@ -549,6 +549,35 @@ export class HostDirectoryService implements IHostDirectoryService {
     return "many";
   }
 
+  /**
+   * The merged fleet's host ids, but ONLY when the registry has actually been
+   * heard from - `null` otherwise.
+   *
+   * For a caller that reads ABSENCE from this directory as a host having left
+   * the account, and destroys durable state on that reading. `list()` cannot
+   * serve them: a snapshot is `localEntry` + `remoteEntries`, so on any machine
+   * running a local host it is non-empty from the first local snapshot onward,
+   * long before - or entirely without - a registry listing. A `failed` first
+   * fetch therefore yields a perfectly ordinary-looking LOCAL-ONLY snapshot,
+   * and "not in this list" there means "the registry was never reached", not
+   * "deregistered". Emptiness is not the guard a caller wants; on desktop it is
+   * nearly unreachable and would let every remote host read as departed.
+   *
+   * `signed-out` clears the flag with the entries (see
+   * `hasObservedRemoteListing`), so an auth-settling race re-closes this rather
+   * than presenting its empty remote set as an answer.
+   *
+   * Returned as a set built from the SAME read as the flag, so a caller can
+   * never pair current evidence with a snapshot taken before the listing
+   * landed.
+   */
+  settledFleetHostIds(): ReadonlySet<string> | null {
+    if (!this.hasObservedRemoteListing) {
+      return null;
+    }
+    return new Set(this.snapshot().map((entry) => entry.hostId));
+  }
+
   onChange(listener: HostDirectoryListener): Disposable {
     this.listeners.add(listener);
     return {

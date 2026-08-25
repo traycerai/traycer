@@ -8,6 +8,7 @@ import {
 } from "react";
 import { isRelayFuseRecoveryCandidate } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { useHostBinding } from "@/lib/host";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
@@ -189,6 +190,7 @@ function dispatchCapableClose(args: {
  */
 export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const directory = useHostDirectoryList();
+  const binding = useHostBinding();
   const pendingKills = useLandingTerminalStore((state) => state.pendingKills);
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
@@ -280,24 +282,29 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // state forever and keep an authority probe mounted below for a machine that
   // will never answer.
   //
-  // Absence from the directory is read as deregistration, not unreachability.
-  // `directory.list()` is the unfiltered registry snapshot - an offline host
-  // stays listed (its picker row says `offline`) - and its tombstone must
-  // survive exactly so the drain above can fire when it returns.
+  // Absence from the fleet is read as deregistration, not unreachability - an
+  // offline host stays listed (its picker row says `offline`) and its tombstone
+  // must survive exactly so the drain above can fire when it returns. That
+  // reading is only ever valid against a fleet the REGISTRY has answered for,
+  // which is why the set comes from `settledFleetHostIds()` and not from the
+  // query rows this effect triggers on.
   //
-  // Two snapshots are therefore NOT evidence of departure and are skipped: a
-  // directory that has not resolved, and an EMPTY fleet. Empty is a real
-  // transient, not a hypothetical: the host publishes during boot and arrives
-  // as a later `onChange`, and a boot-time empty fetch being served to late
-  // consumers is the 2026-07-14 incident `useHostPickerList` carries
-  // `staleTime: 0` for. Acting on one here would silently abandon every closed
-  // shell at launch - the one failure this GC must never cause.
+  // The rows cannot carry that evidence themselves. A directory snapshot is
+  // `localEntry` + `remoteEntries`, so on a machine running a local host it is
+  // non-empty from the first local snapshot onward - a failed or not-yet-landed
+  // first registry fetch still renders one perfectly ordinary local-only row.
+  // Guarding on emptiness would therefore fire almost never on desktop and read
+  // every remote host as departed at launch: the one failure this GC must never
+  // cause. `null` (nobody has reached the registry, including after a
+  // `signed-out` clear while auth settles) skips the pass entirely.
+  //
+  // `directoryHostIds` is the TRIGGER, not the input - a committed listing
+  // emits, which invalidates the query and re-runs this.
   useEffect(() => {
-    if (directoryHostIds.length === 0) return;
-    useLandingTerminalStore
-      .getState()
-      .retainPendingKillsForHosts(new Set(directoryHostIds));
-  }, [directoryHostIds]);
+    const settledFleet = binding?.directory.settledFleetHostIds() ?? null;
+    if (settledFleet === null) return;
+    useLandingTerminalStore.getState().retainPendingKillsForHosts(settledFleet);
+  }, [binding, directoryHostIds]);
 
   useEffect(() => {
     const entries = directory.data ?? [];

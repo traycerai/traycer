@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => {
   const initialAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   const terminalsById: Readonly<Record<string, unknown>> = {};
+  // The registry-settled fleet the GC reads, held in a cell so `binding` can
+  // stay one stable object: it sits in the GC effect's dependency list, and a
+  // fresh identity per render would re-run the pass on every commit.
+  const settledFleet: { current: ReadonlySet<string> | null } = {
+    current: null,
+  };
   return {
     entries: [] as readonly HostDirectoryEntry[],
     kill: vi.fn(),
@@ -20,12 +26,24 @@ const mocks = vi.hoisted(() => {
     canMutate: false,
     terminalsById,
     closeAsync: vi.fn(() => Promise.resolve()),
+    /** `null` models a registry nobody has successfully reached yet. */
+    settledFleet,
+    binding: {
+      directory: {
+        settledFleetHostIds: (): ReadonlySet<string> | null =>
+          settledFleet.current,
+      },
+    },
   };
 });
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: mocks.entries }),
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useHostBinding: () => mocks.binding };
+});
 vi.mock(
   "@/components/home/terminal-panel/use-landing-terminal-kill-mutation",
   () => ({
@@ -114,6 +132,20 @@ const offlineHost: HostDirectoryEntry = {
   transportDialability: "not-dialable",
 };
 
+/**
+ * This machine's own host. It reaches a snapshot through the local arm alone,
+ * so it is present with or without a registry listing - which is what makes a
+ * row count useless as evidence that the fleet is known.
+ */
+const localHost: HostDirectoryEntry = {
+  hostId: "host-local",
+  label: "This Mac",
+  kind: "local",
+  websocketUrl: null,
+  version: "1.0.0",
+  transportDialability: "dialable",
+};
+
 describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
   beforeEach(() => {
     mocks.entries = [offlineHost];
@@ -124,6 +156,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.terminalsById = {};
     mocks.closeAsync.mockReset();
     mocks.closeAsync.mockImplementation(() => Promise.resolve());
+    // Drain cases run with the registry unanswered, so the GC never fires and
+    // cannot be confused for the behaviour they assert.
+    mocks.settledFleet.current = null;
     useLandingTerminalStore.getState().resetForTests();
   });
 
@@ -547,11 +582,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     }
   });
 
-  it("drops a tombstone once the settled directory no longer lists its host", async () => {
+  it("drops a tombstone once the registry-settled fleet no longer lists its host", async () => {
     // host-b stays listed (the default fixture); the tombstone below names a
     // DIFFERENT host that has left the account entirely - deregistration,
     // not merely offline.
     mocks.entries = [offlineHost];
+    mocks.settledFleet.current = new Set(["host-b"]);
     useLandingTerminalStore.getState().addTab({
       instanceId: "gone-tab",
       sessionId: "session-gone",
@@ -572,12 +608,15 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
   });
 
-  it("does not drop a tombstone when the directory snapshot has zero entries (unresolved query or a genuine empty fleet)", async () => {
-    // An unresolved query and a real boot-time empty fleet both produce a
-    // zero-length `directory.data`, and the bridge treats them identically:
-    // the host that owns this tombstone publishes during boot and arrives as
-    // a LATER snapshot, so acting on either would abandon a live shell.
-    mocks.entries = [];
+  it("does not drop a tombstone while the registry is unanswered, even though a local host keeps the snapshot non-empty", async () => {
+    // The regression that made emptiness the wrong guard. A directory snapshot
+    // is `localEntry` + `remoteEntries`, so a machine running a local host
+    // renders one ordinary row whether the registry answered or not - a failed
+    // first fetch is indistinguishable from a one-host account by row count
+    // alone. Pruning here would abandon the live shell on host-b at every
+    // launch that starts offline.
+    mocks.entries = [localHost];
+    mocks.settledFleet.current = null;
     useLandingTerminalStore.getState().addTab({
       instanceId: "boot-tab",
       sessionId: "session-boot",
@@ -596,8 +635,9 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     ]);
   });
 
-  it("keeps a tombstone for a host that is offline but still listed in the directory", async () => {
+  it("keeps a tombstone for a host that is offline but still listed in the settled fleet", async () => {
     mocks.entries = [offlineHost];
+    mocks.settledFleet.current = new Set(["host-b"]);
     useLandingTerminalStore.getState().addTab({
       instanceId: "offline-tab",
       sessionId: "session-offline",
