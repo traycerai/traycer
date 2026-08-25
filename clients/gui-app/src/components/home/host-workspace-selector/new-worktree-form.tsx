@@ -28,6 +28,7 @@ import {
   pickerEmptyStateLabel,
   type WorktreeBranchPickerRow,
 } from "@/components/home/worktree/worktree-branch-picker-model";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -482,11 +483,18 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     [activeIndex, idPrefix, props.onSelect],
   );
 
-  // Autofocus the search on mount.
+  // Autofocus the search on mount, for the pointer that can type without
+  // costing screen space. On a touch pointer the software keyboard covers the
+  // branch list this combobox was expanded to show, and it is an inline
+  // combobox rather than a Radix layer - nothing was ever going to be focused
+  // on its behalf, so skipping the call leaves focus exactly where the tap
+  // that expanded it left it.
+  const coarsePointer = useCoarsePointer();
   useEffect(() => {
+    if (coarsePointer) return;
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [coarsePointer]);
 
   // Keep the active option scrolled into the virtual window after filter
   // changes and Home/End jumps. External scroller sync only — no React state.

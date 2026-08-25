@@ -30,6 +30,7 @@ import {
   usePointerDragCommit,
   type PointerDragSliderProps,
 } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useVirtualKeyboardInset } from "@/hooks/ui/use-virtual-keyboard-inset";
@@ -427,17 +428,31 @@ export function LandingTerminalPanel(): ReactNode {
     [],
   );
 
+  // The chooser's field is not why the chooser is on screen: a directory is
+  // picked from the list beneath it, and on a touch pointer focusing the field
+  // covers that list with a software keyboard. Skipping the REQUEST rather
+  // than the endpoint's focus is what keeps the coordinator's bookkeeping
+  // honest - an intent no endpoint will ever satisfy would stay pending.
+  const coarsePointer = useCoarsePointer();
+  const requestDirectoryPickerFocus = useCallback(
+    (requestKey: number): void => {
+      if (coarsePointer) return;
+      requestPrimaryFocus({
+        kind: "landing-terminal-directory",
+        requestId: requestKey,
+      });
+    },
+    [coarsePointer],
+  );
+
   const replaceDirectoryRequest = useCallback(
     (request: LandingTerminalDirectoryRequest | null): void => {
       writeDirectoryRequest(request);
       if (request !== null && request.selectedTarget === null) {
-        requestPrimaryFocus({
-          kind: "landing-terminal-directory",
-          requestId: request.key,
-        });
+        requestDirectoryPickerFocus(request.key);
       }
     },
-    [writeDirectoryRequest],
+    [requestDirectoryPickerFocus, writeDirectoryRequest],
   );
 
   const setPanelOpen = useCallback(
@@ -601,12 +616,9 @@ export function LandingTerminalPanel(): ReactNode {
         selectedTarget,
         error: null,
       });
-      requestPrimaryFocus({
-        kind: "landing-terminal-directory",
-        requestId: request.key,
-      });
+      requestDirectoryPickerFocus(request.key);
     },
-    [replaceDirectoryRequest, selectWorkspacePath],
+    [replaceDirectoryRequest, requestDirectoryPickerFocus, selectWorkspacePath],
   );
 
   const handleReconciliationError = useCallback(() => {
@@ -623,12 +635,9 @@ export function LandingTerminalPanel(): ReactNode {
       error: "The terminal directory could not be opened.",
     });
     if (ownsFocus) {
-      requestPrimaryFocus({
-        kind: "landing-terminal-directory",
-        requestId: request.key,
-      });
+      requestDirectoryPickerFocus(request.key);
     }
-  }, [writeDirectoryRequest]);
+  }, [requestDirectoryPickerFocus, writeDirectoryRequest]);
 
   const activateTerminalTab = useCallback(
     (instanceId: string) => {

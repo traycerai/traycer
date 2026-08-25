@@ -103,6 +103,7 @@ function CacheKeyLifecycleHarness(): ReactNode {
         language="typescript"
         editing={editing}
         editAdapter={editAdapter}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
