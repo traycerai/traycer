@@ -566,6 +566,17 @@ describe("interviewBlockSchema defaults and malformed enhanced fields", () => {
   });
 
   it("defaults delivery.generation to 0 when absent and catches a malformed generation to 0", () => {
+    const current = interviewBlockSchema.parse({
+      ...legacyInterviewBlock(),
+      delivery: {
+        deliveryId: "del-1",
+        status: "pending",
+        retryable: false,
+        generation: 4,
+      },
+    });
+    expect(current.delivery?.generation).toBe(4);
+
     const absent = interviewBlockSchema.parse({
       ...legacyInterviewBlock(),
       delivery: {

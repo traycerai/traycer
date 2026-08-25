@@ -5,6 +5,7 @@ import {
   createTurnContentState,
 } from "../agent-runtime-accumulator";
 import {
+  interviewResolvedEventSchema,
   steerSubmittedEventSchema,
   toolCallCompletedEventSchema,
   toolCallErroredEventSchema,
@@ -54,17 +55,6 @@ function expectInterviewBlock(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isProductionShapedAnswer(value: unknown): value is InterviewAnswer {
-  if (!isRecord(value)) return false;
-  if (Object.hasOwn(value, "selection")) return false;
-  return (
-    (typeof value.questionId === "string" || value.questionId === null) &&
-    (typeof value.question === "string" || value.question === null) &&
-    Array.isArray(value.values) &&
-    (typeof value.notes === "string" || value.notes === null)
-  );
 }
 
 describe("accumulateEvent", () => {
@@ -1749,15 +1739,13 @@ describe("accumulateEvent", () => {
       notes: null,
     };
     expect(Object.hasOwn(productionAnswer, "selection")).toBe(false);
-    if (!isProductionShapedAnswer(productionAnswer)) {
-      throw new Error("expected production-shaped answer");
-    }
-    blocks = accumulateEvent(blocks, {
+    const resolved = interviewResolvedEventSchema.parse({
       type: "interview.resolved",
       blockId: "interview1",
       timestamp: 2,
       answers: [productionAnswer],
     });
+    blocks = accumulateEvent(blocks, resolved);
 
     const interview = blocks[0];
     if (interview === undefined || interview.type !== "interview") {
