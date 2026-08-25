@@ -11268,6 +11268,34 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "enabled": {
                       "default": true,
                       "type": "boolean"
+                    },
+                    "launchCommand": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "command": {
+                              "type": "string"
+                            },
+                            "shell": {
+                              "type": "string",
+                              "enum": [
+                                "posix",
+                                "powershell"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "command",
+                            "shell"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [

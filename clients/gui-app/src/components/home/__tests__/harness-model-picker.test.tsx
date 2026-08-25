@@ -269,6 +269,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // Resolves to a sentinel string standing in for a `HostClient`: "default" for
 // a null host id (mirrors the real hook's app-wide-default fallback), else
 // the raw host id - lets `useProvidersListForClient` above key its

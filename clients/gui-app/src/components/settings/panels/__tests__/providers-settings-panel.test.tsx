@@ -483,6 +483,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return { ...actual, useHostClient: () => null };
 });
 
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return { ...actual, useHostSupportsMethod: () => true };
+});
+
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
   useProvidersDetectVersion: () => ({
     isFetching: false,
@@ -3679,6 +3687,7 @@ describe("<ProvidersSettingsPanel />", () => {
           selectedProfileId={null}
           onSelectedProfileIdChange={vi.fn()}
           profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
           profileEnablementPending={() => false}
           onSetProfileEnabled={vi.fn()}
         />

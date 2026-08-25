@@ -91,6 +91,7 @@ interface ProviderProfileScopedSectionProps {
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
+  readonly profileStatusRefreshAvailable: boolean;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly onSetProfileEnabled: (
     profileId: string | null,
@@ -196,6 +197,7 @@ export function ProviderProfileScopedSection(
     selectedProfileId,
     onSelectedProfileIdChange,
     profileEnablementAvailable,
+    profileStatusRefreshAvailable,
     profileEnablementPending,
     onSetProfileEnabled,
   } = props;
@@ -280,7 +282,7 @@ export function ProviderProfileScopedSection(
                 state,
                 selectedProfile,
               )}
-              maintenanceAvailable={profileEnablementAvailable}
+              maintenanceAvailable={profileStatusRefreshAvailable}
             />
           </div>
         </div>

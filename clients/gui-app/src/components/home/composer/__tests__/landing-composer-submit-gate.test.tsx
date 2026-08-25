@@ -214,6 +214,15 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,

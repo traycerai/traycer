@@ -9,6 +9,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   providerProfileSchema,
   PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
@@ -38,13 +39,26 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  * narrow the cached capability. See the call site for why this one field is
  * different from every other field on the echo.
  */
-function withoutLoginCapability(state: AwaitLoginProviderState) {
+function withoutLoginCapability(
+  state: AwaitLoginProviderState,
+  cachedProfiles: readonly ProviderProfile[],
+) {
   const { loginCapability: _dropped, ...rest } = state;
   return {
     ...rest,
-    profiles: rest.profiles.map((profile) =>
-      providerProfileSchema.parse(profile),
-    ),
+    profiles: rest.profiles.map((profile) => {
+      const parsed = providerProfileSchema.parse(profile);
+      const cached = cachedProfiles.find(
+        (candidate) => candidate.profileId === parsed.profileId,
+      );
+      return cached === undefined
+        ? parsed
+        : {
+            ...parsed,
+            enabled: cached.enabled,
+            launchCommand: cached.launchCommand,
+          };
+    }),
   };
 }
 
@@ -154,7 +168,10 @@ export function useProvidersAwaitLoginForClient(args: {
                     // the user is looking at it. Capability is a property of
                     // the installed CLI, not of a login attempt; only
                     // `providers.list` may set it.
-                    { ...p, ...withoutLoginCapability(next) }
+                    {
+                      ...p,
+                      ...withoutLoginCapability(next, p.profiles),
+                    }
                   : p,
               ),
               native: prev.native,

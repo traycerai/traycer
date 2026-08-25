@@ -175,7 +175,23 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       "providers.list",
       { native: null },
     );
-    queryClient.setQueryData(listKey, seededProvidersList());
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        profiles: [
+          {
+            ...legacyV21Profile(),
+            enabled: false,
+            launchCommand: {
+              command: "copilot --profile work",
+              shell: "posix" as const,
+            },
+          },
+        ],
+      })),
+    });
     mocks.requestWithResponseTimeout.mockResolvedValue({
       state: v21Echo({ profiles: [legacyV21Profile()] }),
       existingProfileId: null,
@@ -193,7 +209,11 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       (p: ProviderListEntry) => p.providerId === "copilot",
     );
     expect(copilot?.loginCapability?.terminalLogin).toEqual({});
-    expect(copilot?.profiles[0]?.enabled).toBe(true);
+    expect(copilot?.profiles[0]?.enabled).toBe(false);
+    expect(copilot?.profiles[0]?.launchCommand).toEqual({
+      command: "copilot --profile work",
+      shell: "posix",
+    });
     // The missing direction: `terminalLogin` staying `{}` is also what a
     // no-op merge (one that dropped the WHOLE echo, not just its
     // `loginCapability`) would produce, since the seeded cache already has

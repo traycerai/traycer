@@ -145,6 +145,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // useResolvedSeededProfileId still hits useHostQuery directly (not the
 // providers-list-query wrapper). Mirror the same provider list so a managed
 // seed is not tombstoned to ambient mid-test.

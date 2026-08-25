@@ -30,6 +30,7 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -1142,9 +1143,21 @@ function ProviderDetail({
     hostClient,
     providerId,
   );
-  const profileEnablementAvailable = state.profiles.some(
+  const hasManagedProfiles = state.profiles.some(
     (profile) => profile.kind === "managed",
   );
+  const supportsProfileEnablement = useHostSupportsMethod(
+    hostId,
+    "providers.setProfileEnabled",
+  );
+  const supportsProfileStatusRefresh = useHostSupportsMethod(
+    hostId,
+    "providers.refreshProfileStatus",
+  );
+  const profileEnablementAvailable =
+    hasManagedProfiles && supportsProfileEnablement;
+  const profileStatusRefreshAvailable =
+    hasManagedProfiles && supportsProfileStatusRefresh;
   const anyProfileEnablementPending = state.profiles.some((profile) =>
     profileEnablementPending(profileCommitId(profile)),
   );
@@ -1194,6 +1207,7 @@ function ProviderDetail({
     selectedProfileId,
     onSelectedProfileIdChange: setSelectedProfileId,
     profileEnablementAvailable,
+    profileStatusRefreshAvailable,
     profileEnablementPending,
     onSetProfileEnabled: (profileId, enabled) =>
       setProfileEnabled.mutate({
@@ -1434,6 +1448,7 @@ interface ProviderProfileTabProps {
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
   readonly profileEnablementAvailable: boolean;
+  readonly profileStatusRefreshAvailable: boolean;
   readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly onSetProfileEnabled: (
     profileId: string | null,
