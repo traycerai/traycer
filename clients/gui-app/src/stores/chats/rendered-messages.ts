@@ -3997,7 +3997,11 @@ const BLOCK_HANDLERS: {
     description: block.description,
     questions: block.questions,
     answers: block.answers,
+    draftAnswers: block.draftAnswers,
+    outcome: block.outcome,
+    settlement: block.settlement,
     error: block.error,
+    delivery: block.delivery,
     forkedWithoutAnswer: block.metadata?.["forkedWithoutAnswer"] === true,
   }),
   // Artifact-operation cards render top-level regardless of the authoring agent

@@ -2,8 +2,8 @@ import { chatHeadReaderSchema, type ChatHeadRecord } from "@traycer/protocol/per
 import { chatShardReaderSchema, type ChatShardRecord } from "@traycer/protocol/persistence/chat-sync/shard";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import {
-  chatHeadRecordV110,
-  chatShardRecordV110,
+  chatHeadRecordV120,
+  chatShardRecordV120,
   type ChatHead,
   type ChatShard,
 } from "@traycer/protocol/persistence/registry";
@@ -70,7 +70,7 @@ describe("chat-sync record shapes", () => {
     // so a repeated `{ major: 1, minor: 0 }` would let a future bump register
     // 1.1 while a payload schema and its writer stayed on 1.0. The two records
     // share ONE version line, so they must bind the same object.
-    expect(chatHeadRecordV110.schemaVersion).toBe(CHAT_SYNC_SCHEMA_VERSION);
-    expect(chatShardRecordV110.schemaVersion).toBe(CHAT_SYNC_SCHEMA_VERSION);
+    expect(chatHeadRecordV120.schemaVersion).toBe(CHAT_SYNC_SCHEMA_VERSION);
+    expect(chatShardRecordV120.schemaVersion).toBe(CHAT_SYNC_SCHEMA_VERSION);
   });
 });

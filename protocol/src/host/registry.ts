@@ -181,6 +181,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -8600,7 +8601,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 6,
+      latestMinor: 7,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8622,6 +8623,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         6: {
           contract: chatSubscribeV16,
+        },
+        7: {
+          contract: chatSubscribeV17,
         },
       },
     },

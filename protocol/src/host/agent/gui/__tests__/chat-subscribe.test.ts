@@ -4,6 +4,7 @@ import {
   chatQueuedItemSchema,
   chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
+  chatSubscribeLiveSchemaVersion,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -12,6 +13,7 @@ import {
   chatSubscribeV14,
   chatSubscribeV15,
   chatSubscribeV16,
+  chatSubscribeV17,
   createImageResolutionUpdatedFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
@@ -2260,14 +2262,33 @@ describe("chat.subscribe@1.6 (image generation)", () => {
   });
 });
 
-describe("chat.subscribe@1.6 registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 6 as chatSubscribeV16", () => {
+describe("chat.subscribe registry membership", () => {
+  it("registers chat.subscribe major 1 latestMinor 7 as chatSubscribeV17", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(6);
+    expect(entry[1].latestMinor).toBe(7);
+    expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
+    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+    expect(entry[1].versions).not.toHaveProperty("8");
+  });
+
+  it("keeps `1.6` registered and bound to its own frozen contract", () => {
+    // `1.6` shipped in `host-v1.2.0-rc.1`, so it must stay negotiable AND stop
+    // following the live schemas. It used to BE the live line; the assertion
+    // that matters now is that the two contracts are distinct objects.
+    const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
-    expect(entry[1].versions).not.toHaveProperty("7");
+    expect(chatSubscribeV16.serverFrameSchema).not.toBe(
+      chatSubscribeV17.serverFrameSchema,
+    );
+    expect(chatSubscribeV16.clientFrameSchema).not.toBe(
+      chatSubscribeV17.clientFrameSchema,
+    );
+  });
+
+  it("points the live-line constant at `1.7`", () => {
+    expect(chatSubscribeLiveSchemaVersion).toEqual({ major: 1, minor: 7 });
   });
 });
 

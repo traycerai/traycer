@@ -182,6 +182,139 @@ function frozenPreImageAssistantMessage(): Record<string, unknown> {
   };
 }
 
+/**
+ * A `chat.subscribe@1.6` assistant message carrying a pre-settlement
+ * interview block: no outcome/drafts/settlement/diagnostics/delivery, and
+ * answers without `selection`. A 1.6 shallow parse leaves those keys
+ * absent; `normalizeInterviewBlocksInShallowSnapshot` is what fills them.
+ * Also omits `imageResolutions` so the test can tell shallow from deep.
+ */
+function frozenV16InterviewAssistantMessage(): Record<string, unknown> {
+  return {
+    role: "assistant",
+    messageId: "assistant-interview-1",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-1",
+      displayName: "Coder",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        blockId: "text-1",
+        status: "completed",
+        timestamp: 10,
+        parentBlockId: null,
+        type: "text",
+        text: "hello",
+      },
+      {
+        blockId: "iv-1",
+        status: "completed",
+        timestamp: 20,
+        parentBlockId: null,
+        type: "interview",
+        toolName: "AskUserQuestion",
+        title: "Library",
+        description: "Pick one",
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which library?",
+            header: "Library",
+            options: [{ label: "date-fns", description: null, preview: null }],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which library?",
+            values: ["date-fns"],
+            notes: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+      },
+    ],
+    startedAt: 10,
+    timestamp: 20,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function interviewBlockFromMessage(message: unknown): Record<string, unknown> {
+  if (!isRecord(message)) {
+    throw new Error("expected assistant message");
+  }
+  if (!Array.isArray(message.blocks)) {
+    throw new Error("expected blocks");
+  }
+  for (const block of message.blocks) {
+    if (isRecord(block) && block.type === "interview") return block;
+  }
+  throw new Error("expected interview block");
+}
+
+function interviewAnswerAction(): ChatSubscribeClientFrame {
+  return {
+    kind: "interviewAnswer",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    clientActionId: "action-answer",
+    blockId: "iv-1",
+    answers: [
+      {
+        questionId: "q1",
+        question: "Which library?",
+        values: ["date-fns"],
+        notes: null,
+        selection: {
+          questionIndex: 0,
+          optionIndices: [0],
+          optionLabels: ["date-fns"],
+          customText: null,
+        },
+      },
+    ],
+  };
+}
+
+function interviewErrorAction(): ChatSubscribeClientFrame {
+  return {
+    kind: "interviewError",
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    clientActionId: "action-error",
+    blockId: "iv-1",
+    reason: "Not now",
+    settlement: {
+      outcome: "skipped",
+      draftAnswers: [
+        {
+          questionId: "q1",
+          question: "Which library?",
+          values: ["lodash"],
+          notes: null,
+          selection: null,
+        },
+      ],
+    },
+  };
+}
+
 function snapshotFrameWithAssistantMessage(
   assistantMessage: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -219,11 +352,40 @@ function snapshotFrameWithAssistantMessage(
 }
 
 function parseText(raw: string): Record<string, unknown> {
-  const value = JSON.parse(raw);
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  const value: unknown = JSON.parse(raw);
+  if (!isRecord(value)) {
     throw new Error("Expected object text frame");
   }
-  return value as Record<string, unknown>;
+  return value;
+}
+
+function makeNoopCallbacks(
+  onSnapshot: ChatStreamCallbacks["onSnapshot"],
+): ChatStreamCallbacks {
+  return {
+    onSnapshot,
+    onActionAck: () => undefined,
+    onMessageAccepted: () => undefined,
+    onQueueChanged: () => undefined,
+    onTurnStateChanged: () => undefined,
+    onBlockDelta: () => undefined,
+    onApprovalRequested: () => undefined,
+    onApprovalResolved: () => undefined,
+    onFileEditApprovalRequested: () => undefined,
+    onFileEditApprovalResolved: () => undefined,
+    onInterviewRequested: () => undefined,
+    onInterviewAnswered: () => undefined,
+    onInterviewErrored: () => undefined,
+    onEventAppended: () => undefined,
+    onRestoreStarted: () => undefined,
+    onRestoreProgress: () => undefined,
+    onRestoreCompleted: () => undefined,
+    onErrorNotice: () => undefined,
+    onWorktreeStateChanged: () => undefined,
+    onManagedCommandsChanged: () => undefined,
+    onHeldUpdatesChanged: () => undefined,
+    onConnectionStatus: () => undefined,
+  };
 }
 
 describe("ChatStreamClient", () => {
@@ -549,35 +711,6 @@ describe("ChatStreamClient", () => {
 });
 
 describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
-  function makeNoopCallbacks(
-    onSnapshot: ChatStreamCallbacks["onSnapshot"],
-  ): ChatStreamCallbacks {
-    return {
-      onSnapshot,
-      onActionAck: () => undefined,
-      onMessageAccepted: () => undefined,
-      onQueueChanged: () => undefined,
-      onTurnStateChanged: () => undefined,
-      onBlockDelta: () => undefined,
-      onApprovalRequested: () => undefined,
-      onApprovalResolved: () => undefined,
-      onFileEditApprovalRequested: () => undefined,
-      onFileEditApprovalResolved: () => undefined,
-      onInterviewRequested: () => undefined,
-      onInterviewAnswered: () => undefined,
-      onInterviewErrored: () => undefined,
-      onEventAppended: () => undefined,
-      onRestoreStarted: () => undefined,
-      onRestoreProgress: () => undefined,
-      onRestoreCompleted: () => undefined,
-      onErrorNotice: () => undefined,
-      onWorktreeStateChanged: () => undefined,
-      onManagedCommandsChanged: () => undefined,
-      onHeldUpdatesChanged: () => undefined,
-      onConnectionStatus: () => undefined,
-    };
-  }
-
   it("takes the deep parse path and up-converts a down-negotiated (1.5) snapshot's pre-image assistant message", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
@@ -609,7 +742,7 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     client.close();
   });
 
-  it("takes the shallow parse path and passes a live (1.6) snapshot's message through structurally unchanged", () => {
+  it("takes the live (1.7) shallow parse path and passes the message through structurally unchanged", () => {
     const { factory, sockets } = makeFactory();
     const deliveredMessages: unknown[] = [];
 
@@ -623,7 +756,8 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     });
     // Default handshake echoes the client's own manifest verbatim, which
     // negotiates to the client's canonical chat.subscribe version - today
-    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:6}).
+    // exactly `chatSubscribeLiveSchemaVersion` ({major:1, minor:7}). The live
+    // shallow path does NOT run the 1.6 interview normalizer.
     completeHandshake(sockets[0]);
 
     sockets[0].fireText(
@@ -637,6 +771,107 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
     // sent, `imageResolutions` genuinely absent.
     expect(assistant).not.toHaveProperty("imageResolutions");
     expect(assistant).toMatchObject({ messageId: "assistant-1" });
+
+    client.close();
+  });
+
+  it("takes the 1.6 shallow path and delivers a normalized interview snapshot", () => {
+    const { factory, sockets } = makeFactory();
+    const deliveredMessages: unknown[] = [];
+
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks((frame) => {
+        deliveredMessages.push(...frame.snapshot.chat.messages);
+      }),
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+
+    sockets[0].fireText(
+      snapshotFrameWithAssistantMessage(frozenV16InterviewAssistantMessage()),
+    );
+
+    expect(deliveredMessages).toHaveLength(1);
+    const [assistant] = deliveredMessages;
+    // Shallow: the 1.6 envelope did not walk histories, so the deep
+    // schema's `imageResolutions: []` default was never applied.
+    expect(assistant).not.toHaveProperty("imageResolutions");
+    const interview = interviewBlockFromMessage(assistant);
+    expect(interview.outcome).toBeNull();
+    expect(interview.draftAnswers).toEqual([]);
+    expect(interview.settlement).toBeNull();
+    expect(interview.diagnostics).toEqual([]);
+    expect(interview.delivery).toBeNull();
+    expect(interview.settlementExtensions).toEqual({});
+    if (!Array.isArray(interview.answers) || !isRecord(interview.answers[0])) {
+      throw new Error("expected interview answers");
+    }
+    expect(interview.answers[0].selection).toBeNull();
+    expect(interview.answers[0].values).toEqual(["date-fns"]);
+
+    client.close();
+  });
+});
+
+describe("ChatStreamClient.sendAction interview projection", () => {
+  it("sends interviewAnswer/interviewError verbatim on a 1.7 session", () => {
+    const { factory, sockets } = makeFactory();
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks(() => undefined),
+    });
+    completeHandshake(sockets[0]);
+
+    const answer = interviewAnswerAction();
+    const error = interviewErrorAction();
+    client.sendAction(answer);
+    client.sendAction(error);
+
+    const sentAnswer = parseText(sockets[0].textSent[2]);
+    const sentError = parseText(sockets[0].textSent[3]);
+    expect(sentAnswer).toEqual(answer);
+    expect(sentError).toEqual(error);
+    if (
+      !Array.isArray(sentAnswer.answers) ||
+      !isRecord(sentAnswer.answers[0])
+    ) {
+      throw new Error("expected projected answers");
+    }
+    expect(Object.hasOwn(sentAnswer.answers[0], "selection")).toBe(true);
+    expect(Object.hasOwn(sentError, "settlement")).toBe(true);
+
+    client.close();
+  });
+
+  it("strips selection and settlement before sending on a 1.6 session", () => {
+    const { factory, sockets } = makeFactory();
+    const client = new ChatStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      chatId: "chat-1",
+      callbacks: makeNoopCallbacks(() => undefined),
+    });
+    completeHandshakeAtVersion(sockets[0], { major: 1, minor: 6 });
+
+    client.sendAction(interviewAnswerAction());
+    client.sendAction(interviewErrorAction());
+
+    const sentAnswer = parseText(sockets[0].textSent[2]);
+    const sentError = parseText(sockets[0].textSent[3]);
+    if (
+      !Array.isArray(sentAnswer.answers) ||
+      !isRecord(sentAnswer.answers[0])
+    ) {
+      throw new Error("expected projected answers");
+    }
+    expect(Object.hasOwn(sentAnswer.answers[0], "selection")).toBe(false);
+    expect(sentAnswer.answers[0].values).toEqual(["date-fns"]);
+    expect(Object.hasOwn(sentError, "settlement")).toBe(false);
+    expect(sentError.reason).toBe("Not now");
 
     client.close();
   });
