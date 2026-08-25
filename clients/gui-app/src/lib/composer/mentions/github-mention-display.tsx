@@ -32,22 +32,25 @@ import type {
 import { formatCompactRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
-import { foldGithubIdentitySegment } from "./github-mention-rows";
 import { isDefaultGithubMentionHost } from "@traycer/protocol/common/github-mention-host";
-import { githubMentionToken } from "./github-mention-token";
+import {
+  foldGithubIdentitySegment,
+  githubMentionToken,
+} from "@traycer/protocol/common/github-mention-identity";
 import { MENU_ICON_CLASS } from "./mention-entry-display";
 
 /**
- * The mention's IDENTITY builders live in `github-mention-token.ts` - pure
- * string functions, no rendering dependency - and are re-exported here so this
- * module stays the one place a caller has to know about. See that file for why
- * they were separated.
+ * The mention's IDENTITY builders live in
+ * `@traycer/protocol/common/github-mention-identity` - pure string functions,
+ * no rendering dependency - and are re-exported here so this module stays the
+ * one place a caller has to know about. See that file for why they were
+ * separated, and for why they left the GUI entirely.
  */
 export {
   githubMentionToken,
   githubMentionTokenPrefix,
   githubMentionTokenReference,
-} from "./github-mention-token";
+} from "@traycer/protocol/common/github-mention-identity";
 
 /**
  * How a PR/issue row reads: its state glyph, its row text, its preview card,

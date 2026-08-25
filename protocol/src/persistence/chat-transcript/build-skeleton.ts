@@ -3,6 +3,7 @@ import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+import { extractPlainTextFromComposerJSONContent } from "@traycer/protocol/common/composer-plain-text";
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   buildTranscriptRecordLookup,
@@ -35,26 +36,42 @@ import {
  *
  * A user row's preview is the plain-text projection of its composer content -
  * `@mentions` resolved to paths, `/commands` to their names, quotes prefixed.
- * That projection lives in the GUI today (`tiptap-json-content.ts`) and reaches
- * the whole mention type system, so it is part of the shared-derivation move,
- * not something to reimplement here.
+ * That projection is {@link transcriptPreviewProjection} below, and it is a
+ * PARAMETER rather than a direct call for two reasons that outlived the move
+ * that made it shareable.
  *
- * It is also not something to APPROXIMATE here. Reading `attrs.path` directly
- * looks equivalent and is not: every mention branch resolves its path as
+ * It is not something to APPROXIMATE. Reading `attrs.path` directly looks
+ * equivalent and is not: every mention branch resolves its path as
  * `attrs.path ?? <branch-specific fallback>`, and a GitHub mention node carries
  * no `path` of its own at all. A preview built on the shortcut would silently
- * differ from the label the renderer shows for exactly those rows.
+ * differ from the label the renderer shows for exactly those rows. Taking it as
+ * a parameter is what keeps that shortcut from looking like a local decision a
+ * producer is free to make.
  *
- * So the projection is a parameter. A producer that has one passes it; one that
- * does not cannot invent it, which is the intended pressure.
+ * And it keeps this module's own dependencies to the transcript record shapes.
+ * A producer that wants previews reaches the composer projection; one that does
+ * not - a size-only consumer, a test fixture asserting ordinals - passes its own
+ * and never loads it.
  */
 
 /**
  * Projects a user message's composer content to the plain text its minimap
- * label is made from. Supply `extractPlainTextFromComposerJSONContent`, or the
- * shared relocation of it.
+ * label is made from. Pass {@link transcriptPreviewProjection} unless you have
+ * a specific reason not to.
  */
 export type TranscriptPreviewProjection = (content: JsonContent) => string;
+
+/**
+ * The projection every real producer should pass - the one the GUI composer has
+ * always used, re-exported here under the parameter's own type so a producer
+ * does not have to know which module in `common/` it came from.
+ *
+ * This is the whole point of the injection seam being fillable: the live host,
+ * the publisher, and the renderer now agree on a row's preview by running the
+ * same function, not by three implementations that happen to match today.
+ */
+export const transcriptPreviewProjection: TranscriptPreviewProjection =
+  extractPlainTextFromComposerJSONContent;
 
 /**
  * How far into the source to look for non-whitespace before giving up.
