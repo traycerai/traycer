@@ -50,6 +50,8 @@ function createHarness(chatId: string): Harness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => false,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },

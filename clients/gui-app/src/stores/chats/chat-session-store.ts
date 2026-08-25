@@ -27,6 +27,24 @@ import {
   removeOptimisticQueuedItemByMessageId,
 } from "@/stores/chats/optimistic-queue";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
+import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
+import type {
+  ChatAccumulatedFileChangeSummary,
+  ChatTranscriptDerived,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  applyIndexChange,
+  applyRangeResponse,
+  applySkeletonChunk,
+  applyWindowedSnapshot,
+  emptyTranscriptWindow,
+  evictTranscriptWindowToBudget,
+  hydratedRecords,
+  isTailHydrated,
+  planTranscriptHydration,
+  TRANSCRIPT_WINDOW_MAX_BYTES,
+  type TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import type {
   StreamFlushCoordinator,
   StreamFlushLease,
@@ -122,9 +140,18 @@ import type {
 import { v4 as uuidv4 } from "uuid";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
-type ChatStreamClientHandle = Pick<
+export type ChatStreamClientHandle = Pick<
   ChatStreamClient,
-  "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+  | "sendAction"
+  | "close"
+  | "sameTurnSteeringProtocolSupported"
+  // The two windowed READS. Required rather than optional even though every
+  // implementation but the real client is a test double: the store calls them
+  // unconditionally, and an optional method invoked through `?.()` is a silent
+  // no-op - which on this line means a chat that asks for its tail, never
+  // sends the request, and renders empty forever.
+  | "requestTranscriptRange"
+  | "requestResnapshot"
 >;
 
 export type ChatStreamClientFactory = (
@@ -138,6 +165,10 @@ type ChatOwnerActionFrame = Exclude<
   { readonly kind: "ping" }
 >;
 type ChatActionAckFrame = Parameters<ChatStreamCallbacks["onActionAck"]>[0];
+type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
+type ChatWindowedSnapshotFrame = Parameters<
+  ChatStreamCallbacks["onWindowedSnapshot"]
+>[0];
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
 type ChatSessionGetState = StoreApi<ChatSessionState>["getState"];
 type SendActionInput = {
@@ -543,6 +574,40 @@ export interface ChatSessionState {
   readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly pendingInterviews: ReadonlyArray<ChatPendingInterviewState>;
   readonly accumulatedFileChanges: ReadonlyArray<ChatAccumulatedFileChange>;
+  /**
+   * The transcript index and whichever bodies are hydrated, on the windowed
+   * line. Empty on every other line, where the whole transcript rides the
+   * snapshot and {@link messages} is complete by construction.
+   *
+   * `messages`/`events` are DERIVED from this on the windowed line - they hold
+   * what is hydrated, not what exists. `transcriptWindow.rowCount` is what
+   * exists.
+   */
+  readonly transcriptWindow: TranscriptWindow;
+  /**
+   * Whole-transcript folds the host computed because a windowed client cannot:
+   * the pinned-todo stack, the latest usage, the fork boundary, and the
+   * restorable setup interruption (whose event occupies no ordinal at all).
+   * `null` off the windowed line, where each is still derived locally.
+   */
+  readonly transcriptDerived: ChatTranscriptDerived | null;
+  /**
+   * How many files this chat has touched, per the windowed snapshot - what the
+   * accumulated-changes panel paints its collapsed header from before any
+   * summary chunk lands. `0` off the windowed line, where
+   * {@link accumulatedFileChanges} carries the whole set.
+   */
+  readonly accumulatedFileChangeCount: number;
+  /**
+   * The accumulated-change SUMMARIES, assembled from the chunk frames.
+   *
+   * Separate from {@link accumulatedFileChanges} rather than replacing it,
+   * because they are different types: a summary carries a digest and counts,
+   * not the before/after CONTENTS the diff surfaces read. Binding those
+   * surfaces to fetch contents on demand is its own ticket, so on the windowed
+   * line `accumulatedFileChanges` stays empty and the panel is not yet wired.
+   */
+  readonly accumulatedFileChangeSummaries: ReadonlyArray<ChatAccumulatedFileChangeSummary>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   /**
    * The shells this chat created, whatever state they are in - not a subset
@@ -1725,291 +1790,432 @@ export function createChatSessionStoreWithNotificationDependencies(
     const isCurrentStream = (streamGeneration: number): boolean =>
       !disposed && streamGeneration === activeStreamGeneration;
 
-    const callbacks: ChatStreamCallbacks = {
-      onSnapshot: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
-          return;
-        }
-        nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
-        flushBlockDeltas();
-        // Pendings dispatched on an earlier connection never see their ack, so
-        // the snapshot drops them (below). Computed here, before the set, so a
-        // swept `editUserMessage` gets its staged worktree intent restored the
-        // same way a rejected one does - the drop otherwise leaves the slot
-        // cleared and the next resend runs against the prior binding. Reads
-        // `get()` (no pendingActions mutation happens before the set), so it
-        // sees the same state the updater will.
-        const sweep = sweepStalePendingActions(
-          get().pendingActions,
+    /**
+     * The authoritative-snapshot fold, shared by BOTH lines.
+     *
+     * Named and hoisted rather than left inline because the windowed line
+     * needs exactly this - the pending-send reconcile, the queue merge, the
+     * worktree-intent hand-back, the interview-draft reap - over a transcript
+     * that arrives differently. Re-implementing it for the windowed peer
+     * would be a second copy of the most intricate fold in this store, and
+     * the two would drift on the first bug fixed in one of them.
+     *
+     * It takes a LEGACY-shaped snapshot; the windowed caller adapts. See
+     * `applyWindowedSnapshotFrame` for what that adaptation is and is not.
+     */
+    const applyAuthoritativeSnapshot = (frame: ChatSnapshotFrame): void => {
+      if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        return;
+      }
+      nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
+      flushBlockDeltas();
+      // Pendings dispatched on an earlier connection never see their ack, so
+      // the snapshot drops them (below). Computed here, before the set, so a
+      // swept `editUserMessage` gets its staged worktree intent restored the
+      // same way a rejected one does - the drop otherwise leaves the slot
+      // cleared and the next resend runs against the prior binding. Reads
+      // `get()` (no pendingActions mutation happens before the set), so it
+      // sees the same state the updater will.
+      const sweep = sweepStalePendingActions(
+        get().pendingActions,
+        connectionEpoch,
+      );
+      // Every swept id came from this same `pendingActions` snapshot, so the
+      // lookup is always present. DEFERRED past the reconcile rather than
+      // applied here: the slot holds one pick, and a swept edit is not the
+      // only claimant. See `restoreOneWorktreeIntent` below for who wins.
+      const sweptPendings = get().pendingActions;
+      const sweptWorktreeIntents = [...sweep.sweptActionIds].map(
+        (sweptId) => sweptPendings[sweptId],
+      );
+      let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
+        null;
+      set((state) => {
+        const previousTurnId = snapshotPreviousTurnId(
+          state.activeTurn,
+          state.liveAssistantMessage,
+          frame.snapshot.activeTurn,
+        );
+        const messages = messagesForTurnStateChange(
+          frame.snapshot.chat.messages,
+          {
+            previousTurnId,
+            nextTurnId: frame.snapshot.activeTurn?.turnId ?? null,
+          },
+        );
+        // A changed persisted tuple is an authoritative host-side update
+        // (for example `agent.configure`) and must replace the live picker.
+        // An unchanged tuple is ordinary stream traffic, so keep any local
+        // composer edits that have not been committed by a send yet.
+        const authoritativeSettingsChanged =
+          state.chat === null ||
+          !nullableChatRunSettingsEqual(
+            state.chat.settings,
+            frame.snapshot.chat.settings,
+          );
+        // What a RESEND would run under after this snapshot lands. The
+        // drift statement compares against this, not the persisted tuple:
+        // a local pick the user just made is what the composer will send.
+        const nextComposerSettings = authoritativeSettingsChanged
+          ? frame.snapshot.chat.settings
+          : state.currentComposerSettings;
+        const now = Date.now();
+        // This snapshot is the authority for everything a lost connection
+        // left in limbo: pendings dispatched on an earlier connection will
+        // never see their ack, so drop them (via `sweep`, computed above so
+        // swept edits restore their staged worktree intent). Controls
+        // re-enable; the user can re-issue against the state the snapshot
+        // shows. Message sends stay - `reconcileSnapshotChange` settles those
+        // by messageId with composer restoration, and only for sends from
+        // an earlier epoch: this same connection's in-flight sends keep
+        // waiting for their ack (a steady-state refresh snapshot is not
+        // evidence they were lost).
+        const pending = reconcileSnapshotChange({
+          pendingActions: sweep.pendingActions,
+          pendingUserMessages: state.pendingUserMessages,
+          messages,
+          queue: frame.snapshot.queue,
+          failedSendRestoration: state.failedSendRestoration,
           connectionEpoch,
-        );
-        // Every swept id came from this same `pendingActions` snapshot, so the
-        // lookup is always present. DEFERRED past the reconcile rather than
-        // applied here: the slot holds one pick, and a swept edit is not the
-        // only claimant. See `restoreOneWorktreeIntent` below for who wins.
-        const sweptPendings = get().pendingActions;
-        const sweptWorktreeIntents = [...sweep.sweptActionIds].map(
-          (sweptId) => sweptPendings[sweptId],
-        );
-        let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
-          null;
-        set((state) => {
-          const previousTurnId = snapshotPreviousTurnId(
-            state.activeTurn,
-            state.liveAssistantMessage,
-            frame.snapshot.activeTurn,
-          );
-          const messages = messagesForTurnStateChange(
-            frame.snapshot.chat.messages,
-            {
-              previousTurnId,
-              nextTurnId: frame.snapshot.activeTurn?.turnId ?? null,
-            },
-          );
-          // A changed persisted tuple is an authoritative host-side update
-          // (for example `agent.configure`) and must replace the live picker.
-          // An unchanged tuple is ordinary stream traffic, so keep any local
-          // composer edits that have not been committed by a send yet.
-          const authoritativeSettingsChanged =
-            state.chat === null ||
-            !nullableChatRunSettingsEqual(
-              state.chat.settings,
-              frame.snapshot.chat.settings,
-            );
-          // What a RESEND would run under after this snapshot lands. The
-          // drift statement compares against this, not the persisted tuple:
-          // a local pick the user just made is what the composer will send.
-          const nextComposerSettings = authoritativeSettingsChanged
-            ? frame.snapshot.chat.settings
-            : state.currentComposerSettings;
-          const now = Date.now();
-          // This snapshot is the authority for everything a lost connection
-          // left in limbo: pendings dispatched on an earlier connection will
-          // never see their ack, so drop them (via `sweep`, computed above so
-          // swept edits restore their staged worktree intent). Controls
-          // re-enable; the user can re-issue against the state the snapshot
-          // shows. Message sends stay - `reconcileSnapshotChange` settles those
-          // by messageId with composer restoration, and only for sends from
-          // an earlier epoch: this same connection's in-flight sends keep
-          // waiting for their ack (a steady-state refresh snapshot is not
-          // evidence they were lost).
-          const pending = reconcileSnapshotChange({
-            pendingActions: sweep.pendingActions,
-            pendingUserMessages: state.pendingUserMessages,
+          currentSettings: nextComposerSettings,
+          currentAccountContext:
+            useAccountContextStore.getState().accountContext,
+          worktreePartition,
+          acceptedActions: state.acceptedActions,
+          nowMs: now,
+        });
+        // `reconcileSnapshotChange` only settles sends still awaiting their
+        // ack. A send whose accepted ack landed before the connection died
+        // has already left `pendingActions`, so its optimistic user message
+        // needs its own settled pass: when this authoritative snapshot
+        // reports no turn in progress, an entry with no remaining path to
+        // materialization will never be cleared by a later frame - drop it
+        // (restoring its content if the transcript never recorded it).
+        const settled = reconcileTurnSettled(
+          turnSettledFromStatus(
+            frame.snapshot.turnInProgress,
+            frame.snapshot.runStatus,
+          ),
+          {
+            pendingActions: pending.pendingActions,
+            pendingUserMessages: pending.pendingUserMessages,
             messages,
             queue: frame.snapshot.queue,
-            failedSendRestoration: state.failedSendRestoration,
-            connectionEpoch,
+            failedSendRestoration: pending.failedSendRestoration,
             currentSettings: nextComposerSettings,
             currentAccountContext:
               useAccountContextStore.getState().accountContext,
             worktreePartition,
             acceptedActions: state.acceptedActions,
-            nowMs: now,
-          });
-          // `reconcileSnapshotChange` only settles sends still awaiting their
-          // ack. A send whose accepted ack landed before the connection died
-          // has already left `pendingActions`, so its optimistic user message
-          // needs its own settled pass: when this authoritative snapshot
-          // reports no turn in progress, an entry with no remaining path to
-          // materialization will never be cleared by a later frame - drop it
-          // (restoring its content if the transcript never recorded it).
-          const settled = reconcileTurnSettled(
-            turnSettledFromStatus(
-              frame.snapshot.turnInProgress,
-              frame.snapshot.runStatus,
-            ),
-            {
-              pendingActions: pending.pendingActions,
-              pendingUserMessages: pending.pendingUserMessages,
-              messages,
-              queue: frame.snapshot.queue,
-              failedSendRestoration: pending.failedSendRestoration,
-              currentSettings: nextComposerSettings,
-              currentAccountContext:
-                useAccountContextStore.getState().accountContext,
-              worktreePartition,
-              acceptedActions: state.acceptedActions,
-            },
-          );
-          restoredWorktreeIntentForSnapshot =
-            settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
-          return {
-            // Destructured rather than spread-and-overwritten: the point is
-            // that neither array is RETAINED, and `{...chat, messages: []}`
-            // would still hold `events` (and any transcript-bearing field a
-            // later minor adds). See `ChatSessionRecord`.
-            chat: chatRecordWithoutTranscript(frame.snapshot.chat),
-            currentComposerSettings: nextComposerSettings,
-            access: frame.snapshot.access,
-            messages,
-            events: frame.snapshot.chat.events,
-            queue: mergeQueueWithOptimisticQueuedItems(
-              frame.snapshot.queue,
-              queueWithoutSettledAcceptedSends(
-                state.queue,
-                pending.settledAcceptedActionIds,
-              ),
-              new Set(Object.keys(pending.pendingActions)),
-            ),
-            runStatus: frame.snapshot.runStatus,
-            activeTurn: frame.snapshot.activeTurn,
-            turnInProgress: frame.snapshot.turnInProgress,
-            pendingApprovals: frame.snapshot.pendingApprovals,
-            pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
-            pendingInterviews: frame.snapshot.pendingInterviews,
-            accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
-            backgroundItems: frame.snapshot.backgroundItems,
-            managedCommands: frame.snapshot.managedCommands,
-            heldUpdates: frame.snapshot.heldUpdates,
-            // Drop per-item stops whose task has left the running-only list
-            // (its terminal landed) and clear the stop-all flag once nothing
-            // is left running, so settled rows never stay disabled. A stop
-            // whose FRAME died with a dropped connection never terminates its
-            // task, so also drop entries whose generic pending was just swept
-            // (same clientActionId) - an ack-ACCEPTED stop has no generic
-            // pending left and correctly stays disabled until its terminal.
-            pendingBackgroundStops: reconcileBackgroundStops(
-              withoutBackgroundStopsForActions(
-                state.pendingBackgroundStops,
-                sweep.sweptActionIds,
-              ),
-              frame.snapshot.backgroundItems,
-            ),
-            pendingBackgroundStopAll:
-              state.pendingBackgroundStopAll !== null &&
-              sweep.sweptActionIds.has(
-                state.pendingBackgroundStopAll.clientActionId,
-              )
-                ? null
-                : reconcileBackgroundStopAll(
-                    state.pendingBackgroundStopAll,
-                    frame.snapshot.backgroundItems,
-                  ),
-            // A session stop whose in-flight frame died with the connection
-            // (either phase) was just swept - drop it so Stop all re-enables.
-            // One whose frame was already accepted survives; the dispatch
-            // call after this set advances or clears it against the
-            // snapshot's turn and item state.
-            pendingBackgroundSessionStop:
-              state.pendingBackgroundSessionStop !== null &&
-              sweep.sweptActionIds.has(
-                state.pendingBackgroundSessionStop.clientActionId,
-              )
-                ? null
-                : state.pendingBackgroundSessionStop,
-            pendingActions: pending.pendingActions,
-            acceptedActions: pruneAcceptedActions(
-              {
-                ...withoutSettledAcceptedActions(
-                  state.acceptedActions,
-                  // BOTH passes retire records: the snapshot pass for sends it
-                  // settled itself, the settled pass for rows it recovered.
-                  new Set([
-                    ...pending.settledAcceptedActionIds,
-                    ...settled.settledAcceptedActionIds,
-                  ]),
-                ),
-                // Confirmation stamps first, then this pass's own additions -
-                // an id cannot be in both, but ordering the merge makes that
-                // independent of whether it ever could be.
-                ...pending.confirmedAcceptedActions,
-                ...pending.acceptedActions,
-              },
-              now,
-            ),
-            pendingUserMessages: settled.pendingUserMessages,
-            failedSendRestoration: settled.failedSendRestoration,
-            // Statements both reconcile passes owe the user: a send whose
-            // restoration lost the single-slot race on reconnect, and a
-            // stranded send the settled pass dropped without the slot.
-            // Appended through the same ring/cap as the rejection path's
-            // notice.
-            errorNotices: appendErrorNoticeDelta(
-              state.errorNotices,
-              [
-                ...pending.appendedErrorNotices,
-                ...settled.appendedErrorNotices,
-              ],
-              state.deliveredNoticeActionIds,
-            ),
-            restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
-            snapshotLoaded: true,
-            // Stamped with the CONNECTION, not a per-snapshot counter: a
-            // reconnect's backfill re-baselines transcript consumers, while a
-            // steady-state refresh on this same connection does not.
-            transcriptBaselineEpoch: connectionEpoch,
-            worktreeBinding: frame.snapshot.worktreeBinding,
-            missingWorktreePaths: frame.snapshot.missingWorktreePaths,
-            liveAssistantMessage: liveAssistantForTurnStateFrame({
-              current: state.liveAssistantMessage,
-              previousTurnId,
-              activeTurn: frame.snapshot.activeTurn,
-              messages,
-            }),
-            // Snapshot is authoritative - the assistant message's
-            // persisted `usage` field now carries any final state. Clear
-            // the transient liveTurnUsage so a stale value from a
-            // disconnected/abandoned turn can't survive a reconnect or
-            // route swap. The chip falls back to messages[last].usage
-            // (which the new snapshot just refreshed) until the next
-            // live `usage.updated` arrives.
-            liveTurnUsage: null,
-          };
-        });
-        // A prompt handed back to the composer takes its staged worktree with
-        // it, or the resubmit silently runs against the chat's previous
-        // binding.
-        //
-        // PRECEDENCE, because the slot holds one pick and a reconnect can kill
-        // several actions that each want theirs back. The prompt in the
-        // composer wins: a prompt and the worktree it was written for have to
-        // travel together, and staging an unrelated action's binding beside it
-        // is worse than staging none - the resend looks right and runs
-        // somewhere else. A swept edit only gets its binding back when no
-        // prompt is being handed back, which is the case the sweep's own
-        // reasoning was written for (an edit dropped before its ack never runs
-        // the rejection path, so nothing else would restore it).
-        const handedBackForSnapshot = restoreOneWorktreeIntent(
-          restoredWorktreeIntentForSnapshot,
-          sweptWorktreeIntents,
-          {
-            surface: "owner",
-            hostId: options.hostId,
-            epicId: options.epicId,
-            ownerKind: "chat",
-            ownerId: options.chatId,
           },
-          // Read AFTER the reconcile `set`, so this is who holds the slot now -
-          // this pass's own restored prompt, or an earlier pass's still waiting
-          // to be consumed.
-          get().failedSendRestoration,
         );
-        recordStagedRevisionFor(
-          restoredWorktreeIntentForSnapshot,
-          handedBackForSnapshot,
-        );
-        // A deferred session stop that survived the sweep (its turn stop was
-        // accepted before the connection dropped) may never see another
-        // turn-state frame - the turn could have settled while offline - so
-        // advance it against the snapshot state directly.
-        maybeDispatchPendingBackgroundSessionStop(set, get);
-        // This snapshot is authoritative for which interviews are still
-        // pending, so any stored draft whose block has left the set is an
-        // orphan (its interview resolved, possibly while this window was
-        // offline). Prune those keys; currently-pending drafts survive. Runs on
-        // every snapshot, so cold start and reconnect both reap orphans.
-        useInterviewDraftStore
-          .getState()
-          .pruneChatDrafts(
-            options.chatId,
-            new Set(
-              frame.snapshot.pendingInterviews.map(
-                (interview) => interview.blockId,
-              ),
+        restoredWorktreeIntentForSnapshot =
+          settled.restoredWorktreeIntent ?? pending.restoredWorktreeIntent;
+        return {
+          // Destructured rather than spread-and-overwritten: the point is
+          // that neither array is RETAINED, and `{...chat, messages: []}`
+          // would still hold `events` (and any transcript-bearing field a
+          // later minor adds). See `ChatSessionRecord`.
+          chat: chatRecordWithoutTranscript(frame.snapshot.chat),
+          currentComposerSettings: nextComposerSettings,
+          access: frame.snapshot.access,
+          messages,
+          events: frame.snapshot.chat.events,
+          queue: mergeQueueWithOptimisticQueuedItems(
+            frame.snapshot.queue,
+            queueWithoutSettledAcceptedSends(
+              state.queue,
+              pending.settledAcceptedActionIds,
             ),
-          );
-      },
+            new Set(Object.keys(pending.pendingActions)),
+          ),
+          runStatus: frame.snapshot.runStatus,
+          activeTurn: frame.snapshot.activeTurn,
+          turnInProgress: frame.snapshot.turnInProgress,
+          pendingApprovals: frame.snapshot.pendingApprovals,
+          pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
+          pendingInterviews: frame.snapshot.pendingInterviews,
+          accumulatedFileChanges: frame.snapshot.accumulatedFileChanges,
+          backgroundItems: frame.snapshot.backgroundItems,
+          managedCommands: frame.snapshot.managedCommands,
+          heldUpdates: frame.snapshot.heldUpdates,
+          // Drop per-item stops whose task has left the running-only list
+          // (its terminal landed) and clear the stop-all flag once nothing
+          // is left running, so settled rows never stay disabled. A stop
+          // whose FRAME died with a dropped connection never terminates its
+          // task, so also drop entries whose generic pending was just swept
+          // (same clientActionId) - an ack-ACCEPTED stop has no generic
+          // pending left and correctly stays disabled until its terminal.
+          pendingBackgroundStops: reconcileBackgroundStops(
+            withoutBackgroundStopsForActions(
+              state.pendingBackgroundStops,
+              sweep.sweptActionIds,
+            ),
+            frame.snapshot.backgroundItems,
+          ),
+          pendingBackgroundStopAll:
+            state.pendingBackgroundStopAll !== null &&
+            sweep.sweptActionIds.has(
+              state.pendingBackgroundStopAll.clientActionId,
+            )
+              ? null
+              : reconcileBackgroundStopAll(
+                  state.pendingBackgroundStopAll,
+                  frame.snapshot.backgroundItems,
+                ),
+          // A session stop whose in-flight frame died with the connection
+          // (either phase) was just swept - drop it so Stop all re-enables.
+          // One whose frame was already accepted survives; the dispatch
+          // call after this set advances or clears it against the
+          // snapshot's turn and item state.
+          pendingBackgroundSessionStop:
+            state.pendingBackgroundSessionStop !== null &&
+            sweep.sweptActionIds.has(
+              state.pendingBackgroundSessionStop.clientActionId,
+            )
+              ? null
+              : state.pendingBackgroundSessionStop,
+          pendingActions: pending.pendingActions,
+          acceptedActions: pruneAcceptedActions(
+            {
+              ...withoutSettledAcceptedActions(
+                state.acceptedActions,
+                // BOTH passes retire records: the snapshot pass for sends it
+                // settled itself, the settled pass for rows it recovered.
+                new Set([
+                  ...pending.settledAcceptedActionIds,
+                  ...settled.settledAcceptedActionIds,
+                ]),
+              ),
+              // Confirmation stamps first, then this pass's own additions -
+              // an id cannot be in both, but ordering the merge makes that
+              // independent of whether it ever could be.
+              ...pending.confirmedAcceptedActions,
+              ...pending.acceptedActions,
+            },
+            now,
+          ),
+          pendingUserMessages: settled.pendingUserMessages,
+          failedSendRestoration: settled.failedSendRestoration,
+          // Statements both reconcile passes owe the user: a send whose
+          // restoration lost the single-slot race on reconnect, and a
+          // stranded send the settled pass dropped without the slot.
+          // Appended through the same ring/cap as the rejection path's
+          // notice.
+          errorNotices: appendErrorNoticeDelta(
+            state.errorNotices,
+            [...pending.appendedErrorNotices, ...settled.appendedErrorNotices],
+            state.deliveredNoticeActionIds,
+          ),
+          restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
+          snapshotLoaded: true,
+          // Stamped with the CONNECTION, not a per-snapshot counter: a
+          // reconnect's backfill re-baselines transcript consumers, while a
+          // steady-state refresh on this same connection does not.
+          transcriptBaselineEpoch: connectionEpoch,
+          worktreeBinding: frame.snapshot.worktreeBinding,
+          missingWorktreePaths: frame.snapshot.missingWorktreePaths,
+          liveAssistantMessage: liveAssistantForTurnStateFrame({
+            current: state.liveAssistantMessage,
+            previousTurnId,
+            activeTurn: frame.snapshot.activeTurn,
+            messages,
+          }),
+          // Snapshot is authoritative - the assistant message's
+          // persisted `usage` field now carries any final state. Clear
+          // the transient liveTurnUsage so a stale value from a
+          // disconnected/abandoned turn can't survive a reconnect or
+          // route swap. The chip falls back to messages[last].usage
+          // (which the new snapshot just refreshed) until the next
+          // live `usage.updated` arrives.
+          liveTurnUsage: null,
+        };
+      });
+      // A prompt handed back to the composer takes its staged worktree with
+      // it, or the resubmit silently runs against the chat's previous
+      // binding.
+      //
+      // PRECEDENCE, because the slot holds one pick and a reconnect can kill
+      // several actions that each want theirs back. The prompt in the
+      // composer wins: a prompt and the worktree it was written for have to
+      // travel together, and staging an unrelated action's binding beside it
+      // is worse than staging none - the resend looks right and runs
+      // somewhere else. A swept edit only gets its binding back when no
+      // prompt is being handed back, which is the case the sweep's own
+      // reasoning was written for (an edit dropped before its ack never runs
+      // the rejection path, so nothing else would restore it).
+      const handedBackForSnapshot = restoreOneWorktreeIntent(
+        restoredWorktreeIntentForSnapshot,
+        sweptWorktreeIntents,
+        {
+          surface: "owner",
+          hostId: options.hostId,
+          epicId: options.epicId,
+          ownerKind: "chat",
+          ownerId: options.chatId,
+        },
+        // Read AFTER the reconcile `set`, so this is who holds the slot now -
+        // this pass's own restored prompt, or an earlier pass's still waiting
+        // to be consumed.
+        get().failedSendRestoration,
+      );
+      recordStagedRevisionFor(
+        restoredWorktreeIntentForSnapshot,
+        handedBackForSnapshot,
+      );
+      // A deferred session stop that survived the sweep (its turn stop was
+      // accepted before the connection dropped) may never see another
+      // turn-state frame - the turn could have settled while offline - so
+      // advance it against the snapshot state directly.
+      maybeDispatchPendingBackgroundSessionStop(set, get);
+      // This snapshot is authoritative for which interviews are still
+      // pending, so any stored draft whose block has left the set is an
+      // orphan (its interview resolved, possibly while this window was
+      // offline). Prune those keys; currently-pending drafts survive. Runs on
+      // every snapshot, so cold start and reconnect both reap orphans.
+      useInterviewDraftStore
+        .getState()
+        .pruneChatDrafts(
+          options.chatId,
+          new Set(
+            frame.snapshot.pendingInterviews.map(
+              (interview) => interview.blockId,
+            ),
+          ),
+        );
+    };
+
+    // ─── The windowed line (`chat.subscribe@1.7`) ───────────────────────────
+
+    /**
+     * A windowed snapshot whose TAIL had no bodies, held until it does.
+     *
+     * The wait-for-tail rule lives here. The fold above answers "did the
+     * transcript record this message?" by looking in the records it was
+     * handed, and on this line absence means "not hydrated" rather than "never
+     * landed" - so running it against an empty window restores an already-sent
+     * message into the composer and the user sends it twice.
+     *
+     * A pending send is recent by construction, so if it landed it is at the
+     * tail. That makes the tail's presence exactly the condition under which
+     * the fold's question is answerable, and holding the WHOLE snapshot until
+     * then is the simple correct move: the alternative - applying aux state now
+     * and reconciling later - splits one authoritative frame into two
+     * half-applications for a case that only arises when a chat's last row is
+     * over the host's 256 KB tail budget. Rare enough to pay a round trip for;
+     * not rare enough to get wrong.
+     */
+    let deferredWindowedSnapshot: ChatWindowedSnapshotFrame | null = null;
+
+    /** Ask for whatever the window says is missing, if anything. */
+    const requestPlannedHydration = (): void => {
+      const client = streamClient;
+      if (client === null) return;
+      const window = get().transcriptWindow;
+      if (window.invalidated) {
+        // A void index cannot be repaired by a range: every ordinal it would
+        // name belongs to a coordinate space this client has left.
+        client.requestResnapshot();
+        return;
+      }
+      // Viewport-driven hydration arrives with placeholder rows; until then the
+      // only standing obligation is the tail.
+      const next = planTranscriptHydration(window, null);
+      if (next === null) return;
+      client.requestTranscriptRange({
+        requestId: uuidv4(),
+        epoch: window.epoch,
+        fromOrdinal: next.fromOrdinal,
+        toOrdinal: next.toOrdinal,
+        // The host clamps this to its own ceiling regardless, so asking for the
+        // full frame budget is asking for "as much as one frame holds" rather
+        // than a number this side has to keep in step.
+        maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
+      });
+    };
+
+    /**
+     * Re-point `messages`/`events` at what the window now holds.
+     *
+     * The steady-state path for every windowed frame that changes hydration
+     * without being authoritative about anything else.
+     */
+    const publishWindowedTranscript = (window: TranscriptWindow): void => {
+      const records = hydratedRecords(window);
+      set({
+        transcriptWindow: window,
+        messages: records.messages,
+        events: records.events,
+      });
+    };
+
+    /**
+     * The windowed snapshot as the shared fold expects it.
+     *
+     * The chat record regains its two transcript arrays - from the WINDOW, so
+     * they hold what is hydrated rather than what exists - and every other
+     * field maps across unchanged, because the two snapshot shapes differ in
+     * exactly the transcript and the accumulated changes.
+     *
+     * `accumulatedFileChanges` is deliberately empty. The windowed line carries
+     * SUMMARIES (a digest and counts, no before/after contents), which is a
+     * different type from what this field holds and what the diff surfaces
+     * read; they land in `accumulatedFileChangeSummaries` instead. Binding
+     * those surfaces to fetch contents on demand is its own ticket, and until
+     * it lands the panel is not wired on this line.
+     */
+    const adaptWindowedSnapshot = (
+      frame: ChatWindowedSnapshotFrame,
+      window: TranscriptWindow,
+    ): ChatSnapshotFrame => {
+      const records = hydratedRecords(window);
+      return {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        epicId: frame.epicId,
+        chatId: frame.chatId,
+        snapshot: {
+          chat: {
+            ...frame.snapshot.chat,
+            messages: [...records.messages],
+            events: [...records.events],
+          },
+          access: frame.snapshot.access,
+          queue: frame.snapshot.queue,
+          runStatus: frame.snapshot.runStatus,
+          activeTurn: frame.snapshot.activeTurn,
+          pendingApprovals: frame.snapshot.pendingApprovals,
+          pendingInterviews: frame.snapshot.pendingInterviews,
+          worktreeBinding: frame.snapshot.worktreeBinding,
+          missingWorktreePaths: frame.snapshot.missingWorktreePaths,
+          pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
+          accumulatedFileChanges: [],
+          backgroundItems: frame.snapshot.backgroundItems,
+          managedCommands: frame.snapshot.managedCommands,
+          heldUpdates: frame.snapshot.heldUpdates,
+          turnInProgress: frame.snapshot.turnInProgress,
+        },
+      };
+    };
+
+    /**
+     * Runs the shared fold if the tail is in, or holds the frame until it is.
+     * The one place the wait-for-tail rule is enforced.
+     */
+    const applyOrDeferWindowedSnapshot = (
+      frame: ChatWindowedSnapshotFrame,
+      window: TranscriptWindow,
+    ): void => {
+      if (!isTailHydrated(window)) {
+        deferredWindowedSnapshot = frame;
+        return;
+      }
+      deferredWindowedSnapshot = null;
+      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window));
+    };
+
+    const callbacks: ChatStreamCallbacks = {
+      onSnapshot: applyAuthoritativeSnapshot,
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -2036,24 +2242,95 @@ export function createChatSessionStoreWithNotificationDependencies(
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
       },
-      // ─── The windowed line, not bound yet ────────────────────────────────
+      // ─── The windowed line (`chat.subscribe@1.7`) ────────────────────────
       //
-      // `chatSubscribeV17` is not registered, so this store can never
-      // negotiate the windowed line and none of these can fire: negotiation
+      // Unreachable until `chatSubscribeV17` is registered - negotiation
       // declares this client's own canonical minor whenever the host's is
-      // newer, so a `1.7` host still negotiates `1.6` here.
-      //
-      // They are stubs rather than absent because `ChatStreamCallbacks`
-      // requires them - which is the point. Binding `TranscriptWindow` into
-      // `ChatSessionState` is its own ticket, and these five bodies are the
-      // list of what that ticket has to fill in. Registering `1.7` while they
-      // are still empty would render a chat that never fills in, so the two
-      // must land together.
-      onWindowedSnapshot: () => undefined,
-      onSkeletonChunk: () => undefined,
-      onIndexChanged: () => undefined,
-      onRange: () => undefined,
-      onAccumulatedChanges: () => undefined,
+      // newer, so a `1.7` host still settles on `1.6` here.
+      onWindowedSnapshot: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Before the fold, exactly as the legacy path flushes: a queued delta
+        // applied after an authoritative snapshot would re-add a block the
+        // snapshot already carries.
+        flushBlockDeltas();
+        const window = applyWindowedSnapshot(get().transcriptWindow, {
+          epoch: frame.snapshot.transcriptEpoch,
+          rowCount: frame.snapshot.rowCount,
+          tail: frame.snapshot.tail,
+        });
+        set({
+          transcriptWindow: window,
+          transcriptDerived: frame.snapshot.derived,
+          accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
+        });
+        applyOrDeferWindowedSnapshot(frame, window);
+        requestPlannedHydration();
+      },
+      onSkeletonChunk: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Can DROP bodies, not just add entries: this is where a tail seated
+        // with no ids to check against finally meets the rows it claimed.
+        const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
+        publishWindowedTranscript(window);
+        requestPlannedHydration();
+      },
+      onIndexChanged: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        const window = applyIndexChange(get().transcriptWindow, {
+          epoch: frame.epoch,
+          rowCount: frame.rowCount,
+          changes: frame.changes,
+        });
+        publishWindowedTranscript(window);
+        // Covers the `reindexed` case too: `requestPlannedHydration` sends a
+        // `resnapshot` rather than a range when the window is invalidated.
+        requestPlannedHydration();
+      },
+      onRange: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        const window = evictTranscriptWindowToBudget(
+          applyRangeResponse(get().transcriptWindow, frame.range),
+          TRANSCRIPT_WINDOW_MAX_BYTES,
+        );
+        const deferred = deferredWindowedSnapshot;
+        if (deferred === null) {
+          publishWindowedTranscript(window);
+        } else {
+          // The tail this response was asked for may have arrived. The fold
+          // publishes `messages`/`events` itself, so it replaces - rather than
+          // follows - the steady-state publish above.
+          set({ transcriptWindow: window });
+          applyOrDeferWindowedSnapshot(deferred, window);
+        }
+        requestPlannedHydration();
+      },
+      onAccumulatedChanges: (frame) => {
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // Chunks are contiguous and in order from `fromIndex`, so a chunk
+        // starting at 0 begins a fresh set and any other extends the one being
+        // assembled. Splicing at `fromIndex` rather than appending makes a
+        // re-sent chunk idempotent instead of duplicating its entries.
+        set((state) => {
+          const summaries = [
+            ...state.accumulatedFileChangeSummaries.slice(
+              0,
+              frame.chunk.fromIndex,
+            ),
+            ...frame.chunk.summaries,
+          ];
+          return { accumulatedFileChangeSummaries: summaries };
+        });
+      },
       onActionAck: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -2946,6 +3223,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingFileEditApprovals: [],
       pendingInterviews: [],
       accumulatedFileChanges: [],
+      transcriptWindow: emptyTranscriptWindow(),
+      transcriptDerived: null,
+      accumulatedFileChangeCount: 0,
+      accumulatedFileChangeSummaries: [],
       backgroundItems: undefined,
       managedCommands: [],
       heldUpdates: [],

@@ -363,6 +363,8 @@ function createHarness(): Harness {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -404,6 +406,15 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        // Delegated rather than stubbed: this harness drives a REAL
+        // `ChatStreamClient` over a mock socket, so the reads have to reach it
+        // for a test to observe what was put on the wire.
+        requestTranscriptRange: (request) => {
+          client.requestTranscriptRange(request);
+        },
+        requestResnapshot: () => {
+          client.requestResnapshot();
+        },
         close: () => {
           client.close();
         },
@@ -996,6 +1007,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => {
             closeCalls += 1;
           },
@@ -1047,6 +1060,8 @@ describe("createChatSessionStore", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },
@@ -10175,6 +10190,8 @@ function createCoalesceHarness(): CoalesceHarness {
       return {
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
     },
@@ -10512,6 +10529,8 @@ describe("surface visibility rollup", () => {
       streamClientFactory: () => ({
         sendAction: () => undefined,
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       }),
     });
@@ -10970,6 +10989,8 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
         return {
           sendAction: () => undefined,
           sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
           close: () => undefined,
         };
       },

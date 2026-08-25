@@ -11,6 +11,7 @@ import {
 import { contentBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
+import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -312,6 +313,14 @@ export function publishedChatSessionState(
     pendingFileEditApprovals: [],
     pendingInterviews: [],
     accumulatedFileChanges: [],
+    // A published copy is a FULL-materialized transcript, so it is on the
+    // legacy side of the window seam by construction: `messages`/`events`
+    // above hold everything, and there is no host to hydrate a range from.
+    // The windowed index for a `1.2` head is its own path (`publish-path §4`).
+    transcriptWindow: emptyTranscriptWindow(),
+    transcriptDerived: null,
+    accumulatedFileChangeCount: 0,
+    accumulatedFileChangeSummaries: [],
     backgroundItems: undefined,
     pendingBackgroundStops: {},
     pendingBackgroundStopAll: null,

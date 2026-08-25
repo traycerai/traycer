@@ -554,6 +554,50 @@ export function applyRangeResponse(
 }
 
 /**
+ * Whether the LAST row's body is held.
+ *
+ * The gate the session store gates pending-send reconciliation on, and the
+ * reason that gate exists: those reconcilers ask "did the transcript record
+ * this message?" by looking in the records they were handed, and on a windowed
+ * line "absent" means "not hydrated" rather than "never landed". A pending send
+ * is recent by construction, so if it landed it is at the tail — which makes
+ * the tail's presence exactly the condition under which their question is
+ * answerable. Reconciling without it restores a sent message into the composer
+ * and the user sends it twice.
+ *
+ * An empty transcript is trivially hydrated: there is no tail to wait for, and
+ * blocking on one would strand a brand-new chat forever.
+ */
+export function isTailHydrated(window: TranscriptWindow): boolean {
+  if (window.rowCount === 0) return true;
+  const last = window.rowCount - 1;
+  return window.spans.some(
+    (span) => span.fromOrdinal <= last && spanEnd(span) > last,
+  );
+}
+
+/**
+ * Every hydrated record, in transcript order, WITHOUT touching anything.
+ *
+ * What feeds `ChatSessionState.messages` / `.events`. Deliberately not
+ * {@link selectHydratedRecords}: that one touches the spans it draws from for
+ * eviction order, and this read covers the whole window — so using it here
+ * would touch every span on every frame and flatten the LRU into no order at
+ * all. Touching belongs to a VIEWPORT read, which arrives with placeholder
+ * rows; until then eviction orders by hydration recency, which is wrong for
+ * nothing that currently exists.
+ */
+export function hydratedRecords(window: TranscriptWindow): {
+  readonly messages: readonly Message[];
+  readonly events: readonly ChatEvent[];
+} {
+  return {
+    messages: dedupeMessages(window.spans.map((span) => span.messages)),
+    events: dedupeEvents(window.spans.map((span) => span.events)),
+  };
+}
+
+/**
  * The records the renderer folds, for one ordinal span.
  *
  * Returns whatever is hydrated and says nothing about what is not - the
@@ -621,11 +665,18 @@ export function transcriptHydrationGaps(
  *
  * Two obligations, in priority order:
  *
- * 1. **The tail, unconditionally.** A snapshot whose `rowCount` is positive
- *    and whose tail seated nothing means the host's tail budget could not fit
- *    even one row. The client must ask immediately and render a placeholder
- *    meanwhile - the alternative is a chat that has rows in it and displays as
- *    empty, with nothing on screen to suggest a retry.
+ * 1. **The tail, when the LAST ROW is not hydrated.** A snapshot whose
+ *    `rowCount` is positive and whose tail seated nothing means the host's tail
+ *    budget could not fit even one row. The client must ask immediately and
+ *    render a placeholder meanwhile - the alternative is a chat that has rows
+ *    in it and displays as empty, with nothing on screen to suggest a retry.
+ *
+ *    Gated on {@link isTailHydrated} rather than on any gap inside the tail
+ *    WINDOW, and the difference is not cosmetic: a chat whose inline tail
+ *    covers its last five rows has no missing tail, and treating the fifteen
+ *    rows above it as an outstanding obligation would prefetch scrollback the
+ *    reader may never reach on every single snapshot. Once the tail is in,
+ *    hydration is the viewport's business.
  * 2. **The visible span**, whichever part of it is not hydrated.
  *
  * An invalidated window returns `null`: no range can repair a void index, and
@@ -639,13 +690,16 @@ export function planTranscriptHydration(
 ): OrdinalRange | null {
   if (window.invalidated) return null;
   if (window.rowCount === 0) return null;
-  const tail: OrdinalRange = {
-    fromOrdinal: Math.max(0, window.rowCount - EAGER_TAIL_ROW_COUNT),
-    toOrdinal: window.rowCount,
-  };
-  const tailGaps = transcriptHydrationGaps(window, tail);
-  const lastTailGap = tailGaps.at(-1);
-  if (lastTailGap !== undefined) return lastTailGap;
+  if (!isTailHydrated(window)) {
+    const tailGaps = transcriptHydrationGaps(window, {
+      fromOrdinal: Math.max(0, window.rowCount - EAGER_TAIL_ROW_COUNT),
+      toOrdinal: window.rowCount,
+    });
+    // The LAST gap: it is the one that reaches the end of the transcript, and
+    // therefore the one that ends the wait.
+    const lastTailGap = tailGaps.at(-1);
+    if (lastTailGap !== undefined) return lastTailGap;
+  }
   if (visible === null) return null;
   return transcriptHydrationGaps(window, visible)[0] ?? null;
 }

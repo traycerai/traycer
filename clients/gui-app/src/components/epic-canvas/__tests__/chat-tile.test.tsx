@@ -298,7 +298,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
 import type {
   ChatEvent,
   Message,
@@ -469,14 +469,13 @@ function createChatHarness(): ChatHarness {
           );
         }, 0);
       }
-      const client: Pick<
-        ChatStreamClient,
-        "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-      > = {
+      const client: ChatStreamClientHandle = {
         sendAction: (frame) => {
           sent.push(frame);
         },
         sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
         close: () => undefined,
       };
       return client;

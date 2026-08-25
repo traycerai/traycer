@@ -19,7 +19,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { ChatStreamClientHandle } from "@/stores/chats/chat-session-store";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -237,14 +237,13 @@ function createChatHarness(): {
             nextCallbacks.onConnectionStatus("open", null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
-          const client: Pick<
-            ChatStreamClient,
-            "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
-          > = {
+          const client: ChatStreamClientHandle = {
             sendAction: (frame) => {
               sent.push(frame);
             },
             sameTurnSteeringProtocolSupported: () => true,
+            requestTranscriptRange: () => undefined,
+            requestResnapshot: () => undefined,
             close: () => undefined,
           };
           return client;
