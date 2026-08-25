@@ -97,11 +97,18 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
 
   return (
     <>
+      {/*
+       * Below the pill, like every other control in this row. The status row
+       * is the topmost content row in the window, so a `top` tooltip has
+       * nowhere to go but up into the title bar, where it covers the
+       * minimize/maximize/close buttons. `end` alignment keeps the wider
+       * multi-plane copy from running off the right edge.
+       */}
       <TooltipWrapper
         label={tooltipFor(rawSelected)}
-        side="top"
+        side="bottom"
         sideOffset={undefined}
-        align={undefined}
+        align="end"
       >
         <button
           type="button"
