@@ -136,6 +136,7 @@ interface ChatTimelineRowSharedState {
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
   readonly navigationHighlightStore: NavigationHighlightStore;
+  readonly onRowMount: ((messageId: string) => void) | undefined;
 }
 
 const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
@@ -228,6 +229,8 @@ export interface ChatTimelineProps {
   readonly navigationHighlightedMessageId?: string | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
   readonly onItemSizeChanged?: () => void;
+  /** Fires for every mounted virtual row, including cached equal-size rows. */
+  readonly onRowMount?: (messageId: string) => void;
   /**
    * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
@@ -271,6 +274,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
   onItemSizeChanged,
+  onRowMount,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
@@ -312,6 +316,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       getMessageActions,
       nextStepActions,
       navigationHighlightStore,
+      onRowMount,
     }),
     [
       taskTitle,
@@ -319,6 +324,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       getMessageActions,
       nextStepActions,
       navigationHighlightStore,
+      onRowMount,
     ],
   );
 
@@ -632,10 +638,18 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   if (ctx === null) {
     throw new Error("ChatTimelineRow must render inside ChatTimeline");
   }
+  const { onRowMount } = ctx;
   const isNavigationHighlighted = useIsNavigationHighlighted(
     ctx.navigationHighlightStore,
     message.id,
   );
+
+  // LegendList's size callback is not a mount callback: a recycled row whose
+  // cached height is unchanged does not report a size delta. Find needs this
+  // commit-boundary signal to resume a pending reveal for every real row mount.
+  useLayoutEffect(() => {
+    onRowMount?.(message.id);
+  }, [message.id, onRowMount]);
 
   return (
     <div

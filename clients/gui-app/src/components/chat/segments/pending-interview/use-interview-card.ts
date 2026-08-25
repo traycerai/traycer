@@ -23,7 +23,7 @@ import {
   useInterviewDraftStore,
 } from "@/stores/composer/interview-draft-store";
 import {
-  draftFromStoredAnswer,
+  draftsFromStoredAnswers,
   draftHasContent,
   draftHasState,
   draftToAnswerValues,
@@ -84,7 +84,13 @@ interface UseInterviewCardArgs {
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null;
-  onSkip: ((blockId: string, reason: string) => string | null) | null;
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
 }
 
 // Owns every behavior of the pending interview card - draft state, paging,
@@ -116,7 +122,10 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   // ephemeral animation direction and never persists.
   const [step, setStep] = useState<1 | -1>(1);
   // The just-picked single-select option, highlighted until auto-advance.
-  const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  // Keep its interaction-time index because labels can repeat.
+  const [pendingOptionIndex, setPendingOptionIndex] = useState<number | null>(
+    null,
+  );
 
   const containerRef = useRef<HTMLElement | null>(null);
   const advanceTimerRef = useRef<number | null>(null);
@@ -132,10 +141,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   }, [isBusy]);
 
   const drafts = useMemo(
-    () =>
-      questions.map((question, index) =>
-        draftFromStoredAnswer(storedDraft?.answers[index], question),
-      ),
+    () => draftsFromStoredAnswers(storedDraft?.answers, questions),
     [questions, storedDraft],
   );
 
@@ -171,9 +177,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
         Math.max(latest?.pageIndex ?? 0, 0),
         Math.max(total - 1, 0),
       ),
-      drafts: questions.map((question, index) =>
-        draftFromStoredAnswer(latest?.answers[index], question),
-      ),
+      drafts: draftsFromStoredAnswers(latest?.answers, questions),
     };
   };
 
@@ -189,7 +193,18 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     }
     saveStoredDraft(chatId, blockId, {
       pageIndex: nextPageIndex,
-      answers: nextDrafts.map(draftToStoredAnswer),
+      answers: nextDrafts.map((draft, index) => {
+        const question = questions.at(index);
+        if (question === undefined) {
+          return {
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: draft.otherText,
+            otherSelected: draft.otherSelected,
+          };
+        }
+        return draftToStoredAnswer(draft, question);
+      }),
     });
   };
 
@@ -214,7 +229,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   ) => {
     if (isBusy) return;
     clearAdvanceTimer();
-    setPendingLabel(null);
+    setPendingOptionIndex(null);
     const nextIndex = Math.min(
       Math.max(safeIndex + direction, 0),
       Math.max(total - 1, 0),
@@ -228,18 +243,43 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const goNext = () => navigate(1, drafts);
   const goPrevious = () => navigate(-1, drafts);
 
+  const answersFromDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) =>
+    questions.map((q, i) => {
+      const source = answerDrafts[i] ?? emptyDraft();
+      const optionIndices = [...source.selected].filter(
+        (index) => index >= 0 && index < q.options.length,
+      );
+      const optionLabels = optionIndices.flatMap((index) => {
+        const option = q.options.at(index);
+        return option === undefined ? [] : [option.label];
+      });
+      return {
+        questionId: q.questionId,
+        question: q.question,
+        values: [...draftToAnswerValues(source, q)],
+        notes: null,
+        selection:
+          !source.selectionEvidenceExact ||
+          (optionIndices.length === 0 && !source.otherSelected)
+            ? null
+            : {
+                questionIndex: i,
+                optionIndices,
+                optionLabels,
+                customText: source.otherSelected
+                  ? source.otherText.trim() || null
+                  : null,
+              },
+      };
+    });
+
   const submitDrafts = (answerDrafts: ReadonlyArray<DraftAnswer>) => {
     if (onSubmit === null || isBusy) return;
     clearAdvanceTimer();
     // Submit is unconditional: unanswered questions go through with empty
     // values (draftToAnswerValues returns [] for an empty draft).
-    const answers: InterviewAnswer[] = questions.map((q, i) => ({
-      questionId: q.questionId,
-      question: q.question,
-      values: [...draftToAnswerValues(answerDrafts[i] ?? emptyDraft())],
-      notes: null,
-    }));
-    setPendingLabel(null);
+    const answers: InterviewAnswer[] = answersFromDrafts(answerDrafts);
+    setPendingOptionIndex(null);
     // Fire and keep the draft: a returned client action id only proves the
     // renderer sent the action, not that the host accepted it. The draft is
     // cleared authoritatively when the interviewAnswered lifecycle frame lands
@@ -260,19 +300,35 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
   const skip = () => {
     if (!canSkip) return;
     clearAdvanceTimer();
-    setPendingLabel(null);
+    setPendingOptionIndex(null);
     // Same lifecycle contract as submit: keep the draft until the authoritative
     // interviewErrored frame clears it, so a rejected skip stays retryable.
-    onSkip(blockId, "Skipped by user");
+    // Skip saves only completed/non-empty pages. Unvisited empty pages are not
+    // drafts and must not inflate the durable saved-draft count.
+    const savedDrafts = answersFromDrafts(drafts).filter(
+      (answer) => answer.values.length > 0,
+    );
+    onSkip(
+      blockId,
+      "Skipped by user",
+      // An explicit 1.7 Skip always carries its settlement envelope, even
+      // when no page was completed. `undefined` is reserved for legacy/error
+      // paths that cannot assert a user-chosen Skip outcome.
+      savedDrafts,
+    );
   };
 
-  const toggleOption = (label: string) => {
+  const toggleOption = (optionIndex: number) => {
     if (question === null || isBusy) return;
     if (question.multiSelect) {
       const next = new Set(draft.selected);
-      if (next.has(label)) next.delete(label);
-      else next.add(label);
-      updateDraft({ ...draft, selected: next });
+      if (next.has(optionIndex)) next.delete(optionIndex);
+      else next.add(optionIndex);
+      updateDraft({
+        ...draft,
+        selected: next,
+        selectionEvidenceExact: true,
+      });
       return;
     }
     // Single-select: commit the choice, hold a brief highlight, then advance.
@@ -280,10 +336,11 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     // the timer, so a quick correction is never swallowed.
     updateDraft({
       ...draft,
-      selected: new Set([label]),
+      selected: new Set([optionIndex]),
+      selectionEvidenceExact: true,
       otherSelected: false,
     });
-    setPendingLabel(label);
+    setPendingOptionIndex(optionIndex);
     clearAdvanceTimer();
     advanceTimerRef.current = window.setTimeout(() => {
       advanceTimerRef.current = null;
@@ -292,7 +349,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       // snapshot stale. Submitting or advancing now would mutate state (or
       // double-dispatch) while busy.
       if (latestIsBusyRef.current) {
-        setPendingLabel(null);
+        setPendingOptionIndex(null);
         return;
       }
       // Re-derive from the LATEST canonical row at fire time. A duplicate view
@@ -304,7 +361,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       // e.g. stale-submitting the last question the other view just left, or
       // rewinding a view that advanced further ahead.
       if (latest.pageIndex !== safeIndex) {
-        setPendingLabel(null);
+        setPendingOptionIndex(null);
         return;
       }
       const currentAnswer = latest.drafts[safeIndex] ?? emptyDraft();
@@ -314,9 +371,9 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
       const stillOurChoice =
         !currentAnswer.otherSelected &&
         currentAnswer.selected.size === 1 &&
-        currentAnswer.selected.has(label);
+        currentAnswer.selected.has(optionIndex);
       if (!stillOurChoice) {
-        setPendingLabel(null);
+        setPendingOptionIndex(null);
         return;
       }
       // Submit / page-advance against the LATEST canonical answers, never the
@@ -330,26 +387,36 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     if (question === null || isBusy) return;
     // Diverting to a custom answer cancels any pending single-select advance.
     clearAdvanceTimer();
-    setPendingLabel(null);
+    setPendingOptionIndex(null);
     if (question.multiSelect) {
-      updateDraft({ ...draft, otherSelected: !draft.otherSelected });
+      updateDraft({
+        ...draft,
+        selectionEvidenceExact: true,
+        otherSelected: !draft.otherSelected,
+      });
       return;
     }
     updateDraft({
       ...draft,
-      selected: new Set(),
+      selected: new Set<number>(),
+      selectionEvidenceExact: true,
       otherSelected: !draft.otherSelected,
     });
   };
 
   const setOtherText = (text: string) => {
     if (isBusy) return;
-    updateDraft({ ...draft, otherText: text });
+    updateDraft({ ...draft, selectionEvidenceExact: true, otherText: text });
   };
 
   const setFreeText = (text: string) => {
     if (isBusy) return;
-    updateDraft({ ...draft, otherText: text, otherSelected: true });
+    updateDraft({
+      ...draft,
+      selectionEvidenceExact: true,
+      otherText: text,
+      otherSelected: true,
+    });
   };
 
   // Pick the option/Other bound to a bare digit; returns false when the key is
@@ -361,7 +428,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     const optionCount = question.options.length;
     if (optionCount === 0) return false;
     if (digit >= 1 && digit <= optionCount) {
-      toggleOption(question.options[digit - 1].label);
+      toggleOption(digit - 1);
       return true;
     }
     if (digit === optionCount + 1) {
@@ -487,7 +554,7 @@ export function useInterviewCard(args: UseInterviewCardArgs) {
     question,
     draft,
     direction: step,
-    pendingLabel,
+    pendingOptionIndex,
     isLast,
     answeredCount,
     canAdvance,

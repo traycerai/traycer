@@ -138,6 +138,7 @@ vi.mock(
 );
 
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 /**
  * The account axis the wire no longer carries: `hostListItemToDirectoryEntry`
@@ -258,6 +259,88 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
+  it("routes an unsettled create to terminal.kill rather than discarding its tombstone", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    // The create has not landed, so the host projects nothing for this id yet.
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "creating-tab",
+      sessionId: "session-creating",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "creating-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-creating",
+      });
+    });
+    // `terminal.plain.close` would REJECT for a terminal this host has not
+    // created yet, and the tombstone names the id the CLIENT gave `create` - so
+    // the terminal that lands next is precisely the one owed this kill.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+  });
+
+  it("kills a legacy session on a host that came back upgraded", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    // Closed while the host was legacy; it returns negotiating the plain
+    // protocol, which is the ordinary shape of a host that was offline BECAUSE
+    // it was upgrading.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "legacy-tab",
+      sessionId: "session-legacy",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "legacy-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-legacy",
+      });
+    });
+    // A session that was never a plain terminal has no projection to vanish
+    // from, so the capable arm must not read its absence as death.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: "host-b",
+        sessionId: "session-legacy",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
+  });
+
   it("does not drain capable-host tombstones while authority is stale", async () => {
     mocks.entries = [
       {
@@ -286,8 +369,511 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-stale" },
+      {
+        hostId: "host-b",
+        sessionId: "session-stale",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
     ]);
+  });
+
+  it("keeps retrying a kill the host resolved without killing anything", async () => {
+    // `terminal.kill` reports an already-gone session as DATA (`killed: false`),
+    // and the kill mutation deliberately KEEPS the tombstone for the one shape
+    // where that answer means "not created yet" rather than "gone" - a session
+    // whose `terminal.plain.create` had not settled, whose terminal lands
+    // afterwards under this same client-supplied id.
+    //
+    // The bridge used to read ANY resolution as success and clear the retry, so
+    // nothing was left to send the kill: the reject arm never runs for a
+    // resolved promise, and the drain skips a key it has already attempted on
+    // this arm. The PTY then outlived its tab until an unrelated route or
+    // capability flap. An outstanding record after a resolved close is a kill
+    // that is still owed.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "unsettled-kill-tab",
+      sessionId: "session-unsettled-kill",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "unsettled-kill-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(2);
+  });
+
+  it("switches to the plain arm the moment the projection appears, without waiting out the kill backoff", async () => {
+    // An unacknowledged tombstone routes to `terminal.kill` while its create is
+    // still in flight. When that create lands and the terminal is published,
+    // the correct arm becomes `plain` - but the host has been `capable`
+    // throughout, so a mark keyed on CAPABILITY read "already attempted" and
+    // the new arm sat out the old one's backoff, up to the 300s ceiling, with
+    // the PTY running the whole time.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = {};
+    mocks.kill.mockRejectedValueOnce(new Error("not created yet"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "arm-swap-tab",
+      sessionId: "session-arm-swap",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "arm-swap-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    // The create lands: this session is now a plain terminal the host
+    // publishes, so `terminal.plain.close` is the arm that names it.
+    mocks.terminalsById = { "session-arm-swap": {} };
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // No timer advanced. The arm changed, so the drain must not sit on a
+    // backoff the other arm ran up.
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends terminal.kill on a capable host whose listing is merely stale", async () => {
+    // `canMutate` tracks LIST-STREAM freshness, not terminal liveness, and only
+    // one arm reads a listing: `terminal.plain.close` names a row in the
+    // projection, while `terminal.kill` is unary and never consults it. Gating
+    // BOTH on freshness parked exactly the tombstones that never needed it -
+    // and cancelled their retry records on the way past, so nothing was left to
+    // wake when the stream recovered.
+    //
+    // The acknowledged case above still waits: `plain` is its arm, and that arm
+    // genuinely needs a fresh listing.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = false;
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "stale-kill-tab",
+      sessionId: "session-stale-kill",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "stale-kill-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-stale-kill",
+      });
+    });
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+  });
+
+  it("leaves a joined close's tombstone to whoever owns the request", async () => {
+    // The coordinator keys by the terminal's LIFETIME, not by RPC, so this
+    // plain close can join an in-flight `terminal.kill` sent by the panel's
+    // fast path. That kill answers an already-gone session with `killed: false`
+    // as data, and for a `pendingCreate` record the kill mutation deliberately
+    // KEEPS the tombstone. Clearing here off the joined promise would overrule
+    // the owner and strand the PTY the create is about to produce.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-joined": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "joined-tab",
+      sessionId: "session-joined",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "joined-tab");
+
+    // Someone else's request is already in flight for this lifetime, and it
+    // settles WITHOUT retiring the record.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-b",
+      sessionId: "session-joined",
+      close: ownerClose,
+    });
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    // It joined rather than sending a second request.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseOwner();
+      await Promise.resolve();
+    });
+
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("re-arms the plain close after joining a kill that kept the tombstone", async () => {
+    // Declining to conclude is only HALF of what a joiner owes. It learned
+    // nothing about its own arm, and the drain admits a key on exactly three
+    // things: a drainability edge, FIRST SIGHT of the arm, or a due retry. A
+    // joiner that returned having dropped its retry - while `attemptedRef`
+    // still carried the `plain` mark - produced none of the three, so no close
+    // was ever sent and the PTY the create is about to produce outlived its
+    // tombstone. The test above stops at the settlement and passes either way;
+    // the strand is only visible past it.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-rearm": {} };
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "rearm-tab",
+      sessionId: "session-rearm",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "rearm-tab");
+
+    // Someone else owns the in-flight request for this lifetime and settles it
+    // WITHOUT retiring the record - what `terminal.kill` does for a
+    // `pendingCreate` tombstone it answers `killed: false` about.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-b",
+      sessionId: "session-rearm",
+      close: ownerClose,
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(ownerClose).toHaveBeenCalledTimes(1);
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseOwner();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The joined settlement is not this arm's answer, so nothing is concluded
+    // from it and nothing is dispatched off it either.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // The re-arm. The key is free now, so this close is OWNED and may retire
+    // the record on its own settlement.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+  });
+
+  it("wakes a plain close when listing freshness returns", async () => {
+    // The plain arm's first close rejects while the list stream happens to be
+    // stale. No retry can be scheduled for an arm that is undrainable, so the
+    // ONLY way back is the drainability edge - and keying that edge on `kill`
+    // lost it, because `kill` stayed true the whole time. The mark still named
+    // `plain`, so the drain skipped this key forever and the PTY outlived its
+    // tombstone.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-refresh": {} };
+    mocks.closeAsync.mockRejectedValueOnce(new Error("stream went stale"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "refresh-tab",
+      sessionId: "session-refresh",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "refresh-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    // The stream goes stale as that first close rejects. `kill` is unaffected -
+    // it never reads a listing - so nothing about the HOST's drainability moved.
+    mocks.canMutate = false;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    // Freshness returns. That is this arm's recovery edge even though the host
+    // was continuously dialable and continuously `capable`.
+    mocks.canMutate = true;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires a pending-create tombstone once its reprieve is spent", async () => {
+    // `pendingCreate` makes `killed: false` ambiguous, so the kill mutation
+    // keeps the record. Nothing here can ever falsify it: the tile that
+    // dispatched the create is unmounted and its lifecycle hook drops the
+    // settlement, so a create that REJECTED leaves a tombstone no answer can
+    // retire - an RPC and an invalidation every five minutes, forever.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "doomed-create-tab",
+      sessionId: "session-doomed-create",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "doomed-create-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    // Walk the ladder to one answer short of the budget. Every answer resolves
+    // without killing anything, which is exactly what a create that never
+    // landed looks like.
+    for (let attempt = 1; attempt < 9; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(500 * 2 ** (attempt - 1));
+        await Promise.resolve();
+      });
+    }
+    expect(mocks.kill).toHaveBeenCalledTimes(9);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // The tenth answer spends the budget, and the record retires on that same
+    // pass rather than arming an eleventh attempt.
+    await act(async () => {
+      vi.advanceTimersByTime(128_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+
+    // And it stays retired - no timer left armed to ask an eleventh time.
+    await act(async () => {
+      vi.advanceTimersByTime(600_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+  });
+
+  it("does not spend the pending-create reprieve on rejected kills", async () => {
+    // A rejection is the transport failing to ask, not the host reporting the
+    // session absent. Both settlement arms schedule a retry, so an
+    // ATTEMPT-counted budget burned down on pure rejections and discarded a
+    // tombstone nobody had answered for - leaking the PTY if the create landed.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockRejectedValue(new Error("transport flap"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "rejected-kill-tab",
+      sessionId: "session-rejected-kill",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "rejected-kill-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Walk well past the budget. Every attempt rejects, so no answer is earned.
+    for (let attempt = 1; attempt <= 12; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(300_000);
+        await Promise.resolve();
+      });
+    }
+    expect(mocks.kill.mock.calls.length).toBeGreaterThan(10);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("closes a terminal that appears after the reprieve is spent", async () => {
+    // The final `killed: false` can race the create landing. A pass that sees
+    // both an exhausted budget and a fresh projection must believe the positive
+    // evidence: discarding there drops the tombstone in front of a live PTY.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "late-create-tab",
+      sessionId: "session-late-create",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "late-create-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Nine answers against an absent projection: one short of the budget.
+    for (let attempt = 1; attempt < 9; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(500 * 2 ** (attempt - 1));
+        await Promise.resolve();
+      });
+    }
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // Hold the TENTH kill in flight - the one whose answer spends the budget.
+    let releaseFinalKill: (() => void) | null = null;
+    mocks.kill.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFinalKill = () => resolve();
+        }),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(128_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+
+    // The create lands WHILE that kill is in flight, so the host is publishing
+    // the terminal by the time the answer comes back.
+    mocks.terminalsById = { "session-late-create": {} };
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    // Now the tenth answer arrives. This pass holds BOTH a spent budget and a
+    // live projection; the projection has to win.
+    await act(async () => {
+      releaseFinalKill?.();
+      await Promise.resolve();
+    });
+
+    expect(mocks.closeAsync).toHaveBeenCalledWith({
+      hostId: "host-b",
+      terminalId: "session-late-create",
+    });
   });
 
   it("retries a capable close after rejection and retires on acknowledgement", async () => {
@@ -676,7 +1262,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-gone", sessionId: "session-gone" },
+      {
+        hostId: "host-gone",
+        sessionId: "session-gone",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -733,7 +1324,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-boot" },
+      {
+        hostId: "host-b",
+        sessionId: "session-boot",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -755,7 +1351,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-offline" },
+      {
+        hostId: "host-b",
+        sessionId: "session-offline",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -783,7 +1384,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-solo" },
+      {
+        hostId: "host-b",
+        sessionId: "session-solo",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -876,7 +1482,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-gone", sessionId: "session-gone" },
+      {
+        hostId: "host-gone",
+        sessionId: "session-gone",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -1046,7 +1657,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     // Still owed, and still trying - the drain has not parked itself.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-doomed" },
+      {
+        hostId: "host-b",
+        sessionId: "session-doomed",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     for (let round = 0; round < 10; round += 1) await advance(60_000);
     expect(mocks.kill.mock.calls.length).toBeGreaterThan(afterAnHour);
