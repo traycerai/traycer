@@ -584,7 +584,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     });
   });
 
-  it("treats a READY remote session as confirmed recovery while the registry stays offline", () => {
+  it("treats a READY remote session as confirmed recovery while the registry stays offline", async () => {
     // The registry never leaves `offline` for the whole credential-plane
     // incident, so the directory alone can never provide the recovery edge.
     // The recovery dial the fuse window kept open SUCCEEDS instead - the
@@ -641,6 +641,8 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         vi.advanceTimersByTime(1_000);
       });
       view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+      // The close boundary dispatches on a microtask, so let it run.
+      await act(async () => Promise.resolve());
 
       expect(mocks.kill).toHaveBeenCalledWith({
         hostId: "host-b",
@@ -989,5 +991,56 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
         terminalId: "session-mirror",
       });
     });
+  });
+
+  it("stops retrying a permanently failing kill instead of looping forever", async () => {
+    // The backoff caps at 8s, so an unbounded retry against a host that keeps
+    // rejecting - a credential it will not accept, say - is an RPC every eight
+    // seconds for as long as the app is open, on a route that stays perfectly
+    // dialable.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    mocks.kill.mockImplementation(() =>
+      Promise.reject(new Error("permanently rejected")),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "doomed-tab",
+      sessionId: "session-doomed",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "doomed-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    // Well past the whole backoff schedule (500+1000+2000+4000+8000+8000ms).
+    for (let round = 0; round < 20; round += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(8_000);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    // One initial dispatch plus the capped retries, and then silence - not a
+    // call per 8s tick for the rest of the session.
+    expect(mocks.kill).toHaveBeenCalledTimes(7);
+    // The tombstone is SUSPENDED, not retired: the kill is still owed and the
+    // next route or authority change sends it.
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      { hostId: "host-b", sessionId: "session-doomed" },
+    ]);
   });
 });

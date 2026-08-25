@@ -31,6 +31,19 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 const CAPABLE_CLOSE_RETRY_MAX_MS = 8_000;
+/**
+ * Automatic attempts before a tombstone stops re-sending on its own.
+ *
+ * The backoff caps at 8s, so without a ceiling a PERMANENT failure - a host
+ * that keeps rejecting the current credential, say - is an RPC every eight
+ * seconds for as long as the app is open, on a route that stays perfectly
+ * dialable. The retry record is what carries the count, and
+ * `cancelUndrainableCapableCloseRetries` drops it the moment the host stops
+ * being drainable, so exhausting the budget suspends the tombstone until the
+ * route or the authority actually changes rather than retiring it - the
+ * kill is still owed, and the next recovery edge sends it.
+ */
+const CLOSE_RETRY_MAX_ATTEMPTS = 6;
 
 interface CapableCloseRetry {
   attempt: number;
@@ -158,6 +171,7 @@ function scheduleCloseRetry(args: {
   const prior = args.refs.retries.current.get(args.key);
   if (prior !== undefined && prior.timer !== null) return;
   const attempt = (prior?.attempt ?? 0) + 1;
+  if (attempt > CLOSE_RETRY_MAX_ATTEMPTS) return;
   const retryDelay = Math.min(
     CAPABLE_CLOSE_RETRY_BASE_MS * 2 ** (attempt - 1),
     CAPABLE_CLOSE_RETRY_MAX_MS,
@@ -264,11 +278,21 @@ function dispatchLegacyClose(args: {
     ...args.refs.inFlight.current,
     args.key,
   ]);
-  void args.kill
-    .mutateAsync({
-      hostId: args.pending.hostId,
-      sessionId: args.pending.sessionId,
-    })
+  void requestLandingTerminalClose({
+    hostId: args.pending.hostId,
+    sessionId: args.pending.sessionId,
+    // Same boundary the capable arm uses. `terminal.kill` is scheduled `fifo`
+    // and `selectJob` returns null for fifo rather than joining an identical
+    // queued job, so an unmediated duplicate is two real RPCs and two
+    // invalidations for one gesture.
+    close: () =>
+      args.kill
+        .mutateAsync({
+          hostId: args.pending.hostId,
+          sessionId: args.pending.sessionId,
+        })
+        .then(() => undefined),
+  })
     .then(
       () => clearCapableCloseRetry(args.refs.retries.current, args.key),
       () => scheduleCloseRetry({ ...args, capability: "legacy" }),

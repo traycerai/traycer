@@ -1463,10 +1463,13 @@ describe("<LandingTerminalPanel />", () => {
     // with are drained by the reconciliation that follows, once the host list
     // confirms the sessions are gone - the durable write itself is pinned in
     // the store test.)
-    before.forEach((tab) => {
-      expect(mocks.kill).toHaveBeenCalledWith({
-        hostId: tab.hostId,
-        sessionId: tab.sessionId,
+    // Dispatched through the shared close boundary, which hops a microtask.
+    await waitFor(() => {
+      before.forEach((tab) => {
+        expect(mocks.killAsync).toHaveBeenCalledWith({
+          hostId: tab.hostId,
+          sessionId: tab.sessionId,
+        });
       });
     });
   });
@@ -1717,9 +1720,11 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingTerminalStore.getState().tabs[0].instanceId).toBe(
       first.instanceId,
     );
-    expect(mocks.kill).toHaveBeenCalledWith({
-      hostId: second.hostId,
-      sessionId: second.sessionId,
+    await waitFor(() => {
+      expect(mocks.killAsync).toHaveBeenCalledWith({
+        hostId: second.hostId,
+        sessionId: second.sessionId,
+      });
     });
   });
 

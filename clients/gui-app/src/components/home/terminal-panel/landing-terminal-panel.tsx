@@ -167,12 +167,27 @@ function landingTerminalAuthorityReady(
 function dispatchLandingTerminalClose(args: {
   readonly entry: LandingTerminalAuthorityEntry | undefined;
   readonly closed: LandingTerminalTabRef;
-  readonly killTerminal: (variables: LandingTerminalKillVariables) => void;
+  readonly killTerminal: (
+    variables: LandingTerminalKillVariables,
+  ) => Promise<unknown>;
 }): void {
   const { entry, closed, killTerminal } = args;
   if (!landingTerminalAuthorityReady(entry)) return;
   if (entry.authority.capability.status !== "capable") {
-    killTerminal({ hostId: closed.hostId, sessionId: closed.sessionId });
+    // Same boundary as the capable arm below, for the same reason. `terminal.kill`
+    // is scheduled `fifo`, and `selectJob` returns null for fifo rather than
+    // joining an identical queued job - so an unmediated duplicate is two real
+    // RPCs and two `terminal.list` invalidations on every ordinary legacy close,
+    // the second answering `killed: false` about a session the first removed.
+    void requestLandingTerminalClose({
+      hostId: closed.hostId,
+      sessionId: closed.sessionId,
+      close: () =>
+        killTerminal({
+          hostId: closed.hostId,
+          sessionId: closed.sessionId,
+        }).then(() => undefined),
+    }).catch(() => undefined);
     return;
   }
   // Through the shared close boundary, not straight at the mutation. The
@@ -386,7 +401,6 @@ export function LandingTerminalPanel(): ReactNode {
   const renameTab = useLandingTerminalStore((state) => state.renameTab);
   const closeTab = useLandingTerminalStore((state) => state.closeTab);
   const kill = useLandingTerminalKill();
-  const killTerminal = kill.mutate;
   const killTerminalAsync = kill.mutateAsync;
   // Last settled generation's host context. Manual create uses it only when
   // `hostId` still equals the active host; auto-spawn never reads this alone.
@@ -846,7 +860,7 @@ export function LandingTerminalPanel(): ReactNode {
       dispatchLandingTerminalClose({
         entry: authorityEntry,
         closed,
-        killTerminal,
+        killTerminal: killTerminalAsync,
       });
       // Closing a non-last tab promotes a surviving neighbor - keep the
       // keyboard with the panel. The last-tab case collapses the panel, and
@@ -866,7 +880,7 @@ export function LandingTerminalPanel(): ReactNode {
       clearPending,
       closeTab,
       authorityEntries,
-      killTerminal,
+      killTerminalAsync,
       landingPageId,
       replaceDirectoryRequest,
     ],
