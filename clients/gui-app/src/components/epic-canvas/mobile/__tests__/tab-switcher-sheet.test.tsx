@@ -50,6 +50,9 @@ vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
 vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
   SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
 }));
+vi.mock("@/components/epic-canvas/mobile/switcher-comments-list", () => ({
+  SwitcherCommentsList: () => <div data-testid="mock-comments-list" />,
+}));
 vi.mock("@/components/epic-canvas/mobile/switcher-panel-embed", () => ({
   SwitcherPanelEmbed: (props: { readonly category: string }) => (
     <div data-testid="mock-panel-embed" data-category={props.category} />
@@ -115,6 +118,7 @@ const CATEGORY_NAMES = [
   "Git Diff",
   "Terminals",
   "Sharing",
+  "Comments",
 ];
 
 /**
@@ -156,12 +160,22 @@ describe("<TabSwitcherSheet />", () => {
   });
   afterEach(cleanup);
 
-  it("renders exactly the six always-on category tabs when open on mobile", () => {
+  it("renders exactly the seven always-on category tabs when open on mobile", () => {
     renderSheet(true, () => {});
     for (const name of CATEGORY_NAMES) {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
-    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    expect(screen.getAllByRole("tab")).toHaveLength(7);
+  });
+
+  it("keeps the Comments tab on the bar with no artifact tile open", () => {
+    // Desktop hides Comments until an artifact tile reveals it; the phone sheet
+    // is the only route to a thread list, so a tab that came and went with the
+    // shown tile would leave an anchor tap with nowhere to land. The category's
+    // own body says what it is waiting for when no artifact is open - the
+    // canvas here holds no tiles at all.
+    renderSheet(true, () => {});
+    expect(screen.getByRole("tab", { name: "Comments" })).toBeTruthy();
   });
 
   it("labels the chats category 'Chats' and renders the active tab as an underline, not a box", () => {
@@ -189,8 +203,27 @@ describe("<TabSwitcherSheet />", () => {
     // ui/tabs' `after:bg-foreground` active indicator and paints a full-cover,
     // near-white box over the label on touch (coarse-pointer) devices.
     expect(touchTargetsCss).toMatch(
-      /tabs-trigger"\]\)::after\s*\{[^}]*background:\s*transparent/,
+      /tabs-trigger"\][^)]*\)::after\s*\{[^}]*background:\s*transparent/,
     );
+  });
+
+  it("gives every slop slot a positioned box of its own", () => {
+    // The contract is set equality, not membership: the two rules must address
+    // the SAME slots, whatever those slots are. One establishes the containing
+    // block, the other places the `::after` against it, so a slot in the second
+    // list only anchors its hit area to whatever ancestor happens to be
+    // positioned - invisible until a tap lands somewhere else. Stated this way
+    // it holds for every slot added later without being restated.
+    const slotLists = [...touchTargetsCss.matchAll(/:is\(([^)]*)\)/g)].map(
+      (match) =>
+        [...match[1].matchAll(/data-slot="([^"]+)"/g)]
+          .map((slot) => slot[1])
+          .sort(),
+    );
+    expect(slotLists).toHaveLength(2);
+    // Positive control: an empty parse would satisfy the equality vacuously.
+    expect(slotLists[0].length).toBeGreaterThan(0);
+    expect(slotLists[0]).toEqual(slotLists[1]);
   });
 
   it("defaults to the Agents category and shows its body", () => {
@@ -226,7 +259,7 @@ describe("<TabSwitcherSheet />", () => {
     setPullRequestPresence(true);
     renderSheet(true, () => {});
     const tabs = screen.getAllByRole("tab");
-    expect(tabs).toHaveLength(7);
+    expect(tabs).toHaveLength(8);
     expect(tabs.map((tab) => tab.getAttribute("data-testid"))).toEqual([
       "mobile-switcher-tab-chats",
       "mobile-switcher-tab-artifacts",
@@ -235,7 +268,32 @@ describe("<TabSwitcherSheet />", () => {
       "mobile-switcher-tab-pull-requests",
       "mobile-switcher-tab-terminals",
       "mobile-switcher-tab-sharing",
+      "mobile-switcher-tab-comments",
     ]);
+  });
+
+  it("shows the comments panel when the category is selected", async () => {
+    const user = userEvent.setup();
+    renderSheet(true, () => {});
+    await user.click(screen.getByRole("tab", { name: "Comments" }));
+    expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
+      "comments",
+    );
+    expect(screen.getByTestId("mock-comments-list")).toBeTruthy();
+  });
+
+  it("opens straight onto a comments selection written by an anchor tap", () => {
+    // The tap path selects the category in this same store and opens the sheet;
+    // the thread is only reachable if the sheet lands on that category with no
+    // further click.
+    useLeftPanelStore.setState({
+      activePanelIdByTabId: { [TAB_ID]: "comments" },
+    });
+    renderSheet(true, () => {});
+    expect(
+      screen.getByRole("tab", { name: "Comments" }).getAttribute("data-state"),
+    ).toBe("active");
+    expect(screen.getByTestId("mock-comments-list")).toBeTruthy();
   });
 
   it("shows the embedded desktop sharing panel body when the category is selected", async () => {
@@ -314,7 +372,7 @@ describe("<TabSwitcherSheet />", () => {
     streamState.prSupport = "unsupported";
     renderSheet(true, () => {});
     expect(screen.queryByRole("tab", { name: "Pull Requests" })).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    expect(screen.getAllByRole("tab")).toHaveLength(7);
   });
 
   it("clamps a persisted pull-requests selection when the host lost stream support", () => {
