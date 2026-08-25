@@ -229,6 +229,11 @@ function dispatchCapableClose(args: {
       const next = new Set(args.refs.inFlight.current);
       next.delete(args.key);
       args.refs.inFlight.current = next;
+      // Clearing a ref renders nothing, so without this the drain never looks
+      // at this key again on its own: an authority change that arrived while
+      // the request was in flight was skipped for being in flight, and the
+      // settlement that released it is invisible.
+      args.signalRetry();
     });
 }
 
@@ -272,7 +277,46 @@ function dispatchLegacyClose(args: {
       const next = new Set(args.refs.inFlight.current);
       next.delete(args.key);
       args.refs.inFlight.current = next;
+      // Clearing a ref renders nothing, so without this the drain never looks
+      // at this key again on its own: an authority change that arrived while
+      // the request was in flight was skipped for being in flight, and the
+      // settlement that released it is invisible.
+      args.signalRetry();
     });
+}
+
+/** Routes a drainable tombstone to the arm its host's capability calls for. */
+function dispatchTombstoneClose(args: {
+  readonly entry: LandingTerminalAuthorityEntry | undefined;
+  readonly kill: LandingTerminalKillDispatch;
+  readonly key: string;
+  readonly pending: LandingTerminalPendingKill;
+  readonly retry: CapableCloseRetry | undefined;
+  readonly refs: TombstoneRetryRefs;
+  readonly signalRetry: () => void;
+}): void {
+  const { entry } = args;
+  if (entry === undefined) return;
+  if (entry.authority.capability.status === "capable") {
+    dispatchCapableClose({
+      entry,
+      key: args.key,
+      pending: args.pending,
+      retry: args.retry,
+      refs: args.refs,
+      signalRetry: args.signalRetry,
+    });
+    return;
+  }
+  if (entry.authority.capability.status !== "legacy") return;
+  dispatchLegacyClose({
+    kill: args.kill,
+    key: args.key,
+    pending: args.pending,
+    retry: args.retry,
+    refs: args.refs,
+    signalRetry: args.signalRetry,
+  });
 }
 
 /**
@@ -287,8 +331,14 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const kill = useLandingTerminalKill();
   const killRef = useRef(kill);
   const inFlightRef = useRef<ReadonlySet<string>>(new Set());
-  /** Tombstone keys this bridge has already dispatched at least once. */
-  const attemptedRef = useRef<ReadonlySet<string>>(new Set());
+  /**
+   * Tombstone keys this bridge has dispatched, against the CAPABILITY each was
+   * dispatched under - a host that changes protocol makes its key eligible
+   * again rather than resting on a mark left by the other arm.
+   */
+  const attemptedRef = useRef<
+    ReadonlyMap<string, "unknown" | "legacy" | "capable">
+  >(new Map());
   const retriesRef = useRef<Map<string, CapableCloseRetry>>(new Map());
   const mountedRef = useRef(true);
   const [retryGeneration, setRetryGeneration] = useState(0);
@@ -459,8 +509,8 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     // Forget keys that are no longer outstanding, so a session id that is
     // tombstoned again later is seen fresh rather than inheriting the earlier
     // close's "already dispatched" mark.
-    attemptedRef.current = new Set(
-      [...attemptedRef.current].filter((key) => pendingKeys.has(key)),
+    attemptedRef.current = new Map(
+      [...attemptedRef.current].filter(([key]) => pendingKeys.has(key)),
     );
 
     if (pendingKills.length === 0) return;
@@ -477,38 +527,39 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       // authority - the panel's fast path had already sent the kill - but a
       // close under an unresolved probe records the tombstone and dispatches
       // nothing, and the bridge is then the only thing that will ever send it.
-      const firstSight = !attemptedRef.current.has(key);
+      //
+      // The mark records the CAPABILITY it was dispatched under, so a host that
+      // changes protocol while staying dialable is seen fresh again. Without
+      // that, a close rejected after the authority flipped is abandoned:
+      // `closeRetryStillWarranted` refuses to schedule a retry because the
+      // capability no longer matches the one that dispatched, the
+      // authority-change render skipped this key while it was still in
+      // `inFlightRef`, and clearing that ref renders nothing - so the
+      // capability-correct close would never be sent.
+      const entry = authorityEntries[pending.hostId];
+      const capability = entry?.authority.capability.status;
+      const firstSight = attemptedRef.current.get(key) !== capability;
       if (!routeRecovered && !firstSight && retry?.due !== true) continue;
       if (inFlightRef.current.has(key)) continue;
       // Reached only where the host is drainable, which already required the
       // authority entry to be `legacy` or capable+`canMutate` - so this marks a
       // key that one of the two branches below is about to dispatch, never one
       // parked waiting for its probe.
-      if (firstSight) {
-        attemptedRef.current = new Set([...attemptedRef.current, key]);
+      if (firstSight && capability !== undefined) {
+        attemptedRef.current = new Map([
+          ...attemptedRef.current,
+          [key, capability],
+        ]);
       }
-      const entry = authorityEntries[pending.hostId];
-      if (entry?.authority.capability.status === "capable") {
-        dispatchCapableClose({
-          entry,
-          key,
-          pending,
-          retry,
-          refs: retryRefs,
-          signalRetry: () => setRetryGeneration((current) => current + 1),
-        });
-        continue;
-      }
-      if (entry?.authority.capability.status === "legacy") {
-        dispatchLegacyClose({
-          kill: killRef.current,
-          key,
-          pending,
-          retry,
-          refs: retryRefs,
-          signalRetry: () => setRetryGeneration((current) => current + 1),
-        });
-      }
+      dispatchTombstoneClose({
+        entry,
+        kill: killRef.current,
+        key,
+        pending,
+        retry,
+        refs: retryRefs,
+        signalRetry: () => setRetryGeneration((current) => current + 1),
+      });
     }
   }, [
     authorityEntries,

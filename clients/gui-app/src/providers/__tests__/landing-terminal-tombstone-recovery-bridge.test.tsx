@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => {
     readySessionHosts: new Set<string>(),
     authorityStatus: initialAuthorityStatus(),
     canMutate: false,
+    /** Bump to make the fleet mock re-emit an entry with the current status. */
+    authorityRevision: 0,
     terminalsById,
     closeAsync: vi.fn(() => Promise.resolve()),
     /** The host ids the authority fleet was last asked to probe. */
@@ -80,6 +82,7 @@ vi.mock(
       }) => {
         const { onEntry } = props;
         const hostKey = props.hostIds.join("\u0000");
+        const revision = mocks.authorityRevision;
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
           mocks.probedHostIds = hostIds;
@@ -111,7 +114,7 @@ vi.mock(
           return () => {
             hostIds.forEach((hostId) => onEntry(hostId, null));
           };
-        }, [hostKey, onEntry]);
+        }, [hostKey, onEntry, revision]);
         return null;
       },
     };
@@ -174,6 +177,7 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     mocks.readySessionHosts = new Set();
     mocks.authorityStatus = "legacy";
     mocks.canMutate = false;
+    mocks.authorityRevision = 0;
     mocks.terminalsById = {};
     mocks.closeAsync.mockReset();
     mocks.closeAsync.mockImplementation(() => Promise.resolve());
@@ -866,5 +870,67 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
       { hostId: "host-gone", sessionId: "session-gone" },
     ]);
+  });
+
+  it("re-dispatches with the NEW capability when authority flips during an in-flight close", async () => {
+    // A `terminal.plain.close` incompatibility can drop a host back to legacy
+    // while it stays dialable. The capable request then rejects, but
+    // `closeRetryStillWarranted` refuses a retry because the capability no
+    // longer matches the one that dispatched - and the authority-change render
+    // had already skipped this key for being in flight. Clearing that ref
+    // renders nothing, so without a capability-aware mark plus a signal on
+    // settlement the correct close is never sent.
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-flip": {} };
+    let rejectClose: (reason: Error) => void = () => undefined;
+    mocks.closeAsync.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectClose = reject;
+        }),
+    );
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "flip-tab",
+      sessionId: "session-flip",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "flip-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    // The host drops to legacy while that close is still outstanding.
+    mocks.authorityStatus = "legacy";
+    mocks.canMutate = false;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rejectClose(new Error("plain close unsupported"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-flip",
+      });
+    });
   });
 });
