@@ -33,7 +33,13 @@ const HOST_B = "host-b";
 const SHARED_ID = "shared-term";
 
 interface DurableCollectionHolder {
-  value: PlainTerminalCollection | null;
+  /**
+   * `undefined`, not null, for an absent catalog: that is what the real
+   * authority hands back (it is `query.data`), and `useEpicTerminalsPanel`
+   * tests it with `=== undefined`. A null here quietly skips the
+   * capable-but-unhydrated loading branch.
+   */
+  value: PlainTerminalCollection | undefined;
 }
 interface ListedSessionsHolder {
   value: CanonicalTerminalSessionInfo[];
@@ -60,7 +66,7 @@ interface HostClientHolder {
 }
 
 const durableCollection = vi.hoisted((): DurableCollectionHolder => ({
-  value: null,
+  value: undefined,
 }));
 const listedSessions = vi.hoisted((): ListedSessionsHolder => ({ value: [] }));
 const listQuery = vi.hoisted((): ListQueryHolder => ({
@@ -275,7 +281,7 @@ beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useSettingsStore.setState({ showNavigatorResourceStats: false });
   resetEpicTerminalDurableCreatesForTests();
-  durableCollection.value = null;
+  durableCollection.value = undefined;
   listedSessions.value = [];
   listQuery.isPending = false;
   listQuery.isError = false;
@@ -451,7 +457,23 @@ describe("<SwitcherTerminalsList /> states", () => {
     expect(screen.queryByText("No terminals yet.")).toBeNull();
   });
 
+  it("waits while a capable host's durable catalog has not hydrated yet", () => {
+    // The list query has answered; the projection stream has not. The panel
+    // keys this branch on `collection === undefined`, so an absent catalog has
+    // to be modelled as undefined - a null would read as "hydrated and empty"
+    // and show the empty state before the catalog ever arrived.
+    durableCollection.value = undefined;
+    renderList(openEpicTab());
+    expect(screen.getByTestId("switcher-terminal-loading")).toBeTruthy();
+    expect(screen.queryByTestId("switcher-terminal-empty")).toBeNull();
+    expect(screen.queryByText("No terminals yet.")).toBeNull();
+  });
+
   it("surfaces a load failure with the host's message and a retry", () => {
+    // Hydrated catalog: the panel checks loading before error, and a capable
+    // host with no catalog yet is still loading, so an unhydrated fixture here
+    // would assert the spinner rather than the failure.
+    durableCollection.value = completeFleet([]);
     listQuery.isError = true;
     listQuery.errorMessage = "host unreachable";
     renderList(openEpicTab());
