@@ -109,17 +109,34 @@ export type ConfigShellListDetectedRequest = z.infer<
   typeof configShellListDetectedRequestSchema
 >;
 
-export const configDetectedShellSchema = z.object({
+/**
+ * The v1.0 row, FROZEN as released (cli-v1.2.0 shipped this shape). Adding a
+ * key here - even an optional one - changes the wire schema at a released
+ * version, which the protocol-compat gate rightly blocks; growth happens at
+ * v1.1 below instead.
+ */
+export const configDetectedShellSchemaV10 = z.object({
   name: z.string(),
   path: shellPathSchema,
   isDefault: z.boolean(),
   source: z.enum(["detected", "added"]),
   missing: z.boolean(),
-  // Optional both ways: absent from hosts predating the probe, and absent on
-  // every healthy or non-WSL row. See `DetectedShell.wslHealth`.
+});
+
+/**
+ * v1.1 adds `wslHealth`: optional both ways - absent from hosts predating the
+ * probe, and absent on every healthy or non-WSL row. See
+ * `DetectedShell.wslHealth`. This unversioned name stays the canonical row
+ * shape clients import.
+ */
+export const configDetectedShellSchema = configDetectedShellSchemaV10.extend({
   wslHealth: z.enum(["not-installed", "no-distro"]).optional(),
 });
 export type ConfigDetectedShell = z.infer<typeof configDetectedShellSchema>;
+
+export const configShellListDetectedResponseSchemaV10 = z.object({
+  shells: z.array(configDetectedShellSchemaV10),
+});
 
 export const configShellListDetectedResponseSchema = z.object({
   shells: z.array(configDetectedShellSchema),
