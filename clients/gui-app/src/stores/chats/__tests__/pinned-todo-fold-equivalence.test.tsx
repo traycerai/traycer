@@ -13,14 +13,17 @@ import {
   type RenderedMessagesDisplayContext,
   type RenderedMessagesInput,
 } from "@/stores/chats/rendered-messages";
-// Cross-repo import, deliberately: `foldPinnedTodo`/`contentBlocksById` are
+// The shared half of the fold, from protocol. It used to be a cross-repo
+// relative path into `traycer-host/`, which resolves only in the internal
+// monorepo - so this corpus was silently unrunnable in a standalone OSS clone,
+// i.e. exactly where it needs to run. `foldPinnedTodo`/`contentBlocksById` are
 // host-owned (`traycer-host/`, a sibling checkout of this submodule, not a
 // package `traycer/` itself depends on). This is the one place that boundary
 // is crossed - see the module doc below for why.
 import {
   contentBlocksById,
   foldPinnedTodo,
-} from "../../../../../../../traycer-host/src/domain/chat/chat-pinned-todo-fold";
+} from "@traycer/protocol/persistence/chat-transcript/pinned-todo-fold";
 
 /**
  * # Pinned-todo fold: renderer/host equivalence
