@@ -173,13 +173,16 @@ describe("adversarial: JSON envelope shape stability across all seven commands",
     const listRes = await configShellListCommand(makeCtx());
     assertRecordArray(listRes.data);
     for (const row of listRes.data) {
-      expect(Object.keys(row).sort()).toEqual([
-        "isDefault",
-        "missing",
-        "name",
-        "path",
-        "source",
-      ]);
+      // `wslHealth` is present only on a Windows wsl.exe row whose WSL cannot
+      // host a terminal - a live probe of THIS machine, so the suite cannot
+      // pin its presence either way without becoming machine-dependent.
+      const keys = Object.keys(row)
+        .filter((key) => key !== "wslHealth")
+        .sort();
+      expect(keys).toEqual(["isDefault", "missing", "name", "path", "source"]);
+      if ("wslHealth" in row) {
+        expect(["not-installed", "no-distro"]).toContain(row.wslHealth);
+      }
     }
   });
 });

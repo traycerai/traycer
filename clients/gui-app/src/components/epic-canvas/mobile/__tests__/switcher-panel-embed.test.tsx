@@ -14,6 +14,11 @@ vi.mock("@/components/epic-canvas/git-diff/git-diff-panel-body-live", () => ({
 vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
   PrPanelBody: () => <div data-testid="pr-panel-body" />,
 }));
+vi.mock("@/components/epic-canvas/panels/epic-sharing/panel", () => ({
+  SharingPanel: (props: { readonly epicId: string }) => (
+    <div data-testid="sharing-panel-body" data-epic-id={props.epicId} />
+  ),
+}));
 
 describe("<SwitcherPanelEmbed />", () => {
   afterEach(cleanup);
@@ -37,5 +42,21 @@ describe("<SwitcherPanelEmbed />", () => {
     expect(screen.getByTestId("pr-panel-body")).toBeTruthy();
     expect(screen.queryByTestId("file-tree-body")).toBeNull();
     expect(screen.queryByTestId("git-diff-body")).toBeNull();
+  });
+
+  it("embeds the desktop sharing panel for the sharing category", () => {
+    render(<SwitcherPanelEmbed category="sharing" epicId="e" tabId="t" />);
+    const body = screen.getByTestId("sharing-panel-body");
+    expect(body.dataset.epicId).toBe("e");
+    expect(screen.queryByTestId("pr-panel-body")).toBeNull();
+  });
+
+  // The sharing panel is the one embedded body with no scroller of its own - on
+  // desktop the sidebar's scroll region supplies it - so the embed must.
+  it("gives the sharing panel a scroll region the other embeds own themselves", () => {
+    const { container } = render(
+      <SwitcherPanelEmbed category="sharing" epicId="e" tabId="t" />,
+    );
+    expect(container.querySelector(".overflow-y-auto")).toBeTruthy();
   });
 });
