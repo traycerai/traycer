@@ -192,3 +192,43 @@ export const chatSchemaV15 = z.object({
   events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),
 });
+
+// Wire-freeze copy of the chat record as `chat.subscribe@1.6` shipped it:
+// images (`messageSchema`, not `messageSchemaPreImage`), plus the two fields
+// `1.5` predates. Bound to `chatSnapshotSchemaV16` so the released `1.6` line
+// stays verbatim once `1.7` opens above it.
+//
+// `claudePendingWakes` keeps the pre-deadline wire shape every frozen line
+// uses, NOT the live persisted one - `retryDeadlineStartedAt` / `heldChain`
+// are host-internal recovery state that has never been on this wire.
+//
+// Hand-frozen, and that is load-bearing rather than stylistic: `chatSchema` is
+// the PERSISTENCE schema, so binding it by reference means every later field
+// addition to the chat record (the way `pinnedUserProviderHandle` and
+// `lastDeliveredRolesDigest` arrived) silently lands on a released wire shape.
+// See `chatSchemaV14` / `chatSchemaV15`, which exist for exactly this reason.
+//
+// `messages` / `events` DO follow the live element schemas, matching how `1.5`
+// follows live `chatEventSchema`. That is the standing retro-pin obligation in
+// this file: the next minor that changes a message or event tree owes this
+// copy a hand-written pre-image the way `1.4` and `1.5` took `messageSchemaPreImage`.
+export const chatSchemaV16 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
+    [],
+  ),
+  messages: z.array(messageSchema),
+  events: z.array(chatEventSchema).default([]),
+  archivedAt: z.number().nullable().default(null),
+  pinnedUserProviderHandle: z.string().nullable().default(null),
+  lastDeliveredRolesDigest: z.string().nullable().default(null),
+});

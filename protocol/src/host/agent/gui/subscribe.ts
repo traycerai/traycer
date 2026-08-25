@@ -1,11 +1,17 @@
 /**
- * `chat.subscribe@1.6` - versioned streaming-RPC contract for a single
- * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.5`
+ * `chat.subscribe@1.7` - versioned streaming-RPC contract for a single
+ * host-owned GUI chat session. `chat.subscribe@1.0`–`@1.6`
  * (frozen, near the bottom of this file) are the exact shapes shipped in
- * earlier hosts; later minors only add to them, so a `1.6` app still bridges to
- * hosts that only know `1.0`–`1.5`. Streams have no cross-major downgrade
+ * earlier hosts; later minors only add to them, so a `1.7` app still bridges to
+ * hosts that only know `1.0`–`1.6`. Streams have no cross-major downgrade
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
+ *
+ * `1.7` is the WINDOWED line and is the one place that generalization bends:
+ * it does not merely add to `1.6`, it replaces the snapshot's embedded
+ * transcript with a skeleton plus on-demand ranges. That is a behaviour
+ * change selected by version rather than by a flag, and the host serves whole
+ * snapshots to anything below it. See the `1.7` contract at the bottom.
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -23,6 +29,7 @@ import {
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
+  chatSchemaV16,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
@@ -77,6 +84,20 @@ import {
   heldManagedCommandUpdateSchema,
   managedCommandSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
+// The windowed line's payload shapes. They live in their own module (and import
+// nothing from here) so this file can stay the one place every `chat.subscribe`
+// FRAME union is assembled - the aux frames are shared between the two lines,
+// and splitting the unions across files would hide that.
+import {
+  chatAccumulatedFileChangeSummarySchema,
+  chatIndexChangeSchema,
+  chatLoadRangeRequestSchema,
+  chatRangeResponseSchema,
+  chatRecordSchema,
+  chatSkeletonChunkSchema,
+  chatTranscriptDerivedSchema,
+  chatTranscriptWindowSchema,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -1075,16 +1096,20 @@ function isStructuralRecord(value: unknown): boolean {
  * `z.custom<...>` keeps the inferred type identical to the deep schema's, so
  * a shallow-parsed snapshot IS a `ChatSubscribeServerFrame` to consumers.
  *
- * ONLY SOUND ON THE LIVE LINE (`chatSubscribeLiveSchemaVersion`). The deep
+ * ONLY SOUND ON `chatSubscribeFullSnapshotSchemaVersion` (`1.6`). The deep
  * message/event schemas carry compatibility defaults (`imageResolutions`,
  * `serviceTier`, …) that up-convert a down-negotiated host's pre-image
- * objects; the structural check skips them, so a `1.6` assistant message
+ * objects; the structural check skips them, so a `1.5` assistant message
  * would reach consumers with `imageResolutions` genuinely absent while typed
- * as present. A host serving the client's own live line emits fully live
- * shapes (its in-memory objects are post-parse normalized and its frame
- * projection is the identity on the live line), so the shallow path is
- * exact there — callers MUST fall back to the deep parse for any other
- * negotiated version.
+ * as present. A host serving exactly this line emits fully live `1.6` shapes
+ * (its in-memory objects are post-parse normalized and its frame projection is
+ * the identity there), so the shallow path is exact — callers MUST fall back to
+ * the deep parse for any other negotiated version.
+ *
+ * The windowed line (`1.7`) does not need this and must not use it: its
+ * snapshot carries no transcript arrays, so there is no deep walk to skip.
+ * This is why the gate is a named "newest full-snapshot line" constant rather
+ * than "the newest line" — see that constant's doc.
  */
 export const chatSubscribeSnapshotServerFrameShallowSchema = z.object({
   kind: z.literal("snapshot"),
@@ -2027,7 +2052,64 @@ export const chatSubscribeV15 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaV14ToV15,
 });
 
-// ─── Live `chat.subscribe@1.6` contract ────────────────────────────────────
+// ─── Frozen `chat.subscribe@1.6` shape (Shells + images + held updates) ────
+//
+// `1.6` shipped the whole Shells surface, image generation, and the Stop
+// fence's held updates - see the contract note below for what that means. It
+// is pinned here because `1.7` opens above it with the WINDOWED transcript,
+// and the two lines carry genuinely different snapshots: `1.6` embeds the
+// entire chat record, `1.7` sends a bounded snapshot plus a row skeleton.
+//
+// What is pinned, and what is deliberately not:
+//
+//   - `chat` takes `chatSchemaV16` rather than the live `chatSchema`, because
+//     `chatSchema` is the PERSISTENCE schema and a released line must not
+//     follow it by reference (the `1.5` comment above states the rule, and
+//     `pinnedUserProviderHandle` / `lastDeliveredRolesDigest` are what happens
+//     when it is broken).
+//   - Every other sub-schema binds live, exactly as `1.4`/`1.5` bind live
+//     `chatAccessSchema`, `chatRunStatusSchema`, and the rest. That is the
+//     standing retro-pin obligation in this file, not an oversight: the next
+//     minor that changes one of them owes this bundle a hand-written pin, the
+//     way `1.6`'s `individualStopUnavailable` forced
+//     `chatSubscribeTurnStateChangedServerFrameSchemaV15` into existence.
+//
+// The windowed line does NOT grow this union, so `1.7` cannot leak into it by
+// construction: its frames live in their own union below.
+const chatSnapshotSchemaV16 = z.object({
+  chat: chatSchemaV16,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV16 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV16,
+});
+
+const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV16,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  chatSubscribeManagedCommandsChangedServerFrameSchema,
+  chatSubscribeHeldUpdatesChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemas,
+]);
+
+// ─── `chat.subscribe@1.6` contract ─────────────────────────────────────────
 //
 // `1.6` is where the whole Shells surface joined the chat stream: the chat's
 // own commands (`snapshot.managedCommands` + `managedCommandsChanged`) and the
@@ -2058,28 +2140,224 @@ export const chatSubscribeV15 = defineStreamRpcContract({
 // Those last two arrived on a `1.7` opened above a `1.6` that was itself
 // pinned to a hand-written pre-image bundle, so that the live schemas could
 // grow without mutating it. The release collapsed the two: no peer in the field
-// has ever negotiated `1.6` or `1.7` (the highest minor any released
-// `host-v*`/`cli-v*`/`desktop-v*` baseline carries is `1.5`), so a pre-image
+// had ever negotiated `1.6` or `1.7` (the highest minor any released
+// `host-v*`/`cli-v*`/`desktop-v*` baseline carried was `1.5`), so a pre-image
 // that froze `1.6` against `1.7` froze it against nothing, and shipping both
 // minors would have announced two negotiable lines where one peer set exists.
 //
-// This line is therefore bound to the LIVE schemas, and that is what makes the
-// freeze discipline start again cleanly: the moment `1.6` ships, or the moment
-// a `1.7` opens above it, whichever comes first, this line must be re-pinned to
-// a hand-written pre-image bundle the way `1.4` and `1.5` are above. The lines
-// below it are frozen precisely because they HAVE peers; this one does not yet.
+// **`1.6` has since shipped**, and the promise that comment made is kept
+// immediately above: the line now binds the hand-frozen `V16` bundle rather
+// than the live schemas, and `1.7` (the windowed transcript, below) is the
+// minor the live shapes belong to.
 export const chatSubscribeV16 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 6 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV16,
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
 /**
- * The live line's version, declared HERE (next to the live contract) so a
- * future line bump cannot miss it. This is the one negotiated version on
- * which `chatSubscribeSnapshotServerFrameShallowSchema` is sound — see its
- * doc for why any down-negotiated line must take the deep parse instead.
+ * The newest line whose snapshot embeds the whole chat record.
+ *
+ * This is what `chatSubscribeSnapshotServerFrameShallowSchema` is gated on,
+ * and the two must move together: the shallow parse exists only to skip a deep
+ * zod walk over `chat.messages` / `chat.events`, and the windowed line
+ * (`1.7`, below) has neither array on its snapshot at all. So this is
+ * deliberately NOT "the highest minor" — it is "the highest minor with an
+ * unbounded snapshot", and it stops moving now that later minors are windowed.
+ *
+ * Renamed from `chatSubscribeLiveSchemaVersion` when `1.7` opened, because
+ * "live" had quietly come to mean two things: the newest negotiable line, and
+ * the line whose shapes the shallow parse is exact for. Those are now different
+ * versions, and a caller reading the old name would have picked the wrong one.
  */
-export const chatSubscribeLiveSchemaVersion = chatSubscribeV16.schemaVersion;
+export const chatSubscribeFullSnapshotSchemaVersion =
+  chatSubscribeV16.schemaVersion;
+
+// ─── Live `chat.subscribe@1.7` contract — the windowed transcript ──────────
+//
+// `1.7` stops shipping the transcript with the snapshot. See
+// `subscribe-windowed.ts` for the design; the short version is that today's
+// snapshot embeds the entire persisted chat (20-40 MB on a long one) and every
+// one of the host's ~27 emit sites re-serializes it, so this line replaces that
+// with a bounded snapshot, a row skeleton streamed in chunks, and ranges of
+// bodies fetched on demand.
+//
+// **Version implies behaviour.** There is no `windowed` flag and no
+// full-snapshot mode on this line. Two behaviours behind one version is the
+// arrangement where a host and a client can each believe the other is in the
+// mode it is not; a peer too old for this negotiates `1.6` or below and the
+// host serves it whole snapshots from its own fallback path.
+//
+// That is also why this union is built from scratch rather than by extending
+// `chatSubscribeServerFrameSchema`: the two lines do not differ by a few added
+// variants, they carry different snapshots. Sharing the aux frames (everything
+// that is not about the transcript) is deliberate and is what keeps the
+// renderer's reducers identical across the two modes.
+
+/**
+ * The bounded snapshot.
+ *
+ * Aux state exactly as `1.6` sends it, with three substitutions and four
+ * additions. The substitutions are the transcript itself (`chat` loses its two
+ * arrays), the accumulated-changes panel (summaries now, contents on demand -
+ * full file bodies were one of the larger byte offenders), and nothing else:
+ * every field a renderer already reads keeps its name, its type, and its
+ * optionality, because the zero-regression bar is about mixed-version fleets
+ * and a reducer that has to branch per line is where that bar gets missed.
+ *
+ * `backgroundItems` in particular keeps `.optional()` even though every `1.7`
+ * host populates it. Its optionality is a capability sentinel on the older
+ * lines, and making it required here would fork the one reducer that reads it
+ * for no gain.
+ */
+export const chatWindowedSnapshotSchema = z.object({
+  /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
+  chat: chatRecordSchema,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  /** Summaries only; contents come from `chat.readAccumulatedFileChange`. */
+  accumulatedFileChangeSummaries: z.array(
+    chatAccumulatedFileChangeSummarySchema,
+  ),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  managedCommands: z.array(managedCommandSchema).default([]),
+  heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
+  turnInProgress: z.boolean().optional(),
+  /**
+   * The epoch every ordinal in this session is relative to. Bumped by the host
+   * on any history mutation; a `range` response carrying a different one is
+   * discarded rather than applied.
+   */
+  transcriptEpoch: z.number().int().nonnegative(),
+  /**
+   * How many rows the transcript has, so the client can size the scrollbar and
+   * seat the tail before the skeleton has finished arriving — and so it can
+   * tell a complete skeleton from a lossy one when the final chunk lands.
+   */
+  rowCount: z.number().int().nonnegative(),
+  /**
+   * The hydrated tail. Always present, because the tail is where a live turn
+   * happens and the client must paint it without a round trip.
+   */
+  tail: chatTranscriptWindowSchema,
+  /** Whole-transcript folds a windowed client cannot compute for itself. */
+  derived: chatTranscriptDerivedSchema,
+});
+export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
+
+const chatSubscribeWindowedSnapshotServerFrameSchema = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatWindowedSnapshotSchema,
+});
+
+const chatSubscribeSkeletonChunkServerFrameSchema = z.object({
+  kind: z.literal("skeletonChunk"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  chunk: chatSkeletonChunkSchema,
+});
+
+const chatSubscribeIndexChangedServerFrameSchema = z.object({
+  kind: z.literal("indexChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  /** The epoch AFTER the change — what subsequent `loadRange`s must carry. */
+  epoch: z.number().int().nonnegative(),
+  /** Row count after the change, kept in step with the snapshot's field. */
+  rowCount: z.number().int().nonnegative(),
+  change: chatIndexChangeSchema,
+});
+
+const chatSubscribeRangeServerFrameSchema = z.object({
+  kind: z.literal("range"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  range: chatRangeResponseSchema,
+});
+
+export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
+    chatSubscribeWindowedSnapshotServerFrameSchema,
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema,
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemas,
+  ],
+);
+export type ChatSubscribeWindowedServerFrame = z.infer<
+  typeof chatSubscribeWindowedServerFrameSchema
+>;
+
+/**
+ * Ask for a span of bodies.
+ *
+ * Not an owner action: it carries no `clientActionId` and is never acked,
+ * because it is a READ. A viewer scrolling a chat they do not own must be able
+ * to hydrate what they are looking at, and routing that through the action
+ * machinery would gate it on `canAct` and mint an ack per scroll.
+ */
+const loadRangeClientFrameSchema = z.object({
+  kind: z.literal("loadRange"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  request: chatLoadRangeRequestSchema,
+});
+
+/**
+ * Re-base from scratch: a fresh bounded snapshot and a fresh skeleton.
+ *
+ * The client's recovery path for the cases where its own index cannot be
+ * trusted — a reconnect, an epoch it never saw the `indexChanged` for, a
+ * `reindexed` change. A read, so it is not an owner action either.
+ */
+const resnapshotClientFrameSchema = z.object({
+  kind: z.literal("resnapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+});
+
+export const chatSubscribeWindowedClientFrameSchema = z.discriminatedUnion(
+  "kind",
+  [
+    ...chatSubscribeClientFrameSchemaOptions,
+    loadRangeClientFrameSchema,
+    resnapshotClientFrameSchema,
+  ],
+);
+export type ChatSubscribeWindowedClientFrame = z.infer<
+  typeof chatSubscribeWindowedClientFrameSchema
+>;
+
+/**
+ * The windowed line.
+ *
+ * **Deliberately not in `hostStreamRpcRegistry` yet.** Stream minors are
+ * negotiated to the highest the two peers share, so the moment this appears in
+ * the registry every new-GUI-to-new-host pair negotiates it — which means
+ * registering it IS the switch, and it must land in the same change that
+ * teaches the host to serve windowed frames and the GUI to consume them.
+ * Registering it earlier would leave both sides negotiating a line neither
+ * implements, on the one stream where a broken subscribe means a blank chat.
+ */
+export const chatSubscribeV17 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 7 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});

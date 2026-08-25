@@ -1,5 +1,5 @@
 import {
-  chatSubscribeLiveSchemaVersion,
+  chatSubscribeFullSnapshotSchemaVersion,
   chatSubscribeServerFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchema,
   type ChatSubscribeClientFrame,
@@ -203,17 +203,18 @@ export class ChatStreamClient {
   }
 
   /**
-   * Whether THIS session negotiated exactly the live `chat.subscribe` line.
-   * Gates the shallow snapshot path: on any other (older) line the host sends
-   * pre-image shapes that only the deep parse's compatibility defaults
-   * up-convert to the current `Message`/`ChatEvent` types.
+   * Whether THIS session negotiated exactly the newest FULL-SNAPSHOT
+   * `chat.subscribe` line. Gates the shallow snapshot path: on any older line
+   * the host sends pre-image shapes that only the deep parse's compatibility
+   * defaults up-convert to the current `Message`/`ChatEvent` types, and on the
+   * windowed line there is no embedded transcript to skip in the first place.
    */
-  private isOnLiveSchemaLine(): boolean {
+  private isOnFullSnapshotSchemaLine(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
     return (
       version !== null &&
-      version.major === chatSubscribeLiveSchemaVersion.major &&
-      version.minor === chatSubscribeLiveSchemaVersion.minor
+      version.major === chatSubscribeFullSnapshotSchemaVersion.major &&
+      version.minor === chatSubscribeFullSnapshotSchemaVersion.minor
     );
   }
 
@@ -222,7 +223,7 @@ export class ChatStreamClient {
     binaryPayload: Uint8Array | null,
   ): void {
     if (binaryPayload !== null) return;
-    if (envelope.kind === "snapshot" && this.isOnLiveSchemaLine()) {
+    if (envelope.kind === "snapshot" && this.isOnFullSnapshotSchemaLine()) {
       // Snapshots are the one frame whose size scales with chat history
       // (10s-100s of MB under full-chat-on-subscribe); a deep zod parse over
       // the message/event histories is seconds of render-thread CPU per
@@ -230,7 +231,7 @@ export class ChatStreamClient {
       // history arrays are checked structurally - same trust domain as the
       // blockDelta frames that stream the identical content.
       //
-      // LIVE-LINE ONLY: the deep schemas' compatibility defaults
+      // FULL-SNAPSHOT-LINE ONLY: the deep schemas' compatibility defaults
       // (`imageResolutions: []`, `serviceTier: null`, ...) are what
       // up-convert a down-negotiated host's pre-image messages; the
       // structural check skips them, so a 1.5 snapshot taken shallow would
