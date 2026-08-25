@@ -116,8 +116,8 @@ const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
 // (16-bit X11 channels, see `toRgbString` in @xterm/xterm) - so a query or
 // colour-SET sequence arriving as genuine user input (a paste) still flows
 // through untouched.
-// eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
 const OSC_COLOR_REPORT_PATTERN =
+  // eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
   /\x1b\](?:10|11);rgb:[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
