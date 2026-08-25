@@ -11,6 +11,12 @@
  * keeps the rest of the app untouched. The mobile shell only renders below md,
  * so desktop never carries the scope.
  *
+ * Controls are addressed by `data-slot`, so a control that is not a `ui/button`
+ * earns the slop by declaring a slot of its own. The two rules below must list
+ * the same slots: the second positions its `::after` absolutely, and a slot
+ * missing from the first has no positioned ancestor of its own, so the hit area
+ * silently lands on whatever box above it happens to be positioned.
+ *
  * Vertical-only slop, matching precedent: flush horizontal neighbours would
  * otherwise capture each other's taps. `.absolute` controls (the drawer's
  * built-in close) skip the position:relative fallback - this file is unlayered
@@ -19,12 +25,20 @@
  */
 @media (pointer: coarse) {
   [data-mobile-shell-touch-scope]
-    :is([data-slot="button"], [data-slot="tabs-trigger"]):not(.absolute) {
+    :is(
+      [data-slot="button"],
+      [data-slot="tabs-trigger"],
+      [data-slot="comment-thread-toggle"]
+    ):not(.absolute) {
     position: relative;
   }
 
   [data-mobile-shell-touch-scope]
-    :is([data-slot="button"], [data-slot="tabs-trigger"])::after {
+    :is(
+      [data-slot="button"],
+      [data-slot="tabs-trigger"],
+      [data-slot="comment-thread-toggle"]
+    )::after {
     content: "";
     /* Pure hit-area - this pseudo must NEVER paint. An element has a single
        `::after`, so this rule merges with a control's own `::after` (e.g.

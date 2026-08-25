@@ -315,6 +315,7 @@ vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 
@@ -1266,6 +1267,66 @@ describe("<LandingTerminalPanel />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
+  it("leaves the tombstone to the owner when its close merely joins one", async () => {
+    // The close coordinator keys by the terminal's LIFETIME, not by RPC, so
+    // this close can join an in-flight `terminal.kill` the recovery bridge
+    // already sent. A kill answers an already-gone session with `killed: false`
+    // as data, and for a `pendingCreate` record the kill mutation deliberately
+    // KEEPS the tombstone - so a joiner that retired it here would overrule the
+    // owner and strand the PTY the create is about to produce.
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const projection = plainTerminal({
+      terminalId: "terminal-owned",
+      manualTitle: "Owned title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "owned-instance",
+      sessionId: "terminal-owned",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+
+    // Another surface's request is already in flight for this lifetime, and it
+    // settles without retiring the record.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-a",
+      sessionId: "terminal-owned",
+      close: ownerClose,
+    });
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    render(panelUi());
+    fireEvent.click(screen.getByRole("button", { name: "Close Owned title" }));
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    });
+    releaseOwner();
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    // It joined rather than sending its own, and left the record alone.
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
   it("blocks capable-host create and rename, but still tombstones a close without dispatching, while authority is stale", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
@@ -1325,7 +1386,12 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "terminal-stale" },
+      {
+        hostId: "host-a",
+        sessionId: "terminal-stale",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -1362,7 +1428,12 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "terminal-unresolved" },
+      {
+        hostId: "host-a",
+        sessionId: "terminal-unresolved",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -1533,8 +1604,18 @@ describe("<LandingTerminalPanel />", () => {
     // shell needs killing once that host becomes dialable.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual(
       expect.arrayContaining([
-        { hostId: "host-a", sessionId: "terminal-ready" },
-        { hostId: "host-b", sessionId: "terminal-not-ready" },
+        {
+          hostId: "host-a",
+          sessionId: "terminal-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
       ]),
     );
     await waitFor(() => {
@@ -1557,7 +1638,12 @@ describe("<LandingTerminalPanel />", () => {
     // the not-ready host's stays until the recovery bridge can ask it.
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-        { hostId: "host-b", sessionId: "terminal-not-ready" },
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
       ]);
     });
   });
@@ -1628,7 +1714,12 @@ describe("<LandingTerminalPanel />", () => {
       });
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "still-running" },
+      {
+        hostId: "host-a",
+        sessionId: "still-running",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
