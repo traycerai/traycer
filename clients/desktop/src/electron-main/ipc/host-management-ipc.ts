@@ -18,7 +18,7 @@ import type {
   HostLogsTailResult,
   HostRegistryUpdateState,
   HostRemovalState,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
   MaintenanceDoctorProjection,
   MaintenanceInstallDispatch,
   DoctorRepairDispatch,
@@ -31,6 +31,8 @@ import type {
 import {
   hostAvailableManifestSchema,
   hostDoctorIssueSchema,
+  hostIncludePreReleasesSourceSchema,
+  type HostIncludePreReleasesSource,
 } from "@traycer/protocol/host/maintenance/index";
 import {
   readHostInstallRecordAtPath,
@@ -117,6 +119,130 @@ export function optionalString(raw: unknown, key: string): string | null {
 export function optionalBoolean(raw: unknown, key: string): boolean {
   if (!isPlainObject(raw)) return false;
   return raw[key] === true;
+}
+
+/**
+ * A tri-state flag off the IPC wire: `true`, `false`, or absent.
+ *
+ * Distinct from `optionalBoolean`, which folds absent and `false` together.
+ * That fold is right for a plain switch and wrong for the catalog override,
+ * where the two are different REQUESTS: absent asks the CLI to derive
+ * inclusion from the installed host, and `false` overrides that derivation.
+ * Reading an unchecked filter as absent is what would leave an RC host still
+ * listing release candidates after the user unticked the box.
+ *
+ * Anything that is not a boolean reads as absent — the renderer omits the key
+ * for the derive state, and `structuredClone` across the context bridge drops
+ * an explicitly-undefined property anyway, so absence is the only form that
+ * state can arrive in.
+ */
+export function triStateBoolean(
+  raw: unknown,
+  key: string,
+): boolean | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  const value = raw[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * `host available`'s catalog args for a tri-state override.
+ *
+ * Mirrors the host's own `availableArgsForOverride` resolver: absent passes NO
+ * flag so the CLI derives the default, and explicit false passes the NEGATIVE
+ * flag rather than omitting one. Both lanes below answer the same question as
+ * that resolver over the same producer, so they must spell it the same way.
+ */
+function availableArgsForOverride(
+  includePreReleases: boolean | undefined,
+): readonly string[] {
+  const base = ["host", "available", "--json"];
+  if (includePreReleases === undefined) return base;
+  return includePreReleases
+    ? [...base, "--include-pre-releases"]
+    : [...base, NO_INCLUDE_PRE_RELEASES_FLAG];
+}
+
+/** The flag only a CLI new enough to know explicit exclusion will accept. */
+const NO_INCLUDE_PRE_RELEASES_FLAG = "--no-include-pre-releases";
+
+/**
+ * Whether the CLI failed specifically because it does not KNOW that flag.
+ *
+ * Positive identification, never a generic catch: retrying an unrelated
+ * failure would mask a real fault behind a silent second run. Two signals,
+ * both naming the flag, so an unknown OTHER option (a caller bug rather than
+ * version skew) does not trigger a retry either:
+ *
+ * 1. the `--json` envelope's `details.commanderCode` — the CLI entry's
+ *    `applyRunnerErrorRouting` puts commander's own `commander.unknownOption`
+ *    there deliberately, and `TraycerCliError` carries it through as `details`;
+ * 2. failing that, commander's message text (or the stderr tail), for a CLI old
+ *    enough to predate that routing and refuse in raw stderr.
+ *
+ * Mirrors `rejectedUnknownFlag` in the host's own
+ * `host-maintenance-resolvers.ts`. The duplication is forced — separate repos,
+ * no shared module spans them — and both are keyed off the same two facts.
+ */
+function rejectedUnknownFlag(err: unknown): boolean {
+  if (!(err instanceof TraycerCliError)) return false;
+  const details = isPlainObject(err.details) ? err.details : {};
+  if (
+    details.commanderCode === "commander.unknownOption" &&
+    err.message.includes(NO_INCLUDE_PRE_RELEASES_FLAG)
+  ) {
+    return true;
+  }
+  return (
+    mentionsUnknownOption(err.message) || mentionsUnknownOption(err.stderrTail)
+  );
+}
+
+function mentionsUnknownOption(text: string): boolean {
+  return (
+    text.includes("unknown option") &&
+    text.includes(NO_INCLUDE_PRE_RELEASES_FLAG)
+  );
+}
+
+/**
+ * The CLI envelope's resolved inclusion and provenance, or a fail-closed
+ * reconstruction from the request when this CLI predates them.
+ *
+ * Same rule and same fallback as the host resolver's `parseAvailableInclusion`
+ * — including its refusal to ever synthesise `installed-rc`, which asserts a
+ * derivation only the CLI can have performed.
+ */
+function readCliInclusion(
+  payload: unknown,
+  requested: boolean | undefined,
+): {
+  readonly effectiveIncludePreReleases: boolean;
+  readonly includePreReleasesSource: HostIncludePreReleasesSource;
+} {
+  const record = isPlainObject(payload) ? payload : {};
+  const source = hostIncludePreReleasesSourceSchema.safeParse(
+    record.includePreReleasesSource,
+  );
+  const effective = record.includePreReleases;
+  if (source.success && typeof effective === "boolean") {
+    return {
+      effectiveIncludePreReleases: effective,
+      includePreReleasesSource: source.data,
+    };
+  }
+  if (requested === undefined) {
+    return {
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    };
+  }
+  return {
+    effectiveIncludePreReleases: requested,
+    includePreReleasesSource: requested
+      ? "explicit-include"
+      : "explicit-exclude",
+  };
 }
 
 function optionalNumber(raw: unknown, key: string): number | null {
@@ -1172,17 +1298,27 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostAvailable,
     async (_event, raw: unknown) => {
-      const includePreReleases = optionalBoolean(raw, "includePreReleases");
-      const args = [
-        "host",
-        "available",
-        "--json",
-        ...(includePreReleases ? ["--include-pre-releases"] : []),
-      ];
+      const requested = triStateBoolean(raw, "includePreReleases");
       try {
-        const result = await runTraycerCliJson<unknown>(args);
-        return projectAvailableSnapshot(result);
+        return projectAvailableSnapshot(
+          await runTraycerCliJson<unknown>(availableArgsForOverride(requested)),
+        );
       } catch (err) {
+        // ONE retry, only for an explicit exclusion this CLI is too old to
+        // spell, and only on a positively identified unknown-option refusal.
+        // Unlike the maintenance lanes below, this one resolves the DISCOVERED
+        // manifest/PATH CLI (`runTraycerCliJson`, not the bundled
+        // version-matched one), so it can be older than the app driving it.
+        // Dropping the flag is not a degradation: a CLI that does not know it
+        // also predates derived defaults, so its no-flag behaviour is already
+        // stable-only — what explicit false asked for.
+        if (requested === false && rejectedUnknownFlag(err)) {
+          return projectAvailableSnapshot(
+            await runTraycerCliJson<unknown>(
+              availableArgsForOverride(undefined),
+            ),
+          );
+        }
         // Dev builds reject this command with `E_HOST_VERIFY_FAILED`
         // because no trusted signing keys are bundled. Surface that as an
         // empty version list rather than leaking the CLI's stderr to the
@@ -1216,16 +1352,11 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerMaintenanceUpdateCheck,
-    async (_event, raw: unknown): Promise<HostUpdateCheckResponse> => {
+    async (_event, raw: unknown): Promise<HostUpdateCheckResponseV11> => {
       const expectedHostId = optionalString(raw, "expectedHostId") ?? "";
       return fencedLocalHostRead(bridge, expectedHostId, async () => {
-        const includePreReleases = optionalBoolean(raw, "includePreReleases");
-        const args = [
-          "host",
-          "available",
-          "--json",
-          ...(includePreReleases ? ["--include-pre-releases"] : []),
-        ];
+        const requested = triStateBoolean(raw, "includePreReleases");
+        const args = availableArgsForOverride(requested);
         let payload: unknown;
         try {
           payload = await runBundledTraycerCliJson<unknown>(args);
@@ -1254,7 +1385,16 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
           );
           return { outcome: "invalid-output" };
         }
-        return { outcome: "ok", manifest: manifest.data };
+        // The CLI envelope's own resolved inclusion and provenance, preserved
+        // rather than re-derived. This lane answers the same wire contract as
+        // the host's `host.update.check` resolver, and dropping the metadata
+        // here would make the Settings explanation appear on a remote host and
+        // vanish on a local one for identical CLI output.
+        return {
+          outcome: "ok",
+          manifest: manifest.data,
+          ...readCliInclusion(payload, requested),
+        };
       });
     },
   );

@@ -546,7 +546,7 @@ export function DefaultHostReadyGate(props: {
   const cardReadiness = gateCardReadiness(predicateInput);
   return (
     <div
-      className="flex min-h-svh w-full flex-col bg-background text-foreground"
+      className="flex min-h-safe-svh w-full flex-col bg-background text-foreground"
       data-testid="host-ready-gate"
       data-readiness={readiness.kind}
       data-narrated-by-window-modal={cardReadiness === null ? "true" : "false"}

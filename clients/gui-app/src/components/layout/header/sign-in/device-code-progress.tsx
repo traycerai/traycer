@@ -7,7 +7,7 @@ import { type DeviceFlowProgress } from "@/lib/auth/auth-service";
 import { formatClockDuration } from "@/lib/format-duration";
 import { cn } from "@/lib/utils";
 import { DeviceCodeFallback } from "./device-code-fallback";
-import { useRemainingDeviceSeconds } from "./use-remaining-device-seconds";
+import { useRemainingSeconds } from "./use-remaining-seconds";
 
 /**
  * Active device-flow progress. The app already auto-opens the pre-filled
@@ -24,7 +24,7 @@ export function DeviceCodeProgress(props: {
   const openVerificationPageMutation = useAuthOpenVerificationPageMutation();
   const signInMutation = useAuthSignInMutation();
   const progress = props.progress;
-  const remainingSeconds = useRemainingDeviceSeconds(progress.expiresAtMs);
+  const remainingSeconds = useRemainingSeconds(progress.expiresAtMs);
   const isFinalizing = progress.phase === "finalizing";
   // A consumed (approved) code can no longer expire - finalizing wins over the
   // countdown reaching zero while the token is validated.

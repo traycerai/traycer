@@ -270,7 +270,7 @@ function LandingTerminalTab(props: {
             size="icon-sm"
             aria-label={`Close ${displayName}`}
             disabled={!props.canClose}
-            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100"
             onClick={(event) => {
               event.stopPropagation();
               props.onClose(tab);

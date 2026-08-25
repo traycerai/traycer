@@ -10,6 +10,7 @@ import {
   Server,
   ShieldAlert,
   Smartphone,
+  TabletSmartphone,
   Terminal,
 } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -59,6 +60,8 @@ function sessionClientLabel(session: UserSessionListItem): string {
       return "CLI";
     case "extension":
       return "Extension";
+    case "mobile":
+      return "Mobile app";
     case "host":
       return "Host";
     default:
@@ -137,6 +140,11 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
       return <Terminal className={className} />;
     case "extension":
       return <Smartphone className={className} />;
+    case "mobile":
+      // Deliberately NOT `Smartphone`: the extension already owns that glyph,
+      // and two client kinds sharing one icon in the same list is worse than
+      // either choice on its own.
+      return <TabletSmartphone className={className} />;
     case "host":
       return <Server className={className} />;
     default:

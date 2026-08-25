@@ -91,6 +91,7 @@ import {
   nextComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
@@ -138,6 +139,22 @@ function promptStashIsDisabled(
   attachmentPending: boolean,
 ): boolean {
   return isSubmitting || attachmentPending;
+}
+
+function landingComposerCanSubmit(args: {
+  readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
+  readonly submitBlocked: boolean;
+  readonly workspaceCanStart: boolean;
+  readonly hasSubmittableContent: boolean;
+}): boolean {
+  return (
+    !args.isSubmitting &&
+    !args.attachmentPending &&
+    !args.submitBlocked &&
+    args.workspaceCanStart &&
+    args.hasSubmittableContent
+  );
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -188,6 +205,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const composerMode = draftComposerMode ?? globalComposerMode;
   const chatComposerActive = activityEnabled && composerMode === "chat";
+  // Phones collapse the composer toolbar into a single options-sheet trigger.
+  // Only the toolbar slot swaps, so the editor keeps its position in the tree
+  // and never remounts when the viewport crosses the breakpoint.
+  const isMobile = useIsMobileViewport();
 
   useEffect(() => {
     return () => {
@@ -584,12 +605,13 @@ export function LandingComposer(props: LandingComposerProps) {
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
   });
-  const canSubmit =
-    !isSubmitting &&
-    !attachmentPending &&
-    !submitBlocked &&
-    workspaceCanStart &&
-    hasSubmittableContent;
+  const canSubmit = landingComposerCanSubmit({
+    isSubmitting,
+    attachmentPending,
+    submitBlocked,
+    workspaceCanStart,
+    hasSubmittableContent,
+  });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
@@ -796,6 +818,7 @@ export function LandingComposer(props: LandingComposerProps) {
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
+      toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
           <ComposerHostNotice

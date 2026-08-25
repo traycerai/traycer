@@ -209,7 +209,7 @@ function setInitialAuthState(status: AuthStatus): void {
     return;
   }
   if (status === "signing-in") {
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
     return;
   }
   useAuthStore.getState().setSignedOut();

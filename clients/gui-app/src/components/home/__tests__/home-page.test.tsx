@@ -14,6 +14,7 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -35,6 +36,7 @@ import {
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
+import { isMobileApp, setMobileApp } from "@/lib/mobile-app";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
 import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -83,8 +85,16 @@ const homeMocks = vi.hoisted(() => ({
   })),
   composerCommits: [] as ComposerCommit[],
   nextInstanceId: 0,
+  isMobile: false,
   tabActivity: { visible: true, focused: true },
   delayComposerRegistration: false,
+}));
+
+// Drive the viewport branch directly. jsdom reports a desktop width, so this
+// only makes the default explicit - the phone case flips it per test.
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => homeMocks.isMobile,
+  isMobileViewport: () => homeMocks.isMobile,
 }));
 
 vi.mock("@/components/layout/tab-surface-activity-hooks", () => ({
@@ -222,6 +232,11 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
           : composer.closest("[data-primary-focus-scope='true']");
       if (
         activityEnabled &&
+        // Mirrors the real editor's own gate: becoming active is not a user
+        // gesture, so the installed mobile app never takes focus from it. The
+        // mock carries it so a surface-driven focus is the only thing left that
+        // could raise the keyboard here.
+        !isMobileApp() &&
         !paneActivationFocusIntent.shouldYieldAutoFocus() &&
         (focusScope === null ||
           document.activeElement === null ||
@@ -400,6 +415,7 @@ describe("<HomePage />", () => {
     __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     homeMocks.systemModalOpen = false;
+    homeMocks.isMobile = false;
     homeMocks.navigate.mockReset();
     homeMocks.request.mockReset();
     homeMocks.getActiveHostId.mockReset();
@@ -451,6 +467,8 @@ describe("<HomePage />", () => {
       mostRecentTabIdByEpicId: {},
     });
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    useMobileNavStore.setState({ open: false });
+    setMobileApp(false);
     useAuthStore.setState({
       status: "signed-out",
       profile: null,
@@ -495,6 +513,59 @@ describe("<HomePage />", () => {
     expect(screen.getByTestId("landing-composer").dataset.activityEnabled).toBe(
       "false",
     );
+    queryClient.clear();
+  });
+
+  it("drops the embedded epics list at phone width, keeping the hero and composer", () => {
+    homeMocks.isMobile = true;
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    // The hamburger drawer already carries "Recent tasks" + "View all" off the
+    // same useHistoryQuery, so the inline copy is pure duplication here.
+    expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+    expect(screen.getByTestId("home-hero")).not.toBeNull();
+    expect(screen.getByTestId("landing-composer")).not.toBeNull();
+    queryClient.clear();
+  });
+
+  it("opens the nav drawer from the phone-only View history link", () => {
+    homeMocks.isMobile = true;
+    useMobileNavStore.setState({ open: false });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("home-view-history"));
+
+    // Same drawer the header hamburger opens - that is where "Recent tasks"
+    // lives once the embedded list is dropped at this width.
+    expect(useMobileNavStore.getState().open).toBe(true);
+    queryClient.clear();
+  });
+
+  it("keeps the View history link off the desktop landing page", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HomePage />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByTestId("home-view-history")).toBeNull();
     queryClient.clear();
   });
 
@@ -843,6 +914,34 @@ describe("<HomePage />", () => {
 
       unregisterInactive();
       inactiveComposer.remove();
+      queryClient.clear();
+    });
+
+    // The installed mobile app's rule: only a gesture may raise the software
+    // keyboard. The landing surface reaches both endpoints through their focus
+    // registries, so neither endpoint's own guard is on this path - the guard
+    // has to be here, and these two cases are what hold it.
+    it("takes no focus on the mobile app when the landing surface becomes focused", async () => {
+      setMobileApp(true);
+      useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+      useLandingDraftStore.getState().setActiveDraft("draft-a");
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      // The composer IS registered and active - without that this would pass on
+      // a surface that simply had no endpoint to focus.
+      const submit = await screen.findByTestId("landing-submit");
+      expect(document.activeElement).not.toBe(submit);
+      expect(document.body.contains(submit)).toBe(true);
+      queryClient.clear();
+    });
+
+    it("leaves a maximized landing terminal unfocused on the mobile app", async () => {
+      setMobileApp(true);
+      seedFocusedLandingTerminal(true);
+      const { queryClient } = renderLandingFocusHarness(noPaneFocusIntent);
+
+      const terminal = await screen.findByTestId("landing-terminal-panel-slot");
+      expect(document.activeElement).not.toBe(terminal);
       queryClient.clear();
     });
 

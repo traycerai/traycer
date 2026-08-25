@@ -27,6 +27,7 @@ import type { SkillsMutateData } from "@/hooks/providers/native-response-map";
 import { useProvidersSkillsList } from "@/hooks/providers/use-providers-skills-list-query";
 import { useProvidersSkillsMutate } from "@/hooks/providers/use-providers-skills-mutate-mutation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
 import { ProviderSkillComposerDialog } from "./provider-skill-composer-dialog";
@@ -462,7 +463,12 @@ function ProviderSkillsTabBody({
         (~/.agents/skills) vs this provider's own folder — and must not look
         like a second scope picker.
       */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-2",
+          SETTINGS_ROW_STACK.container,
+        )}
+      >
         {globalOnly ? (
           <p className="text-ui-xs text-muted-foreground">
             Applies to every workspace on this host.

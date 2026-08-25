@@ -51,10 +51,12 @@ export interface IHostStreamClient<
   /**
    * Nudges every open session to reconnect immediately (skip backoff) - used
    * when a LOCAL host respawns at a new `websocketUrl` under the same
-   * identity. A remote session has no equivalent "same identity, new address"
-   * transition (the relay attach endpoint is fixed, per-fleet, not per-host),
-   * so `RemoteStreamClient` implements this as a no-op; its own resume/backoff
-   * machinery already owns reconnection.
+   * identity, and by the OS/app wake path (`subscribeWakeSignals`). A remote
+   * session has no equivalent "same identity, new address" transition (the
+   * relay attach endpoint is fixed, per-fleet, not per-host), so
+   * `RemoteStreamClient` cannot re-resolve anything; it forwards to the
+   * session's own wake - pull a pending redial forward, and probe a socket
+   * whose keepalive interval may have been frozen along with the runtime.
    *
    * `options.probeFirst` distinguishes the two callers, and getting it wrong is
    * a real regression in either direction:
@@ -66,6 +68,21 @@ export interface IHostStreamClient<
    *    not finished coming back. Probe each session and re-dial only the dead.
    */
   reconnectAll(reason: string, options: ReconnectAllOptions): void;
+  /**
+   * Whether this client is currently carrying traffic - the readiness of the
+   * session(s) IT owns, never a lookup by host. A surface that speaks for one
+   * connection must ask the client it speaks for: a per-host readiness scan can
+   * answer off an unrelated session (a completed one-shot, a keep-warm entry
+   * nobody holds) and hide the very outage the surface exists to report.
+   *
+   * The two transports own one connection and many respectively, so the shape
+   * of "ready" differs and both are honest about their own: `RemoteStreamClient`
+   * answers for its single shared mux session, `WsStreamClient` answers "none of
+   * the sessions I own is disconnected" - vacuously true when it owns none,
+   * since a client that has not subscribed to anything is not evidence of an
+   * outage.
+   */
+  isReady(): boolean;
   /**
    * Learned per-method compatibility with the connected host, keyed by
    * stream method name. `"unknown"` until a subscribe attempt resolves.

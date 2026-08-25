@@ -485,6 +485,32 @@ export class WsStreamClient<
   }
 
   /**
+   * Whether nothing this client owns is currently disconnected
+   * (see {@link IHostStreamClient.isReady}).
+   *
+   * This client is not one connection: it owns N independent per-method
+   * sockets, each with its own status and its own reconnect loop, so "ready"
+   * can only mean "none of mine is down". A client that owns NO sessions
+   * answers `true` - it has not subscribed to anything, which is not evidence
+   * of an outage, and answering `false` there would make a client flip to
+   * not-ready every time its last stream is legitimately unsubscribed.
+   *
+   * Deliberately scoped to owned sessions and nothing else: the point of this
+   * method is that a surface can ask the client it actually speaks for.
+   */
+  isReady(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    for (const session of this.ownedSessions) {
+      if (!session.isOpen()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Subscribes to the client's terminal `close()`. Fires once, synchronously
    * inside `close()`, after every owned session has been torn down. NOT
    * retro-fired for an already-closed client - callers that may attach late
@@ -1328,6 +1354,16 @@ class StreamSession<
     }
     this.teardownSocket(1000, "reconnect-requested-by-consumer");
     this.onTransportDrop();
+  }
+
+  /**
+   * Whether this session is carrying traffic right now. `"open"` is the only
+   * status that qualifies: `"connecting"` has not arrived yet, `"reconnecting"`
+   * has lost the socket, and `"closed"` is over. A disposed session is never
+   * open, whatever status it last published.
+   */
+  isOpen(): boolean {
+    return !this.disposed && this.status === "open";
   }
 
   close(): void {

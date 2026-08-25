@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -290,21 +291,25 @@ function RemoteFolderPickerBody(): ReactNode {
           }}
         />
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1">
-          <Kbd>↑</Kbd>
-          <Kbd>↓</Kbd> Navigate
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Kbd>⏎</Kbd> Open
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Kbd>⌫</Kbd> Back
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <Kbd>Esc</Kbd> Close
-        </span>
-      </div>
+      {/* The whole strip is the hint - hiding only the caps would leave a
+          bordered band of orphaned verbs. */}
+      <ShortcutHint>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 px-3 py-2 text-ui-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd> Navigate
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Kbd>⏎</Kbd> Open
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Kbd>⌫</Kbd> Back
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <Kbd>Esc</Kbd> Close
+          </span>
+        </div>
+      </ShortcutHint>
     </div>
   );
 }

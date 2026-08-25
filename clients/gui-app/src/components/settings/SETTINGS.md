@@ -53,12 +53,100 @@ navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
 gate at all: a section absent from them stops being recognised as a settings
 route for persistence. `devices` was missing from both for its whole life.
 
+## Responsive Behavior (mobile)
+
+The **route** presentation collapses to a drill-down below the 768px
+`useIsMobileViewport()` breakpoint: `/settings` renders the section list full-screen
+(`SettingsSidebar` with `variant="mobile-list"` - the index no longer
+redirects on phones), tapping a section navigates to its existing route
+full-screen, and `settings-layout.tsx` shows a back-to-list header instead of
+the rail. Desktop keeps the exact two-pane shell; the **modal** presentation
+is deliberately unchanged internally (it always renders the rail variant) and
+simply never opens on phones: `openSettings` in
+`src/stores/tabs/use-system-tab-modal.ts` - the single funnel for every modal
+entry point (user menu, deep-links, the palette/keybinding bridge) - gates on
+`isMobileViewport()` and navigates to the full-page route instead
+(`/settings/<section>` when a section is requested, else `/settings`).
+History keeps its modal on every viewport.
+
+Supporting pieces, all viewport-agnostic where possible:
+
+- `settings-row-layout.ts` (`SETTINGS_ROW_STACK`) holds the narrow-width half
+  of the label-beside-control geometry every row shares. It is a WIDTH FLOOR,
+  not a stack: flex line-breaking reads an item's basis clamped by its own
+  `min-width`, so raising the label's floor to `70%` below `md` pushes any
+  control wider than the remaining third onto a line of its own before any
+  shrinking happens. Wide controls (selects, inputs, chip rows, action
+  clusters) therefore stack under the label at phone width, while a switch or
+  an icon button stays beside it - a settings toggle reads as one line on a
+  phone, the way it does natively. Every class carries `max-md:` bar the
+  `flex-wrap` the mechanism depends on, so it layers onto the row that uses it
+  (padding, borders and typography stay that row's own) and is inert from `md`
+  up - the pointer-width rendering is unchanged.
+  Rows that are two columns from their own markup rather than through
+  `SettingsRow` - the Shell panel's program and startup-flags rows,
+  Diagnostics' memory and log-detail rows, the host identity/updates rows, the
+  worktree branch-prefix row, the Skills header and the notification-hook rows
+  - apply it directly. Without a floor the control keeps its intrinsic width
+    and the label takes what is left, which on a phone is a sliver: a two-word
+    label breaks one word per line.
+- `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
+  (switches) stay inline while wide controls wrap below the label on narrow
+  containers; `SETTINGS_ROW_STACK` raises that floor below `md` so the split
+  lands in the right place on a phone.
+- `settings-panel-shell.tsx` (and the inline shells in the Keybindings and
+  Shell panels) step padding down below `sm`; the shell header wraps.
+- A row whose control wrapped still has to decide what to DO with its new
+  line, and that is per-control rather than something the floor can express -
+  a button should not stretch, a text field should. The worktree branch-prefix
+  row is the worked example: below `md` its cluster spans the line
+  (`max-md:w-full`), the input flexes into it, and its description drops to
+  `md:truncate` so the sentence wraps once it owns the width instead of
+  ellipsing. Its reserved reset slot keeps leading the field at every width,
+  and the small inset that costs below `md` is deliberate - responsive
+  `order-*` would close it by splitting visual order from DOM order, and the
+  slot holds a labelled button, so focus and screen-reader order would then
+  reach Reset before the field it acts on (WCAG 2.4.3 / 1.3.2). No `order-*`
+  on interactive content: source order is the only order.
+- The Providers rail collapses below `md` into a full-width provider `Select`
+  above the detail pane, and the detail pane's own tab rail collapses into a
+  second `Select` (`provider-section-select.tsx`) in the rail's slot - so
+  picking a section is the same gesture as picking the provider one row above
+  it, rather than a bespoke one. Both arms read the same `tabs` list and the
+  same `providerTabLabel`; only the container differs, and `Tabs` stays
+  controlled by the panel, so exactly one section body is mounted either way.
+  Rows are icon + label only: the state a section is in belongs in its BODY,
+  one tap away, and a two-line row inside a menu is a card in other clothes.
+  The phone arm has no tab TRIGGERS, so it labels each pane with `aria-label`
+  and clears the `aria-labelledby` Radix would otherwise point at a trigger
+  that is not rendered. `EnvOverrideEditor` rows restack onto two lines below
+  `sm` and hide the column header.
+- `settings-touch-targets.css` (imported by `settings-layout.tsx`, scoped
+  under `[data-settings-touch-scope]`) enlarges the _hit areas_ of
+  switch/button/select-trigger primitives to >=44px on coarse-pointer devices
+  without changing any visual size - settings-only, the shared primitives in
+  `src/components/ui/` are untouched.
+  - The scope reaches only what the settings subtree CONTAINS, so the rows
+    inside an open menu are out of its range by construction: Radix portals
+    popover content to the body. A control the scope enlarges can therefore
+    open a list it cannot, which is how the Providers `Select` came to have a
+    44px trigger over 28px rows. Anything living in a portal owns its own
+    target instead, at the primitive: `pointer-coarse:min-h-11` on
+    `ui/select.tsx`'s `SelectItem` and on all four of `ui/dropdown-menu.tsx`'s
+    row types (item, checkbox, radio, sub-trigger - keep them in step). Reach
+    for a scope rule only for a control that renders in place.
+
 ## Key Files
 
 - `settings-layout.tsx` Owns the two-column shell for the settings route.
 - `settings-sidebar.tsx` Renders navigation from `settings-sections.ts`.
 - `settings-panel-shell.tsx` Shared width, header, and panel spacing - density-
   aware (see below).
+- `settings-touch-targets.css` Coarse-pointer hit-area rules for the route
+  shell (see below).
+- `settings-row-layout.ts` The `max-md:` label floor shared by every
+  label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
+  decides, per row width, which controls stack and which stay inline.
 - `settings-row.tsx` Shared label/description/control row - also density-aware.
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
@@ -690,7 +778,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `totalTokens`/`remainingTokens` come from the inference `GetRateLimitUsage`
     gRPC, which the gui-app/daemon stack doesn't expose. Also a "Manage
     subscription" link (opens the platform URL via
-    `resolveManageSubscriptionUrl(runnerHost.authnBaseUrl)`, reused from
+    `resolvePlatformBaseUrl(runnerHost.signInUrl)`, reused from
     `user-menu.tsx`), and a refresh icon. A global account-context selector
     (Personal / each Team, shown only when the user has `teamSubscriptions`)
     chooses which subscription is displayed - the selection persists in the

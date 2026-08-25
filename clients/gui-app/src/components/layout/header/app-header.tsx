@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { UserMenu } from "@/components/auth/user-menu";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { AppUpdateHeaderButton } from "@/components/layout/header/app-update-button";
 import { HistoryButton } from "@/components/layout/header/history-button";
@@ -11,6 +12,7 @@ import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { cn } from "@/lib/utils";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
@@ -48,11 +50,24 @@ export interface AppHeaderProps {
 }
 
 /**
- * App navigation chrome. Frameless desktop shells use this row as the native
- * title bar: tabs and controls stay interactive, while the empty spacer before
- * the right-side controls remains available for window dragging.
+ * App navigation chrome. On phones this delegates to the hamburger
+ * `MobileAppHeader`; at >=768px it renders the desktop tab-strip header
+ * (`DesktopAppHeader`) exactly as before.
  */
 export function AppHeader(props: AppHeaderProps): ReactNode {
+  const isMobile = useIsMobileViewport();
+  if (props.variant === "app" && isMobile) {
+    return <MobileAppHeader />;
+  }
+  return <DesktopAppHeader variant={props.variant} />;
+}
+
+/**
+ * Desktop navigation chrome. Frameless desktop shells use this row as the
+ * native title bar: tabs and controls stay interactive, while the empty spacer
+ * before the right-side controls remains available for window dragging.
+ */
+function DesktopAppHeader(props: AppHeaderProps): ReactNode {
   const { variant } = props;
   const showTabStrip = variant === "app";
   // Host-loading renders above the router and above the

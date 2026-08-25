@@ -9,6 +9,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
@@ -128,8 +129,13 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           </m.div>
         </AnimatePresence>
       )}
+      {/* The left cluster keeps its NATURAL width: `min-w-0 flex-1` here let
+          the cluster's box shrink while its shrink-0 children could not, so a
+          narrow card overflowed the fork actions under Skip/Submit instead of
+          ever triggering the row's wrap. Natural width makes the wrap real -
+          too narrow, and Skip/Submit drop to their own right-aligned line. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <QuestionPager
             current={safeIndex + 1}
             total={total}
@@ -155,7 +161,9 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
             onClick={skip}
           >
             Skip
-            <Kbd>Esc</Kbd>
+            <ShortcutHint>
+              <Kbd>Esc</Kbd>
+            </ShortcutHint>
           </Button>
           {isLast ? (
             <Button

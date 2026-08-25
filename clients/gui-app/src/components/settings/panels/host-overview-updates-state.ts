@@ -1,10 +1,18 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import {
+  compareHostVersions,
+  isStrictlyNewerHostVersion,
+} from "@traycer-clients/shared/host-version/compare-host-versions";
+import {
+  isMatchingStableRelease,
+  isSameReleaseLine,
+} from "@traycer-clients/shared/host-version/release-line";
 import type {
   HostAvailableManifest,
-  HostUpdateCheckResponse,
+  HostIncludePreReleasesSource,
+  HostUpdateCheckResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
 import type { VersionPickerProps } from "@/components/settings/panels/host-overview-advanced";
 import type { HostVersionRow } from "@/components/settings/panels/host-version-rows";
@@ -62,6 +70,8 @@ import type { HostRpcRegistry } from "@/lib/host";
 export function useHostOverviewUpdates(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostName: string;
+  /** The scoped host this panel is showing — see the override reset below. */
+  readonly hostId: string | null;
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
   /** Whether this host is worth asking at all — the page owns that gate. */
@@ -72,7 +82,25 @@ export function useHostOverviewUpdates(input: {
 }): HostOverviewUpdatesState {
   const { client, hostName, installedVersion } = input;
   const [showAllVersions, setShowAllVersions] = useState(false);
-  const [includePreReleases, setIncludePreReleases] = useState(false);
+  // `undefined` until the user touches the checkbox: the DEFAULT is the host's
+  // own derivation, not a value this component picked. Only a deliberate
+  // interaction produces `true`/`false`, which is what makes unchecking able to
+  // exclude RC rows on a host whose default includes them.
+  const [includePreReleasesOverride, setIncludePreReleasesOverride] = useState<
+    boolean | undefined
+  >(undefined);
+  // The override belongs to the host it was expressed about. Settings can swap
+  // the scoped host under a subtree `HostScopeGate` keeps mounted, and a filter
+  // carried across that swap would silently apply one machine's decision to
+  // another — worse, an explicit `false` would suppress the new host's RC rows
+  // while its checkbox rendered the reason for a host no longer on screen.
+  // Adjust-during-render on a changed input, the same shape as the discovered
+  // refusal below; an effect would render one frame under the wrong filter.
+  const [overrideHostId, setOverrideHostId] = useState(input.hostId);
+  if (overrideHostId !== input.hostId) {
+    setOverrideHostId(input.hostId);
+    setIncludePreReleasesOverride(undefined);
+  }
   // The INSTALL side's two failure lifetimes, deliberately kept apart. The
   // check's equivalents are no longer state at all — they are read straight off
   // the query's latest answer below.
@@ -105,7 +133,7 @@ export function useHostOverviewUpdates(input: {
   const checkQuery = useHostUpdateCheckQuery({
     client,
     enabled: input.enabled && input.checkDegrade === null,
-    includePreReleases,
+    includePreReleases: includePreReleasesOverride,
   });
   const installMutation = useHostUpdateInstall(client);
 
@@ -187,24 +215,46 @@ export function useHostOverviewUpdates(input: {
     );
   };
 
-  const latest = manifest?.latest ?? null;
   // While the CURRENT ask is in error, the retained manifest is display
   // history, not an actionable catalog: TanStack keeps the previous data
   // beside `isError`, and deriving install affordances from it would offer
   // versions the failed check could not confirm - under a summary that says
   // the host could not be checked.
   const actionableManifest = checkQuery.isError ? null : manifest;
+  // The best STRICTLY NEWER version this catalog offers, before the yanked and
+  // platform-asset gates - what the sentence is about, where
+  // `updatableVersion` below is what the button can act on.
+  //
   // PRECEDENCE, not equality: a host running a hotfix or RC AHEAD of the
   // stable channel is not outdated, and offering Update now there submits a
   // target the CLI short-circuits as `installed-up-to-date` - an update that
-  // announces itself and performs no work. `latest` must be STRICTLY newer to
-  // offer anything; equal precedence (build-metadata differences included)
-  // and incomparable pairs both count as up to date for the SUMMARY - the
-  // picker below stays the surface for deliberate cross-channel moves.
+  // announces itself and performs no work. Equal precedence (build-metadata
+  // differences included) and incomparable pairs both count as up to date for
+  // the SUMMARY - the picker stays the surface for deliberate cross-channel
+  // moves.
+  const targetVersion = newerTargetVersion({
+    manifest,
+    installedVersion,
+    source: check.source,
+  });
+  // Read off the resolved target rather than `manifest.latest`, which for an
+  // installed-RC catalog is the WRONG pointer: `latest` tracks the stable
+  // channel, so a host on `2.0.0-rc.1` sees `1.9.0` there and would be told it
+  // was up to date while `2.0.0` sat in the same list, offerable.
   const upToDate =
-    latest !== null &&
-    installedVersion !== null &&
-    !latestIsStrictlyNewer(installedVersion, latest);
+    manifest !== null && installedVersion !== null && targetVersion === null;
+  // The one state "up to date" would misdescribe: an `installed-rc` follower
+  // whose own line has run out, while the catalog still lists something newer
+  // on ANOTHER line. Not moving is deliberate — a follower must not be pushed
+  // to a line nobody put it on — but rendering that as "running the latest
+  // version" is a false claim about the catalog the user is looking at, with
+  // an enabled row for a newer version directly beneath it.
+  const strandedOnLine = strandedLineTarget({
+    upToDate,
+    manifest,
+    installedVersion,
+    source: check.source,
+  });
   // The summary action resolves through the SAME availability checks as the
   // picker rows: a latest with no usable asset for this host is advertised
   // nowhere rather than installable in one surface and unavailable in the
@@ -213,6 +263,7 @@ export function useHostOverviewUpdates(input: {
     manifest: actionableManifest,
     installedVersion,
     platformKey: input.platformKey,
+    source: check.source,
   });
   const installingVersion = installMutation.isPending
     ? installMutation.variables.version
@@ -230,6 +281,15 @@ export function useHostOverviewUpdates(input: {
         hostName,
         upToDate,
         offerable: updatableVersion !== null,
+        // What the BUTTON will install, when it can install anything. The two
+        // differ whenever the best candidate is unusable: with a yanked
+        // `2.0.0` on the line the offer walks down to `2.0.0-rc.3`, and a
+        // sentence still naming `2.0.0` would advertise a version Update now
+        // does not install. Falls back to the bare target so the
+        // "available, but can't install it" case still names what it means.
+        targetVersion: updatableVersion ?? targetVersion,
+        strandedOnLine,
+        installedVersion,
       }),
       transientFailure,
       checking,
@@ -254,11 +314,28 @@ export function useHostOverviewUpdates(input: {
       totalCount: manifest?.versions.length ?? 0,
       showAll: showAllVersions,
       onToggleShowAll: () => setShowAllVersions((previous) => !previous),
-      includePreReleases,
+      // What the box SHOWS is what the catalog actually did, not what this
+      // component last decided. Before any interaction the override is absent,
+      // so the host's own resolved inclusion is the honest answer — on an RC
+      // host that renders the box ticked, matching the RC rows beside it.
+      // Falls back to unticked only until the first answer arrives.
+      includePreReleases: resolveCheckboxState(
+        includePreReleasesOverride,
+        check.effectiveIncludePreReleases,
+      ),
+      // The first interaction turns the absent state into an explicit one, and
+      // never returns to absent: the user has now expressed a filter, and
+      // silently reverting to the derived default would make unticking on an
+      // RC host appear to do nothing. Scope changes reset it — see above.
+      //
       // Just moves the flag. It is part of the QUERY KEY, so changing it asks
       // the host a different question by itself — no explicit re-check, and no
       // risk of the two drifting apart the way an imperative re-ask could.
-      onIncludePreReleasesChange: setIncludePreReleases,
+      onIncludePreReleasesChange: setIncludePreReleasesOverride,
+      includePreReleasesExplanation: describeIncludePreReleasesSource(
+        check.source,
+        installedVersion,
+      ),
       installingVersion,
       disabled: input.busy,
       onInstall: install,
@@ -329,33 +406,201 @@ function visibleVersionRows(input: {
  *
  * Four gates, all of which the picker enforces per row and the summary must
  * therefore enforce for its one target: the manifest must be from a check the
- * host CONFIRMED (not error-retained data), `latest` must be strictly newer
- * than what is installed, the latest entry must not be YANKED (the row
- * disables it and the CLI's `resolveAsset` refuses it before download, so an
- * offer here would dispatch an install the host is guaranteed to reject), and
- * the entry must resolve a usable asset for this host's platform.
+ * host CONFIRMED (not error-retained data), the target must be strictly newer
+ * than what is installed, its entry must not be YANKED (the row disables it and
+ * the CLI's `resolveAsset` refuses it before download, so an offer here would
+ * dispatch an install the host is guaranteed to reject), and the entry must
+ * resolve a usable asset for this host's platform.
+ *
+ * WHICH version is the target depends on how the catalog was resolved, and
+ * that is the whole reason provenance rides on the response. For an
+ * `installed-rc` DEFAULT the answer is not `manifest.latest`: `latest` is
+ * stable-CHANNEL metadata, so on a host running `2.0.0-rc.1` it can still read
+ * `1.9.0` while `2.0.0` is published — offering `latest` there would offer a
+ * DOWNGRADE, and the strictly-newer gate would then offer nothing at all.
+ * Every other provenance keeps the plain `latest` behaviour, including an
+ * explicit include: a user who asked for the broad catalog gets the broad
+ * catalog's own pointer rather than a line restriction they did not request.
  */
 function offerableLatestVersion(input: {
   readonly manifest: HostAvailableManifest | null;
   readonly installedVersion: string | null;
   readonly platformKey: string | null;
+  readonly source: HostIncludePreReleasesSource | null;
 }): string | null {
   const { manifest } = input;
   if (manifest === null) return null;
-  const latest = manifest.latest;
-  if (
-    input.installedVersion !== null &&
-    !latestIsStrictlyNewer(input.installedVersion, latest)
-  ) {
-    return null;
+  for (const candidate of targetCandidates({
+    manifest,
+    installedVersion: input.installedVersion,
+    source: input.source,
+  })) {
+    if (
+      input.installedVersion !== null &&
+      !latestIsStrictlyNewer(input.installedVersion, candidate)
+    ) {
+      continue;
+    }
+    const entry = manifest.versions.find(
+      (version) => version.version === candidate,
+    );
+    if (entry === undefined || entry.yanked) continue;
+    const asset = platformAssetFor(entry.platforms, input.platformKey);
+    if (assetUnavailableReason(asset) === null) return candidate;
   }
-  const entry = manifest.versions.find(
-    (candidate) => candidate.version === latest,
+  return null;
+}
+
+/**
+ * The best strictly-newer version in the catalog, ignoring installability.
+ *
+ * Separate from `offerableLatestVersion` because the summary says two
+ * different things: whether an update EXISTS (this) and whether it can be
+ * installed here (that). Collapsing them would make a yanked or
+ * wrong-platform target read as "running the latest version", which is a
+ * different — and false — claim.
+ */
+function newerTargetVersion(input: {
+  readonly manifest: HostAvailableManifest | null;
+  readonly installedVersion: string | null;
+  readonly source: HostIncludePreReleasesSource | null;
+}): string | null {
+  const { manifest, installedVersion } = input;
+  if (manifest === null) return null;
+  const candidates = targetCandidates({
+    manifest,
+    installedVersion,
+    source: input.source,
+  });
+  if (installedVersion === null) return candidates[0] ?? null;
+  return (
+    candidates.find((candidate) =>
+      latestIsStrictlyNewer(installedVersion, candidate),
+    ) ?? null
   );
-  if (entry === undefined) return null;
-  if (entry.yanked) return null;
-  const asset = platformAssetFor(entry.platforms, input.platformKey);
-  return assetUnavailableReason(asset) === null ? latest : null;
+}
+
+/**
+ * The target versions to try, best first.
+ *
+ * For an `installed-rc` default this is the plan's same-line priority, and the
+ * ORDER is the termination guarantee: matching stable `X.Y.Z` outranks every
+ * later `X.Y.Z-rc.M`, so an RC that can reach its stable takes it and the next
+ * launch derives `stable-only` with nothing to undo. Later RCs on the same line
+ * follow, newest first, for the window before that stable exists.
+ *
+ * A LIST rather than one pick, because each candidate still has to clear the
+ * yanked/asset gates above — "prefer stable IF USABLE, otherwise the highest
+ * later RC" cannot be expressed by choosing before those run.
+ *
+ * Mirrors `resolveSameLineTarget` in desktop main's `host-stage-policy.ts`,
+ * which makes the same choice for background staging. The duplication is
+ * forced — that module is Electron-main-only and this one is browser-safe —
+ * but both read the release-line vocabulary from the same shared helpers, so
+ * only the ordering is restated, never what an RC or a line IS.
+ */
+function targetCandidates(input: {
+  readonly manifest: HostAvailableManifest;
+  readonly installedVersion: string | null;
+  readonly source: HostIncludePreReleasesSource | null;
+}): readonly string[] {
+  const installed = input.installedVersion;
+  if (input.source !== "installed-rc" || installed === null) {
+    return [input.manifest.latest];
+  }
+  const versions = input.manifest.versions.map((entry) => entry.version);
+  const matchingStable = versions.filter((version) =>
+    isMatchingStableRelease(version, installed),
+  );
+  // EXCLUDING the matching stable, which also satisfies both predicates below
+  // — it is on the line and strictly newer. Without this the stable is
+  // returned twice, and `offerableLatestVersion` pays for a second yanked and
+  // platform-asset probe on a candidate it already accepted or rejected.
+  const laterOnLine = versions
+    .filter(
+      (version) =>
+        !matchingStable.includes(version) &&
+        isSameReleaseLine(installed, version) &&
+        isStrictlyNewerHostVersion(version, installed),
+    )
+    .sort(compareNewestFirst);
+  return [...matchingStable, ...laterOnLine];
+}
+
+/**
+ * The newer version this host will not take on its own, or `null`.
+ *
+ * Gated on `installed-rc` PROVENANCE, not merely on there being something
+ * newer. The copy it feeds says the host "follows its own release line", and
+ * that is only true of a host whose catalog was derived from an installed
+ * release candidate. A STABLE host with explicit inclusion is the case this
+ * gate exists for: it is on the newest stable, `latest` names that stable, and
+ * a newer RC row appears only because the user asked to see RCs — it follows
+ * no line, and telling it otherwise would explain its state with a mechanism
+ * that does not apply to it. Those RC rows stay manually installable either
+ * way; only the sentence changes.
+ *
+ * Also gated on `upToDate`, which lives here rather than at the call site
+ * where it was one more branch in an already dense hook.
+ */
+function strandedLineTarget(input: {
+  readonly upToDate: boolean;
+  readonly manifest: HostAvailableManifest | null;
+  readonly installedVersion: string | null;
+  readonly source: HostIncludePreReleasesSource | null;
+}): string | null {
+  if (!input.upToDate || input.source !== "installed-rc") return null;
+  return newestNewerVersion(input.manifest, input.installedVersion);
+}
+
+/**
+ * What the checkbox SHOWS: the user's override once expressed, otherwise the
+ * catalog's own resolved inclusion, otherwise unticked until the first answer.
+ */
+function resolveCheckboxState(
+  override: boolean | undefined,
+  effective: boolean | null,
+): boolean {
+  if (override !== undefined) return override;
+  return effective ?? false;
+}
+
+/**
+ * The newest version in the catalog that is strictly newer than what is
+ * installed, ignoring release lines entirely — or `null` when there is none.
+ *
+ * Deliberately unrestricted, unlike `targetCandidates`. This does not decide
+ * what to OFFER; it answers whether the summary may claim "running the latest
+ * version". A follower with an exhausted line is not on the newest build the
+ * catalog knows about, and saying so is what keeps the sentence honest while
+ * the automatic policy stays unchanged.
+ */
+function newestNewerVersion(
+  manifest: HostAvailableManifest | null,
+  installedVersion: string | null,
+): string | null {
+  if (manifest === null || installedVersion === null) return null;
+  const newer = manifest.versions
+    .map((entry) => entry.version)
+    .filter((version) => isStrictlyNewerHostVersion(version, installedVersion))
+    .sort(compareNewestFirst);
+  return newer[0] ?? null;
+}
+
+/**
+ * Newest first, and a LAWFUL comparator: it returns 0 for pairs that are equal
+ * or that cannot be compared at all.
+ *
+ * The obvious `isStrictlyNewer(a, b) ? -1 : 1` is not lawful — it answers `1`
+ * in both directions for such a pair, violating antisymmetry. Registry
+ * versions are unique valid SemVer so nothing misorders today, but a
+ * comparator whose correctness rests on its input never containing a tie is
+ * one duplicate away from an unstable sort.
+ */
+function compareNewestFirst(a: string, b: string): number {
+  if (isStrictlyNewerHostVersion(a, b)) return -1;
+  if (isStrictlyNewerHostVersion(b, a)) return 1;
+  return 0;
 }
 
 /**
@@ -587,6 +832,14 @@ function describeCheckState(input: {
   readonly upToDate: boolean;
   /** `updatableVersion` resolved — the summary can actually OFFER the latest. */
   readonly offerable: boolean;
+  /** The strictly-newer version this sentence is about, if there is one. */
+  readonly targetVersion: string | null;
+  /**
+   * Set only when this host's own release line has no newer candidate but the
+   * catalog does — the state "running the latest version" would misdescribe.
+   */
+  readonly strandedOnLine: string | null;
+  readonly installedVersion: string | null;
 }): string {
   // Ordered so a stale answer never outranks what is happening NOW: a refetch
   // keeps the previous manifest on screen, so "vX is available." would otherwise
@@ -604,14 +857,58 @@ function describeCheckState(input: {
   }
   // No answer yet and nothing wrong: the first load, which now starts by itself.
   if (input.manifest === null) return "Checking for updates…";
-  if (input.upToDate) return "This host is running the latest version.";
-  // A latest this host cannot act on — yanked, or no asset for its platform.
+  if (input.upToDate) {
+    // Honest about BOTH halves: the newer version exists, and this host will
+    // not take it on its own. Naming the installed version names the line, and
+    // pointing at the list is not decoration — those rows are enabled, and
+    // they are the only way across.
+    if (input.strandedOnLine !== null && input.installedVersion !== null) {
+      return `v${input.strandedOnLine} is available, but ${input.installedVersion} follows its own release line and won't update to it automatically. Pick it below to move.`;
+    }
+    return "This host is running the latest version.";
+  }
+  // Nothing strictly newer to name — an unknown installed version leaves the
+  // comparison undecidable, so the catalog is reported without a claim about
+  // whether this host is behind it.
+  const target = input.targetVersion;
+  if (target === null) return "This host is running the latest version.";
+  // A target this host cannot act on — yanked, or no asset for its platform.
   // Claiming plain availability here would put the sentence at odds with the
   // absent button; the version list carries the specific reason.
   if (!input.offerable) {
-    return `v${input.manifest.latest} is available, but ${input.hostName} can't install it.`;
+    return `v${target} is available, but ${input.hostName} can't install it.`;
   }
-  return `v${input.manifest.latest} is available.`;
+  return `v${target} is available.`;
+}
+
+/**
+ * Why this catalog includes release candidates, when that is worth saying.
+ *
+ * Gated on `installed-rc` ALONE, and that single condition is also what
+ * satisfies "omit the explanation for a negotiated v1.0 response" — no version
+ * check needed. A v1.0 host cannot produce this value: its response carries no
+ * provenance at all, and the v1.0→v1.1 bridge deliberately answers
+ * `explicit-include` or `stable-default` and never `installed-rc`, precisely
+ * because it must not assert a derivation the old peer never performed. So the
+ * one provenance that unlocks copy here is the one only a v1.1 host can send.
+ *
+ * Nothing is said for the other three. `explicit-include` and
+ * `explicit-exclude` restate the user's own click, and `stable-default` is the
+ * unremarkable case — a line of prose under each would be noise that makes the
+ * one meaningful explanation harder to notice.
+ *
+ * This is PROVENANCE, not a saved setting: the copy says the host is following
+ * its current release-candidate line, and must never imply a stored
+ * preference, because there is none to turn off.
+ */
+function describeIncludePreReleasesSource(
+  source: HostIncludePreReleasesSource | null,
+  installedVersion: string | null,
+): string | null {
+  if (source !== "installed-rc") return null;
+  return installedVersion === null
+    ? "This host is on a release candidate, so its own line is listed."
+    : `This host is on ${installedVersion}, so its own release-candidate line is listed.`;
 }
 
 /**
@@ -621,16 +918,31 @@ function describeCheckState(input: {
  * "Nothing asked yet" and an `ok` answer both mean "no failure", which is why
  * the two collapse here rather than at every use site.
  */
-function readCheckResponse(response: HostUpdateCheckResponse | null): {
+function readCheckResponse(response: HostUpdateCheckResponseV11 | null): {
   readonly manifest: HostAvailableManifest | null;
   readonly sticky: OverviewDegradeReason | null;
   readonly transient: CliShellFailure | null;
+  /** The host's resolved inclusion, or `null` when it did not answer `ok`. */
+  readonly effectiveIncludePreReleases: boolean | null;
+  readonly source: HostIncludePreReleasesSource | null;
 } {
   if (response === null) {
-    return { manifest: null, sticky: null, transient: null };
+    return {
+      manifest: null,
+      sticky: null,
+      transient: null,
+      effectiveIncludePreReleases: null,
+      source: null,
+    };
   }
   if (response.outcome === "ok") {
-    return { manifest: response.manifest, sticky: null, transient: null };
+    return {
+      manifest: response.manifest,
+      sticky: null,
+      transient: null,
+      effectiveIncludePreReleases: response.effectiveIncludePreReleases,
+      source: response.includePreReleasesSource,
+    };
   }
   // `stickyDegradeFor` owns the classification, and it is deliberately wider
   // than this response: `externally-managed` is an INSTALL outcome, which the
@@ -638,6 +950,20 @@ function readCheckResponse(response: HostUpdateCheckResponse | null): {
   // compiler rejected — the shared classifier is what keeps the two paths
   // agreeing about which refusals are structural.
   const sticky = stickyDegradeFor(response.outcome);
-  if (sticky !== null) return { manifest: null, sticky, transient: null };
-  return { manifest: null, sticky: null, transient: response.outcome };
+  if (sticky !== null) {
+    return {
+      manifest: null,
+      sticky,
+      transient: null,
+      effectiveIncludePreReleases: null,
+      source: null,
+    };
+  }
+  return {
+    manifest: null,
+    sticky: null,
+    transient: response.outcome,
+    effectiveIncludePreReleases: null,
+    source: null,
+  };
 }

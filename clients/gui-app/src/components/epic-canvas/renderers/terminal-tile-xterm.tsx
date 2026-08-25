@@ -7,6 +7,7 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
@@ -39,6 +40,7 @@ import {
   resolveFileTransferPaths,
   uniquePaths,
 } from "@/lib/files/file-transfer-paths";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import { useTerminalTheme } from "@/lib/terminal-theme";
@@ -58,6 +60,8 @@ import {
   focusTerminalInstance,
   registerTerminalFocus,
 } from "@/lib/terminals/terminal-focus-registry";
+import { applyTerminalKeyBarLatchToTypedInput } from "@/lib/terminals/terminal-key-bar-latch";
+import { registerTerminalKeyInput } from "@/lib/terminals/terminal-key-input-registry";
 import {
   acquireXtermHost,
   adoptWarmSessionInstance,
@@ -91,6 +95,9 @@ const GRID_LATCH_WARN_STREAK = 5;
 // grid, which must never reach the host's shared min-size grid. No usable
 // terminal pane is this small, so the floor only ever rejects degenerate boxes.
 const MIN_FIT_CONTAINER_PX = 48;
+
+/** Finger travel beyond this is a scroll gesture, not a tap-to-focus. */
+const TOUCH_TAP_SLOP_PX = 10;
 
 interface XtermInitialOptions extends ITerminalOptions {
   readonly vtExtensions: {
@@ -464,6 +471,21 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       () => paneFocused && mountRef.current !== null,
     );
   }, [paneFocused, props.instanceId, props.registerImperativeFocus]);
+  // Input bridge for the mobile key bar. Registered unconditionally (unlike
+  // focus, which only some surfaces route imperatively): whichever tile hosts
+  // this engine on a phone is the one the bar targets. Injection goes through
+  // `term.input` so bar keys ride the ordinary onData -> writeInput path, and
+  // the cursor-key mode is read live so arrows encode the dialect (CSI vs
+  // SS3) the running program asked for via DECCKM.
+  useEffect(() => {
+    return registerTerminalKeyInput(props.instanceId, {
+      input: (data) => termRef.current?.input(data, true),
+      getCursorKeyMode: () =>
+        termRef.current?.modes.applicationCursorKeysMode === true
+          ? "application"
+          : "normal",
+    });
+  }, [props.instanceId]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
@@ -471,6 +493,37 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     termRef.current?.paste(input);
     termRef.current?.focus();
   }, []);
+
+  // Tap-to-focus for touch devices. xterm's own click-to-focus rides the
+  // compatibility mouse events iOS synthesizes after a tap, which don't
+  // arrive reliably over the terminal (xterm's touch scrolling swallows
+  // them) - so on a phone, tapping the terminal never focused it and the
+  // soft keyboard could not come up. Focus explicitly on a touch TAP, with a
+  // movement slop so finger-scrolling the buffer doesn't yank the keyboard
+  // open. Mouse/pen still use xterm's native mousedown focus path.
+  const touchTapStartRef = useRef<{ x: number; y: number } | null>(null);
+  const handleTouchPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (event.pointerType !== "touch") return;
+      touchTapStartRef.current = { x: event.clientX, y: event.clientY };
+    },
+    [],
+  );
+  const handleTouchPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (event.pointerType !== "touch") return;
+      const start = touchTapStartRef.current;
+      touchTapStartRef.current = null;
+      if (start === null) return;
+      const movedPx = Math.hypot(
+        event.clientX - start.x,
+        event.clientY - start.y,
+      );
+      if (movedPx > TOUCH_TAP_SLOP_PX) return;
+      termRef.current?.focus();
+    },
+    [],
+  );
 
   const handleDragEnter = useCallback(
     (event: DragEvent<HTMLDivElement>): void => {
@@ -578,6 +631,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onPasteCapture={handlePaste}
+        onPointerDown={handleTouchPointerDown}
+        onPointerUp={handleTouchPointerUp}
       />
       {isDraggingFiles ? (
         <div
@@ -705,7 +760,10 @@ function createXtermEntry(
   let hasReceivedContent = false;
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
-    live.onUserInput(d);
+    // A sticky modifier latched on the mobile key bar combines with the next
+    // typed character here. Desktop input takes the empty-latch fast path
+    // (only the bar ever sets a latch).
+    live.onUserInput(applyTerminalKeyBarLatchToTypedInput(d));
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
     live.onSearchResults(result);
@@ -1318,6 +1376,12 @@ function useActiveTerminalFocus(
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusVisibleTerminal = useCallback(() => {
     if (!shouldFocusOnActivePane) return;
+    // A phone keyboard must be summoned by a tap, not by pane activation: on
+    // the installed mobile app the terminal takes focus only from the tile's
+    // tap-to-focus path, which keeps the pane readable until the user asks to
+    // type. The key bar still reaches the engine while it is unfocused - it
+    // injects through `term.input`, not the hidden textarea.
+    if (isMobileApp()) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     focusTerminalInstance(instanceId);
   }, [instanceId, paneActivationFocusIntent, shouldFocusOnActivePane]);

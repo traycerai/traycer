@@ -204,7 +204,9 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
     <output
       data-testid="epic-shell-status-row"
-      className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground"
+      // The phone single-tile design has no status row; the global mobile
+      // header carries app-wide status instead. Desktop (>=768px) is unchanged.
+      className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
     >
       {props.sessionReady ? <EpicConnectionPill epicId={props.epicId} /> : null}
       {props.snapshotLoaded ? (
@@ -285,7 +287,7 @@ function CanvasColumn(props: {
 function LoadingTileCanvas() {
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground max-md:border-0"
       data-testid="tile-canvas-loading"
     >
       <CanvasSkeleton />

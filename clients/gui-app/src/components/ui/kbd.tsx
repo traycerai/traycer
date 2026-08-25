@@ -1,5 +1,9 @@
 import { cn } from "@/lib/utils";
 
+// A key-cap glyph, and nothing more - it is equally the keybinding settings'
+// rendering of a chord being edited. A `Kbd` that ADVERTISES a shortcut on
+// some other control belongs inside `<ShortcutHint>`, which owns whether such
+// a hint is worth showing at all.
 function Kbd({ className, ...props }: React.ComponentProps<"kbd">) {
   return (
     <kbd

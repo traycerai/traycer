@@ -9,6 +9,7 @@ import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
+import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
@@ -40,6 +41,7 @@ export function SettingsModalContent(
             activeSection: section,
             onSelect: setSection,
           }}
+          variant="rail"
         />
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
           <SettingsPanelForSection section={section} />
@@ -73,6 +75,8 @@ export function SettingsPanelForSection(props: {
       return <HostSettingsPanel />;
     case "devices":
       return <DevicesSessionsPanel />;
+    case "link-phone":
+      return <LinkPhonePanel />;
     case "app-diagnostics":
       return <AppDiagnosticsSettingsPanel />;
     case "diagnostics":
