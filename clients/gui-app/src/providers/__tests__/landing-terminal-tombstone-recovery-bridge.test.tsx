@@ -513,6 +513,119 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.closeAsync).not.toHaveBeenCalled();
   });
 
+  it("wakes a plain close when listing freshness returns", async () => {
+    // The plain arm's first close rejects while the list stream happens to be
+    // stale. No retry can be scheduled for an arm that is undrainable, so the
+    // ONLY way back is the drainability edge - and keying that edge on `kill`
+    // lost it, because `kill` stayed true the whole time. The mark still named
+    // `plain`, so the drain skipped this key forever and the PTY outlived its
+    // tombstone.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = { "session-refresh": {} };
+    mocks.closeAsync.mockRejectedValueOnce(new Error("stream went stale"));
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "refresh-tab",
+      sessionId: "session-refresh",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "refresh-tab");
+
+    const view = render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    // The stream goes stale as that first close rejects. `kill` is unaffected -
+    // it never reads a listing - so nothing about the HOST's drainability moved.
+    mocks.canMutate = false;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(1);
+
+    // Freshness returns. That is this arm's recovery edge even though the host
+    // was continuously dialable and continuously `capable`.
+    mocks.canMutate = true;
+    mocks.authorityRevision += 1;
+    view.rerender(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+
+    expect(mocks.closeAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires a pending-create tombstone once its reprieve is spent", async () => {
+    // `pendingCreate` makes `killed: false` ambiguous, so the kill mutation
+    // keeps the record. Nothing here can ever falsify it: the tile that
+    // dispatched the create is unmounted and its lifecycle hook drops the
+    // settlement, so a create that REJECTED leaves a tombstone no answer can
+    // retire - an RPC and an invalidation every five minutes, forever.
+    vi.useFakeTimers();
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "legacy";
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "doomed-create-tab",
+      sessionId: "session-doomed-create",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore
+      .getState()
+      .closeTab("landing-page", "doomed-create-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+    await act(async () => Promise.resolve());
+    expect(mocks.kill).toHaveBeenCalledTimes(1);
+
+    // Walk the ladder to one answer short of the budget. Every answer resolves
+    // without killing anything, which is exactly what a create that never
+    // landed looks like.
+    for (let attempt = 1; attempt < 9; attempt += 1) {
+      await act(async () => {
+        vi.advanceTimersByTime(500 * 2 ** (attempt - 1));
+        await Promise.resolve();
+      });
+    }
+    expect(mocks.kill).toHaveBeenCalledTimes(9);
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+
+    // The tenth answer spends the budget, and the record retires on that same
+    // pass rather than arming an eleventh attempt.
+    await act(async () => {
+      vi.advanceTimersByTime(128_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
+
+    // And it stays retired - no timer left armed to ask an eleventh time.
+    await act(async () => {
+      vi.advanceTimersByTime(600_000);
+      await Promise.resolve();
+    });
+    expect(mocks.kill).toHaveBeenCalledTimes(10);
+  });
+
   it("retries a capable close after rejection and retires on acknowledgement", async () => {
     vi.useFakeTimers();
     mocks.entries = [

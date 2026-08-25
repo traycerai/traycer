@@ -32,8 +32,10 @@ import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-cl
 
 const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
 /**
- * Ceiling on the retry interval - and there is deliberately NO ceiling on the
- * number of attempts.
+ * Ceiling on the retry interval - and there is deliberately no ceiling on the
+ * number of attempts, for every tombstone whose kill some answer can still
+ * settle. (`PENDING_CREATE_KILL_ANSWER_BUDGET` is the one exception, and it
+ * exists precisely because no answer can settle that shape.)
  *
  * A tombstone is a kill that is still owed, so the drain must not reach a state
  * it cannot leave. An attempt budget did exactly that: once spent, the three
@@ -48,6 +50,39 @@ const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
  * requests an hour, while a host that recovers is still picked up on its own.
  */
 const CAPABLE_CLOSE_RETRY_MAX_MS = 300_000;
+
+/**
+ * How many `terminal.kill` answers a tombstone's PENDING-CREATE reprieve buys.
+ *
+ * `pendingCreate` is the one provenance that makes `killed: false` ambiguous -
+ * "not created YET" rather than "gone" - so the kill mutation keeps the record
+ * instead of clearing it. Every other shape retires itself on that answer.
+ *
+ * The reprieve needs a floor because the create's settlement is UNOBSERVABLE
+ * from here: it is dispatched by the tile, and `useLandingTerminalDurableLifecycle`
+ * invalidates its own request generation on unmount - which closing the tab
+ * always causes - so a create that rejects, or one that lands and exits before
+ * the next attempt, leaves `pendingCreate` true with nothing left to falsify it.
+ * Unbounded, that is an RPC and a `terminal.list` invalidation every five
+ * minutes, forever, for a session that can never appear.
+ *
+ * Spending the budget on the ATTEMPT LADDER rather than on wall-clock keeps the
+ * two bounds in one place: these are exactly the attempts before the backoff
+ * saturates, so the reprieve runs the whole un-capped ladder - ~4.25 minutes of
+ * the host continuously answering "no such session" - and expires precisely when
+ * retrying stops being cheap. A create still unlanded by then is not landing.
+ *
+ * The budget is counted in ANSWERS, so the record retires on the same pass as
+ * the last one rather than arming an eleventh attempt it would only discard.
+ *
+ * It rides the retry record, so it is scoped to one drain episode: a host that
+ * goes undialable and returns starts a fresh ladder. That is deliberate. The
+ * budget is a statement about how long a create can plausibly still be in
+ * flight, and a host that just came back is a host whose create genuinely may
+ * be. What it must not do - and no longer does - is let a STABLE host be asked
+ * forever, which is the cost this bound exists to cap.
+ */
+const PENDING_CREATE_KILL_ANSWER_BUDGET = 10;
 
 /**
  * Which RPC a drain attempt used - NOT which capability its host reported.
@@ -272,11 +307,22 @@ type TombstoneCloseAction = TombstoneCloseArm | "discard" | "wait";
 
 function intendedCloseAction(args: {
   readonly entry: LandingTerminalAuthorityEntry | undefined;
+  readonly killAttempts: number;
   readonly pending: LandingTerminalPendingKill;
   readonly plainDrainable: boolean;
 }): TombstoneCloseAction {
   const authority = args.entry?.authority;
   if (authority === undefined) return "wait";
+  // Ahead of the capability split, because an exhausted reprieve retires the
+  // tombstone on EITHER kind of host: a `pendingCreate` record routes to
+  // `terminal.kill` whether the host came back legacy or capable, so bounding
+  // it under only one of them would leave the other asking forever.
+  if (
+    args.pending.pendingCreate &&
+    args.killAttempts >= PENDING_CREATE_KILL_ANSWER_BUDGET
+  ) {
+    return "discard";
+  }
   if (authority.capability.status === "legacy") return "kill";
   if (authority.capability.status !== "capable") return "wait";
   if (!args.plainDrainable) {
@@ -304,6 +350,76 @@ function intendedCloseAction(args: {
   // `terminal.kill` covers both - the capable host tries its plain registry
   // first and falls back to the legacy manager.
   return absentListingProvesDeath(args.pending) ? "discard" : "kill";
+}
+
+interface TombstoneDispatchDecision {
+  readonly action: TombstoneCloseAction;
+  /** The arm about to be spent, or `null` when this pass sends nothing. */
+  readonly arm: TombstoneCloseArm | null;
+  /** This pass may send: an arm recovered, the arm changed, or a retry is due. */
+  readonly admitted: boolean;
+  /** This arm is not the one this key was last dispatched on. */
+  readonly firstSight: boolean;
+}
+
+/**
+ * What to do with one tombstone on one pass, and whether this pass may do it.
+ *
+ * Three independent ways in, because each covers a gap the others leave:
+ *
+ * - an ARM RECOVERY. Deliberately the arm's own drainability and not the
+ *   host's: `kill` is the weaker arm and is true whenever `plain` is, so keying
+ *   the edge on it lost the plain arm's stale -> fresh return entirely. A
+ *   `plain` close that rejected while the listing was stale could schedule no
+ *   retry (its arm was undrainable at the time), still carried a `plain` mark,
+ *   and saw `kill` true throughout - no edge to ride, and the PTY outlived its
+ *   tombstone.
+ * - FIRST SIGHT of this arm. A tombstone recorded while its host was ALREADY
+ *   drainable has no transition to ride in on and no retry record yet, so
+ *   without this it would wait for the host to flap. That was survivable while
+ *   a close could only be recorded against a resolved authority - the panel's
+ *   fast path had already sent the kill - but a close under an unresolved probe
+ *   records the tombstone and dispatches nothing, leaving the bridge as the only
+ *   thing that will ever send it.
+ *
+ *   The mark records the ARM, not the host's capability. Those stopped being the
+ *   same thing once a capable host could serve either: a tombstone whose
+ *   in-flight create finally appeared in the projection moves from `kill` to
+ *   `plain` with the capability unchanged, so a capability-keyed mark said
+ *   "already attempted" and the new arm sat out the old one's backoff, up to the
+ *   full 300s ceiling.
+ * - a DUE retry, the ordinary backoff path.
+ */
+function tombstoneDispatchDecision(args: {
+  readonly attempted: ReadonlyMap<string, TombstoneCloseArm>;
+  readonly drainable: TombstoneDrainability;
+  readonly entry: LandingTerminalAuthorityEntry | undefined;
+  readonly key: string;
+  readonly pending: LandingTerminalPendingKill;
+  readonly previous: TombstoneDrainability | undefined;
+  readonly retry: CapableCloseRetry | undefined;
+}): TombstoneDispatchDecision {
+  const action = intendedCloseAction({
+    entry: args.entry,
+    // Only a ladder spent on THIS arm counts. A `plain` record's attempts were
+    // spent on a request that answers a different question, and the reprieve is
+    // about how many times the host has said "no such session".
+    killAttempts: args.retry?.arm === "kill" ? args.retry.attempt : 0,
+    pending: args.pending,
+    plainDrainable: args.drainable.plain,
+  });
+  const arm = action === "plain" || action === "kill" ? action : null;
+  const armRecovered =
+    arm === "plain"
+      ? args.previous?.plain !== true
+      : args.previous?.kill !== true;
+  const firstSight = args.attempted.get(args.key) !== arm;
+  return {
+    action,
+    arm,
+    admitted: armRecovered || firstSight || args.retry?.due === true,
+    firstSight,
+  };
 }
 
 /** Sends `terminal.plain.close`. Reached only for a projection that exists. */
@@ -455,9 +571,15 @@ function dispatchTombstoneClose(args: {
   if (entry === undefined) return;
   if (args.action === "wait") return;
   if (args.action === "discard") {
-    // The one shape that is discarded: a capable host with a FRESH listing that
-    // does not name a session it had already acknowledged. That host published
-    // the session once, so its disappearance is the host saying it is gone.
+    // Two shapes reach here, both of them a record the host has ANSWERED:
+    //
+    // - a capable host with a FRESH listing that does not name a session it had
+    //   already acknowledged. That host published the session once, so its
+    //   disappearance is the host saying it is gone.
+    // - a `pendingCreate` record whose reprieve is spent
+    //   (`PENDING_CREATE_KILL_ANSWER_BUDGET`). The host has answered "no such
+    //   session" for the whole attempt ladder, and the create that could have
+    //   contradicted it can no longer be observed from here.
     useLandingTerminalStore
       .getState()
       .clearPendingKill(args.pending.hostId, args.pending.sessionId);
@@ -696,47 +818,28 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       if (drainable?.kill !== true) continue;
       const key = terminalSessionKey(pending.hostId, pending.sessionId);
       const retry = retriesRef.current.get(key);
-      const routeRecovered =
-        previousDialable.get(pending.hostId)?.kill !== true;
-      // A tombstone recorded while its host was ALREADY drainable has no route
-      // transition to ride in on and no retry record yet, so the two conditions
-      // above would skip it until the host happened to flap. That was
-      // survivable while a close could only be recorded against a resolved
-      // authority - the panel's fast path had already sent the kill - but a
-      // close under an unresolved probe records the tombstone and dispatches
-      // nothing, and the bridge is then the only thing that will ever send it.
-      //
-      // The mark records the ARM it was dispatched on, so anything that changes
-      // the arm makes this key eligible again. Without that, a close rejected
-      // after the arm flipped is abandoned: `closeRetryStillWarranted` refuses
-      // to schedule a retry because the arm no longer matches the one that
-      // dispatched, the authority-change render skipped this key while it was
-      // still in `inFlightRef`, and clearing that ref renders nothing - so the
-      // arm-correct close would never be sent.
-      //
-      // Keying it on the host's capability instead was subtly weaker: a
-      // tombstone whose in-flight create finally appeared in the projection
-      // moves from `kill` to `plain` with the capability unchanged at
-      // `capable`, so the mark said "already attempted" and the new arm waited
-      // out the old one's backoff - up to the full 300s ceiling.
       const entry = authorityEntries[pending.hostId];
-      const action = intendedCloseAction({
+      const decision = tombstoneDispatchDecision({
+        attempted: attemptedRef.current,
+        drainable,
         entry,
+        key,
         pending,
-        plainDrainable: drainable.plain,
+        previous: previousDialable.get(pending.hostId),
+        retry,
       });
-      if (action === "wait") continue;
-      const arm = action === "discard" ? null : action;
-      const firstSight = attemptedRef.current.get(key) !== arm;
-      if (!routeRecovered && !firstSight && retry?.due !== true) continue;
+      if (decision.action === "wait" || !decision.admitted) continue;
       if (inFlightRef.current.has(key)) continue;
       // Only a real arm is marked. A discard sends nothing, so there is no
       // attempt to record against it.
-      if (firstSight && arm !== null) {
-        attemptedRef.current = new Map([...attemptedRef.current, [key, arm]]);
+      if (decision.firstSight && decision.arm !== null) {
+        attemptedRef.current = new Map([
+          ...attemptedRef.current,
+          [key, decision.arm],
+        ]);
       }
       dispatchTombstoneClose({
-        action,
+        action: decision.action,
         entry,
         kill: killRef.current,
         key,

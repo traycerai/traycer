@@ -68,6 +68,14 @@ export function useLandingTerminalKill(): UseMutationResult<
         // is how the tombstone gets lost in front of the terminal it was written
         // to kill. Left outstanding, the drain retries under its own backoff and
         // the next attempt - after the create has landed - answers `true`.
+        //
+        // The reprieve is a DELAY, not a reprieve without end. Nothing here can
+        // observe the create failing: the tile that dispatched it is gone, and
+        // its lifecycle hook drops the settlement on unmount, so `pendingCreate`
+        // would stay true forever for a create that rejected or for a terminal
+        // that landed and exited first. The recovery bridge owns the bound
+        // (`PENDING_CREATE_KILL_ANSWER_BUDGET`) and retires the record once the
+        // host has answered "no such session" for the whole attempt ladder.
         const stillPendingCreate = useLandingTerminalStore
           .getState()
           .pendingKills.some(
