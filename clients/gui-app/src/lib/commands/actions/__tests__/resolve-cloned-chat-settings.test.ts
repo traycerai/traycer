@@ -214,6 +214,27 @@ describe("resolveClonedChatSettings", () => {
     });
   });
 
+  it("reports when an explicitly selected profile disappeared from the target", async () => {
+    const targetProfiles = [
+      profile("ambient", "ambient", "Terminal account", "acct-9"),
+      profile("target-work-uuid", "managed", "Work", "acct-1"),
+    ];
+    const result = await resolveClonedChatSettings({
+      sourceSettings: { ...BASE_SETTINGS, profileId: "source-work-uuid" },
+      sourceClient: null,
+      targetClient: buildClient(targetProfiles),
+      explicitTargetProfileId: { profileId: "vanished-profile" },
+    });
+
+    expect(result).toEqual({
+      status: "profile-selection-required",
+      providerId: "claude-code",
+      reason: "explicit-profile-missing",
+      matchedProfileId: "vanished-profile",
+      targetProfiles,
+    });
+  });
+
   it("falls back to ambient when the source host is unreachable (null client)", async () => {
     const sourceSettings = { ...BASE_SETTINGS, profileId: "source-work-uuid" };
     const targetClient = buildClient([

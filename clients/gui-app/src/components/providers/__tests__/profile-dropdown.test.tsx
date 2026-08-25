@@ -233,6 +233,22 @@ function baseDropdownInput(
 describe("<ProfileDropdown />", () => {
   afterEach(() => cleanup());
 
+  it("moves focus between a profile row and its enablement switch", () => {
+    renderDropdown(baseDropdownInput({ activeProfileId: "ambient" }));
+
+    const workRow = screen.getByRole("menuitem", { name: "Work" });
+    const workSwitch = screen.getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+
+    workRow.focus();
+    fireEvent.keyDown(workRow, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(workSwitch);
+
+    fireEvent.keyDown(workSwitch, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(workRow);
+  });
+
   it("shows the active profile's dot and name on the closed trigger", () => {
     renderDropdown(baseDropdownInput({}));
 

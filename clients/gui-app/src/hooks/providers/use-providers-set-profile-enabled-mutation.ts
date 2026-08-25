@@ -14,7 +14,11 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  providersListQueryKey,
+  providersMutationKeys,
+} from "@/lib/query-keys";
 
 interface SetProfileEnabledContext {
   readonly hostId: string | null;
@@ -121,14 +125,6 @@ function isSetProfileEnabledRequest(
     variables !== null &&
     "profileId" in variables &&
     typeof variables.profileId === "string"
-  );
-}
-
-function providersListQueryKey(hostId: string) {
-  return hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-    hostId,
-    "providers.list",
-    { native: null },
   );
 }
 

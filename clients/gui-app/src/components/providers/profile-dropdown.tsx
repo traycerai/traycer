@@ -386,8 +386,8 @@ function ProfileDropdownRow(props: {
     admissionByProfileId: props.context.admissionByProfileId,
   });
   const enablementPending =
-    props.context.eligibilityControls?.pending(state.commitId) ??
     props.context.profileEnablementPending?.(state.commitId) ??
+    props.context.eligibilityControls?.pending(state.commitId) ??
     false;
   const enablementDisabledReason =
     props.context.eligibilityControls?.disabledReason(props.profile) ?? null;

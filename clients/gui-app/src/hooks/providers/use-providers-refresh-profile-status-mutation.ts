@@ -9,7 +9,11 @@ import type {
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import {
+  hostQueryKeys,
+  providersListQueryKey,
+  providersMutationKeys,
+} from "@/lib/query-keys";
 import {
   buildProviderRateLimitEnvelopeFromSnapshot,
   type ProviderRateLimitEnvelope,
@@ -68,11 +72,7 @@ export function useProvidersRefreshProfileStatusForClient(
             ),
         );
         await queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            context.hostId,
-            "providers.list",
-            { native: null },
-          ),
+          queryKey: providersListQueryKey(context.hostId),
           exact: true,
         });
       },

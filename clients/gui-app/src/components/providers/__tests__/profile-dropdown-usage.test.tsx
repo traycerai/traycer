@@ -230,11 +230,7 @@ function renderDropdown(
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
-      eligibilityControls={{
-        pending: () => false,
-        disabledReason: () => null,
-        onSetEnabled: vi.fn(),
-      }}
+      eligibilityControls={null}
       admissionByProfileId={null}
     />,
   );

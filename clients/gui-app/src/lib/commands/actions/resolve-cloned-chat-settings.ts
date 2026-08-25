@@ -20,7 +20,10 @@ export interface ResolvedClonedChatSettings {
 export interface ClonedChatProfileSelectionRequired {
   readonly status: "profile-selection-required";
   readonly providerId: ProviderId;
-  readonly reason: "matching-profile-disabled" | "no-enabled-terminal-fallback";
+  readonly reason:
+    | "matching-profile-disabled"
+    | "no-enabled-terminal-fallback"
+    | "explicit-profile-missing";
   readonly matchedProfileId: string | null;
   readonly targetProfiles: ReadonlyArray<ProviderProfile>;
 }
@@ -151,7 +154,7 @@ function resolveTargetProfile(input: {
       providerId,
       reason:
         explicitProfile === undefined
-          ? "no-enabled-terminal-fallback"
+          ? "explicit-profile-missing"
           : "matching-profile-disabled",
       matchedProfileId: explicitTargetProfileId,
       targetProfiles,

@@ -115,11 +115,7 @@ function NestedPickerSurface() {
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
-              eligibilityControls={{
-                pending: () => false,
-                disabledReason: () => null,
-                onSetEnabled: vi.fn(),
-              }}
+              eligibilityControls={null}
               admissionByProfileId={null}
             />
           )}
@@ -269,11 +265,7 @@ function OpenProfileDropdownSurface() {
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
-              eligibilityControls={{
-                pending: () => false,
-                disabledReason: () => null,
-                onSetEnabled: vi.fn(),
-              }}
+              eligibilityControls={null}
               admissionByProfileId={WORK_LOCKED_ADMISSION}
             />
           )}

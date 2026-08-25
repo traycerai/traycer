@@ -284,6 +284,37 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
     });
   });
 
+  it("notifies when a CLI-less harness drops an explicit profile on a missing target", async () => {
+    const createChat = vi.fn<CreateChatCommand>();
+    const onProfileFallbackToAmbient = vi.fn();
+    const directory = fakeDirectory([
+      {
+        hostId: "source-host",
+        label: "Source",
+        kind: "local",
+        websocketUrl: "ws://127.0.0.1:0/source",
+        version: "0.0.0-mock",
+        transportDialability: "dialable",
+      },
+    ]);
+
+    cloneChatOnHostSwitch(
+      baseCloneArgs({
+        directory,
+        createChat,
+        sourceSettings: { ...BASE_SETTINGS, harnessId: "traycer" },
+        onProfileFallbackToAmbient,
+      }),
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onProfileFallbackToAmbient).toHaveBeenCalledTimes(1);
+    expect(createChat).toHaveBeenCalledTimes(1);
+    expect(createChat.mock.calls[0][0].settings?.profileId).toBeNull();
+  });
+
   it("ambient source settings pass through when Terminal is enabled", async () => {
     const createChat = vi.fn<CreateChatCommand>();
     const onProfileFallbackToAmbient = vi.fn();

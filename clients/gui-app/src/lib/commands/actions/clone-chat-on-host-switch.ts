@@ -297,12 +297,16 @@ async function resolveSettingsForClone(
       : buildTransientHostClient(args.globalClient, targetEntry);
   if (targetClient === null) {
     const providerId = providerCliIdForHarness(args.sourceSettings.harnessId);
-    return providerId === null
-      ? {
-          status: "ready",
-          settings: { ...args.sourceSettings, profileId: null },
-        }
-      : { status: "catalog-unavailable", providerId };
+    if (providerId !== null) {
+      return { status: "catalog-unavailable", providerId };
+    }
+    if (args.sourceSettings.profileId !== null) {
+      args.onProfileFallbackToAmbient();
+    }
+    return {
+      status: "ready",
+      settings: { ...args.sourceSettings, profileId: null },
+    };
   }
   const sourceEntry = args.directory.findById(args.sourceHostId);
   const sourceClient =

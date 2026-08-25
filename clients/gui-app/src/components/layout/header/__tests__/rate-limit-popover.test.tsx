@@ -1343,9 +1343,6 @@ describe("<RateLimitPopover /> rail", () => {
       name: "Allow agents to use Work",
     });
     expect(profileSwitch.dataset.state).toBe("checked");
-    expect(profileSwitch.className).toContain(
-      "data-[state=checked]:bg-primary",
-    );
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {

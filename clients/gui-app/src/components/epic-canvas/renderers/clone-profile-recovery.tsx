@@ -66,14 +66,19 @@ export function CloneProfileRecovery(props: {
     );
   }
 
+  let recoveryMessage = `Choose an enabled ${providerDisplayName(props.resolution.providerId)} profile on ${props.targetHostLabel} before cloning.`;
+  if (
+    props.resolution.reason === "matching-profile-disabled" &&
+    matchedProfile !== undefined
+  ) {
+    recoveryMessage = `${profileDisplayLabel(matchedProfile)} is disabled on ${props.targetHostLabel}. Choose an enabled profile or change profile availability in Provider settings before cloning.`;
+  } else if (props.resolution.reason === "explicit-profile-missing") {
+    recoveryMessage = `The selected ${providerDisplayName(props.resolution.providerId)} profile is no longer available on ${props.targetHostLabel}. Choose an enabled profile before cloning.`;
+  }
+
   return (
     <RecoveryBar>
-      <span className="min-w-0 flex-1">
-        {props.resolution.reason === "matching-profile-disabled" &&
-        matchedProfile !== undefined
-          ? `${profileDisplayLabel(matchedProfile)} is disabled on ${props.targetHostLabel}. Choose an enabled profile or change profile availability in Provider settings before cloning.`
-          : `Choose an enabled ${providerDisplayName(props.resolution.providerId)} profile on ${props.targetHostLabel} before cloning.`}
-      </span>
+      <span className="min-w-0 flex-1">{recoveryMessage}</span>
       {profiles.length > 0 ? (
         <div className="w-full max-w-64">
           <ProfileDropdown
