@@ -1,26 +1,35 @@
 import { useCallback } from "react";
 import { Terminal } from "lucide-react";
-import { v4 as uuidv4 } from "uuid";
-import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
-import {
-  SwitcherListEmpty,
-  SwitcherListRow,
-} from "@/components/epic-canvas/mobile/switcher-list-row";
-import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
+import { SwitcherListRow } from "@/components/epic-canvas/mobile/switcher-list-row";
+import { SwitcherTerminalRowActions } from "@/components/epic-canvas/mobile/switcher-terminal-row-actions";
 import { SwitcherNewTerminalRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
-import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
+import { useMobileEpicTiles } from "@/components/epic-canvas/mobile/use-mobile-epic-tiles";
+import {
+  FailedTerminalCreateRow,
+  TerminalsEmptyState,
+  TerminalsErrorState,
+  TerminalsLoadingState,
+} from "@/components/epic-canvas/sidebar/terminal-list-states";
+import {
+  useEpicTerminalsPanel,
+  type EpicTerminalsPanel,
+} from "@/components/epic-canvas/sidebar/use-epic-terminals-panel";
+import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
-import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
-import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { epicTerminalUiIdentityKey } from "@/lib/terminals/pending-create-identity";
+import { terminalSessionLabel } from "@/lib/terminals/terminal-title";
+import type { TerminalSidebarSessionRow } from "@/lib/terminals/reconcile-terminal-sidebar-sessions";
 import {
-  deriveTitleSourceFromSessionTitle,
-  terminalSessionTitle,
-} from "@/lib/terminals/terminal-title";
-import { useIsActiveEpicArtifact } from "@/stores/epics/canvas/canvas-selectors";
+  findOpenTileInTab,
+  useEpicCanvasStore,
+  useIsActiveTile,
+} from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+/** Every test id this list's shared states and rows are grabbed by. */
+const TERMINALS_TEST_ID_PREFIX = "switcher-terminal";
 
 interface SwitcherListProps {
   readonly epicId: string;
@@ -29,24 +38,57 @@ interface SwitcherListProps {
 }
 
 /**
- * Terminals category: raw PTY sessions from the host `terminal.list` query
- * (NOT the Y.Doc projection), filtered by the shared visibility rule. Sessions
- * on an unreachable host are still shown (decision); opening one lands on the
- * existing dead-tile handling.
+ * Terminals category. Rows, load/error/empty states and every mutation come
+ * from `useEpicTerminalsPanel`, the same layer the desktop Terminals panel
+ * mounts - so a phone lists the identical reconciled set (durable
+ * `terminal.plain.list` projections included, which a raw `terminal.list` read
+ * cannot see once a host is capable) and never opens a durable terminal as a
+ * legacy-authority tile. Sessions on an unreachable host are still shown
+ * (decision); opening one is refused with a reason rather than landing a dead
+ * tile.
+ *
+ * This file owns only the touch chrome: a flat scroller instead of the
+ * desktop's draggable tree rows, and a tap that lands the chosen terminal as
+ * the single full-screen mobile tile.
  */
 export function SwitcherTerminalsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  // The Epic SESSION's client, never the ambient one: during a re-point the
-  // window can address host B while this canvas still projects host A's Epic,
-  // and an ambient read would list (and mutate) B's terminals under A's rows -
-  // the same defect the desktop sidebar fixed (see epic-terminal-sidebar).
-  const hostClient = useEpicSessionHostClient();
-  const list = useTerminalList({ kind: "epic", epicId }, hostClient);
-  const sessions = (list.data?.sessions ?? []).filter((session) =>
-    isVisibleEpicTerminalSession(session, epicId),
+  const panel = useEpicTerminalsPanel({ epicId });
+  const canMutate = isEditableRole(useEpicPermissionRole());
+  const { selectTile } = useMobileEpicTiles(tabId);
+  const navigateNested = useEpicNestedFocusNavigation();
+  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
+    (s) => s.prepareOpenTileInTabFocusTarget,
   );
 
-  const canMutate = isEditableRole(useEpicPermissionRole());
+  const prepareOpenRow = panel.prepareOpenRow;
+  const openRow = useCallback(
+    (row: TerminalSidebarSessionRow) => {
+      const tile = prepareOpenRow(row);
+      if (tile === null) return;
+      // By REF, not by content id: two fleet terminals can share a terminalId
+      // across hosts, and "focus the one already open" must not hand back the
+      // other machine's tile.
+      const found = findOpenTileInTab(tabId, tile);
+      if (found === null) {
+        navigateNested(epicId, tabId, () =>
+          prepareOpenTileInTabFocusTarget(tabId, tile),
+        );
+      } else {
+        selectTile(found.paneId, found.instanceId);
+      }
+      onClose();
+    },
+    [
+      epicId,
+      navigateNested,
+      onClose,
+      prepareOpenRow,
+      prepareOpenTileInTabFocusTarget,
+      selectTile,
+      tabId,
+    ],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
@@ -60,70 +102,116 @@ export function SwitcherTerminalsList(props: SwitcherListProps) {
           onClose={onClose}
         />
       ) : null}
-      {sessions.length === 0 ? (
-        <SwitcherListEmpty message="No terminals yet." />
-      ) : (
-        sessions.map((session) => (
-          <SwitcherTerminalRow
-            key={session.sessionId}
-            session={session}
-            epicId={epicId}
-            tabId={tabId}
-            onClose={onClose}
-          />
-        ))
-      )}
+      <SwitcherTerminalsBody
+        panel={panel}
+        epicId={epicId}
+        tabId={tabId}
+        onOpen={openRow}
+      />
     </div>
   );
 }
 
-function SwitcherTerminalRow(props: {
-  readonly session: CanonicalTerminalSessionInfo;
+function SwitcherTerminalsBody(props: {
+  readonly panel: EpicTerminalsPanel;
   readonly epicId: string;
   readonly tabId: string;
-  readonly onClose: () => void;
+  readonly onOpen: (row: TerminalSidebarSessionRow) => void;
 }) {
-  const { session, epicId, tabId, onClose } = props;
-  const activate = useSwitcherActivate(epicId, tabId, onClose);
-  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
-  const hostId = useEpicSessionHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
-  const label = terminalSessionTitle({
-    title: session.title,
-    activeProcessName: session.activeProcessName,
-    currentCwd: session.cwd,
-  });
+  const { panel } = props;
+  if (panel.isLoading) {
+    return <TerminalsLoadingState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
+  }
+  if (panel.isError) {
+    return (
+      <TerminalsErrorState
+        message={panel.errorMessage}
+        isRetrying={panel.isRetrying}
+        onRetry={panel.retry}
+        testIdPrefix={TERMINALS_TEST_ID_PREFIX}
+      />
+    );
+  }
+  if (panel.rows.length === 0 && panel.failedCreates.length === 0) {
+    return <TerminalsEmptyState testIdPrefix={TERMINALS_TEST_ID_PREFIX} />;
+  }
+  return (
+    <>
+      {panel.rows.map((row) => (
+        <SwitcherTerminalRow
+          key={epicTerminalUiIdentityKey(
+            "session",
+            row.hostId,
+            row.session.sessionId,
+          )}
+          row={row}
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panel={panel}
+          onOpen={() => props.onOpen(row)}
+        />
+      ))}
+      {panel.failedCreates.map((job) => (
+        <FailedTerminalCreateRow
+          key={epicTerminalUiIdentityKey(
+            "failed",
+            job.request.hostId,
+            job.request.terminalId,
+          )}
+          job={job}
+          testIdPrefix={TERMINALS_TEST_ID_PREFIX}
+        />
+      ))}
+    </>
+  );
+}
 
-  const onSelect = useCallback(() => {
-    activate(session.sessionId, () => ({
-      id: session.sessionId,
-      instanceId: uuidv4(),
-      type: "terminal",
-      name: terminalSessionTitle({
-        title: session.title,
-        activeProcessName: session.activeProcessName,
-        currentCwd: session.cwd,
-      }),
-      titleSource: deriveTitleSourceFromSessionTitle(session.title),
-      hostId,
-      cwd: session.cwd,
-    }));
-  }, [activate, hostId, session]);
+function SwitcherTerminalRow(props: {
+  readonly row: TerminalSidebarSessionRow;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly panel: EpicTerminalsPanel;
+  readonly onOpen: () => void;
+}) {
+  const { row, epicId, tabId, panel, onOpen } = props;
+  const { hostId, session } = row;
+  // Host-scoped, like desktop: two fleet terminals sharing a terminalId must
+  // not both read as the current tile.
+  const isActive = useIsActiveTile(tabId, session.sessionId, hostId);
+  const showNavigatorResourceStats = useSettingsStore(
+    (state) => state.showNavigatorResourceStats,
+  );
+  const label = terminalSessionLabel(session);
 
   return (
     <SwitcherListRow
       icon={<Terminal className="size-4 shrink-0 text-muted-foreground" />}
       label={label}
+      secondaryLabel={
+        row.runtimeStatus === "unknown" ? "Runtime status unavailable" : null
+      }
+      badge={
+        showNavigatorResourceStats ? (
+          <OwnerResourceChip
+            epicId={epicId}
+            kind="terminal"
+            ownerId={session.sessionId}
+            hostId={hostId}
+            className={undefined}
+          />
+        ) : null
+      }
       active={isActive}
-      onSelect={onSelect}
+      onSelect={onOpen}
       selectTestId={`switcher-terminal-row-${session.sessionId}`}
       actions={
-        <SwitcherRowActions
+        <SwitcherTerminalRowActions
           epicId={epicId}
           tabId={tabId}
-          kind="terminal"
-          nodeId={session.sessionId}
-          name={label}
-          cascadeSummary={null}
+          hostId={hostId}
+          session={session}
+          durable={row.durable}
+          authority={panel}
         />
       }
     />

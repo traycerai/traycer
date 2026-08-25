@@ -3,21 +3,39 @@ import { Check, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
- * One flat row in a switcher category list: leading icon, truncating label, a
+ * One flat row in a switcher category list: leading icon, truncating label, an
+ * optional second line of row metadata, an optional trailing badge slot, a
  * check on the active tile, and an optional trailing "…" actions slot. Tapping
  * the row body activates the tile; the actions slot (null for viewers) is a
  * sibling button so its taps never trigger a row open. The 44px min height plus
  * the sheet's coarse-pointer touch scope satisfy the touch-target guideline.
+ *
+ * `secondaryLabel` and `badge` exist so a category whose desktop row carries
+ * per-row metadata (a terminal's runtime status, its resource usage) can show
+ * the same thing here instead of dropping it: the row is one component, so a
+ * surface cannot quietly say less than its desktop counterpart. Categories
+ * with nothing to add pass null.
  */
 export function SwitcherListRow(props: {
   readonly icon: ReactNode;
   readonly label: string;
+  readonly secondaryLabel: string | null;
+  readonly badge: ReactNode;
   readonly active: boolean;
   readonly onSelect: () => void;
   readonly actions: ReactNode;
   readonly selectTestId: string;
 }) {
-  const { icon, label, active, onSelect, actions, selectTestId } = props;
+  const {
+    icon,
+    label,
+    secondaryLabel,
+    badge,
+    active,
+    onSelect,
+    actions,
+    selectTestId,
+  } = props;
   return (
     // `min-w-0` at both this wrapper and the button: the label's truncate
     // only engages while every flex level above it may shrink below its
@@ -35,9 +53,17 @@ export function SwitcherListRow(props: {
         <span className="flex size-4 shrink-0 items-center justify-center">
           {icon}
         </span>
-        <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
-          {label}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="min-w-0 truncate text-ui-sm text-foreground">
+            {label}
+          </span>
+          {secondaryLabel === null ? null : (
+            <span className="min-w-0 truncate text-ui-xs text-muted-foreground">
+              {secondaryLabel}
+            </span>
+          )}
         </span>
+        {badge}
         {active ? (
           <Check
             className="size-4 shrink-0 text-primary"
