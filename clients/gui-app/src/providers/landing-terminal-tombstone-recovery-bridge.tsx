@@ -13,6 +13,7 @@ import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 import {
+  absentListingProvesDeath,
   useLandingTerminalStore,
   type LandingTerminalPendingKill,
 } from "@/stores/home/landing-terminal-store";
@@ -48,16 +49,32 @@ const CAPABLE_CLOSE_RETRY_BASE_MS = 500;
  */
 const CAPABLE_CLOSE_RETRY_MAX_MS = 300_000;
 
+/**
+ * Which RPC a drain attempt used - NOT which capability its host reported.
+ *
+ * The two stopped being the same thing once an unacknowledged tombstone on a
+ * CAPABLE host began routing to `terminal.kill`. Keying the retry state on host
+ * capability made that case unretryable: the record said `legacy`, the host
+ * said `capable`, and the predicate refused every attempt.
+ *
+ * - `plain` - `terminal.plain.close`, which names a terminal the host is
+ *   publishing and REJECTS for one it does not know.
+ * - `kill` - `terminal.kill`, which a legacy host serves directly and a capable
+ *   host serves by trying its plain registry first and falling back, reporting
+ *   an already-gone session as `killed: false` rather than as an error.
+ */
+type TombstoneCloseArm = "plain" | "kill";
+
 interface CapableCloseRetry {
   attempt: number;
   timer: number | null;
   due: boolean;
   /**
-   * The protocol these attempts were spent on. The budget is per-protocol: a
-   * host that changes capability gets a fresh one, because the attempts that
-   * failed were spent on a different request against a different arm.
+   * The arm these attempts were spent on. The budget is per-arm: a tombstone
+   * that changes arm gets a fresh one, because the attempts that failed were
+   * spent on a different request.
    */
-  capability: "capable" | "legacy";
+  arm: TombstoneCloseArm;
 }
 
 /**
@@ -126,17 +143,21 @@ function cancelUndrainableCapableCloseRetries(args: {
 /**
  * Whether another attempt at this tombstone could still land.
  *
- * Both capabilities require the tombstone to be outstanding and the route to
- * still be there. Only the CAPABLE arm additionally demands a projection: its
- * close names a terminal the host is publishing, so a vanished projection means
- * the session is already gone. Legacy has no projection to consult - the kill
- * is addressed to the host by session id alone - so requiring one would make
- * the legacy arm unretryable, which is the state this replaced.
+ * Both arms require the tombstone to be outstanding and the route to still be
+ * there. Only the PLAIN arm additionally demands a projection: its close names a
+ * terminal the host is publishing, so for a session that host acknowledged, a
+ * vanished projection means the session is already gone.
+ *
+ * The `kill` arm demands only that SOME authority has resolved, because both
+ * capabilities serve `terminal.kill`. Requiring a projection there would make it
+ * unretryable - it is reached precisely when no projection exists - and
+ * requiring a `legacy` host would make it unretryable on the capable host that
+ * an unacknowledged tombstone is routed to.
  */
 function closeRetryStillWarranted(args: {
   readonly pending: LandingTerminalPendingKill;
   readonly refs: TombstoneRetryRefs;
-  readonly capability: "capable" | "legacy";
+  readonly arm: TombstoneCloseArm;
 }): boolean {
   const stillPending = useLandingTerminalStore
     .getState()
@@ -150,13 +171,12 @@ function closeRetryStillWarranted(args: {
     return false;
   }
   const currentEntry = args.refs.authorityEntries.current[args.pending.hostId];
-  if (args.capability === "legacy") {
-    return currentEntry?.authority.capability.status === "legacy";
+  if (currentEntry === undefined) return false;
+  const capability = currentEntry.authority.capability.status;
+  if (args.arm === "kill") {
+    return capability === "legacy" || capability === "capable";
   }
-  if (
-    currentEntry?.authority.capability.status !== "capable" ||
-    !currentEntry.authority.canMutate
-  ) {
+  if (capability !== "capable" || !currentEntry.authority.canMutate) {
     return false;
   }
   return (
@@ -172,18 +192,18 @@ function scheduleCloseRetry(args: {
   readonly key: string;
   readonly pending: LandingTerminalPendingKill;
   readonly refs: TombstoneRetryRefs;
-  readonly capability: "capable" | "legacy";
+  readonly arm: TombstoneCloseArm;
   readonly signalRetry: () => void;
 }): void {
   if (!args.refs.mounted.current) return;
   if (!closeRetryStillWarranted(args)) return;
-  // A record belonging to the OTHER protocol is discarded outright, timer and
-  // all. Keeping it would block this arm twice over: its armed timer makes the
-  // guard below return, and its attempt count would hand a host that just
-  // changed protocol the long interval the failed arm ran up. A protocol change
+  // A record belonging to the OTHER arm is discarded outright, timer and all.
+  // Keeping it would block this arm twice over: its armed timer makes the guard
+  // below return, and its attempt count would hand a tombstone that just
+  // switched arm the long interval the failed arm ran up. A different request
   // deserves a prompt attempt on a clean schedule.
   const stale = args.refs.retries.current.get(args.key);
-  if (stale !== undefined && stale.capability !== args.capability) {
+  if (stale !== undefined && stale.arm !== args.arm) {
     clearCapableCloseRetry(args.refs.retries.current, args.key);
   }
   const prior = args.refs.retries.current.get(args.key);
@@ -197,7 +217,7 @@ function scheduleCloseRetry(args: {
     attempt,
     timer: null,
     due: false,
-    capability: args.capability,
+    arm: args.arm,
   };
   nextRetry.timer = window.setTimeout(() => {
     if (!args.refs.mounted.current) return;
@@ -210,6 +230,7 @@ function scheduleCloseRetry(args: {
 
 function dispatchCapableClose(args: {
   readonly entry: LandingTerminalAuthorityEntry;
+  readonly kill: LandingTerminalKillDispatch;
   readonly key: string;
   readonly pending: LandingTerminalPendingKill;
   readonly retry: CapableCloseRetry | undefined;
@@ -223,6 +244,25 @@ function dispatchCapableClose(args: {
       args.pending.sessionId,
     ) === undefined
   ) {
+    if (!absentListingProvesDeath(args.pending)) {
+      // Not evidence of death - so fall through to `terminal.kill` rather than
+      // discard the record. `terminal.plain.close` would REJECT for a terminal
+      // this host does not know, which is the wrong answer for both shapes that
+      // land here: a create still in flight (whose terminal will exist under
+      // this exact session id, because the client supplied it) and a legacy
+      // session on a host that came back upgraded (which never had a plain
+      // projection at all). `terminal.kill` covers both - the capable host
+      // tries its plain registry first and falls back to the legacy manager.
+      dispatchLegacyClose({
+        kill: args.kill,
+        key: args.key,
+        pending: args.pending,
+        retry: args.retry,
+        refs: args.refs,
+        signalRetry: args.signalRetry,
+      });
+      return;
+    }
     useLandingTerminalStore
       .getState()
       .clearPendingKill(args.pending.hostId, args.pending.sessionId);
@@ -255,7 +295,7 @@ function dispatchCapableClose(args: {
           .clearPendingKill(args.pending.hostId, args.pending.sessionId);
         clearCapableCloseRetry(args.refs.retries.current, args.key);
       },
-      () => scheduleCloseRetry({ ...args, capability: "capable" }),
+      () => scheduleCloseRetry({ ...args, arm: "plain" }),
     )
     .finally(() => {
       const next = new Set(args.refs.inFlight.current);
@@ -313,7 +353,7 @@ function dispatchLegacyClose(args: {
   })
     .then(
       () => clearCapableCloseRetry(args.refs.retries.current, args.key),
-      () => scheduleCloseRetry({ ...args, capability: "legacy" }),
+      () => scheduleCloseRetry({ ...args, arm: "kill" }),
     )
     .finally(() => {
       const next = new Set(args.refs.inFlight.current);
@@ -342,6 +382,9 @@ function dispatchTombstoneClose(args: {
   if (entry.authority.capability.status === "capable") {
     dispatchCapableClose({
       entry,
+      // Carried through because the capable arm falls back to `terminal.kill`
+      // for a tombstone whose session this host never acknowledged.
+      kill: args.kill,
       key: args.key,
       pending: args.pending,
       retry: args.retry,

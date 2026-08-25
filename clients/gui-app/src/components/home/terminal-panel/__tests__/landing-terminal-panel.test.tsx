@@ -1325,7 +1325,12 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "terminal-stale" },
+      {
+        hostId: "host-a",
+        sessionId: "terminal-stale",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -1362,7 +1367,12 @@ describe("<LandingTerminalPanel />", () => {
       expect(useLandingTerminalStore.getState().tabs).toEqual([]);
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "terminal-unresolved" },
+      {
+        hostId: "host-a",
+        sessionId: "terminal-unresolved",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -1533,8 +1543,18 @@ describe("<LandingTerminalPanel />", () => {
     // shell needs killing once that host becomes dialable.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual(
       expect.arrayContaining([
-        { hostId: "host-a", sessionId: "terminal-ready" },
-        { hostId: "host-b", sessionId: "terminal-not-ready" },
+        {
+          hostId: "host-a",
+          sessionId: "terminal-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
       ]),
     );
     await waitFor(() => {
@@ -1557,7 +1577,12 @@ describe("<LandingTerminalPanel />", () => {
     // the not-ready host's stays until the recovery bridge can ask it.
     await waitFor(() => {
       expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-        { hostId: "host-b", sessionId: "terminal-not-ready" },
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
       ]);
     });
   });
@@ -1628,7 +1653,12 @@ describe("<LandingTerminalPanel />", () => {
       });
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "still-running" },
+      {
+        hostId: "host-a",
+        sessionId: "still-running",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 

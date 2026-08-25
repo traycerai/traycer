@@ -258,6 +258,88 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
+  it("routes an unsettled create to terminal.kill rather than discarding its tombstone", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    // The create has not landed, so the host projects nothing for this id yet.
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "creating-tab",
+      sessionId: "session-creating",
+      hostId: "host-b",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+      pendingCreate: true,
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "creating-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-creating",
+      });
+    });
+    // `terminal.plain.close` would REJECT for a terminal this host has not
+    // created yet, and the tombstone names the id the CLIENT gave `create` - so
+    // the terminal that lands next is precisely the one owed this kill.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+  });
+
+  it("kills a legacy session on a host that came back upgraded", async () => {
+    mocks.entries = [
+      {
+        ...offlineHost,
+        websocketUrl: "ws://host-b/rpc",
+        transportDialability: "dialable",
+      },
+    ];
+    // Closed while the host was legacy; it returns negotiating the plain
+    // protocol, which is the ordinary shape of a host that was offline BECAUSE
+    // it was upgrading.
+    mocks.authorityStatus = "capable";
+    mocks.canMutate = true;
+    mocks.terminalsById = {};
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "legacy-tab",
+      sessionId: "session-legacy",
+      hostId: "host-b",
+      cwd: "/legacy",
+      name: "Legacy",
+      titleSource: "default",
+    });
+    useLandingTerminalStore.getState().closeTab("landing-page", "legacy-tab");
+
+    render(<LandingTerminalTombstoneRecoveryBridge />);
+
+    await waitFor(() => {
+      expect(mocks.kill).toHaveBeenCalledWith({
+        hostId: "host-b",
+        sessionId: "session-legacy",
+      });
+    });
+    // A session that was never a plain terminal has no projection to vanish
+    // from, so the capable arm must not read its absence as death.
+    expect(mocks.closeAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: "host-b",
+        sessionId: "session-legacy",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
+  });
+
   it("does not drain capable-host tombstones while authority is stale", async () => {
     mocks.entries = [
       {
@@ -286,7 +368,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-stale" },
+      {
+        hostId: "host-b",
+        sessionId: "session-stale",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -676,7 +763,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-gone", sessionId: "session-gone" },
+      {
+        hostId: "host-gone",
+        sessionId: "session-gone",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -733,7 +825,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-boot" },
+      {
+        hostId: "host-b",
+        sessionId: "session-boot",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -755,7 +852,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual(["host-b"]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-offline" },
+      {
+        hostId: "host-b",
+        sessionId: "session-offline",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     expect(mocks.closeAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
@@ -783,7 +885,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-solo" },
+      {
+        hostId: "host-b",
+        sessionId: "session-solo",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -876,7 +983,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     expect(mocks.probedHostIds).toEqual([]);
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-gone", sessionId: "session-gone" },
+      {
+        hostId: "host-gone",
+        sessionId: "session-gone",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -1046,7 +1158,12 @@ describe("<LandingTerminalTombstoneRecoveryBridge />", () => {
 
     // Still owed, and still trying - the drain has not parked itself.
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-b", sessionId: "session-doomed" },
+      {
+        hostId: "host-b",
+        sessionId: "session-doomed",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     for (let round = 0; round < 10; round += 1) await advance(60_000);
     expect(mocks.kill.mock.calls.length).toBeGreaterThan(afterAnHour);

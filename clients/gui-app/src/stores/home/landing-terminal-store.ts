@@ -31,9 +31,59 @@ export interface LandingTerminalTabRef {
   readonly sourceStoreVersion?: number;
 }
 
+/**
+ * A kill that is still owed for a session whose tab is already gone.
+ *
+ * The provenance fields exist because the drain cannot otherwise tell an absent
+ * plain projection apart from a dead session. Absence is proof of death for
+ * exactly one shape of tombstone - a session a capable host had ALREADY
+ * acknowledged as a plain terminal - and reading it that way for any other
+ * shape leaks the PTY the tombstone was written to kill:
+ *
+ * - a `terminal.plain.create` still in flight has no projection YET, and the
+ *   session id is the one the CLIENT supplied to `create`, so the terminal that
+ *   lands afterwards is precisely the one this tombstone names;
+ * - a legacy session has no plain projection EVER, and a host is frequently
+ *   offline because it is upgrading - so the drain meets it as `capable`.
+ *
+ * Both fields are copied off the closing TAB rather than read from the live
+ * authority. They are facts about this session's history; the authority only
+ * reports what its host can do right now, and by the time the drain runs that
+ * host may be negotiating a different protocol than the session was closed
+ * under. The capability at the moment of the gesture is deliberately NOT
+ * recorded: every routing decision below turns out to rest on these two, and an
+ * unread field in a persisted schema is one every future build must keep.
+ */
 export interface LandingTerminalPendingKill {
   readonly hostId: string;
   readonly sessionId: string;
+  /** A capable host had acknowledged this session as a plain terminal. */
+  readonly hostAuthorityAcknowledged: boolean;
+  /** The tab's `terminal.plain.create` had not settled when it was closed. */
+  readonly pendingCreate: boolean;
+}
+
+/**
+ * Whether this session's absence from its host's own listing proves it is dead.
+ *
+ * True for exactly one shape of tombstone: a session a capable host had ALREADY
+ * acknowledged. That host published it once, so its disappearance is the host
+ * saying it is gone. For anything else absence is the host saying NOTHING - a
+ * create still in flight has not been listed yet, and a legacy session is not in
+ * a plain projection to begin with.
+ *
+ * Lives here rather than beside any one caller because three separate drains ask
+ * this question - the recovery bridge, and both arms of landing-terminal
+ * reconciliation - and answering it differently in any of them reopens the leak.
+ *
+ * `pendingCreate` is checked as well as acknowledgement even though
+ * `hostAcknowledgedTab` clears one while setting the other: the pair arrives
+ * from persisted JSON, where nothing enforces that invariant.
+ */
+export function absentListingProvesDeath(
+  pending: LandingTerminalPendingKill,
+): boolean {
+  return pending.hostAuthorityAcknowledged && !pending.pendingCreate;
 }
 
 export interface LandingTerminalLayout {
@@ -74,7 +124,12 @@ export interface LandingTerminalStoreState {
   readonly renameTab: (instanceId: string, name: string) => void;
   /** Refreshes a derived title without overwriting a user rename. */
   readonly syncDefaultTitle: (instanceId: string, name: string) => void;
-  /** Atomically tombstones then removes a user-closed tab. */
+  /**
+   * Atomically tombstones then removes a user-closed tab.
+   *
+   * The tombstone's provenance is copied off the tab being closed, so no caller
+   * has to supply it and no call site can get it wrong.
+   */
   readonly closeTab: (
     landingPageId: string,
     instanceId: string,
@@ -288,7 +343,13 @@ export const useLandingTerminalStore = create<LandingTerminalStoreState>()(
             ? state.pendingKills
             : [
                 ...state.pendingKills,
-                { hostId: closed.hostId, sessionId: closed.sessionId },
+                {
+                  hostId: closed.hostId,
+                  sessionId: closed.sessionId,
+                  hostAuthorityAcknowledged:
+                    closed.hostAuthorityAcknowledged === true,
+                  pendingCreate: closed.pendingCreate === true,
+                },
               ];
           return {
             tabs,
@@ -519,7 +580,20 @@ function parsePendingKills(
     const key = terminalSessionKey(entry.hostId, entry.sessionId);
     if (seen.has(key)) return [];
     seen.add(key);
-    return [{ hostId: entry.hostId, sessionId: entry.sessionId }];
+    // Back-compat: a record written before the provenance fields existed parses
+    // to the CONSERVATIVE reading - unknown capability, unacknowledged. That
+    // costs such a record its clear-on-absent-projection shortcut and routes it
+    // through `terminal.kill`, which reports "already gone" as data instead of
+    // rejecting. Defaulting the other way would re-create the leak for exactly
+    // the tombstones written before it was understood.
+    return [
+      {
+        hostId: entry.hostId,
+        sessionId: entry.sessionId,
+        hostAuthorityAcknowledged: entry.hostAuthorityAcknowledged === true,
+        pendingCreate: entry.pendingCreate === true,
+      },
+    ];
   });
 }
 

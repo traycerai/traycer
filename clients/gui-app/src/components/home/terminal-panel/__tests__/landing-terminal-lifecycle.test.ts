@@ -511,8 +511,16 @@ describe("landing terminal lifecycle", () => {
       mintInstanceId: () => "would-be-adopted",
     });
 
+    // The persisted record above carries no provenance, so this also pins the
+    // back-compat reading: unacknowledged, which withholds the
+    // clear-on-absent-projection shortcut rather than granting it.
     expect(restored.pendingKills).toEqual([
-      { hostId: HOST_A, sessionId: "session-close" },
+      {
+        hostId: HOST_A,
+        sessionId: "session-close",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
     expect(result.tabs).toEqual([]);
     expect(result.adoptedTabs).toEqual([]);
@@ -868,5 +876,121 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
 
     expect(afterRename.tabs[0]).not.toBe(first);
     expect(afterRename.tabs[0]?.name).toBe("Renamed on host");
+  });
+});
+
+/**
+ * The tombstone's provenance is what lets the drain tell an absent plain
+ * projection apart from a dead session. These pin the mapping itself, so the
+ * shape assertions in the drain suites are reading a spec rather than a
+ * tautology.
+ */
+describe("close tombstone provenance", () => {
+  // Tombstones are durable by design, so they survive into the next test unless
+  // the store is reset - and a leaked one reads as this test having written two.
+  beforeEach(() => {
+    useLandingTerminalStore.getState().resetForTests();
+  });
+
+  it("records the acknowledgement that makes an absent projection proof of death", () => {
+    const store = useLandingTerminalStore.getState();
+    store.addTab({
+      ...tab({ instanceId: "ack", sessionId: "s-ack", hostId: HOST_A }),
+      hostAuthorityAcknowledged: true,
+    });
+
+    store.closeTab("draft-a", "ack");
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: HOST_A,
+        sessionId: "s-ack",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
+    ]);
+  });
+
+  it("records a create that had not settled", () => {
+    const store = useLandingTerminalStore.getState();
+    store.addTab({
+      ...tab({ instanceId: "new", sessionId: "s-new", hostId: HOST_A }),
+      pendingCreate: true,
+    });
+
+    store.closeTab("draft-a", "new");
+
+    // The session id is the one the CLIENT handed `terminal.plain.create`, so
+    // the terminal that lands after this close is exactly the one named here.
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: HOST_A,
+        sessionId: "s-new",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: true,
+      },
+    ]);
+  });
+
+  it("records a legacy session as unacknowledged, not as a settled plain terminal", () => {
+    const store = useLandingTerminalStore.getState();
+    store.addTab(
+      tab({ instanceId: "legacy", sessionId: "s-legacy", hostId: HOST_B }),
+    );
+
+    store.closeTab("draft-a", "legacy");
+
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: HOST_B,
+        sessionId: "s-legacy",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
+  });
+
+  it("parses a tombstone written before provenance existed as unacknowledged", () => {
+    // The conservative reading on purpose. Defaulting acknowledgement to `true`
+    // would hand every pre-existing tombstone the clear-on-absent-projection
+    // shortcut this change exists to withdraw.
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      pendingKills: [{ hostId: HOST_A, sessionId: "s-old" }],
+    });
+
+    expect(restored.pendingKills).toEqual([
+      {
+        hostId: HOST_A,
+        sessionId: "s-old",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
+  });
+
+  it("coerces non-boolean provenance rather than trusting persisted JSON", () => {
+    const restored = parsePersistedLandingTerminalState({
+      tabs: [],
+      activeInstanceId: null,
+      pendingKills: [
+        {
+          hostId: HOST_A,
+          sessionId: "s-junk",
+          hostAuthorityAcknowledged: "yes",
+          pendingCreate: 1,
+        },
+      ],
+    });
+
+    expect(restored.pendingKills).toEqual([
+      {
+        hostId: HOST_A,
+        sessionId: "s-junk",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
   });
 });

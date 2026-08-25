@@ -56,12 +56,31 @@ export function useLandingTerminalKill(): UseMutationResult<
             sessionId: variables.sessionId,
           });
         }),
-      onSuccess: (_response, variables) => {
+      onSuccess: (response, variables) => {
         // An acknowledgement is the durable boundary: only now can a tombstone
         // be cleared without reopening adoption to a still-running PTY.
-        useLandingTerminalStore
+        //
+        // With one exception. `killed: false` is the host saying the session was
+        // "already missing, or past its post-exit grace" - but for a session
+        // whose `terminal.plain.create` had not settled when it was closed, it
+        // equally means NOT CREATED YET, and the create still lands under this
+        // exact id because the client is the one that chose it. Clearing there
+        // is how the tombstone gets lost in front of the terminal it was written
+        // to kill. Left outstanding, the drain retries under its own backoff and
+        // the next attempt - after the create has landed - answers `true`.
+        const stillPendingCreate = useLandingTerminalStore
           .getState()
-          .clearPendingKill(variables.hostId, variables.sessionId);
+          .pendingKills.some(
+            (pending) =>
+              pending.hostId === variables.hostId &&
+              pending.sessionId === variables.sessionId &&
+              pending.pendingCreate,
+          );
+        if (!(!response.killed && stillPendingCreate)) {
+          useLandingTerminalStore
+            .getState()
+            .clearPendingKill(variables.hostId, variables.sessionId);
+        }
         void queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(
             variables.hostId,

@@ -25,6 +25,7 @@ import {
 import { consumeRetainedPlainTerminalTombstone } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import {
   LANDING_TERMINAL_SOURCE_STORE_VERSION,
+  absentListingProvesDeath,
   terminalSessionKey,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
@@ -330,7 +331,16 @@ export function useLandingTerminalReconciliation(
         freshSessions.map((session) => session.sessionId),
       );
       for (const pending of hostTombstones) {
-        if (!listedSessionIds.has(pending.sessionId)) {
+        // Absence from the host's own list is only proof of death for a session
+        // it had already acknowledged. A `terminal.plain.create` that has not
+        // settled is not listed YET, and its terminal lands under this exact
+        // session id, so clearing here drops the record in front of the terminal
+        // it was written to kill. Left outstanding, the recovery bridge drains
+        // it on the next dialable edge.
+        if (
+          !listedSessionIds.has(pending.sessionId) &&
+          absentListingProvesDeath(pending)
+        ) {
           useLandingTerminalStore
             .getState()
             .clearPendingKill(pending.hostId, pending.sessionId);
@@ -340,7 +350,14 @@ export function useLandingTerminalReconciliation(
         hostTombstones
           .filter((pending) => listedSessionIds.has(pending.sessionId))
           .map((pending) =>
-            killTerminal(pending).then(
+            // Variables built explicitly rather than passing the tombstone. The
+            // two shapes were structurally identical until the tombstone grew
+            // provenance, so this type-checked while quietly sending fields the
+            // RPC has no use for.
+            killTerminal({
+              hostId: pending.hostId,
+              sessionId: pending.sessionId,
+            }).then(
               () => undefined,
               () => undefined,
             ),
@@ -441,11 +458,18 @@ export async function reconcileCapableLandingTerminals(args: {
     pendingKills.map(async (pending) => {
       const collection =
         queryClient.getQueryData<PlainTerminalCollection>(queryKey);
-      if (
+      const projected =
         getPlainTerminal(collection, pending.hostId, pending.sessionId) !==
-        undefined
-      ) {
+        undefined;
+      if (projected) {
         await args.closeTerminal({ terminalId: pending.sessionId });
+      } else if (!absentListingProvesDeath(pending)) {
+        // The close was never sent and absence proves nothing here - an
+        // in-flight create is simply not projected yet, and a legacy session
+        // never appears in a plain collection at all. Clearing regardless is how
+        // the same tombstone was being discarded on a plain reconcile, not just
+        // by the recovery bridge. Leave it for that bridge to drain.
+        return;
       }
       useLandingTerminalStore
         .getState()
