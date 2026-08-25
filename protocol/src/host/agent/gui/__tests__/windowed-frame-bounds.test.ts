@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACCUMULATED_CHANGE_CHUNK_MAX_BYTES,
   INDEX_CHANGE_MAX_BYTES,
   SKELETON_CHUNK_MAX_BYTES,
+  WINDOWED_SNAPSHOT_MAX_BYTES,
+  chunkByEncodedBytes,
   chunkRowSkeleton,
   indexChangeFits,
+  windowedSnapshotFitsFrame,
+  type ChatAccumulatedFileChangeSummary,
   type ChatIndexChange,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
@@ -199,5 +204,96 @@ describe("indexChangeFits", () => {
     };
 
     expect(indexChangeFits([change], 64 * 1024 * 1024)).toBe(false);
+  });
+});
+
+function summary(index: number): ChatAccumulatedFileChangeSummary {
+  return {
+    // A realistic path: deep, hyphenated, and the kind a refactor touches by
+    // the thousand. Short fixture paths are how a size guard passes while
+    // saying nothing.
+    filePath: `packages/app/src/features/settings/panels/section-${index}/settings-panel-row-${index}.tsx`,
+    operation: "edit",
+    diffSource: "snapshot",
+    reason: "snapshot",
+    undoable: true,
+    hasContents: true,
+    digest: "d".repeat(64),
+    counts: { additions: 120, deletions: 45 },
+  };
+}
+
+/**
+ * The snapshot's own budget — the one that was assertion-only.
+ *
+ * The tail, the skeleton chunks, the range and the index delta were each
+ * budgeted by code while the SNAPSHOT measured nothing, which is the exact
+ * shape `maxBytes` had before a review measured 4,378 rows producing a
+ * 1,196,401-byte frame.
+ */
+describe("the bounded snapshot is actually bounded", () => {
+  it("a broad-refactor chat's summaries would ALONE blow the frame, which is why they are chunked", () => {
+    // The premise of moving them out. If this ever stops being true the
+    // chunking is dead weight and someone should find out from a test rather
+    // than by reasoning about it.
+    const summaries = Array.from({ length: 5_000 }, (unused, index) =>
+      summary(index),
+    );
+
+    expect(utf8ByteLength(JSON.stringify(summaries))).toBeGreaterThan(
+      WINDOWED_SNAPSHOT_MAX_BYTES,
+    );
+  });
+
+  it("chunks those summaries into frames that each fit", () => {
+    const summaries = Array.from({ length: 5_000 }, (unused, index) =>
+      summary(index),
+    );
+
+    const chunks = chunkByEncodedBytes(
+      summaries,
+      ACCUMULATED_CHANGE_CHUNK_MAX_BYTES,
+    );
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(utf8ByteLength(JSON.stringify(chunk.items))).toBeLessThanOrEqual(
+        ACCUMULATED_CHANGE_CHUNK_MAX_BYTES,
+      );
+    }
+    // Every summary exactly once, in order — a panel that reverts a subset it
+    // presented as the whole set is worse than one that takes another frame.
+    expect(chunks.flatMap((chunk) => chunk.items)).toEqual(summaries);
+    expect(chunks.at(-1)?.isFinal).toBe(true);
+  });
+
+  it("accepts a snapshot carrying only state-scaled aux fields", () => {
+    expect(
+      windowedSnapshotFitsFrame(
+        { accumulatedFileChangeCount: 5_000, rowCount: 40_000, tail: {} },
+        WINDOWED_SNAPSHOT_MAX_BYTES,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a snapshot that would exceed the frame, whatever the field", () => {
+    // Not scoped to the summaries: the guard measures the ENCODED object, so a
+    // future field that grows without anyone noticing is caught by the same
+    // check rather than by a new one nobody remembers to add.
+    expect(
+      windowedSnapshotFitsFrame(
+        { somethingAddedLater: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+        WINDOWED_SNAPSHOT_MAX_BYTES,
+      ),
+    ).toBe(false);
+  });
+
+  it("clamps a caller asking for more than the frame budget", () => {
+    expect(
+      windowedSnapshotFitsFrame(
+        { padding: "x".repeat(WINDOWED_SNAPSHOT_MAX_BYTES) },
+        64 * 1024 * 1024,
+      ),
+    ).toBe(false);
   });
 });

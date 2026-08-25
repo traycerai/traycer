@@ -558,6 +558,65 @@ export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
 export const SKELETON_CHUNK_MAX_BYTES = 256 * 1024;
 export const INDEX_CHANGE_MAX_BYTES = 256 * 1024;
 
+/**
+ * The ceiling on a bounded snapshot's ENCODED size.
+ *
+ * Named and enforced rather than assumed. Every other frame on this line is
+ * budgeted - the tail by `sliceTranscriptTail`, the skeleton by
+ * {@link chunkRowSkeleton}, the delta by {@link indexChangeFits} - and the
+ * snapshot was the one left measuring nothing, which is precisely the shape
+ * `maxBytes` had before it became a real frame ceiling.
+ */
+export const WINDOWED_SNAPSHOT_MAX_BYTES = 1024 * 1024;
+
+/** A contiguous run of items small enough to ship as one frame. */
+export interface EncodedChunk<Item> {
+  readonly fromIndex: number;
+  readonly items: readonly Item[];
+  readonly isFinal: boolean;
+}
+
+/**
+ * Splits a list into frame-sized chunks, measured on the ENCODED bytes.
+ *
+ * Shared by the skeleton and the accumulated-change summaries because they have
+ * the same shape of problem - a list whose length is a property of the chat's
+ * history rather than of its current state - and a second chunker would be a
+ * second set of boundary decisions for two producers to disagree about.
+ *
+ * An item too large for a whole chunk still ships ALONE rather than being
+ * dropped: a list with a hole in it is worse than a list that took an extra
+ * frame, and every item here is bounded by construction anyway.
+ *
+ * An EMPTY list yields one empty final chunk, not zero chunks. A client that
+ * receives no chunk cannot tell "there is nothing" from "the chunks were lost".
+ */
+export function chunkByEncodedBytes<Item>(
+  items: readonly Item[],
+  maxBytes: number,
+): readonly EncodedChunk<Item>[] {
+  const chunks: EncodedChunk<Item>[] = [];
+  let start = 0;
+  let spent = 0;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const cost = utf8ByteLength(JSON.stringify(items[index])) + 1;
+    if (index > start && spent + cost > maxBytes) {
+      chunks.push({
+        fromIndex: start,
+        items: items.slice(start, index),
+        isFinal: false,
+      });
+      start = index;
+      spent = 0;
+    }
+    spent += cost;
+  }
+
+  chunks.push({ fromIndex: start, items: items.slice(start), isFinal: true });
+  return chunks;
+}
+
 /** A contiguous run of skeleton entries small enough to ship as one frame. */
 export interface RowSkeletonChunkPlan {
   readonly fromOrdinal: number;
@@ -593,31 +652,14 @@ export function chunkRowSkeleton(
   entries: readonly RowSkeletonEntry[],
   maxBytes: number,
 ): readonly RowSkeletonChunkPlan[] {
-  const budget = Math.min(maxBytes, SKELETON_CHUNK_MAX_BYTES);
-  const chunks: RowSkeletonChunkPlan[] = [];
-  let start = 0;
-  let spent = 0;
-
-  for (let index = 0; index < entries.length; index += 1) {
-    const cost = encodedEntryBytes(entries[index]);
-    if (index > start && spent + cost > budget) {
-      chunks.push({
-        fromOrdinal: start,
-        entries: entries.slice(start, index),
-        isFinal: false,
-      });
-      start = index;
-      spent = 0;
-    }
-    spent += cost;
-  }
-
-  chunks.push({
-    fromOrdinal: start,
-    entries: entries.slice(start),
-    isFinal: true,
-  });
-  return chunks;
+  return chunkByEncodedBytes(
+    entries,
+    Math.min(maxBytes, SKELETON_CHUNK_MAX_BYTES),
+  ).map((chunk) => ({
+    fromOrdinal: chunk.fromIndex,
+    entries: chunk.items,
+    isFinal: chunk.isFinal,
+  }));
 }
 
 /**
@@ -643,6 +685,69 @@ export function indexChangeFits(
   return (
     utf8ByteLength(JSON.stringify(changes)) <
     Math.min(maxBytes, INDEX_CHANGE_MAX_BYTES)
+  );
+}
+
+/**
+ * The byte budget for one accumulated-change chunk.
+ *
+ * These summaries leave the snapshot for the same reason the skeleton never
+ * joined it: their count is a property of the chat's HISTORY - one entry per
+ * file ever touched - not of its current state. A broad refactor touches
+ * thousands, and at ~200 encoded bytes each that is the whole frame budget
+ * spent on a panel the user may never open.
+ *
+ * The other aux arrays stay inline deliberately, and the distinction is worth
+ * stating because it is the rule for anything added later: `pendingApprovals`,
+ * `queue`, `managedCommands` and `heldUpdates` scale with CONCURRENT state -
+ * approvals in flight, shells alive, items queued - which is bounded by what a
+ * user and an agent can hold open at once. History-scaled lists are chunked;
+ * state-scaled lists ride the snapshot and are measured by
+ * {@link windowedSnapshotFitsFrame}.
+ */
+export const ACCUMULATED_CHANGE_CHUNK_MAX_BYTES = 256 * 1024;
+
+/**
+ * A slice of the accumulated-change summaries.
+ *
+ * `isFinal` marks the last one, at which point the client's list must agree
+ * with the snapshot's `accumulatedFileChangeCount`. A mismatch means chunks
+ * were lost, and the panel re-requests rather than rendering a total that
+ * silently under-counts the files it would revert.
+ */
+export const chatAccumulatedChangeChunkSchema = z.object({
+  epoch: z.number().int().nonnegative(),
+  fromIndex: z.number().int().nonnegative(),
+  summaries: z.array(chatAccumulatedFileChangeSummarySchema),
+  isFinal: z.boolean(),
+});
+export type ChatAccumulatedChangeChunk = z.infer<
+  typeof chatAccumulatedChangeChunkSchema
+>;
+
+/**
+ * Whether a bounded snapshot actually fits the frame it claims to.
+ *
+ * The point is that it MEASURES. Every other frame on this line is budgeted by
+ * code; the snapshot was budgeted by assertion, which is exactly what `maxBytes`
+ * was before a cold review measured 4,378 small rows producing a 1,196,401-byte
+ * frame. The history-scaled list is chunked out (see
+ * {@link ACCUMULATED_CHANGE_CHUNK_MAX_BYTES}), so what remains is state-scaled -
+ * bounded by what a user and an agent can hold open at once, which is a real
+ * bound but not a provable one. This is how a producer checks rather than hopes.
+ *
+ * A producer that gets `false` cannot simply truncate: every field left inline
+ * is something a renderer reads unconditionally. It must shed a `tail` row and
+ * re-measure - the tail is the one inline field with a refetch path
+ * (`loadRange`), which is why it is the one that yields.
+ */
+export function windowedSnapshotFitsFrame(
+  snapshot: unknown,
+  maxBytes: number,
+): boolean {
+  return (
+    utf8ByteLength(JSON.stringify(snapshot)) <
+    Math.min(maxBytes, WINDOWED_SNAPSHOT_MAX_BYTES)
   );
 }
 

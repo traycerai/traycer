@@ -89,7 +89,7 @@ import {
 // FRAME union is assembled - the aux frames are shared between the two lines,
 // and splitting the unions across files would hide that.
 import {
-  chatAccumulatedFileChangeSummarySchema,
+  chatAccumulatedChangeChunkSchema,
   chatIndexChangeSchema,
   chatLoadRangeRequestSchema,
   chatRangeResponseSchema,
@@ -2235,10 +2235,15 @@ export const chatWindowedSnapshotSchema = z.object({
   worktreeBinding: worktreeBindingSchema.nullable(),
   missingWorktreePaths: z.array(z.string()),
   pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
-  /** Summaries only; contents come from `chat.readAccumulatedFileChange`. */
-  accumulatedFileChangeSummaries: z.array(
-    chatAccumulatedFileChangeSummarySchema,
-  ),
+  /**
+   * How many files the chat has touched. The SUMMARIES arrive on their own
+   * chunked frames, for the reason the skeleton never joined the snapshot:
+   * their count is a property of the chat's HISTORY, not of its current state,
+   * and a broad refactor touches thousands. This count is what lets the panel
+   * paint its collapsed header immediately and tell a complete list from a
+   * lossy one when the final chunk lands.
+   */
+  accumulatedFileChangeCount: z.number().int().nonnegative(),
   backgroundItems: z.array(backgroundItemSchema).optional(),
   managedCommands: z.array(managedCommandSchema).default([]),
   heldUpdates: z.array(heldManagedCommandUpdateSchema).default([]),
@@ -2271,6 +2276,13 @@ const chatSubscribeWindowedSnapshotServerFrameSchema = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   snapshot: chatWindowedSnapshotSchema,
+});
+
+const chatSubscribeAccumulatedChangesServerFrameSchema = z.object({
+  kind: z.literal("accumulatedChanges"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  chunk: chatAccumulatedChangeChunkSchema,
 });
 
 const chatSubscribeSkeletonChunkServerFrameSchema = z.object({
@@ -2315,6 +2327,7 @@ export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
   [
     chatSubscribeWindowedSnapshotServerFrameSchema,
     chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
     chatSubscribeIndexChangedServerFrameSchema,
     chatSubscribeRangeServerFrameSchema,
     chatSubscribeTurnStateChangedServerFrameSchema,

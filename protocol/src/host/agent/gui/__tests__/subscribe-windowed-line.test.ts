@@ -70,7 +70,7 @@ function baseWindowedSnapshot(): Record<string, unknown> {
     worktreeBinding: null,
     missingWorktreePaths: [],
     pendingFileEditApprovals: [],
-    accumulatedFileChangeSummaries: [],
+    accumulatedFileChangeCount: 0,
     transcriptEpoch: 0,
     rowCount: 0,
     tail: { fromOrdinal: 0, messages: [], events: [] },
@@ -122,10 +122,10 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
       worktreeBinding: null,
       missingWorktreePaths: [],
       pendingFileEditApprovals: [],
-      // The renamed field the windowed line actually uses, so this fixture is
-      // rejected specifically for missing transcriptEpoch/rowCount/tail/derived
-      // - not merely for the unrelated field-name difference.
-      accumulatedFileChangeSummaries: [],
+      // The field the windowed line actually uses, so this fixture is rejected
+      // specifically for missing transcriptEpoch/rowCount/tail/derived - not
+      // merely for an unrelated field-name difference.
+      accumulatedFileChangeCount: 0,
       // No transcriptEpoch / rowCount / tail / derived - the windowed-only
       // fields a real 1.7 snapshot must carry.
     };
@@ -254,6 +254,10 @@ describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
     // Windowed-only.
     "snapshot",
     "skeletonChunk",
+    // The accumulated-change summaries are chunked out of the snapshot for the
+    // reason the skeleton never joined it: their count is a property of the
+    // chat's HISTORY, not its current state.
+    "accumulatedChanges",
     "indexChanged",
     "range",
     // Shared with 1.6.
@@ -332,6 +336,7 @@ describe("the 1.6 server union does not admit windowed-only frame kinds", () => 
     expect(v16ServerKinds.has("range")).toBe(false);
     expect(v16ServerKinds.has("indexChanged")).toBe(false);
     expect(v16ServerKinds.has("skeletonChunk")).toBe(false);
+    expect(v16ServerKinds.has("accumulatedChanges")).toBe(false);
   });
 
   it("actually rejects a well-formed range frame at parse time, not just at the kind-list level", () => {
