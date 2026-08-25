@@ -21,6 +21,9 @@ export const configShellListCommand: CommandFn = async (
     isDefault: shell.isDefault,
     source: shell.source,
     missing: shell.missing,
+    // Only ever set on Windows wsl.exe rows; omitted (not null) when healthy
+    // so the JSON envelope is unchanged for every other shell.
+    ...(shell.wslHealth !== undefined ? { wslHealth: shell.wslHealth } : {}),
   }));
   if (ctx.runtime.json) {
     return { data, human: null, exitCode: 0 };
@@ -35,6 +38,12 @@ export const configShellListCommand: CommandFn = async (
         (shell) =>
           `${shell.isDefault ? "*" : " "} ${shell.name}\t${shell.path}${
             shell.missing ? "\t(not found)" : ""
+          }${
+            shell.wslHealth === "not-installed"
+              ? "\t(WSL not installed)"
+              : shell.wslHealth === "no-distro"
+                ? "\t(no Linux distribution)"
+                : ""
           }`,
       )
       .join("\n"),

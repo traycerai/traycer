@@ -2,9 +2,11 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { toast } from "sonner";
 import { useStore } from "zustand";
 import { v4 as uuidv4 } from "uuid";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -467,6 +469,14 @@ function LandingTerminalDurableState(props: {
   );
 }
 
+/**
+ * How soon after tile mount an exit still reads as "the shell never started"
+ * rather than "the session ended". Generous on purpose: a slow machine can
+ * take a couple of seconds to spawn, and a real interactive session ending
+ * this fast is rare enough that a one-line toast is harmless.
+ */
+const FAST_EXIT_NOTICE_WINDOW_MS = 5_000;
+
 function LandingTerminalTileLive(props: {
   readonly handle: TerminalSessionStoreHandle;
   readonly tab: LandingTerminalTabRef;
@@ -512,6 +522,40 @@ function LandingTerminalTileLive(props: {
     syncDefaultTitle,
     tab.instanceId,
   ]);
+
+  // Backstop for a shell that dies at spawn (wrong path, stale flags, the
+  // Windows wsl.exe installer stub): the exit path below silently retires the
+  // tab, so without this the user experiences "terminals don't start at all"
+  // with no evidence. Only a LIVE run→exit transition observed shortly after
+  // this tile mounted qualifies - a tab adopted already-exited mounts in its
+  // terminal state and never transitions, and a real session that ends later
+  // falls outside the window. Fixed toast id: repeated attempts replace the
+  // notice in place instead of stacking.
+  const mountedAtRef = useRef<number | null>(null);
+  const prevStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    mountedAtRef.current ??= Date.now();
+  }, []);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status !== "exited") return;
+    if (prev !== "running" && prev !== "creating") return;
+    const mountedAt = mountedAtRef.current;
+    if (
+      mountedAt !== null &&
+      Date.now() - mountedAt <= FAST_EXIT_NOTICE_WINDOW_MS
+    ) {
+      const exitCode = handle.store.getState().exitCode;
+      if (exitCode !== null && exitCode !== 0) {
+        toast.warning(`Terminal exited immediately (code ${exitCode})`, {
+          id: "landing-terminal-fast-exit",
+          description:
+            "The shell couldn't start. Check Settings → Shell — if it points at WSL, WSL may not be installed on this machine.",
+        });
+      }
+    }
+  }, [handle, status]);
 
   useEffect(() => {
     if (status !== "exited") return;
