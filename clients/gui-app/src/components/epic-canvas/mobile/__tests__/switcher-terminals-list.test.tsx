@@ -51,6 +51,13 @@ interface AuthorityHolder {
 interface RoleHolder {
   value: "owner" | "viewer";
 }
+/** Stands in for the Epic session's host client; null models "not established yet". */
+interface HostClientStub {
+  readonly request: () => void;
+}
+interface HostClientHolder {
+  value: HostClientStub | null;
+}
 
 const durableCollection = vi.hoisted((): DurableCollectionHolder => ({
   value: null,
@@ -67,30 +74,50 @@ const authority = vi.hoisted((): AuthorityHolder => ({
   canMutate: true,
 }));
 const role = vi.hoisted((): RoleHolder => ({ value: "owner" }));
+const hostClient = vi.hoisted((): HostClientHolder => ({
+  value: { request: () => undefined },
+}));
 
 vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
   useEpicSessionHostId: () => HOST_A,
 }));
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
-  useEpicSessionHostClient: () => ({ request: vi.fn() }),
+  useEpicSessionHostClient: () => hostClient.value,
 }));
 vi.mock("@/lib/terminals/resolve-plain-terminal-owner-client", () => ({
   useResolvePlainTerminalOwnerHostClient: () => () => ({ request: vi.fn() }),
 }));
 vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
-  useTerminalList: () => ({
-    data: { sessions: listedSessions.value },
-    isPending: listQuery.isPending,
-    isError: listQuery.isError,
-    error:
-      listQuery.errorMessage === null
-        ? null
-        : { message: listQuery.errorMessage },
-    isFetching: false,
-    refetch: () => {
-      listQuery.refetchCalls += 1;
-    },
-  }),
+  // Models the real contract rather than a convenient shape. `use-host-query`
+  // disables the query while the client is null, and a DISABLED TanStack v5
+  // query reports `isPending: true` with `isFetching: false` and no data - the
+  // exact combination that decides whether this surface shows a spinner or
+  // claims the epic has no terminals.
+  useTerminalList: () =>
+    hostClient.value === null
+      ? {
+          data: undefined,
+          isPending: true,
+          isError: false,
+          error: null,
+          isFetching: false,
+          refetch: () => {
+            listQuery.refetchCalls += 1;
+          },
+        }
+      : {
+          data: { sessions: listedSessions.value },
+          isPending: listQuery.isPending,
+          isError: listQuery.isError,
+          error:
+            listQuery.errorMessage === null
+              ? null
+              : { message: listQuery.errorMessage },
+          isFetching: false,
+          refetch: () => {
+            listQuery.refetchCalls += 1;
+          },
+        },
 }));
 vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
   useTerminalKillFor: () => ({ mutate: vi.fn(), isPending: false }),
@@ -232,16 +259,16 @@ function openEpicTab(): string {
   return useEpicCanvasStore.getState().openEpicTab(EPIC_ID, "Epic");
 }
 
-function renderList(tabId: string) {
+function renderListFor(epicId: string, tabId: string) {
   return render(
     wrapper(
-      <SwitcherTerminalsList
-        epicId={EPIC_ID}
-        tabId={tabId}
-        onClose={onClose}
-      />,
+      <SwitcherTerminalsList epicId={epicId} tabId={tabId} onClose={onClose} />,
     ),
   );
+}
+
+function renderList(tabId: string) {
+  return renderListFor(EPIC_ID, tabId);
 }
 
 beforeEach(() => {
@@ -257,6 +284,7 @@ beforeEach(() => {
   authority.capability = "capable";
   authority.canMutate = true;
   role.value = "owner";
+  hostClient.value = { request: () => undefined };
   onClose.mockClear();
 });
 afterEach(() => {
@@ -441,6 +469,44 @@ describe("<SwitcherTerminalsList /> states", () => {
     expect(screen.getByText("No terminals yet.")).toBeTruthy();
     // The create row stays above it either way.
     expect(screen.getByTestId("switcher-new-terminal")).toBeTruthy();
+  });
+
+  it("waits, rather than reporting no terminals, while the Epic session's host client is still null", () => {
+    // The defect this pins: on a phone a live terminal read as "No terminals
+    // yet." because the list rendered rows or nothing, consulting no query
+    // state. `useEpicSessionHostClient` is null until the Y.Doc session handle
+    // is established, which disables the query - so this window is the app's
+    // normal startup, not an edge case.
+    hostClient.value = null;
+    // A settled catalog, so the ONLY thing that can decide loading here is the
+    // list query's pending state. A disabled query is `isPending` but NOT
+    // `isLoading` (that needs `isFetching` too), so swapping the panel to
+    // `list.isLoading` would fall straight through to the empty state - which
+    // is exactly the regression this asserts against.
+    durableCollection.value = completeFleet([]);
+    renderList(openEpicTab());
+
+    expect(screen.getByTestId("switcher-terminal-loading")).toBeTruthy();
+    expect(screen.queryByTestId("switcher-terminal-empty")).toBeNull();
+    expect(screen.queryByText("No terminals yet.")).toBeNull();
+  });
+
+  it("waits on an empty epic id instead of claiming the epic has none", () => {
+    hostClient.value = null;
+    // Scoped to a DIFFERENT epic, so reconciliation yields no rows: an empty
+    // id must still read as "not answered yet", never as an answered "none".
+    durableCollection.value = completeFleet([
+      durableTerminal({
+        hostId: HOST_A,
+        terminalId: "durable-term",
+        title: "Durable shell",
+        runtime: runningRuntime("durable-term"),
+      }),
+    ]);
+    renderListFor("", openEpicTab());
+
+    expect(screen.getByTestId("switcher-terminal-loading")).toBeTruthy();
+    expect(screen.queryByText("No terminals yet.")).toBeNull();
   });
 
   it("gives a viewer no New terminal row, empty list or not", () => {
