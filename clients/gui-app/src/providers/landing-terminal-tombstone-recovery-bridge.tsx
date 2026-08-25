@@ -91,25 +91,45 @@ interface TombstoneRetryRefs {
   readonly authorityEntries: {
     current: LandingTerminalAuthorityEntries;
   };
-  readonly dialable: { current: ReadonlyMap<string, boolean> };
+  readonly dialable: { current: ReadonlyMap<string, TombstoneDrainability> };
   readonly inFlight: { current: ReadonlySet<string> };
   readonly mounted: { current: boolean };
   readonly retries: { current: Map<string, CapableCloseRetry> };
 }
 
-function hostCanDrainLandingTerminalTombstones(
+/**
+ * Which arms this host can serve right now - deliberately NOT one boolean.
+ *
+ * `canMutate` tracks LIST-STREAM freshness, not liveness, and only one arm
+ * reads the list: `terminal.plain.close` names a row in the projection, while
+ * `terminal.kill` is unary and never consults it. Gating both on `canMutate`
+ * left an unacknowledged tombstone parked for as long as a capable host's
+ * stream was merely reconnecting - and cancelled its retry record on the way
+ * past, so nothing was left to wake.
+ */
+interface TombstoneDrainability {
+  /** `terminal.kill` can be sent: the route is up and an authority resolved. */
+  readonly kill: boolean;
+  /** `terminal.plain.close` can be sent: capable, with a fresh listing. */
+  readonly plain: boolean;
+}
+
+function landingTerminalTombstoneDrainability(
   directoryEntry: HostDirectoryEntry,
   hasReadySession: boolean,
   authorityEntry: LandingTerminalAuthorityEntry | undefined,
-): boolean {
+): TombstoneDrainability {
   const routeReady =
     dialableHostEndpointFor(directoryEntry, hasReadySession) !== null &&
     (hasReadySession || !isRelayFuseRecoveryCandidate(directoryEntry));
   const authority = authorityEntry?.authority;
-  const authorityReady =
-    authority?.capability.status === "legacy" ||
-    (authority?.capability.status === "capable" && authority.canMutate);
-  return routeReady && authorityReady;
+  const capability = authority?.capability.status;
+  const kill =
+    routeReady && (capability === "legacy" || capability === "capable");
+  return {
+    kill,
+    plain: kill && capability === "capable" && authority?.canMutate === true,
+  };
 }
 
 function clearCapableCloseRetry(
@@ -126,13 +146,16 @@ function clearCapableCloseRetry(
 function cancelUndrainableCapableCloseRetries(args: {
   readonly retries: Map<string, CapableCloseRetry>;
   readonly pendingKeys: ReadonlySet<string>;
-  readonly drainableByHostId: ReadonlyMap<string, boolean>;
+  readonly drainableByHostId: ReadonlyMap<string, TombstoneDrainability>;
 }): void {
   for (const key of args.retries.keys()) {
     const hostId = key.slice(0, key.indexOf("\u0000"));
+    // Keyed on the `kill` arm, the weaker of the two: a host whose listing has
+    // merely gone stale can still serve a kill, so tearing its retry down here
+    // would strand the arm that had no reason to stop.
     if (
       args.pendingKeys.has(key) &&
-      args.drainableByHostId.get(hostId) === true
+      args.drainableByHostId.get(hostId)?.kill === true
     ) {
       continue;
     }
@@ -167,7 +190,10 @@ function closeRetryStillWarranted(args: {
         candidate.sessionId === args.pending.sessionId,
     );
   if (!stillPending) return false;
-  if (args.refs.dialable.current.get(args.pending.hostId) !== true) {
+  // Per-arm, so a stale listing stops only the arm that reads one.
+  const drainable = args.refs.dialable.current.get(args.pending.hostId);
+  if (drainable === undefined) return false;
+  if (!(args.arm === "kill" ? drainable.kill : drainable.plain)) {
     return false;
   }
   const currentEntry = args.refs.authorityEntries.current[args.pending.hostId];
@@ -228,47 +254,67 @@ function scheduleCloseRetry(args: {
   args.refs.retries.current.set(args.key, nextRetry);
 }
 
+/**
+ * What a drain attempt should do about this tombstone right now.
+ *
+ * `discard` and `wait` are deliberately distinct: both send nothing, but one
+ * drops a record the host has answered and the other keeps a kill that is still
+ * owed. Collapsing them is how a tombstone gets lost in front of a live PTY.
+ *
+ * ONE decider, read by two callers: the drain effect marks a key with the arm
+ * it is about to use, and `dispatchTombstoneClose` routes on the same value.
+ * Deriving it separately is how the mark and the request drift - a `kill`-arm
+ * backoff stayed parked for up to its full interval after the projection it was
+ * waiting for had already appeared, because the mark recorded the host's
+ * CAPABILITY, which had not changed.
+ */
+type TombstoneCloseAction = TombstoneCloseArm | "discard" | "wait";
+
+function intendedCloseAction(args: {
+  readonly entry: LandingTerminalAuthorityEntry | undefined;
+  readonly pending: LandingTerminalPendingKill;
+  readonly plainDrainable: boolean;
+}): TombstoneCloseAction {
+  const authority = args.entry?.authority;
+  if (authority === undefined) return "wait";
+  if (authority.capability.status === "legacy") return "kill";
+  if (authority.capability.status !== "capable") return "wait";
+  if (!args.plainDrainable) {
+    // A stale listing blocks only the arm that READS a listing. A tombstone
+    // this host acknowledged is answered by `plain`, so it waits for freshness
+    // - the pre-existing decision, unchanged. One that `plain` could never
+    // answer has nothing to wait for, and `terminal.kill` is unary.
+    return absentListingProvesDeath(args.pending) ? "wait" : "kill";
+  }
+  if (
+    getPlainTerminal(
+      authority.collection,
+      args.pending.hostId,
+      args.pending.sessionId,
+    ) !== undefined
+  ) {
+    return "plain";
+  }
+  // No projection, and absence proves nothing for this shape - so `kill`, not
+  // `plain`. `terminal.plain.close` would REJECT for a terminal this host does
+  // not know, which is the wrong answer for both shapes that land here: a
+  // create still in flight (whose terminal will exist under this exact session
+  // id, because the client supplied it) and a legacy session on a host that
+  // came back upgraded (which never had a plain projection at all).
+  // `terminal.kill` covers both - the capable host tries its plain registry
+  // first and falls back to the legacy manager.
+  return absentListingProvesDeath(args.pending) ? "discard" : "kill";
+}
+
+/** Sends `terminal.plain.close`. Reached only for a projection that exists. */
 function dispatchCapableClose(args: {
   readonly entry: LandingTerminalAuthorityEntry;
-  readonly kill: LandingTerminalKillDispatch;
   readonly key: string;
   readonly pending: LandingTerminalPendingKill;
   readonly retry: CapableCloseRetry | undefined;
   readonly refs: TombstoneRetryRefs;
   readonly signalRetry: () => void;
 }): void {
-  if (
-    getPlainTerminal(
-      args.entry.authority.collection,
-      args.pending.hostId,
-      args.pending.sessionId,
-    ) === undefined
-  ) {
-    if (!absentListingProvesDeath(args.pending)) {
-      // Not evidence of death - so fall through to `terminal.kill` rather than
-      // discard the record. `terminal.plain.close` would REJECT for a terminal
-      // this host does not know, which is the wrong answer for both shapes that
-      // land here: a create still in flight (whose terminal will exist under
-      // this exact session id, because the client supplied it) and a legacy
-      // session on a host that came back upgraded (which never had a plain
-      // projection at all). `terminal.kill` covers both - the capable host
-      // tries its plain registry first and falls back to the legacy manager.
-      dispatchLegacyClose({
-        kill: args.kill,
-        key: args.key,
-        pending: args.pending,
-        retry: args.retry,
-        refs: args.refs,
-        signalRetry: args.signalRetry,
-      });
-      return;
-    }
-    useLandingTerminalStore
-      .getState()
-      .clearPendingKill(args.pending.hostId, args.pending.sessionId);
-    clearCapableCloseRetry(args.refs.retries.current, args.key);
-    return;
-  }
   if (args.retry !== undefined) args.retry.due = false;
   args.refs.inFlight.current = new Set([
     ...args.refs.inFlight.current,
@@ -352,7 +398,34 @@ function dispatchLegacyClose(args: {
         .then(() => undefined),
   })
     .then(
-      () => clearCapableCloseRetry(args.refs.retries.current, args.key),
+      // Resolution is not proof the kill happened. `terminal.kill` reports an
+      // already-gone session as DATA (`killed: false`), and the mutation's
+      // `onSuccess` deliberately KEEPS the tombstone for the one shape where
+      // that answer means "not created yet" rather than "gone" - a session
+      // whose `terminal.plain.create` had not settled, whose terminal lands
+      // afterwards under this same client-supplied id.
+      //
+      // Clearing the retry there stranded it: the promise resolved, so the
+      // reject arm never ran, and the outer drain skips a key it has already
+      // attempted on this arm - leaving nothing at all to send the kill until
+      // an unrelated route or capability flap. An outstanding record after a
+      // resolved close is a kill that is still owed, so it is retried on the
+      // same backoff a rejection would have earned.
+      () => {
+        if (
+          useLandingTerminalStore
+            .getState()
+            .pendingKills.some(
+              (candidate) =>
+                candidate.hostId === args.pending.hostId &&
+                candidate.sessionId === args.pending.sessionId,
+            )
+        ) {
+          scheduleCloseRetry({ ...args, arm: "kill" });
+          return;
+        }
+        clearCapableCloseRetry(args.refs.retries.current, args.key);
+      },
       () => scheduleCloseRetry({ ...args, arm: "kill" }),
     )
     .finally(() => {
@@ -367,8 +440,9 @@ function dispatchLegacyClose(args: {
     });
 }
 
-/** Routes a drainable tombstone to the arm its host's capability calls for. */
+/** Routes a tombstone to whatever `intendedCloseAction` selected for it. */
 function dispatchTombstoneClose(args: {
+  readonly action: TombstoneCloseAction;
   readonly entry: LandingTerminalAuthorityEntry | undefined;
   readonly kill: LandingTerminalKillDispatch;
   readonly key: string;
@@ -379,12 +453,20 @@ function dispatchTombstoneClose(args: {
 }): void {
   const { entry } = args;
   if (entry === undefined) return;
-  if (entry.authority.capability.status === "capable") {
+  if (args.action === "wait") return;
+  if (args.action === "discard") {
+    // The one shape that is discarded: a capable host with a FRESH listing that
+    // does not name a session it had already acknowledged. That host published
+    // the session once, so its disappearance is the host saying it is gone.
+    useLandingTerminalStore
+      .getState()
+      .clearPendingKill(args.pending.hostId, args.pending.sessionId);
+    clearCapableCloseRetry(args.refs.retries.current, args.key);
+    return;
+  }
+  if (args.action === "plain") {
     dispatchCapableClose({
       entry,
-      // Carried through because the capable arm falls back to `terminal.kill`
-      // for a tombstone whose session this host never acknowledged.
-      kill: args.kill,
       key: args.key,
       pending: args.pending,
       retry: args.retry,
@@ -393,7 +475,6 @@ function dispatchTombstoneClose(args: {
     });
     return;
   }
-  if (entry.authority.capability.status !== "legacy") return;
   dispatchLegacyClose({
     kill: args.kill,
     key: args.key,
@@ -417,13 +498,18 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   const killRef = useRef(kill);
   const inFlightRef = useRef<ReadonlySet<string>>(new Set());
   /**
-   * Tombstone keys this bridge has dispatched, against the CAPABILITY each was
-   * dispatched under - a host that changes protocol makes its key eligible
-   * again rather than resting on a mark left by the other arm.
+   * Tombstone keys this bridge has dispatched, against the ARM each was
+   * dispatched on - so anything that changes the arm makes the key eligible
+   * again rather than resting on a mark left by a different request.
+   *
+   * The arm, not the host's capability: those stopped being the same thing once
+   * a capable host could serve either. Marking by capability left a `kill`-arm
+   * backoff parked after an in-flight create finally appeared in the
+   * projection, because the host had been `capable` throughout.
    */
-  const attemptedRef = useRef<
-    ReadonlyMap<string, "unknown" | "legacy" | "capable">
-  >(new Map());
+  const attemptedRef = useRef<ReadonlyMap<string, TombstoneCloseArm>>(
+    new Map(),
+  );
   const retriesRef = useRef<Map<string, CapableCloseRetry>>(new Map());
   const mountedRef = useRef(true);
   const [retryGeneration, setRetryGeneration] = useState(0);
@@ -475,7 +561,9 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
   // recovery there will be, and it is also the very route the kill travels.
   // The session cache is pull-only, so the subscription below - not the
   // directory - is what re-runs this effect when a session becomes ready.
-  const dialableRef = useRef<ReadonlyMap<string, boolean>>(new Map());
+  const dialableRef = useRef<ReadonlyMap<string, TombstoneDrainability>>(
+    new Map(),
+  );
   const directoryHostIds = useMemo(
     () => (directory.data ?? []).map((entry) => entry.hostId),
     [directory.data],
@@ -564,7 +652,7 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     const currentDrainable = new Map(
       entries.map((entry) => [
         entry.hostId,
-        hostCanDrainLandingTerminalTombstones(
+        landingTerminalTombstoneDrainability(
           entry,
           hasReadySessionFor(entry.hostId),
           authorityEntries[entry.hostId],
@@ -601,10 +689,15 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
     if (pendingKills.length === 0) return;
 
     for (const pending of pendingKills) {
-      if (currentDrainable.get(pending.hostId) !== true) continue;
+      // The `kill` arm is the gate, not both arms: a capable host whose listing
+      // has merely gone stale can still serve `terminal.kill`, and waiting for
+      // freshness parked the tombstones that never needed it.
+      const drainable = currentDrainable.get(pending.hostId);
+      if (drainable?.kill !== true) continue;
       const key = terminalSessionKey(pending.hostId, pending.sessionId);
       const retry = retriesRef.current.get(key);
-      const routeRecovered = previousDialable.get(pending.hostId) !== true;
+      const routeRecovered =
+        previousDialable.get(pending.hostId)?.kill !== true;
       // A tombstone recorded while its host was ALREADY drainable has no route
       // transition to ride in on and no retry record yet, so the two conditions
       // above would skip it until the host happened to flap. That was
@@ -613,30 +706,37 @@ export function LandingTerminalTombstoneRecoveryBridge(): ReactNode {
       // close under an unresolved probe records the tombstone and dispatches
       // nothing, and the bridge is then the only thing that will ever send it.
       //
-      // The mark records the CAPABILITY it was dispatched under, so a host that
-      // changes protocol while staying dialable is seen fresh again. Without
-      // that, a close rejected after the authority flipped is abandoned:
-      // `closeRetryStillWarranted` refuses to schedule a retry because the
-      // capability no longer matches the one that dispatched, the
-      // authority-change render skipped this key while it was still in
-      // `inFlightRef`, and clearing that ref renders nothing - so the
-      // capability-correct close would never be sent.
+      // The mark records the ARM it was dispatched on, so anything that changes
+      // the arm makes this key eligible again. Without that, a close rejected
+      // after the arm flipped is abandoned: `closeRetryStillWarranted` refuses
+      // to schedule a retry because the arm no longer matches the one that
+      // dispatched, the authority-change render skipped this key while it was
+      // still in `inFlightRef`, and clearing that ref renders nothing - so the
+      // arm-correct close would never be sent.
+      //
+      // Keying it on the host's capability instead was subtly weaker: a
+      // tombstone whose in-flight create finally appeared in the projection
+      // moves from `kill` to `plain` with the capability unchanged at
+      // `capable`, so the mark said "already attempted" and the new arm waited
+      // out the old one's backoff - up to the full 300s ceiling.
       const entry = authorityEntries[pending.hostId];
-      const capability = entry?.authority.capability.status;
-      const firstSight = attemptedRef.current.get(key) !== capability;
+      const action = intendedCloseAction({
+        entry,
+        pending,
+        plainDrainable: drainable.plain,
+      });
+      if (action === "wait") continue;
+      const arm = action === "discard" ? null : action;
+      const firstSight = attemptedRef.current.get(key) !== arm;
       if (!routeRecovered && !firstSight && retry?.due !== true) continue;
       if (inFlightRef.current.has(key)) continue;
-      // Reached only where the host is drainable, which already required the
-      // authority entry to be `legacy` or capable+`canMutate` - so this marks a
-      // key that one of the two branches below is about to dispatch, never one
-      // parked waiting for its probe.
-      if (firstSight && capability !== undefined) {
-        attemptedRef.current = new Map([
-          ...attemptedRef.current,
-          [key, capability],
-        ]);
+      // Only a real arm is marked. A discard sends nothing, so there is no
+      // attempt to record against it.
+      if (firstSight && arm !== null) {
+        attemptedRef.current = new Map([...attemptedRef.current, [key, arm]]);
       }
       dispatchTombstoneClose({
+        action,
         entry,
         kill: killRef.current,
         key,
