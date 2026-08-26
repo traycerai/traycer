@@ -60,10 +60,11 @@ export function ExpandedImageDialogContent(props: {
     );
   } else {
     body = (
-      // min-h-24 reserves room for the absolutely positioned action bar, so
-      // no image aspect ratio (tiny icon, extreme panorama) can collapse the
-      // wrapper and clip Copy/Download under overflow-hidden.
-      <div className="relative flex max-h-[90vh] min-h-24 w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
+      // The minimum reserves room for the absolutely positioned action bar,
+      // so no image aspect ratio (tiny icon, extreme panorama) can collapse
+      // the wrapper and clip Copy/Download under overflow-hidden; the 90vh
+      // clamp keeps the floor inside the wrapper's own max height.
+      <div className="relative flex max-h-[90vh] min-h-[min(6rem,90vh)] w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
         <img
           src={image.src}
           alt={props.alt}
