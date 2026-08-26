@@ -113,7 +113,7 @@ function buildFileMenu(
       ...nonMacAccountItems,
       ...(state.platform === "darwin"
         ? []
-        : [{ role: "quit" } satisfies MenuItemConstructorOptions]),
+        : [terminalConflictingRole("quit", state.platform)]),
     ],
   };
 }
@@ -132,7 +132,7 @@ function buildEditMenu(
       { role: "cut" },
       { role: "copy" },
       { role: "paste" },
-      { role: "selectAll" },
+      terminalConflictingRole("selectAll", state.platform),
       { type: "separator" },
       {
         label: "Find",
@@ -194,7 +194,7 @@ function buildViewMenu(
           { role: "togglefullscreen" } satisfies MenuItemConstructorOptions,
         ];
   const submenu: MenuItemConstructorOptions[] = [
-    { role: "reload" },
+    terminalConflictingRole("reload", state.platform),
     { role: "forceReload" },
     { type: "separator" },
     {
@@ -267,7 +267,7 @@ function buildWindowMenu(
             click: (_item, browserWindow) =>
               actions.command("window.closeWindow", browserWindow ?? null),
           }
-        : { role: "close" },
+        : terminalConflictingRole("close", state.platform),
     ],
   };
 }
@@ -337,6 +337,22 @@ function registerTerminalConflictingAccelerator(
   platform: NodeJS.Platform,
 ): boolean {
   return platform === "darwin";
+}
+
+/**
+ * Electron's role defaults register these Ctrl accelerators before the
+ * renderer can apply its focused-terminal policy. Keep the native menu action,
+ * but release its accelerator on Windows/Linux so the renderer or xterm owns
+ * the key event. macOS keeps its native menu key equivalents.
+ */
+function terminalConflictingRole(
+  role: "close" | "quit" | "reload" | "selectAll",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return {
+    role,
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
+  };
 }
 
 function authItem(
