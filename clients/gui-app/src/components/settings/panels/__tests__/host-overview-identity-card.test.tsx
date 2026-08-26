@@ -110,7 +110,7 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-function renderPanel(queryClient?: QueryClient): void {
+function renderPanel(queryClient: QueryClient | undefined): void {
   render(
     <QueryClientProvider
       client={
@@ -137,7 +137,7 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     // Waiting on the NAME rather than the button itself: the pencil renders
     // immediately but stays disabled (`!loaded`) until `host.identity.get`
@@ -172,7 +172,7 @@ describe("<HostSettingsPanel /> Overview identity card — rename affordance and
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     await screen.findByText("Studio Mac");
     // Pinned as ABSENT rather than left un-asserted: a reader who remembers
@@ -198,7 +198,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.textContent).toBe("Idle");
@@ -222,7 +222,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("1");
@@ -243,7 +243,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     const chip = await screen.findByTestId("host-active-sessions");
     expect(chip.getAttribute("data-count")).toBe("2");
@@ -277,7 +277,7 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     // The identity card mounts before `host.status` answers — "not yet
     // known" and "known zero" are different facts, and rendering the chip
@@ -342,6 +342,14 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
       });
     });
 
+    // Prove the invalidation actually matched and a refetch is in flight
+    // (gated on refetchGate) - otherwise a wrong query key would leave the
+    // initial render on screen and the retained-content assertion below
+    // would pass vacuously.
+    await waitFor(() => {
+      expect(statusCalls).toBe(2);
+    });
+
     expect(screen.getByTestId("host-active-sessions").textContent).toBe(
       "2 terminals working",
     );
@@ -381,7 +389,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
       client: fixture.client,
       makeActive,
     };
-    renderPanel();
+    renderPanel(undefined);
 
     const button = await screen.findByTestId("host-make-active");
     // "Activate", paired with the "Active" state it produces. The old label
@@ -403,7 +411,7 @@ describe("<HostSettingsPanel /> Overview identity card — window binding", () =
     hostBindingMock.current = { hostClient: fixture.client };
     // `scopeFrom` -> `hostScopeOptionFixture` defaults `isActive: true`.
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
 
     await screen.findByText("Studio Mac");
     expect(screen.queryByTestId("host-make-active")).toBeNull();
@@ -455,7 +463,7 @@ describe("<HostSettingsPanel /> Overview identity card — the failed-name retry
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
     hostBindingMock.current = { hostClient: fixture.client };
     scopeOverrides.current = scopeFrom("host-a", fixture);
-    renderPanel();
+    renderPanel(undefined);
   }
 
   /**
