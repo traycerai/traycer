@@ -86,6 +86,7 @@ function profile(input: {
   } = input;
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,

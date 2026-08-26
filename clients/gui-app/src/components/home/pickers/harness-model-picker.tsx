@@ -77,7 +77,9 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -251,6 +253,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const coarsePointer = useCoarsePointer();
   const listRef = useRef<VirtuosoHandle | null>(null);
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = useCallback(() => {
@@ -619,6 +622,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  const activeProviderProfileEnablementPending =
+    useProviderProfileEnablementPending(
+      runTargetClient,
+      guiHarnessIdToProviderId(resolvedActiveProviderId),
+    );
   // The browsed provider's full CLI state, for the panel's ambient-auth line
   // (which credential a single-profile provider is actually running on - e.g.
   // Copilot riding the GitHub CLI's login). Same `providers.list` response the
@@ -819,15 +827,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
 
+  // Type-to-filter is what a keyboard-driven user opens this for, and the
+  // panel is opened often - every harness or model change. On a touch pointer
+  // the same focus is a software keyboard over the list the tap was aiming at,
+  // so the search stands down and waits to be tapped. Nothing is stranded:
+  // the panel stays open with focus where the trigger left it, and closing
+  // still returns the composer its caret. The pointer decides, not the
+  // viewport and not the build.
   useEffect(() => {
-    if (!visibleOpen) return;
+    if (!visibleOpen || coarsePointer) return;
     const timer = window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [visibleOpen]);
+  }, [coarsePointer, visibleOpen]);
 
   // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
   // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
@@ -848,6 +863,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission: profileAdmission,
+    profileEnablementPending: activeProviderProfileEnablementPending,
     onProfileChange: handleProfileChange,
   });
 
@@ -935,6 +951,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
         activeProviderProfiles={activeProviderProfiles}
+        profileEnablementPending={activeProviderProfileEnablementPending}
         activeProviderState={activeProviderState}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}

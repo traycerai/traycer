@@ -78,6 +78,7 @@ function profile(
     ambientDriftNotice: null,
     accentColor: null,
     ...overrides,
+    enabled: overrides.enabled ?? true,
   };
 }
 

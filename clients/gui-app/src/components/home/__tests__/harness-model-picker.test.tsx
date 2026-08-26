@@ -269,6 +269,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // Resolves to a sentinel string standing in for a `HostClient`: "default" for
 // a null host id (mirrors the real hook's app-wide-default fallback), else
 // the raw host id - lets `useProvidersListForClient` above key its
@@ -1079,6 +1087,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1098,6 +1107,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1428,6 +1438,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1447,6 +1458,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2123,6 +2135,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2164,6 +2177,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2183,6 +2197,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2332,6 +2347,7 @@ describe("<HarnessModelPicker />", () => {
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
     const ambientProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient" as const,
       authType: "oauth" as const,
       label: "Terminal account",
@@ -2352,6 +2368,7 @@ describe("<HarnessModelPicker />", () => {
     const workProfile = {
       ...ambientProfile,
       profileId: "work-profile",
+      enabled: true,
       kind: "managed" as const,
       label: "Work",
       accentColor: initialColor,
@@ -2416,6 +2433,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2435,6 +2453,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2545,6 +2564,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2564,6 +2584,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2927,6 +2948,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2946,6 +2968,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2990,6 +3013,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3009,6 +3033,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3052,6 +3077,7 @@ describe("<HarnessModelPicker />", () => {
     return [
       {
         profileId: "ambient",
+        enabled: true,
         kind: "ambient",
         authType: "oauth",
         label: "Terminal account",
@@ -3071,6 +3097,7 @@ describe("<HarnessModelPicker />", () => {
       },
       {
         profileId: "work-profile",
+        enabled: true,
         kind: "managed",
         authType: "oauth",
         label: "Work",
@@ -3179,6 +3206,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3198,6 +3226,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3257,6 +3286,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3276,6 +3306,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3318,6 +3349,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3337,6 +3369,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3386,6 +3419,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3405,6 +3439,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3446,6 +3481,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3465,6 +3501,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3901,6 +3938,64 @@ describe("<HarnessModelPicker />", () => {
       harnessId: "claude",
       modelSlug: "claude-opus-4-7",
       profileId: null,
+    });
+  });
+
+  /**
+   * Search-on-open is a hardware-keyboard convenience, and the panel is opened
+   * on every harness or model change. On a touch pointer the same focus is a
+   * software keyboard over the list the tap was aiming at, so it stands down.
+   *
+   * Both arms are pinned because the coarse arm is invisible on every
+   * developer's machine: asserting only the focused case keeps passing after
+   * the gate is deleted.
+   */
+  describe("search autofocus", () => {
+    /**
+     * The global test shim answers every media query with `matches: false`,
+     * which is the fine-pointer arm. This narrows the coarse-pointer query
+     * alone so the rest of the app's queries keep the shim's answer.
+     */
+    function stubCoarsePointer(coarse: boolean): void {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: coarse && query === "(pointer: coarse)",
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+
+    it("focuses the search when a fine pointer is driving", async () => {
+      stubCoarsePointer(false);
+      renderPicker(undefined);
+      const input = await openPicker();
+
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    });
+
+    it("leaves the search alone on a coarse pointer", async () => {
+      stubCoarsePointer(true);
+      renderPicker(undefined);
+      // A real pointer press focuses the trigger before the popover opens;
+      // jsdom's synthetic click does not, and the trigger holding focus is
+      // exactly what makes declining safe rather than stranding.
+      screen.getByRole("button", { name: /^GPT-5\.5/ }).focus();
+      const input = await openPicker();
+
+      expect(document.activeElement).not.toBe(input);
+      // Declining strands nothing here: the trigger is a still-mounted button
+      // in the composer toolbar, and closing restores the composer's caret.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^GPT-5\.5/ }),
+      );
     });
   });
 });

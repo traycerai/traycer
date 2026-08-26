@@ -22,9 +22,11 @@ function profile(input: {
   readonly kind: ProviderProfile["kind"];
   readonly usageUpdatedAt: number | null;
   readonly authenticated?: boolean;
+  readonly enabled?: boolean;
 }): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: input.enabled ?? true,
     kind: input.kind,
     authType: "oauth",
     label: input.profileId,
@@ -99,6 +101,31 @@ describe("selectBackgroundRateLimitTargets", () => {
       BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
     );
     expect(targets).toEqual([]);
+  });
+
+  it("excludes disabled authenticated profiles from automatic targets", () => {
+    const providers = [
+      provider({
+        providerId: "codex",
+        profiles: [
+          profile({
+            profileId: "disabled-authenticated",
+            kind: "managed",
+            usageUpdatedAt: null,
+            enabled: false,
+          }),
+        ],
+      }),
+    ];
+
+    expect(
+      selectBackgroundRateLimitTargets(
+        providers,
+        NO_SELECTION,
+        NOW,
+        BACKGROUND_RATE_LIMIT_TARGET_BUDGET,
+      ),
+    ).toEqual([]);
   });
 
   it("excludes a signed-out ambient profile via provider-level ambient ineligibility", () => {

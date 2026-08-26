@@ -57,6 +57,7 @@ import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { CapabilityGate } from "./capability-gate";
 import { GitDiffPanelInlineActions } from "./git-diff-panel-actions";
@@ -549,6 +550,7 @@ interface GitDiffPanelDegradedProps {
  */
 function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
+  const coarsePointer = useCoarsePointer();
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const { epicId, onLatchHost } = props;
   const isMobileViewport = useIsMobileViewport();
@@ -591,7 +593,12 @@ function GitDiffPanelDegraded(props: GitDiffPanelDegradedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={props.surfaceKey} />
                 }
-                autoFocusSearch={repoSwitcherOpen}
+                // Opening the switcher is a tap to pick a workspace, not to
+                // type. A touch pointer would pay for the search's focus with
+                // a software keyboard over the list; a fine one gets
+                // type-to-filter for free. Focus stays on the still-mounted
+                // trigger either way.
+                autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}
                 triggerTestId="git-diff-repo-switcher-trigger"
@@ -651,6 +658,7 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   const { selected, selectedRootRow, epicId, onLatchHost, surfaceKey, client } =
     props;
   const [repoSwitcherOpen, setRepoSwitcherOpen] = useState(false);
+  const coarsePointer = useCoarsePointer();
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
@@ -811,7 +819,12 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
                 hostSection={
                   <WorktreePickerHostSection surfaceKey={surfaceKey} />
                 }
-                autoFocusSearch={repoSwitcherOpen}
+                // Opening the switcher is a tap to pick a workspace, not to
+                // type. A touch pointer would pay for the search's focus with
+                // a software keyboard over the list; a fine one gets
+                // type-to-filter for free. Focus stays on the still-mounted
+                // trigger either way.
+                autoFocusSearch={coarsePointer ? false : repoSwitcherOpen}
                 triggerClassName={undefined}
                 contentClassName={undefined}
                 triggerTestId="git-diff-repo-switcher-trigger"

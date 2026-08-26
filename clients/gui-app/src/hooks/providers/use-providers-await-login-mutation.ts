@@ -6,7 +6,11 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
-import { PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerProfileSchema,
+  PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  type ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
@@ -37,9 +41,25 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  */
 function withoutLoginCapability(
   state: AwaitLoginProviderState,
-): Omit<AwaitLoginProviderState, "loginCapability"> {
+  cachedProfiles: readonly ProviderProfile[],
+) {
   const { loginCapability: _dropped, ...rest } = state;
-  return rest;
+  return {
+    ...rest,
+    profiles: rest.profiles.map((profile) => {
+      const parsed = providerProfileSchema.parse(profile);
+      const cached = cachedProfiles.find(
+        (candidate) => candidate.profileId === parsed.profileId,
+      );
+      return cached === undefined
+        ? parsed
+        : {
+            ...parsed,
+            enabled: cached.enabled,
+            launchCommand: cached.launchCommand,
+          };
+    }),
+  };
 }
 
 /**
@@ -148,7 +168,10 @@ export function useProvidersAwaitLoginForClient(args: {
                     // the user is looking at it. Capability is a property of
                     // the installed CLI, not of a login attempt; only
                     // `providers.list` may set it.
-                    { ...p, ...withoutLoginCapability(next) }
+                    {
+                      ...p,
+                      ...withoutLoginCapability(next, p.profiles),
+                    }
                   : p,
               ),
               native: prev.native,

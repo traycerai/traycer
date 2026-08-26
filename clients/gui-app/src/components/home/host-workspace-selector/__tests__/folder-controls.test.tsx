@@ -919,7 +919,7 @@ describe("WorkspaceFolderRows", () => {
     );
   });
 
-  it("opens the OS folder picker from Add folder when empty and resolved", () => {
+  it("opens the folder picker from Add folder when empty and resolved", () => {
     let added = 0;
     render(
       <TooltipProvider>
