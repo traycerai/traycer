@@ -566,9 +566,9 @@ describe("Files opener sub-page (Artifacts step)", () => {
       "Notes",
     ]);
     expect(items.map((i) => i.id)).toEqual([
-      "open:files:artifacts:epic-1:directory:Parent%20A",
+      "open:files:artifacts:epic-1:directory:p1",
       "open:files:artifacts:c1",
-      "open:files:artifacts:epic-1:directory:Parent%20B",
+      "open:files:artifacts:epic-1:directory:p2",
       "open:files:artifacts:c2",
     ]);
   });
@@ -586,6 +586,32 @@ describe("Files opener sub-page (Artifacts step)", () => {
     const items = artifactStepItems();
     expect(items.map((item) => item.label)).toEqual(["API / UI"]);
     expect(items[0].pathTreeRow?.depth).toBe(0);
+  });
+
+  it("keeps duplicate-titled artifact branches separate by identity", () => {
+    state.projection = projectionOf([
+      { id: "p1", folderName: "one", title: "Area", parentId: null },
+      { id: "c1", folderName: "notes", title: "Notes", parentId: "p1" },
+      { id: "p2", folderName: "two", title: "Area", parentId: null },
+      { id: "c2", folderName: "notes", title: "Notes", parentId: "p2" },
+    ]);
+    state.searchResults = [
+      fileResult("one/notes", "index.md"),
+      fileResult("two/notes", "index.md"),
+    ];
+    const items = artifactStepItems();
+    expect(items.map((item) => item.id)).toEqual([
+      "open:files:artifacts:epic-1:directory:p1",
+      "open:files:artifacts:c1",
+      "open:files:artifacts:epic-1:directory:p2",
+      "open:files:artifacts:c2",
+    ]);
+    expect(items.map((item) => item.label)).toEqual([
+      "Area",
+      "Notes",
+      "Area",
+      "Notes",
+    ]);
   });
 
   it("drops a stale/deleted artifact whose path is not in authoritative state", () => {

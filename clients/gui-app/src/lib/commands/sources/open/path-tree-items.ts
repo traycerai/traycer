@@ -6,6 +6,8 @@ export interface PathTreeLeaf {
   readonly path: string;
   /** Structured display segments when `/` inside a label is not a separator. */
   readonly displaySegments: ReadonlyArray<string> | null;
+  /** Stable structural identity for each display segment, when not path-based. */
+  readonly structuralSegments: ReadonlyArray<string> | null;
   readonly gitStatus: GitFileStatus | undefined;
 }
 
@@ -56,10 +58,11 @@ export function buildPathTreeItems(
     const displaySegments =
       leaf.displaySegments ??
       leaf.path.split("/").filter((segment) => segment.length > 0);
+    const structuralSegments = leaf.structuralSegments ?? displaySegments;
     const segments =
       leaf.displaySegments === null
-        ? displaySegments
-        : displaySegments.map((segment) => encodeURIComponent(segment));
+        ? structuralSegments
+        : structuralSegments.map((segment) => encodeURIComponent(segment));
     let directory = root;
     for (const [index, segment] of segments.slice(0, -1).entries()) {
       const path =

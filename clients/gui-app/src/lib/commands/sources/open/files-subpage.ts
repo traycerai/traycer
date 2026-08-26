@@ -137,6 +137,7 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
       {
         path: result.relPath,
         displaySegments: null,
+        structuralSegments: null,
         gitStatus: undefined,
         item: openerActionLeaf({
           id: `open:files:${workspacePath}:${result.relPath}`,
@@ -185,6 +186,7 @@ function liveCodeFileLeaves(args: {
   const leaves = [...args.fileNameByPath].map(([path, name]) => ({
     path,
     displaySegments: null,
+    structuralSegments: null,
     gitStatus: undefined,
     item: openerActionLeaf({
       id: `open:files:${args.workspacePath}:${path}`,
@@ -360,6 +362,7 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
       {
         path: entry.id,
         displaySegments: entry.titleSegments,
+        structuralSegments: entry.idSegments,
         gitStatus: undefined,
         item: openerActionLeaf({
           id: `open:files:artifacts:${entry.id}`,

@@ -58,6 +58,7 @@ function changedFileLeaves(
   const leaves = shown.map((file) => ({
     path: file.path,
     displaySegments: null,
+    structuralSegments: null,
     gitStatus: file.status,
     item: openerActionLeaf({
       id: `open:diff:${workspacePath}:${file.path}:${file.stage}`,

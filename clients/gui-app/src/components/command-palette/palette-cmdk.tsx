@@ -148,6 +148,23 @@ function AgentSubpageRows(props: {
   const isExpanded = (row: NonNullable<CommandItemShape["agentTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
+  const setRowExpanded = (
+    row: NonNullable<CommandItemShape["agentTreeRow"]>,
+    expanded: boolean,
+  ) => {
+    setUserExpandedIds((ids) => {
+      const next = new Set(ids);
+      if (expanded) next.add(row.nodeId);
+      else next.delete(row.nodeId);
+      return next;
+    });
+    setUserCollapsedIds((ids) => {
+      const next = new Set(ids);
+      if (expanded) next.delete(row.nodeId);
+      else next.add(row.nodeId);
+      return next;
+    });
+  };
   const rowByNodeId = new Map(
     props.items.flatMap((item) =>
       item.agentTreeRow === undefined
@@ -176,6 +193,18 @@ function AgentSubpageRows(props: {
         keywords={[...item.keywords]}
         disabled={item.disabled === true}
         onSelect={() => props.onSelect(item)}
+        onKeyDown={(event) => {
+          if (row?.hasChildren !== true) return;
+          if (event.key === "ArrowRight" && !expanded) {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowExpanded(row, true);
+          } else if (event.key === "ArrowLeft" && expanded) {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowExpanded(row, false);
+          }
+        }}
       >
         <AgentTreeItemLabel
           item={item}
@@ -185,21 +214,7 @@ function AgentSubpageRows(props: {
               ? (event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  if (expanded) {
-                    setUserExpandedIds((ids) => {
-                      const next = new Set(ids);
-                      next.delete(row.nodeId);
-                      return next;
-                    });
-                    setUserCollapsedIds((ids) => new Set(ids).add(row.nodeId));
-                  } else {
-                    setUserCollapsedIds((ids) => {
-                      const next = new Set(ids);
-                      next.delete(row.nodeId);
-                      return next;
-                    });
-                    setUserExpandedIds((ids) => new Set(ids).add(row.nodeId));
-                  }
+                  setRowExpanded(row, !expanded);
                 }
               : undefined
           }
@@ -269,6 +284,23 @@ function ArtifactSubpageRows(props: {
   const isExpanded = (row: NonNullable<CommandItemShape["artifactTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
+  const setRowExpanded = (
+    row: NonNullable<CommandItemShape["artifactTreeRow"]>,
+    expanded: boolean,
+  ) => {
+    setUserExpandedIds((ids) => {
+      const next = new Set(ids);
+      if (expanded) next.add(row.nodeId);
+      else next.delete(row.nodeId);
+      return next;
+    });
+    setUserCollapsedIds((ids) => {
+      const next = new Set(ids);
+      if (expanded) next.delete(row.nodeId);
+      else next.add(row.nodeId);
+      return next;
+    });
+  };
   const rowByNodeId = new Map(
     props.items.flatMap((item) =>
       item.artifactTreeRow === undefined
@@ -297,6 +329,18 @@ function ArtifactSubpageRows(props: {
         keywords={[...item.keywords]}
         disabled={item.disabled === true}
         onSelect={() => props.onSelect(item)}
+        onKeyDown={(event) => {
+          if (row?.hasChildren !== true) return;
+          if (event.key === "ArrowRight" && !expanded) {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowExpanded(row, true);
+          } else if (event.key === "ArrowLeft" && expanded) {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowExpanded(row, false);
+          }
+        }}
       >
         <ArtifactTreeItemLabel
           item={item}
@@ -306,21 +350,7 @@ function ArtifactSubpageRows(props: {
               ? (event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  if (expanded) {
-                    setUserExpandedIds((ids) => {
-                      const next = new Set(ids);
-                      next.delete(row.nodeId);
-                      return next;
-                    });
-                    setUserCollapsedIds((ids) => new Set(ids).add(row.nodeId));
-                  } else {
-                    setUserCollapsedIds((ids) => {
-                      const next = new Set(ids);
-                      next.delete(row.nodeId);
-                      return next;
-                    });
-                    setUserExpandedIds((ids) => new Set(ids).add(row.nodeId));
-                  }
+                  setRowExpanded(row, !expanded);
                 }
               : undefined
           }
@@ -363,7 +393,10 @@ function PathTreeItemLabel(props: {
             tone={gitStyle.tone}
             label={gitStyle.label}
             withTooltip
-            className="ml-auto h-4 min-w-4 px-0.5"
+            className={cn(
+              "ml-auto h-4 min-w-4 px-0.5",
+              gitStyle.tone === "muted" && "bg-foreground/8",
+            )}
           />
         )}
       </span>

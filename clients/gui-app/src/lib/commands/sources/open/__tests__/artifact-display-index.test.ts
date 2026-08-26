@@ -64,6 +64,7 @@ describe("buildArtifactDisplayPathIndex", () => {
       id: "c",
       title: "First",
       titleSegments: ["Tickets", "First"],
+      idSegments: ["p", "c"],
       titlePath: "Tickets / First",
     });
   });

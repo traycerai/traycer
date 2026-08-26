@@ -1,0 +1,160 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Command, CommandList } from "@/components/ui/command";
+import { SubpageView } from "@/components/command-palette/palette-cmdk";
+import type {
+  CommandContext,
+  CommandItem,
+  CommandSubpage,
+} from "@/lib/commands/types";
+import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+
+const router: KeybindingRouter = {
+  getPathname: () => "/",
+  navigateHome: () => undefined,
+  navigateSettings: () => undefined,
+  navigateToEpic: () => undefined,
+  navigateToEpicTab: () => undefined,
+  navigateToEpicList: () => undefined,
+  navigateSettingsSection: () => undefined,
+  navigateToTabIntent: () => undefined,
+  goBack: () => undefined,
+  goForward: () => undefined,
+  isHistoryNavAvailable: () => false,
+  canGoBack: () => false,
+  canGoForward: () => false,
+  navigateNestedFocus: () => null,
+};
+
+const context: CommandContext = {
+  pathname: "/",
+  router,
+  activeTabId: "tab-1",
+  activeEpicId: "epic-1",
+  focusedComposerKind: null,
+  targetGroupId: "group-1",
+};
+
+function baseItem(id: string, label: string): CommandItem {
+  return {
+    id,
+    label,
+    description: null,
+    keywords: [label],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function renderTree(id: "open:agents" | "open:artifacts"): void {
+  const items: ReadonlyArray<CommandItem> =
+    id === "open:agents"
+      ? [
+          {
+            ...baseItem("root", "Root"),
+            agentTreeRow: {
+              nodeId: "root",
+              depth: 0,
+              ancestorIds: [],
+              hasChildren: true,
+              interface: "chat",
+              activity: "idle",
+            },
+          },
+          {
+            ...baseItem("child", "Child"),
+            agentTreeRow: {
+              nodeId: "child",
+              depth: 1,
+              ancestorIds: ["root"],
+              hasChildren: true,
+              interface: "chat",
+              activity: "idle",
+            },
+          },
+          {
+            ...baseItem("grandchild", "Grandchild"),
+            agentTreeRow: {
+              nodeId: "grandchild",
+              depth: 2,
+              ancestorIds: ["root", "child"],
+              hasChildren: false,
+              interface: "chat",
+              activity: "idle",
+            },
+          },
+        ]
+      : [
+          {
+            ...baseItem("root", "Root"),
+            artifactTreeRow: {
+              nodeId: "root",
+              depth: 0,
+              ancestorIds: [],
+              hasChildren: true,
+              kind: "story",
+              status: 1,
+            },
+          },
+          {
+            ...baseItem("child", "Child"),
+            artifactTreeRow: {
+              nodeId: "child",
+              depth: 1,
+              ancestorIds: ["root"],
+              hasChildren: true,
+              kind: "story",
+              status: 1,
+            },
+          },
+          {
+            ...baseItem("grandchild", "Grandchild"),
+            artifactTreeRow: {
+              nodeId: "grandchild",
+              depth: 2,
+              ancestorIds: ["root", "child"],
+              hasChildren: false,
+              kind: "ticket",
+              status: 0,
+            },
+          },
+        ];
+  const subpage: CommandSubpage = {
+    id,
+    title: "Tree",
+    useItems: () => items,
+  };
+  render(
+    <Command>
+      <CommandList>
+        <SubpageView
+          subpage={subpage}
+          ctx={context}
+          onSelect={() => undefined}
+        />
+      </CommandList>
+    </Command>,
+  );
+}
+
+afterEach(() => cleanup());
+
+describe.each(["open:agents", "open:artifacts"] as const)(
+  "%s keyboard tree navigation",
+  (id) => {
+    it("expands with ArrowRight and collapses with ArrowLeft", () => {
+      renderTree(id);
+      expect(screen.queryByText("Grandchild")).toBeNull();
+      const childRow = screen.getByText("Child").closest('[role="option"]');
+      if (childRow === null) throw new Error("missing child option");
+      fireEvent.keyDown(childRow, { key: "ArrowRight" });
+      expect(screen.getByText("Grandchild")).toBeTruthy();
+      fireEvent.keyDown(childRow, { key: "ArrowLeft" });
+      expect(screen.queryByText("Grandchild")).toBeNull();
+    });
+  },
+);
