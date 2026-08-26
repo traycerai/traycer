@@ -21,11 +21,15 @@ import type { HostEndpointProvider } from "@traycer-clients/shared/host-transpor
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
+import {
+  appHostCredentialMintFlow,
+  noteHostCredentialState,
+} from "@/lib/auth/host-credential-provisioning";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { useHostBinding } from "@/lib/host/runtime";
 import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { GUI_CLIENT_IDENTITY } from "@/lib/host/client-identity";
 import { appLogger } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
@@ -248,6 +252,7 @@ export function buildHostStreamClient(params: {
       webSocketFactory: browserStreamWebSocketFactory,
       requestId: uuidv4,
       evidence: transportEvidenceRelay,
+      clientIdentity: GUI_CLIENT_IDENTITY,
     });
     if (remoteTransport === null) return null;
     if (params.autoStart) {
@@ -263,12 +268,19 @@ export function buildHostStreamClient(params: {
     auth: params.auth,
     // Always the app-wide flow, never a per-caller one: the renderer holds
     // several clients against one host, and the shared module is what keeps
-    // that from becoming several OTP dialogs. It resolves `declined` until the
-    // provisioning provider is mounted, so dev shells and tests are unaffected.
+    // that from becoming several concurrent mints revoking each other. It
+    // resolves `unavailable` until the provisioning provider is mounted, so
+    // dev shells and tests are unaffected.
     hostCredentialMint: appHostCredentialMintFlow,
-    // The renderer's long-lived clients never verify adoption; the next
-    // connection's ack settles it.
-    onHostCredentialState: null,
+    // Kept wired as the one place transports report credential state into,
+    // but the report is deliberately INERT today: an `openAck` state carries
+    // no provenance (which credential, which transport, when), so `active`
+    // must NOT release the app-wide adoption claim - a delayed `active(A)`
+    // observed before A was burned would free B's claim and reopen the
+    // double-mint it exists to prevent. The claim expires on its TTL alone;
+    // see `noteHostCredentialState`'s own doc. If a future frame carries the
+    // credential's identity, this is the seam that starts trusting it.
+    onHostCredentialState: noteHostCredentialState,
     // The LOCAL host's long-lived connection, so this is the leg that hears a
     // restart tombstone from a local host restarted by somebody other than
     // this app - a `traycer host restart` on the box, an update install. The
@@ -281,6 +293,7 @@ export function buildHostStreamClient(params: {
     pongTimeoutMs: PONG_TIMEOUT_MS,
     initialBackoffMs: INITIAL_BACKOFF_MS,
     maxBackoffMs: MAX_BACKOFF_MS,
+    clientIdentity: GUI_CLIENT_IDENTITY,
   });
 }
 
@@ -417,6 +430,12 @@ export function useHostStreamClientBindingFor(
             remoteStatus: PLACEHOLDER_REMOTE_STATUS,
             // Fabricated endpoint, not a directory verdict: never in fuse grace.
             relayFuseGrace: false,
+            recentHostCheckIn: false,
+            // Same reason `transportDialability` is written coarsely above:
+            // the plan gate ran upstream against the real directory entry, and
+            // re-asserting a refusal here would contradict a dial this effect
+            // has already been cleared to make.
+            planAllowsRemote: true,
           } satisfies RemoteHostDirectoryEntry)
         : ({
             hostId: endpointHostId,

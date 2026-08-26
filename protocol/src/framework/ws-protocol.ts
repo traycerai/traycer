@@ -1,5 +1,15 @@
 import { z } from "zod";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import {
+  clientCompatibilityRequirementSchema,
+  clientHandshakeIdentitySchema,
+  type ClientCompatibilityRequirement,
+  type ClientHandshakeIdentity,
+} from "@traycer/protocol/framework/client-identity";
+import {
+  worktreeBusyHoldersWireFieldSchema,
+  type WorktreeBusyHolder,
+} from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -147,6 +157,20 @@ export type FatalErrorDetails = {
    * retryable fatal it already understands.
    */
   readonly restartIntent?: HostRestartIntent;
+  /**
+   * Present exactly when this connection was refused by the host's CLIENT
+   * COMPATIBILITY EPOCH gate - see {@link ClientCompatibilityRequirement}.
+   *
+   * Additive and optional under the same rule as the two fields above, and it
+   * is what makes this rejection survivable for the population it targets: a
+   * released old app strips this member and is left with `code`, `reason`,
+   * `upgradeGuidance` and `retryable: false`, which it already handles as a
+   * terminal stop. That is precisely why the epoch rejection keeps the
+   * existing `INCOMPATIBLE` code and why its `reason` has to be independently
+   * actionable - the clients that most need to read it are the ones that
+   * cannot see this field at all.
+   */
+  readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
 };
 
 /**
@@ -158,6 +182,12 @@ export type ClientOpenFrame = {
   readonly token: string;
   readonly manifest: ConnectionManifest;
   readonly optionalManifest?: ConnectionManifest;
+  /**
+   * Who is connecting - see {@link ClientHandshakeIdentity}. Optional on the
+   * wire so an old client's omission reaches the host's deliberate
+   * legacy-epoch verdict instead of a generic parse failure.
+   */
+  readonly clientIdentity?: ClientHandshakeIdentity;
 };
 
 /**
@@ -211,7 +241,11 @@ export type HostResponseFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly result: unknown | null;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: readonly WorktreeBusyHolder[];
+  } | null;
 };
 
 /**
@@ -302,6 +336,11 @@ export const fatalErrorDetailsSchema = z.object({
   // Additive/optional, same rule as `retryable`: absent from every host that
   // predates the restart tombstone, and stripped by every client that does.
   restartIntent: hostRestartIntentSchema.optional(),
+  // Additive/optional, same rule again: absent from every host that predates
+  // the compatibility-epoch gate, and stripped by every client that does -
+  // which is exactly the population this rejection is aimed at, so the
+  // envelope's `reason` carries the whole remedy on its own.
+  clientCompatibilityRequirement: clientCompatibilityRequirementSchema.optional(),
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -310,6 +349,11 @@ export const clientOpenFrameSchema = z.object({
   token: z.string(),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
+  // Additive/optional in BOTH directions: a released old host's copy of this
+  // schema strips it (so a new client still connects), and a released old
+  // client omits it (so a new host sees "no identity" and applies its legacy
+  // epoch rule rather than rejecting the frame as malformed).
+  clientIdentity: clientHandshakeIdentitySchema.optional(),
 });
 
 /** Canonical schema for the client `request` frame. */
@@ -354,6 +398,10 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
+  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
+  // absent rather than rejecting the envelope — adding this optional
+  // field must never fail a `{ code, message }` that parsed before it.
+  holders: worktreeBusyHoldersWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

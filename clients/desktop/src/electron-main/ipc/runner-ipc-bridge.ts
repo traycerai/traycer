@@ -221,6 +221,7 @@ export interface IpcAuthTokenStore {
     readonly token: string;
   }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
   subscribe(listener: (change: TokenStoreChange) => void): () => void;
   migrateLegacyCredentials(
     legacy: StoredAuthTokens,
@@ -1519,6 +1520,10 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
 
   delete(): Promise<void> {
     return Promise.resolve();
+  }
+
+  deleteIfToken(): Promise<"deleted" | "kept"> {
+    return Promise.resolve("kept");
   }
 
   subscribe(): () => void {

@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -23,6 +24,7 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -30,6 +32,7 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { usePanelHeaderMenuStore } from "@/stores/epics/panel-header-menu-store";
+import { resetEpicTerminalDurableCreatesForTests } from "@/lib/terminals/epic-terminal-durable-create-coordinator";
 import { modLabel } from "@/lib/keybindings/platform";
 
 const selectById = vi.fn();
@@ -182,6 +185,7 @@ function openPicker(): string {
         epicId="epic-1"
         tabId={tabId}
         onBeforeOpen={undefined}
+        onLaunched={null}
       />
     </TooltipProvider>,
   );
@@ -219,6 +223,7 @@ describe("<NewTerminalPicker />", () => {
       reportIssueAvailable: false,
       reportIssueContext: null,
     });
+    resetEpicTerminalDurableCreatesForTests();
   });
 
   it("opens a popover with the host section and workspace rows", () => {
@@ -265,6 +270,7 @@ describe("<NewTerminalPicker />", () => {
           epicId="epic-1"
           tabId={tabId}
           onBeforeOpen={undefined}
+          onLaunched={null}
         />
       </TooltipProvider>
     );
@@ -351,9 +357,11 @@ describe("<NewTerminalPicker />", () => {
     );
     expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
     expect(
-      useEpicCanvasStore
-        .getState()
-        .pendingCreateArtifactIds.has(terminals[0].id),
+      hasTerminalPendingCreate(
+        useEpicCanvasStore.getState().pendingCreateTerminalIdentities,
+        terminals[0].hostId,
+        terminals[0].id,
+      ),
     ).toBe(true);
   });
 
@@ -375,17 +383,147 @@ describe("<NewTerminalPicker />", () => {
     expect(isHostEpicTerminalRef(terminals[0])).toBe(true);
   });
 
+  it("shows failed setup as a non-blocking warning and launches that worktree", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          {
+            ...makeRow(
+              "host-1",
+              "/work/traycer-wt/feature-x",
+              "feature-x",
+              null,
+            ),
+            setupState: "failed",
+          },
+        ],
+        folderlessCwd: "/Users/tgill",
+      },
+      isPending: false,
+      isError: false,
+    };
+    const tabId = openPicker();
+
+    const option = screen.getByRole("option", { name: /feature-x/i });
+    const warning = within(option).getByText("setup failed");
+    expect(warning.getAttribute("data-status-tone")).toBe("warning");
+    expect(warning.getAttribute("aria-label")).toContain(
+      "worktree is still usable",
+    );
+    expect(option.className).toContain("cursor-pointer");
+    expect(option.dataset.checked).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    const terminals = tabTiles(tabId).filter(
+      (tile) => tile.type === "terminal",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(launchedTerminalCwd(terminals[0])).toBe(
+      "/work/traycer-wt/feature-x",
+    );
+  });
+
+  it("launches immediately after creation while setup is still running", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          {
+            ...makeRow(
+              "host-1",
+              "/work/traycer-wt/feature-x",
+              "feature-x",
+              // Compatibility with an older host that still projected setup
+              // progress as a disabled reason.
+              "setup_running",
+            ),
+            // The legacy disabled reason remains authoritative when a mixed
+            // host/client deployment has not converged on setupState yet.
+            setupState: "not_required",
+          },
+        ],
+        folderlessCwd: "/Users/tgill",
+      },
+      isPending: false,
+      isError: false,
+    };
+    const tabId = openPicker();
+
+    const option = screen.getByRole("option", { name: /feature-x/i });
+    const progress = within(option).getByText("setting up");
+    expect(progress.getAttribute("data-status-tone")).toBe("neutral");
+    expect(progress.getAttribute("aria-label")).toContain(
+      "ready to use while setup continues",
+    );
+    expect(option.dataset.checked).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
+
+    expect(
+      tabTiles(tabId).some(
+        (tile) =>
+          tile.type === "terminal" &&
+          launchedTerminalCwd(tile) === "/work/traycer-wt/feature-x",
+      ),
+    ).toBe(true);
+  });
+
+  it("shows legacy setup-pending status while keeping the row selectable", () => {
+    bindingsQuery.current = {
+      data: {
+        rows: [
+          {
+            ...makeRow(
+              "host-1",
+              "/work/traycer-wt/feature-x",
+              "feature-x",
+              "setup_pending",
+            ),
+            setupState: "not_required",
+          },
+        ],
+        folderlessCwd: "/Users/tgill",
+      },
+      isPending: false,
+      isError: false,
+    };
+    openPicker();
+
+    const option = screen.getByRole("option", { name: /feature-x/i });
+    const pending = within(option).getByText("setup pending");
+    expect(pending.getAttribute("data-status-tone")).toBe("neutral");
+    expect(option.className).toContain("cursor-pointer");
+    expect(option.dataset.checked).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Launch" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("selects nothing and keeps Launch disabled when every row is disabled", () => {
     bindingsQuery.current = {
       data: {
         rows: [
-          makeRow("host-1", "/work/traycer", "main", "missing_worktree_path"),
-          makeRow(
-            "host-2",
-            "/work/traycer-wt/feature-x",
-            "feature-x",
-            "setup_failed",
-          ),
+          {
+            ...makeRow("host-1", "/work/traycer", "main", "setup_pending"),
+            setupState: "pending",
+            isGitRepo: false,
+          },
+          {
+            ...makeRow(
+              "host-2",
+              "/work/traycer-wt/feature-x",
+              "feature-x",
+              "setup_running",
+            ),
+            setupState: "running",
+            isGitRepo: false,
+          },
         ],
         folderlessCwd: "/Users/tgill",
       },
@@ -606,6 +744,7 @@ describe("<NewTerminalPicker /> focus-loss dismissal (MED4)", () => {
               epicId="epic-1"
               tabId={tabId}
               onBeforeOpen={undefined}
+              onLaunched={null}
             />
           </TooltipProvider>
         </PaneVisibilityContext.Provider>

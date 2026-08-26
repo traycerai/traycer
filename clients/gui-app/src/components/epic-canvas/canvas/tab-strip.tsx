@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -29,6 +30,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropLine } from "@/components/ui/drop-line";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   Tooltip,
   TooltipContent,
@@ -51,6 +53,7 @@ import {
   type EpicCanvasArtifactTabDragData,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
@@ -103,15 +106,12 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
-import { registerEpicTerminalCloseAuthority } from "@/lib/terminals/epic-terminal-close-coordinator";
-import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import {
-  browserTabOrigin,
-  nextSettledTabIdentity,
-  type SettledTabIdentity,
-} from "@/lib/browser-view/browser-tab-display";
+  useBrowserTabPresentation,
+  type BrowserTabPresentation,
+} from "@/components/epic-canvas/canvas/browser-tab-presentation";
+import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
 const EPIC_TAB_LAYOUT_TRANSITION = {
   type: "spring",
@@ -403,7 +403,9 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
         <span className="flex items-center gap-2">
           <span>{actionLabel}</span>
           {shortcut === null ? null : (
-            <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            <ShortcutHint>
+              <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            </ShortcutHint>
           )}
         </span>
         <span className="text-background/70">
@@ -472,66 +474,6 @@ interface TerminalTabControl {
   readonly rename: (title: string) => void;
 }
 
-type BrowserTabPresentation = SettledTabIdentity & {
-  readonly isolated: boolean;
-};
-
-function settleBrowserTabPresentation(
-  previous: BrowserTabPresentation | null,
-  tab: BrowserTabInfo,
-  isolated: boolean,
-): BrowserTabPresentation {
-  const identity = nextSettledTabIdentity(previous, tab);
-  return {
-    ...identity,
-    faviconUrl:
-      browserTabOrigin(tab.url) === browserTabOrigin(identity.url)
-        ? identity.faviconUrl
-        : null,
-    isolated,
-  };
-}
-
-function useBrowserTabPresentation(
-  tab: EpicCanvasTileRef,
-): BrowserTabPresentation | null {
-  const sessions = useMaybeBrowserSessionsContext();
-  const session =
-    tab.type === "browser-session"
-      ? sessions?.items.find(
-          (candidate) =>
-            candidate.hostId === tab.hostId &&
-            candidate.sessionId === tab.sessionId,
-        )
-      : undefined;
-  const liveTab =
-    tab.type === "browser-session"
-      ? session?.tabs.find((candidate) => candidate.tabId === tab.tabId)
-      : undefined;
-  const [state, setState] = useState(() => ({
-    liveTab,
-    presentation:
-      liveTab === undefined || session === undefined
-        ? null
-        : settleBrowserTabPresentation(
-            null,
-            liveTab,
-            session.profile === "isolated",
-          ),
-  }));
-  if (state.liveTab === liveTab) return state.presentation;
-  const presentation =
-    liveTab === undefined || session === undefined
-      ? null
-      : settleBrowserTabPresentation(
-          state.presentation,
-          liveTab,
-          session.profile === "isolated",
-        );
-  setState({ liveTab, presentation });
-  return presentation;
-}
-
 function TabItem(props: TabItemProps) {
   if (props.tab.type !== "terminal") {
     return <TabItemBody {...props} terminalControl={null} />;
@@ -551,40 +493,22 @@ function TerminalTabItem(
     node: props.tab,
   });
   const rename = controller.rename;
-  const close = controller.close;
   const terminalId = props.tab.id;
-  const canClose =
+  const canMutate =
     controller.canMutate &&
     !controller.migrationPending &&
     controller.projection !== undefined;
-  useEffect(
-    () =>
-      registerEpicTerminalCloseAuthority({
-        instanceId: props.tab.instanceId,
-        hostId: props.tab.hostId,
-        terminalId,
-        capability: controller.capability,
-        canMutate: canClose,
-        close: async () => {
-          await close.mutateAsync({ terminalId });
-        },
-      }),
-    [
-      canClose,
-      close,
-      controller.capability,
-      props.tab.hostId,
-      props.tab.instanceId,
-      terminalId,
-    ],
-  );
   const control: TerminalTabControl = {
     mode: controller.capability,
     displayTitle: controller.viewModel?.displayTitle ?? props.tab.name,
-    canMutate: canClose,
+    canMutate,
     rename: (title) => {
       if (!controller.canMutate) return;
-      rename.mutate({ terminalId, manualTitle: title });
+      rename.mutate({
+        hostId: props.tab.hostId,
+        terminalId,
+        manualTitle: title,
+      });
     },
   };
   return <TabItemBody {...props} terminalControl={control} />;
@@ -707,6 +631,7 @@ function TabItemBody(
     }),
     [epicId, groupId, isPreview, tab.instanceId, tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -714,6 +639,7 @@ function TabItemBody(
   } = useDraggable({
     id: getArtifactTabDragId(groupId, tab.instanceId),
     data: dragData,
+    disabled: dragDisabled,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({
@@ -762,11 +688,32 @@ function TabItemBody(
   }, [absoluteFilePath, copy]);
 
   const onOpenUsage = useChatUsageMenuHandler(tab, displayTitle);
+  const consumeNotificationEntity = useContext(NotificationConsumptionContext);
 
   const selectTab = useCallback(() => {
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
-  }, [groupId, onSelect, rename.isEditing, tab.instanceId]);
+    if (
+      isActive &&
+      consumeNotificationEntity !== null &&
+      (tab.type === "chat" ||
+        tab.type === "terminal" ||
+        tab.type === "terminal-agent")
+    ) {
+      consumeNotificationEntity({
+        originHostId: tab.hostId,
+        entity: { epicId, chatId: tab.id },
+      });
+    }
+  }, [
+    consumeNotificationEntity,
+    epicId,
+    groupId,
+    isActive,
+    onSelect,
+    rename.isEditing,
+    tab,
+  ]);
 
   const handleDoubleClick = useCallback(() => {
     if (rename.isEditing) return;
@@ -791,10 +738,10 @@ function TabItemBody(
       if (rename.isEditing) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        onSelect(groupId, tab.instanceId);
+        selectTab();
       }
     },
-    [groupId, onSelect, rename.isEditing, tab.instanceId],
+    [rename.isEditing, selectTab],
   );
   const leaderBadge =
     leaderModifier === null
@@ -1220,7 +1167,13 @@ function isEpicNodeRef(tab: EpicCanvasTileRef): tab is EpicNodeRef {
   );
 }
 
-function TabIcon(props: {
+/**
+ * Live tile icon (chat progress spinner / harness brand / static kind glyph,
+ * with diff + blank fallbacks). Exported so the mobile current-tile bar
+ * (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon
+ * as the desktop tab strip instead of duplicating the dispatch.
+ */
+export function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;

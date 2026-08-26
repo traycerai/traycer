@@ -9,6 +9,7 @@ import {
   type CanonicalTerminalSessionInfo,
   createTerminalRequestSchema,
   createTerminalRequestSchemaV20,
+  createTerminalRequestSchemaV21,
   createTerminalResponseSchema,
   createTerminalResponseSchemaV20,
   killTerminalRequestSchema,
@@ -19,6 +20,7 @@ import {
   listTerminalsResponseSchemaV20,
   listTerminalsResponseSchemaV21,
   listTerminalsResponseSchemaV22,
+  listTerminalsResponseSchemaV23,
   readTerminalOutputRequestSchema,
   readTerminalOutputResponseSchema,
   renameTerminalRequestSchema,
@@ -33,6 +35,7 @@ import {
   terminalSubscribeV13,
   terminalSubscribeV14,
   terminalSubscribeV15,
+  terminalSubscribeV16,
 } from "@traycer/protocol/host/terminal/subscribe";
 
 // Terminal sessions live entirely in the host's memory; these contracts
@@ -131,6 +134,50 @@ export const terminalCreateDowngradeV20ToV10 = defineDowngradePath<
   },
 });
 
+// Additive request-side `themeHint` (spawning client's resolved terminal
+// appearance, for host-side OSC 10/11 replies); request otherwise unchanged,
+// response identical to `@2.0`. Same minor-line pattern as
+// `agent.tui.prepareLaunch@1.1`: a v2.1 peer projects onto a v2.0 host by
+// re-parsing through the (non-strict) v2.0 request schema, which strips
+// `themeHint` on the wire - so no same-major downgrade path is needed.
+export const terminalCreateV21 = defineRpcContract({
+  method: "terminal.create",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: createTerminalRequestSchemaV21,
+  responseSchema: createTerminalResponseSchemaV20,
+});
+
+// A v2.0 request carries no spawner theme, so the upgrade fills the "no hint"
+// default and the host answers OSC 10/11 with its fixed dark fallback. The
+// response is byte-identical, so its upgrade is the identity.
+export const terminalCreateUpgradeV20ToV21 = defineUpgradePath<
+  typeof terminalCreateV20,
+  typeof terminalCreateV21
+>({
+  from: terminalCreateV20.schemaVersion,
+  to: terminalCreateV21.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, themeHint: null }),
+  upgradeResponse: (response) => response,
+});
+
+// Major 2's latest bridge to v1.0. Strip `themeHint` - a v1.0 host predates
+// host-side OSC replies entirely, so dropping the hint loses nothing - then
+// apply the frozen scope-to-epic fold, keeping the independent-scope failure
+// gate.
+export const terminalCreateDowngradeV21ToV10 = defineDowngradePath<
+  typeof terminalCreateV21,
+  typeof terminalCreateV10
+>({
+  from: terminalCreateV21.schemaVersion,
+  to: terminalCreateV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const { themeHint: _themeHint, ...rest } = request;
+    return terminalCreateDowngradeV20ToV10.downgradeRequest(rest);
+  },
+  downgradeResponse: (response) =>
+    terminalCreateDowngradeV20ToV10.downgradeResponse(response),
+});
+
 export const terminalKillV10 = defineRpcContract({
   method: "terminal.kill",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -171,6 +218,15 @@ export const terminalListV22 = defineRpcContract({
   schemaVersion: { major: 2, minor: 2 } as const,
   requestSchema: listTerminalsRequestSchemaV20,
   responseSchema: listTerminalsResponseSchemaV22,
+});
+
+// Additive lifetime-owner discriminator on each response session; request
+// is unchanged from `@2.0`/`@2.1`/`@2.2`.
+export const terminalListV23 = defineRpcContract({
+  method: "terminal.list",
+  schemaVersion: { major: 2, minor: 3 } as const,
+  requestSchema: listTerminalsRequestSchemaV20,
+  responseSchema: listTerminalsResponseSchemaV23,
 });
 
 export const terminalListUpgradeV10ToV20 = defineUpgradePath<
@@ -220,6 +276,24 @@ export const terminalListUpgradeV21ToV22 = defineUpgradePath<
     sessions: response.sessions.map((session) => ({
       ...session,
       currentCwd: session.cwd,
+    })),
+    homeCwd: response.homeCwd,
+  }),
+});
+
+// A v2.2 host cannot name lifetime ownership. Fill `registry` so a capable
+// client fail-closes the row as a durable shadow instead of promoting it.
+export const terminalListUpgradeV22ToV23 = defineUpgradePath<
+  typeof terminalListV22,
+  typeof terminalListV23
+>({
+  from: terminalListV22.schemaVersion,
+  to: terminalListV23.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    sessions: response.sessions.map((session) => ({
+      ...session,
+      lifecycleOwner: "registry" as const,
     })),
     homeCwd: response.homeCwd,
   }),
@@ -308,6 +382,29 @@ export const terminalListDowngradeV22ToV10 = defineDowngradePath<
   },
 });
 
+// Major 2's latest bridge to v1.0. Strip `lifecycleOwner` then reuse the
+// v2.2 currentCwd projection so old peers still see launch `cwd`.
+export const terminalListDowngradeV23ToV10 = defineDowngradePath<
+  typeof terminalListV23,
+  typeof terminalListV10
+>({
+  from: terminalListV23.schemaVersion,
+  to: terminalListV10.schemaVersion,
+  downgradeRequest: (request) => {
+    const epicId = downgradeTerminalScopeForV10(request.scope);
+    if (!epicId.ok) return epicId;
+    return { ok: true, value: { epicId: epicId.value } };
+  },
+  downgradeResponse: (response) =>
+    terminalListDowngradeV22ToV10.downgradeResponse({
+      sessions: response.sessions.map((session) => {
+        const { lifecycleOwner: _lifecycleOwner, ...rest } = session;
+        return rest;
+      }),
+      homeCwd: response.homeCwd,
+    }),
+});
+
 // Brand-new method - an older host simply lacks it, so the registry puts it
 // on the `degrade: unsupported` channel rather than the released floor. No
 // downgrade path exists or is needed: there is no earlier line to bridge to.
@@ -332,4 +429,5 @@ export {
   terminalSubscribeV13,
   terminalSubscribeV14,
   terminalSubscribeV15,
+  terminalSubscribeV16,
 };

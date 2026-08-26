@@ -25,7 +25,16 @@
  * - `complete` - terminal frame; carries the final `deleted` flag.
  * - `failed`   - terminal frame; carries a human-readable reason (busy,
  *                unexpected error). The socket stays open so the client
- *                renders it before tearing down.
+ *                renders it before tearing down. `@1.1` may also carry
+ *                `holders` when the refusal is a busy inventory (the stream
+ *                twin of unary `WORKTREE_BUSY`).
+ *
+ * `worktree.deleteByPath@1.1` adds open-request `stopOwners` (absent/false
+ * ⇒ today's refuse-on-busy) and optional `holders` on `failed`. Degrade: a
+ * 1.0 host's open schema strips `stopOwners` and its `failed` frame has
+ * only `reason`; an old client that negotiated 1.0 never sees `holders`.
+ * Malformed `holders` on a 1.1 `failed` frame are sanitized to absent so
+ * the terminal `reason` still arrives.
  * - `pong`     - heartbeat response.
  *
  * Client frames:
@@ -34,6 +43,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { worktreeBusyHoldersWireFieldSchema } from "@traycer/protocol/framework/worktree-busy-holders";
 import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-schemas";
 
 export const worktreeDeleteByPathOpenRequestSchema = z.object({
@@ -42,6 +52,14 @@ export const worktreeDeleteByPathOpenRequestSchema = z.object({
 });
 export type WorktreeDeleteByPathOpenRequest = z.infer<
   typeof worktreeDeleteByPathOpenRequestSchema
+>;
+
+export const worktreeDeleteByPathOpenRequestSchemaV11 =
+  worktreeDeleteByPathOpenRequestSchema.extend({
+    stopOwners: z.boolean().default(false),
+  });
+export type WorktreeDeleteByPathOpenRequestV11 = z.infer<
+  typeof worktreeDeleteByPathOpenRequestSchemaV11
 >;
 
 const worktreeDeletePhaseSchema = z.enum(["teardown", "remove"]);
@@ -109,5 +127,53 @@ export const worktreeDeleteByPathStreamV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: worktreeDeleteByPathOpenRequestSchema,
   serverFrameSchema: worktreeDeleteByPathServerFrameSchema,
+  clientFrameSchema: worktreeDeleteByPathClientFrameSchema,
+});
+
+export const worktreeDeleteByPathServerFrameSchemaV11 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("started"),
+      hasTeardown: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("phase"),
+      phase: worktreeDeletePhaseSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("output"),
+      channel: worktreeDeleteOutputChannelSchema,
+      chunk: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      deleted: z.boolean(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("failed"),
+      reason: z.string(),
+      holders: worktreeBusyHoldersWireFieldSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type WorktreeDeleteByPathServerFrameV11 = z.infer<
+  typeof worktreeDeleteByPathServerFrameSchemaV11
+>;
+
+export const worktreeDeleteByPathStreamV11 = defineStreamRpcContract({
+  method: "worktree.deleteByPath",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: worktreeDeleteByPathOpenRequestSchemaV11,
+  serverFrameSchema: worktreeDeleteByPathServerFrameSchemaV11,
   clientFrameSchema: worktreeDeleteByPathClientFrameSchema,
 });

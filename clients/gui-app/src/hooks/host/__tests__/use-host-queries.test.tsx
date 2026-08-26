@@ -126,6 +126,7 @@ function createHostQueriesFixture(): {
             busy: false,
             busySessionCount: 0,
             updateProgress: null,
+            busyBreakdown: null,
           };
         },
       },

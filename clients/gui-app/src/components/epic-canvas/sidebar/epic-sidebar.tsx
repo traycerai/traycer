@@ -45,11 +45,11 @@ import {
   useSurfaceHostClient,
   useSurfaceHostPin,
   useTabSurfaceKey,
+  type SurfaceHostPin,
 } from "@/hooks/host/use-surface-host-pin";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -76,13 +76,10 @@ import { ChatsPanelSkeleton } from "@/components/epic-canvas/skeletons/chats-pan
 import { CommentsPanelSkeleton } from "@/components/epic-canvas/skeletons/comments-panel-skeleton";
 import { FileTreePanelSkeleton } from "@/components/epic-canvas/skeletons/file-tree-panel-skeleton";
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
-import { CommentSidebar } from "@/components/comments";
+import { CommentSidebarPanel } from "@/components/comments";
 import { DropLine } from "@/components/ui/drop-line";
 import { Sidebar } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useArtifactAnchorPositions } from "@/stores/comments/anchor-positions-store";
-import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import {
   DEFAULT_LEFT_PANEL_ID,
   useActiveLeftPanelId,
@@ -105,6 +102,11 @@ import {
   useFileTreeStore,
   useSelectedFileTreeWorkspace,
 } from "@/stores/file-tree/file-tree-store";
+import {
+  clearFileTreeRevealRequest,
+  useFileTreeRevealRequest,
+} from "@/stores/file-tree/file-tree-reveal-store";
+import { planFileTreeRevealRouting } from "@/components/epic-canvas/sidebar/file-tree-reveal-routing";
 import {
   useEpicSidebarEffectiveExpanded,
   useEpicSidebarExpansionStore,
@@ -155,7 +157,6 @@ import {
   isArtifactUnread,
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
-import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
@@ -165,6 +166,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   Archive,
+  CopyMinus,
   Download,
   FolderOpen,
   ListChecks,
@@ -238,6 +240,13 @@ interface FileTreeWorkspaceSelection {
   readonly hostId: string | null;
   readonly selectedWorkspacePath: string | null;
   readonly setSelectedWorkspacePath: (workspacePath: string) => void;
+  /**
+   * The browsable roots the picker offers, in picker order. Empty while the
+   * bindings read has not answered - `rootsResolved` tells the two apart.
+   */
+  readonly workspaceRoots: ReadonlyArray<string>;
+  /** True once the bindings read has answered (with roots or without). */
+  readonly rootsResolved: boolean;
   /**
    * Non-null when the bindings read FAILED, as opposed to answering with no
    * browsable roots. Both leave `selectedWorkspacePath` null, and the panel
@@ -334,6 +343,8 @@ function useFileTreeWorkspaceSelection(
     hostId,
     selectedWorkspacePath,
     setSelectedWorkspacePath,
+    workspaceRoots,
+    rootsResolved: queryResolved,
     failure: classifyBindingsFailure(workspacesQuery.error),
     retry,
   };
@@ -350,6 +361,88 @@ function resolveFileTreeWorkspaceRoot(
     return storedWorkspacePath;
   }
   return workspaceRoots[0] ?? null;
+}
+
+/**
+ * Routes a pending "Reveal in Sidebar" request to the panel the file lives
+ * in. The request names the file's host and workspace root (a workspace-file
+ * tab carries both for life); this panel may be showing another of either, so
+ * the gesture re-points it the way the picker would: pin to the file's host,
+ * then select its root. The row-level reveal - expand ancestors, select, scroll
+ * - is the body's job once it is mounted for that host + workspace
+ * (`epic-sidebar-file-tree.tsx`).
+ *
+ * Two requests cannot be served and are dropped, leaving the panel where it
+ * was rather than pointed at something that does not exist:
+ * - the file's host is pinned yet the panel still resolves elsewhere - a pin
+ *   is a preference, and one whose host cannot serve (dead, or since
+ *   deregistered so the fleet guard cleared it) resolves to `effective`;
+ * - the file's root is not among the browsable roots this host offers - a
+ *   synthesized out-of-root workspace (`workspaceFileRefFromAbsoluteFilePath`)
+ *   or a binding since removed.
+ *
+ * `setSelection` is called without a one-shot guard on purpose: it is
+ * idempotent on a same-value write, and the "pinned yet unresolved" check is
+ * what terminates the dead-host case - so a StrictMode re-run of the effect,
+ * which re-reads the SAME pre-write closure, just repeats the write instead of
+ * mistaking the stale read for a refused one.
+ */
+function useFileTreeRevealRouting(args: {
+  readonly tabId: string;
+  readonly pin: SurfaceHostPin;
+  readonly selection: FileTreeWorkspaceSelection;
+}): void {
+  const { tabId } = args;
+  const request = useFileTreeRevealRequest(tabId);
+  const {
+    resolvedHostId,
+    selection: pinnedHostId,
+    setSelection,
+    latchOnFirstUse,
+  } = args.pin;
+  const {
+    rootsResolved,
+    workspaceRoots,
+    selectedWorkspacePath,
+    setSelectedWorkspacePath,
+  } = args.selection;
+  useEffect(() => {
+    if (request === null) return;
+    const step = planFileTreeRevealRouting({
+      request,
+      resolvedHostId,
+      pinnedHostId,
+      rootsResolved,
+      workspaceRoots,
+      selectedWorkspacePath,
+    });
+    switch (step.kind) {
+      case "pin-host":
+        setSelection(step.hostId);
+        return;
+      case "drop":
+        clearFileTreeRevealRequest(tabId, request.nonce);
+        return;
+      case "select-workspace":
+        latchOnFirstUse();
+        setSelectedWorkspacePath(step.workspacePath);
+        return;
+      case "wait":
+      case "ready":
+        return;
+    }
+  }, [
+    latchOnFirstUse,
+    pinnedHostId,
+    request,
+    resolvedHostId,
+    rootsResolved,
+    selectedWorkspacePath,
+    setSelectedWorkspacePath,
+    setSelection,
+    tabId,
+    workspaceRoots,
+  ]);
 }
 
 export interface EpicLeftPanelHostProps {
@@ -1146,7 +1239,11 @@ function GitDiffPanelBody(props: LeftPanelBodyProps): ReactNode {
   return <GitDiffPanelBodyLive epicId={props.epicId} tabId={props.tabId} />;
 }
 
-function FileTreePanelBody(props: LeftPanelBodyProps) {
+// Exported (export-only, desktop-neutral) so the mobile "Switch tab" sheet can
+// embed the same file-tree body the desktop left panel renders, rather than
+// forking it. The `SnapshotGate` resolves against the canvas-side
+// `SnapshotLoadingProvider` that already wraps the mobile tile view.
+export function FileTreePanelBody(props: LeftPanelBodyProps) {
   return (
     <SnapshotGate skeleton={FILE_TREE_PANEL_SKELETON}>
       <FileTreePanelBodyLive epicId={props.epicId} tabId={props.tabId} />
@@ -1171,6 +1268,7 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   // app-wide effective host.
   const hostClient = useSurfaceHostClient(pin.resolvedHostId);
   const resolvedHostEntry = useHostDirectoryEntryForHostId(pin.resolvedHostId);
+  useFileTreeRevealRouting({ tabId: props.tabId, pin, selection });
   const handleSelectPath = (workspacePath: string): void => {
     pin.latchOnFirstUse();
     selection.setSelectedWorkspacePath(workspacePath);
@@ -1936,31 +2034,30 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="chats"
-            collapsed={props.collapsed}
-            addLabel="Add agent"
-            menuTestId="epic-sidebar-add-chat-root-menu"
-            triggerTestId="epic-sidebar-add-chat-root"
-            itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
-            excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
-          />
-          <ChatHeaderMoreMenu
-            epicId={props.epicId}
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="chats"
+          collapsed={props.collapsed}
+          addLabel="Add agent"
+          menuTestId="epic-sidebar-add-chat-root-menu"
+          triggerTestId="epic-sidebar-add-chat-root"
+          itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
+          excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ChatHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ChatFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
         canArchive={canArchive}
-        onCollapseAll={collapseAll}
       />
     </div>
   );
@@ -2051,6 +2148,8 @@ function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
@@ -2072,14 +2171,20 @@ function ChatHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
       >
-        <DropdownMenuItem
-          onSelect={() => openSearch(props.tabId, "chats", "")}
-          data-testid="epic-sidebar-more-search-chats"
-        >
-          <Search className="size-4" />
-          Search agents
-        </DropdownMenuItem>
+        {props.searching ? null : (
+          <DropdownMenuItem
+            onSelect={() => openSearch(props.tabId, "chats", "")}
+            data-testid="epic-sidebar-more-search-chats"
+          >
+            <Search className="size-4" />
+            Search agents
+          </DropdownMenuItem>
+        )}
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}
@@ -2097,6 +2202,8 @@ function ChatHeaderMoreMenu(props: {
 function ArtifactHeaderMoreMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
@@ -2120,10 +2227,10 @@ function ArtifactHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
-        {/* Hidden only when the Epic has NO artifacts - see
-            `useArtifactSearchAvailable` for why emptiness gates this and a size
-            threshold does not. */}
-        {searchAvailable ? (
+        {/* Hidden when the Epic has NO artifacts or is open read-only - see
+            `useArtifactSearchAvailable` for why emptiness and write access gate
+            this and a size threshold does not. */}
+        {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => openSearch(props.tabId, "artifacts", "")}
             data-testid="epic-sidebar-more-search-artifacts"
@@ -2132,6 +2239,10 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}
@@ -2158,29 +2269,28 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="artifacts"
-            collapsed={props.collapsed}
-            addLabel="Add artifact"
-            menuTestId="epic-sidebar-add-artifact-root-menu"
-            triggerTestId="epic-sidebar-add-artifact-root"
-            itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
-            excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
-          />
-          <ArtifactHeaderMoreMenu
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="artifacts"
+          collapsed={props.collapsed}
+          addLabel="Add artifact"
+          menuTestId="epic-sidebar-add-artifact-root-menu"
+          triggerTestId="epic-sidebar-add-artifact-root"
+          itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
+          excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ArtifactHeaderMoreMenu
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ArtifactFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
-        onCollapseAll={collapseAll}
         onMarkAllRead={markAllRead}
         markAllReadDisabled={unreadArtifacts.length === 0}
       />
@@ -2396,47 +2506,5 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
     >
       <X className="size-4" />
     </Button>
-  );
-}
-
-interface CommentSidebarPanelProps {
-  readonly epicId: string;
-  readonly activeArtifactId: string;
-}
-
-function CommentSidebarPanel(props: CommentSidebarPanelProps) {
-  const { epicId, activeArtifactId } = props;
-  const artifactRecord = useEpicArtifact(activeArtifactId);
-  // The sidebar is a sibling of the canvas, deliberately outside every
-  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
-  // one, which re-points under it while this Epic keeps rendering (D15).
-  const hostClient = useEpicSessionHostClient();
-  const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
-  const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
-  const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
-
-  const artifactKind =
-    artifactRecord !== null && "kind" in artifactRecord
-      ? artifactRecord.kind
-      : null;
-
-  if (artifactRecord === null || artifactKind === null) {
-    return null;
-  }
-
-  return (
-    <CommentSidebar
-      epicId={epicId}
-      hostClient={hostClient}
-      artifactType={artifactKind}
-      artifactId={activeArtifactId}
-      anchorPositions={anchorPositions}
-      currentUserId={currentUserId}
-      canModerate={false}
-      onActivateThread={(threadId) => {
-        setFlashThread(epicId, threadId);
-        revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
-      }}
-    />
   );
 }

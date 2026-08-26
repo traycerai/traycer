@@ -19,6 +19,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -147,12 +148,21 @@ function TestSplitGroupHeaderDropTarget(): ReactNode {
   return <div ref={setNodeRef} data-testid="split-group-header-drop-target" />;
 }
 
+/**
+ * The root DnD provider reads the app's query client (an RPC-committed
+ * sidebar reparent invalidates the moved row's record query), so the harness
+ * supplies one the way the app shell does.
+ */
+const queryClient = new QueryClient();
+
 function Harness(): ReactNode {
   return (
-    <RootDndProvider>
-      <TestDragSource />
-      <TestEdgeDropTarget />
-    </RootDndProvider>
+    <QueryClientProvider client={queryClient}>
+      <RootDndProvider>
+        <TestDragSource />
+        <TestEdgeDropTarget />
+      </RootDndProvider>
+    </QueryClientProvider>
   );
 }
 
@@ -160,10 +170,12 @@ function CanvasTearOffHarness(props: {
   readonly source: EpicCanvasArtifactTabDragData;
 }): ReactNode {
   return (
-    <RootDndProvider>
-      <TestCanvasTabDragSource data={props.source} />
-      <TestSplitGroupHeaderDropTarget />
-    </RootDndProvider>
+    <QueryClientProvider client={queryClient}>
+      <RootDndProvider>
+        <TestCanvasTabDragSource data={props.source} />
+        <TestSplitGroupHeaderDropTarget />
+      </RootDndProvider>
+    </QueryClientProvider>
   );
 }
 

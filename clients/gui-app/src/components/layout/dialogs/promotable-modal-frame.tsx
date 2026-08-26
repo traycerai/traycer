@@ -23,8 +23,19 @@ interface PromotableModalFrameProps {
   readonly children: ReactNode;
 }
 
+// `top-safe-center-y` / `left-safe-center-x`, not the halfway marks: a fixed
+// frame centres on the viewport, which on a phone includes the strips the app
+// never paints into - the status bar above, and the sensor housing on one side
+// in landscape. The horizontal centre is displaced by half the DIFFERENCE
+// between the two side insets, not by half of one of them, because only one
+// side carries the housing at a time.
+//
+// `max-w-safe-dvw` caps the width against the same region: a caller sizing the
+// frame to the full window (`w-safe-dvw`) is already inside it, but one asking
+// for a viewport fraction is not. Both collapse to their plain equivalents
+// wherever the insets are zero.
 const FRAME_CONTENT_CLASS =
-  "fixed top-1/2 left-1/2 z-50 flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-background text-foreground ring-1 ring-foreground/10 shadow-2xl duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
+  "fixed top-safe-center-y left-safe-center-x z-50 flex max-w-safe-dvw -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl bg-background text-foreground ring-1 ring-foreground/10 shadow-2xl duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95";
 
 /**
  * Shared floating-modal chrome for surfaces that can be promoted into a tab
@@ -95,10 +106,13 @@ export function PromotableModalFrame(
             {props.title}
           </DialogPrimitive.Title>
           <div className="ml-auto flex items-center gap-1">
+            {/* No promote on phones: the strip-tab surface it opens isn't
+                mobile-ready, and below md the modal is already full-screen. */}
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
+              className="max-md:hidden"
               aria-label={props.promoteAriaLabel}
               data-testid={props.promoteTestId}
               onClick={props.onPromote}

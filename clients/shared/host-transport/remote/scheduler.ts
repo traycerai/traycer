@@ -1,6 +1,6 @@
-import { INBOUND_CREDIT_GRANT_BATCH } from "./config";
 import type { TimerHandle } from "../timer-handle";
 import {
+  FINE_INBOUND_CREDIT_GRANT_BATCH,
   QosClass,
   type EncodeMuxFrameInput,
 } from "@traycer/protocol/host-transport/mux";
@@ -95,6 +95,23 @@ export class PriorityScheduler {
       return;
     }
     this.bulkCredits += credits;
+    void this.pump();
+  }
+
+  /**
+   * Replaces the unspent send window once the peer's `openAck` proved it
+   * grants credits finely (`SESSION_CAPABILITY_FINE_CREDITS`).
+   *
+   * Assignment rather than `Math.min`, and the direction is the point: a
+   * window that ends up LARGER than intended only weakens pacing, while one
+   * that ends up smaller than the peer's grant batch deadlocks the first
+   * transfer outright. In practice neither happens — no bulk frame can be
+   * pulled before the session is ready, so the window is still untouched when
+   * this runs — but if that ever stops being true, this fails toward the
+   * recoverable side.
+   */
+  adoptNegotiatedCreditWindow(credits: number): void {
+    this.bulkCredits = credits;
     void this.pump();
   }
 
@@ -278,8 +295,16 @@ export class PriorityScheduler {
  * Counted at FRAME receipt (post-decrypt, pre-reassembly) on BOTH peers:
  * credits meter transport frames in flight, so reassembly state is irrelevant
  * to them — a per-completed-message count deadlocks any transfer longer than
- * the initial credit window. Coarse-grained on purpose — credit-return
- * traffic must not itself be chatter.
+ * the initial credit window.
+ *
+ * The batch is `FINE_INBOUND_CREDIT_GRANT_BATCH` UNCONDITIONALLY, with no
+ * negotiation, because granting more often is the one direction of the credit
+ * change that cannot hurt: extra grants can only un-stall a sender, never
+ * stall one. It is the SEND window that must not shrink without the peer's
+ * consent. The old "coarse on purpose, credit returns must not become
+ * chatter" rationale does not survive the arithmetic: at 32 frames a 34 MB
+ * transfer costs ~17 extra sub-100-byte control frames, against a per-session
+ * budget of 500 frames per second.
  */
 export class InboundCreditTracker {
   private consumed = 0;
@@ -287,7 +312,7 @@ export class InboundCreditTracker {
   /** Records one consumed inbound bulk frame; returns credits to grant, or 0. */
   onBulkFrameConsumed(): number {
     this.consumed += 1;
-    if (this.consumed >= INBOUND_CREDIT_GRANT_BATCH) {
+    if (this.consumed >= FINE_INBOUND_CREDIT_GRANT_BATCH) {
       const grant = this.consumed;
       this.consumed = 0;
       return grant;

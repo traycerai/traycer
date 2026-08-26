@@ -13,6 +13,7 @@ const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   currentVersion: "",
   allowPrerelease: false,
   latestVersion: null,
+  latestCompatibilityEpoch: null,
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
@@ -51,18 +52,6 @@ export function useDesktopAppUpdates(): DesktopAppUpdatesState {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   return { bridge, snapshot };
-}
-
-/**
- * The active release channel, as pushed from the Electron main process to
- * every window. This is the single per-window source of truth for the channel:
- * host-registry query identity, the Settings → Host available-versions filter,
- * and the RC toggle all read it, so they can never disagree within a window.
- *
- * `false` (stable only) in shells without the desktop update bridge.
- */
-export function useAllowPrereleaseUpdates(): boolean {
-  return useDesktopAppUpdates().snapshot.allowPrerelease;
 }
 
 function getDesktopAppUpdateStore(
@@ -155,6 +144,12 @@ function sameSnapshot(
     left.currentVersion === right.currentVersion &&
     left.allowPrerelease === right.allowPrerelease &&
     left.latestVersion === right.latestVersion &&
+    // Compared alongside the version it describes. A candidate can keep its
+    // version while its epoch moves - a re-stamped feed document, or the
+    // `update-downloaded` re-read disagreeing with `update-available` - and
+    // dropping that as a duplicate would leave the blocking recovery surface
+    // routing from a generation the updater no longer reports.
+    left.latestCompatibilityEpoch === right.latestCompatibilityEpoch &&
     left.downloadProgress === right.downloadProgress &&
     left.installBlockedReason === right.installBlockedReason &&
     sameInstallGuidance(left.installGuidance, right.installGuidance) &&

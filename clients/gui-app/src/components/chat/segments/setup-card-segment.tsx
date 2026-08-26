@@ -263,6 +263,7 @@ export function SetupCardSegment(props: {
 
   const total = workspaces.length;
   const readyCount = workspaces.filter((w) => w.state === "ready").length;
+  const hasProvisionFailure = workspaces.some(isProvisionFailure);
 
   const shared: SharedHandlers = {
     focusTerminal,
@@ -273,16 +274,38 @@ export function SetupCardSegment(props: {
     active: isActive,
   };
 
-  const title = headerTitle(aggregate.state, multi, total, isActive);
+  const title = headerTitle({
+    state: aggregate.state,
+    multi,
+    total,
+    active: isActive,
+    hasProvisionFailure,
+  });
+  const provisionFailureDetail =
+    workspaces.find(isProvisionFailure)?.errorMessage ?? null;
+  const toggleAccessibleLabel =
+    provisionFailureDetail === null
+      ? title
+      : `${title}. ${provisionFailureDetail}`;
   const secondary = multi
     ? `${readyCount} of ${total} done`
     : workspaceSecondary(workspaces[0]);
   const ChevronIcon = expanded ? ChevronDown : ChevronRight;
+  const titleLabel = <span className="text-foreground/85">{title}</span>;
 
   const labelInner = (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
       <StatusIcon state={aggregate.state} active={isActive} />
-      <span className="text-foreground/85">{title}</span>
+      {provisionFailureDetail === null ? (
+        titleLabel
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
+            {provisionFailureDetail}
+          </TooltipContent>
+        </Tooltip>
+      )}
       {secondary.length > 0 ? (
         <>
           {/* Separate centered flex item so the dot aligns with the row's
@@ -327,6 +350,7 @@ export function SetupCardSegment(props: {
           <button
             type="button"
             aria-expanded={expanded}
+            aria-label={toggleAccessibleLabel}
             data-testid="setup-card-toggle"
             className={cn(
               "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
@@ -357,6 +381,7 @@ export function SetupCardSegment(props: {
           data-find-include="true"
           onClick={() => setManualExpanded(!expanded)}
           aria-expanded={expanded}
+          aria-label={toggleAccessibleLabel}
           data-testid="setup-card-toggle"
           className={cn(
             "rounded-sm outline-none transition-colors",
@@ -410,16 +435,26 @@ function WorkspaceSetupDetail(
     tabReady,
     active,
   } = props;
+  const provisionFailed = isProvisionFailure(entry);
+  const creationState = creationStepState(entry, provisionFailed);
+  const setupState = setupStepState(entry, provisionFailed);
+  const setupActive = !provisionFailed && entry.state !== "creating" && active;
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
-      <RetryButton pending={retryPending} onRetry={() => onRetry(entry)} />
+      <RetryButton
+        pending={retryPending}
+        onRetry={() => onRetry(entry)}
+        label={provisionFailed ? "Retry creation" : "Retry setup"}
+      />
     ) : null;
   const reportIssue =
     entry.state === "failed" ? (
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Worktree setup failed",
+          title: provisionFailed
+            ? "Worktree creation failed"
+            : "Worktree setup failed",
           message: entry.errorMessage,
           code: null,
           source: "Setup",
@@ -445,20 +480,21 @@ function WorkspaceSetupDetail(
         <li className="flex items-center gap-2">
           {/* Spins while `git worktree add` runs (state "creating"); flips to a
               done check once the add finishes and the rest proceeds. */}
-          <StatusIcon
-            state={entry.state === "creating" ? "creating" : "ready"}
-            active={active}
-          />
+          <StatusIcon state={creationState} active={active} />
           <span className="text-foreground/85">Creating worktree</span>
         </li>
         <li className="flex items-center gap-2">
           {/* Pending (static dot) until the worktree exists and the setup
               script starts; then reflects the live setup state. */}
-          <StatusIcon
-            state={entry.state === "creating" ? "setting-up" : entry.state}
-            active={entry.state === "creating" ? false : active}
-          />
-          <span className="text-foreground/85">Setting up worktree</span>
+          <StatusIcon state={setupState} active={setupActive} />
+          <span
+            className={cn(
+              "text-foreground/85",
+              provisionFailed && "text-muted-foreground",
+            )}
+          >
+            Setting up worktree
+          </span>
           {entry.state === "failed" && entry.setupExitCode !== null ? (
             <span className="text-muted-foreground">
               (exit {entry.setupExitCode})
@@ -497,12 +533,34 @@ function WorkspaceSetupDetail(
   );
 }
 
-function headerTitle(
-  state: SetupWorkspaceState,
-  multi: boolean,
-  total: number,
-  active: boolean,
-): string {
+function creationStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed) return "failed";
+  if (entry.state === "creating") return "creating";
+  return "ready";
+}
+
+function setupStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed || entry.state === "creating") return "setting-up";
+  return entry.state;
+}
+
+function headerTitle(props: {
+  readonly state: SetupWorkspaceState;
+  readonly multi: boolean;
+  readonly total: number;
+  readonly active: boolean;
+  readonly hasProvisionFailure: boolean;
+}): string {
+  const { state, multi, total, active, hasProvisionFailure } = props;
+  if (state === "failed" && hasProvisionFailure) {
+    return "Worktree creation failed";
+  }
   if (multi) {
     if (state === "ready") return `${total} worktrees ready`;
     if (state === "failed") return "Worktree setup failed";
@@ -576,6 +634,7 @@ function OpenTerminalButton(props: {
 function RetryButton(props: {
   readonly pending: boolean;
   readonly onRetry: () => void;
+  readonly label: "Retry creation" | "Retry setup";
 }) {
   return (
     <Button
@@ -587,7 +646,7 @@ function RetryButton(props: {
       data-testid="setup-card-retry"
       className="text-destructive hover:text-destructive"
     >
-      Retry setup
+      {props.label}
       {props.pending ? (
         <AgentSpinningDots
           className="text-current"
@@ -597,6 +656,10 @@ function RetryButton(props: {
       ) : null}
     </Button>
   );
+}
+
+function isProvisionFailure(entry: SetupCardWorkspace): boolean {
+  return entry.state === "failed" && entry.retryFolderIntent !== null;
 }
 
 /**

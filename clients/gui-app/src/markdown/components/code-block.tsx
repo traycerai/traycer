@@ -100,7 +100,7 @@ function FencedCodeBlock({
           className={cn(
             "inline-flex size-6 shrink-0 items-center justify-center rounded-md",
             "text-muted-foreground/70 transition-all",
-            "opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100",
+            "opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100",
             "hover:bg-accent hover:text-foreground",
             "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
           )}

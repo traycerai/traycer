@@ -71,8 +71,9 @@ export function useHostIdentityQuery(input: {
  * report a version and a session count for a host far too old to have any of
  * the methods around it.
  *
- * Polled, not merely stale-timed. Its `busySessionCount` is what the drain
- * affordance names in "Apply now — ends N sessions" and then destroys, so the
+ * Polled, not merely stale-timed. Its `busySessionCount` / `busyBreakdown` is
+ * what the drain affordance names in "Apply now — ends 2 agents and 1
+ * terminal" (or "ends N sessions" on a @1.1 host) and then destroys, so the
  * question is not "may we reuse this value" but "is this value still true".
  * Going stale does not refetch on its own, so without an interval a focused
  * Overview could sit for minutes serving the count it read on mount.
@@ -260,22 +261,35 @@ export function useHostIdentitySet(
  * newest question rather than queueing.
  *
  * `includePreReleases` rides in `params`, which puts it in the QUERY KEY: the
- * two filters are two cache entries, so toggling the checkbox asks a genuinely
- * different question and can never show one filter's list under the other's
- * label. A host too old to know the field ignores it and answers with the stable
- * list — see the request schema for why that degrades to a filter that appears
- * not to work rather than to an error.
+ * THREE catalog states are three cache entries, so changing the filter asks a
+ * genuinely different question and can never show one filter's list under
+ * another's label. A host too old to know the field ignores it and answers with
+ * the stable list — see the request schema for why that degrades to a filter
+ * that appears not to work rather than to an error.
+ *
+ * The derive state OMITS the key rather than sending a value for it, and both
+ * halves of that matter. On the wire it is what the v1.1 request schema
+ * requires: within one major there is no request-downgrade bridge, so a v1.1
+ * client on a v1.0 host projects by parsing with the older schema, and a
+ * literal `null` would fail that parse and turn every default catalog load
+ * against an already-shipped host into `DOWNGRADE_UNSUPPORTED`. In the cache it
+ * keeps the default's key distinct from explicit-exclude's, which is the whole
+ * point of the tri-state — on an RC host those two produce different lists.
  */
 export function useHostUpdateCheckQuery(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly enabled: boolean;
-  readonly includePreReleases: boolean;
+  /** `undefined` = follow the host's derived default. */
+  readonly includePreReleases: boolean | undefined;
 }) {
   return useHostQuery<HostRpcRegistry, "host.update.check">({
     cacheKeyIdentity: undefined,
     client: input.client,
     method: "host.update.check",
-    params: { includePreReleases: input.includePreReleases },
+    params:
+      input.includePreReleases === undefined
+        ? {}
+        : { includePreReleases: input.includePreReleases },
     options: {
       enabled: input.enabled,
       // Long, deliberately. This is the one read on the page that costs a

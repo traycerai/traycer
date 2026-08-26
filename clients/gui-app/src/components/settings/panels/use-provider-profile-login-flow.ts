@@ -6,10 +6,11 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
-import type {
-  ProviderCliState,
-  ProviderLoginCapability,
-  ProviderProfile,
+import {
+  providerProfileSchema,
+  type ProviderCliState,
+  type ProviderLoginCapability,
+  type ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   Analytics,
@@ -178,7 +179,9 @@ function classifyProfileAwaitResult(
   result: AwaitLoginResult,
   awaitedProfileId: string | null,
 ): AwaitLoginResolution {
-  const profiles = result.state?.profiles ?? [];
+  const profiles = (result.state?.profiles ?? []).map((profile) =>
+    providerProfileSchema.parse(profile),
+  );
   const existingProfileId = result.existingProfileId ?? null;
   const resolvedProfileId = existingProfileId ?? awaitedProfileId;
   const profile =

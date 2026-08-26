@@ -57,6 +57,7 @@ function profile(input: {
   const { profileId, kind, label, rateLimitStatus, authenticated } = input;
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -178,6 +179,7 @@ function ComposerBannerPrecedenceHarness() {
   });
   const rateLimitVisible = !reauthGate.signedOut && prompt.kind === "visible";
   const topBannerKind = resolveComposerTopBannerKind({
+    profileDisabled: false,
     reauthVisible: reauthGate.signedOut,
     ambientDriftVisible: pendingAmbientDrift && !acknowledgedAmbientDrift,
     rateLimitVisible,

@@ -245,7 +245,7 @@ describe("<ChatUsageDialog />", () => {
       "max-[28rem]:bottom-0",
     );
     expect(screen.getByTestId("usage-dialog-body").className).toContain(
-      "max-[28rem]:pb-[env(safe-area-inset-bottom)]",
+      "max-[28rem]:pb-safe-bottom",
     );
   });
 

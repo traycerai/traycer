@@ -70,6 +70,18 @@ interface CommGraphRegistryEntry {
    * those live transports recoverable when their surface leaves.
    */
   readonly claimByHostId: Map<string, CommGraphSubscriptionClaim>;
+  /**
+   * READ-ONLY watchers, which hold no opener and never dial.
+   *
+   * The Epic header's feed-health dot reads this epic's host statuses without
+   * opening anything, so it cannot use a claim - and without a claim it can
+   * never reach `releaseCommGraphSubscription`, which is the only path into the
+   * detached MRU and therefore the only thing that ever removes an entry. A
+   * header that merely resolved a manager would leave one behind for every epic
+   * the user visited, forever. Observers give those entries an owner: see
+   * {@link releaseCommGraphObserver}.
+   */
+  readonly observers: Set<object>;
 }
 
 const entriesByEpicId = new Map<string, CommGraphRegistryEntry>();
@@ -124,9 +136,55 @@ export function getCommGraphSubscriptionManager(
     }),
     openersByClaim: new Map(),
     claimByHostId: new Map(),
+    observers: new Set(),
   };
   entriesByEpicId.set(epicId, entry);
   return entry.manager;
+}
+
+/**
+ * Registers a claim-free READER of this epic's manager and returns it.
+ *
+ * Paired with {@link releaseCommGraphObserver} in an effect. An observer never
+ * supplies an opener and never dials; it only needs the entry to stay alive
+ * (and reachable by identity) while something is watching it.
+ */
+export function observeCommGraphSubscription(
+  epicId: string,
+  observer: object,
+): CommGraphSubscriptionManager {
+  const manager = getCommGraphSubscriptionManager(epicId);
+  entriesByEpicId.get(epicId)?.observers.add(observer);
+  return manager;
+}
+
+/**
+ * Drops a read-only watcher, disposing the entry when it was ONLY ever watched.
+ *
+ * The three early returns are the whole contract:
+ *
+ * - another observer is still reading it - keep it;
+ * - a surface holds a claim - that surface owns the lifecycle, and its release
+ *   is what will retire the entry;
+ * - the epic is already in the detached MRU - it was genuinely subscribed once,
+ *   so its events and cursors are worth the retention slot they were given.
+ *
+ * What is left is an entry that never opened a socket and holds nothing. It is
+ * disposed outright rather than pushed into the MRU, because handing a
+ * retention slot to an empty manager would evict a real one.
+ */
+export function releaseCommGraphObserver(
+  epicId: string,
+  observer: object,
+): void {
+  const entry = entriesByEpicId.get(epicId);
+  if (entry === undefined) return;
+  entry.observers.delete(observer);
+  if (entry.observers.size > 0) return;
+  if (entry.openersByClaim.size > 0) return;
+  if (detachedEpicIds.includes(epicId)) return;
+  entry.manager.dispose();
+  entriesByEpicId.delete(epicId);
 }
 
 /**
@@ -205,6 +263,12 @@ export function releaseCommGraphSubscription(
     if (evictedEpicId === undefined) break;
     const evicted = entriesByEpicId.get(evictedEpicId);
     if (evicted === undefined) continue;
+    // An OBSERVED entry is still live. Disposing it here would strand the
+    // header's feed-health dot on a dead manager: the entry would be gone, so
+    // the tile's next open would build a second one, and the dot would keep
+    // reading the corpse forever. It has already left the MRU, so the observer's
+    // own release is what retires it.
+    if (evicted.observers.size > 0) continue;
     evicted.manager.dispose();
     entriesByEpicId.delete(evictedEpicId);
   }

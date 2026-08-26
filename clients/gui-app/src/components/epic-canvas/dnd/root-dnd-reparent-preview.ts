@@ -7,7 +7,7 @@
  * gesture-scoped refs and feeds them in.
  */
 import type { RefObject } from "react";
-import type { Doc } from "yjs";
+import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import {
   PANEL_NODE_FAMILY,
   SIDEBAR_NODE_DND_TYPE,
@@ -18,8 +18,10 @@ import {
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import type { ResolvedEpicCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
-import { canReparent } from "@/lib/epic-y-mutations";
-import { resolveReparentNode } from "@/lib/reparent-rules";
+import {
+  canReparentProjected,
+  resolveProjectedReparentNode,
+} from "@/lib/reparent-projection-rules";
 import { useEpicSidebarExpansionStore } from "@/stores/epics/epic-sidebar-expansion-store";
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
 
@@ -129,19 +131,22 @@ export function clearSidebarReparentPreview(refs: ReparentRefs): void {
  * hover reads as no-drop.
  */
 function isSidebarReparentValid(
-  doc: Doc,
+  tree: TreeSlice,
   sourceNodeId: string,
   target: SidebarReparentTarget,
   newParentId: string | null,
 ): boolean {
+  // Against the PROJECTED tree, not the doc maps: registry-backed chats and
+  // terminal agents have no doc entry, and the doc evaluator would read a row
+  // the user is dragging as `missing-node`. See `reparent-projection-rules`.
   if (
     target.kind === "sidebar-reparent-panel" &&
-    resolveReparentNode(doc, sourceNodeId)?.family !==
+    resolveProjectedReparentNode(tree, sourceNodeId)?.family !==
       PANEL_NODE_FAMILY[target.panelId]
   ) {
     return false;
   }
-  return canReparent(doc, sourceNodeId, newParentId).ok;
+  return canReparentProjected(tree, sourceNodeId, newParentId).ok;
 }
 
 /**
@@ -175,10 +180,10 @@ export function updateSidebarReparentPreview(
     return;
   }
   const handle = getOpenEpicRegistry().peek(source.epicId);
-  const doc = handle === null ? null : handle.store.getState().doc;
+  const tree = handle === null ? null : handle.store.getState().tree;
   if (
-    doc === null ||
-    !isSidebarReparentValid(doc, source.nodeId, target, newParentId)
+    tree === null ||
+    !isSidebarReparentValid(tree, source.nodeId, target, newParentId)
   ) {
     clearSidebarReparentPreview(refs);
     return;

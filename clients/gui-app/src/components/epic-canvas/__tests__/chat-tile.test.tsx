@@ -279,7 +279,10 @@ import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -296,7 +299,10 @@ import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { Message } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatEvent,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -539,6 +545,7 @@ function emitChatSnapshotWithMessages(input: {
   readonly queueItems: ReadonlyArray<ChatQueuedItem>;
   readonly settings: ChatRunSettings | null;
   readonly messages: ReadonlyArray<Message>;
+  readonly events?: ReadonlyArray<ChatEvent>;
   readonly activeTurn: ChatActiveTurn | null;
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
 }): void {
@@ -561,7 +568,7 @@ function emitChatSnapshotWithMessages(input: {
         activeSessionChain: null,
         claudePendingWakes: [],
         messages: [...input.messages],
-        events: [],
+        events: [...(input.events ?? [])],
         archivedAt: null,
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
@@ -761,6 +768,12 @@ function streamingInterviewAssistantMessage(): Message {
         answers: [],
         error: null,
         metadata: null,
+        outcome: null,
+        draftAnswers: [],
+        settlement: null,
+        diagnostics: [],
+        delivery: null,
+        settlementExtensions: {},
       },
     ],
     timestamp: 3,
@@ -806,10 +819,17 @@ function answeredInterviewAssistantMessage(): Message {
             question: "Which path should we take?",
             values: ["Option A"],
             notes: null,
+            selection: null,
           },
         ],
         error: null,
         metadata: null,
+        outcome: null,
+        draftAnswers: [],
+        settlement: null,
+        diagnostics: [],
+        delivery: null,
+        settlementExtensions: {},
       },
     ],
     timestamp: 4,
@@ -1713,6 +1733,11 @@ describe("<ChatTile />", () => {
         blockId: "question-1",
         reason: "interrupted",
         resolvedAt: 4,
+        settlementId: null,
+        settlementSource: null,
+        outcome: null,
+        draftAnswers: [],
+        delivery: null,
       });
     });
 
@@ -2395,8 +2420,148 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
+  // `-MPLN`, the CLASS: every restoration path ends at one unconditional
+  // `replaceDraftContent`, so any of them could overwrite a newer unsent
+  // draft. The accepted-send pass makes it typical rather than rare - queueing
+  // a send and carrying on typing is the ordinary way to use a queue - but the
+  // guard belongs at the consumption point, where all four paths arrive.
+  it("keeps a newer composer draft and states the restored prompt instead", async () => {
+    registerWaitingChatHandoff();
+
+    renderChatTile();
+    await advanceLegendListTime(0);
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+
+    // The user has started a different message while the send was in flight.
+    const newerDraft = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph" as const,
+          content: [{ type: "text" as const, text: "a newer thought" }],
+        },
+      ],
+    };
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(CHAT_ARTIFACT.id, newerDraft, null);
+    });
+
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Only the agent owner can perform this action.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    });
+
+    // The handoff still settles - the restoration was consumed, not stranded.
+    await waitFor(() => {
+      expect(
+        Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
+      ).toMatchObject({ status: "failed" });
+    });
+
+    // ...and the newer draft is untouched. The older prompt's own durability
+    // is `stateFailedSendRestoration`'s job, asserted at the store level.
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(newerDraft);
+  });
+
+  // `-NRiY`: submittability is text OR image atoms, and `contentIsSubmittable`
+  // is the shared answer. A plain-text reading calls an attachment-only draft
+  // empty and this guard then overwrites images the user could have SENT -
+  // content that cannot be retyped at all.
+  it("keeps an attachment-only newer draft and states the restored prompt", async () => {
+    registerWaitingChatHandoff();
+
+    renderChatTile();
+    await advanceLegendListTime(0);
+    await waitFor(() => {
+      expect(chatHarness.sent).toHaveLength(1);
+    });
+
+    const frame = chatHarness.sent[0];
+    if (frame.kind !== "send") throw new Error("expected send frame");
+
+    const attachmentOnlyDraft = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "imageAttachment" as const,
+          attrs: {
+            id: "image-newer",
+            fileName: "newer.png",
+            b64content: "zzz",
+            mimeType: "image/png",
+            size: 64,
+          },
+        },
+      ],
+    };
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(CHAT_ARTIFACT.id, attachmentOnlyDraft, null);
+    });
+
+    act(() => {
+      chatHarness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ARTIFACT.id,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason: "Only the agent owner can perform this action.",
+        code: null,
+        backgroundStopTaskIds: [],
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
+      ).toMatchObject({ status: "failed" });
+    });
+
+    // The images survive - projecting to "" does not make them absent.
+    expect(
+      useComposerDraftStore.getState().drafts[CHAT_ARTIFACT.id]?.content,
+    ).toEqual(attachmentOnlyDraft);
+  });
+
   it("marks rejected initial handoffs failed and restores the prompt", async () => {
     registerWaitingChatHandoff();
+    // The shared fixture seeds a non-empty draft for the send tests. A chat
+    // opened FROM a landing prompt has an empty composer - the prompt went to
+    // the host, not to the draft - so this is the precondition the case is
+    // named for. With text already there the prompt is stated instead, which
+    // the sibling test above pins.
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(
+          CHAT_ARTIFACT.id,
+          { type: "doc", content: [{ type: "paragraph" }] },
+          null,
+        );
+    });
 
     renderChatTile();
     await advanceLegendListTime(0);
@@ -2433,12 +2598,19 @@ describe("<ChatTile />", () => {
         },
       ],
     });
-    expect(
-      Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
-    ).toMatchObject({
-      status: "failed",
-      failureReason: "Only the agent owner can perform this action.",
-    });
+    const failed = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(failed).toMatchObject({ status: "failed" });
+    // CONTAINS, not equals. `failureReason` carries the restoration's reason,
+    // which is a COMPOSED statement - the host's sentence plus whatever
+    // qualifications the send inherited (drift, delivery, worktree). Its exact
+    // text is owned by `chat-queue-reconciler` and asserted there; pinning the
+    // whole string here made this tile test fail for a qualification firing
+    // correctly one layer down.
+    expect(failed.failureReason).toContain(
+      "Only the agent owner can perform this action.",
+    );
   });
 
   it("does not send an initial handoff while the chat opens read-only", async () => {
@@ -2963,12 +3135,14 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     act(() => {
-      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-        kind: "message",
-        // A2A rows anchor on the DELIVERED message, which reaches the receiving
-        // chat as a user row - and user rows are the ones keyed by `messageId`.
-        messageId: DELIVERED_A2A_MESSAGE_ID,
-      });
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // A2A rows anchor on the DELIVERED message, which reaches the receiving
+          // chat as a user row - and user rows are the ones keyed by `messageId`.
+          messageId: DELIVERED_A2A_MESSAGE_ID,
+        });
     });
 
     // Warm tile, target absent: the request must SURVIVE, not be swallowed.
@@ -2976,7 +3150,9 @@ describe("<ChatTile />", () => {
       await Promise.resolve();
     });
     expect(
-      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
     ).not.toBeUndefined();
 
     act(() => {
@@ -2993,10 +3169,123 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).toBeUndefined();
     });
+  });
+
+  it("consumes an end jump without waiting for a transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, { kind: "end" });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("resolves a durable assistant message id to its projected transcript row", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "message",
+          // Notification rows persist the protocol message id. Assistant
+          // transcript rows are keyed by turn (`assistant:<turnId>`), so the
+          // jump must resolve through ChatMessageModel.persistentMessageId.
+          messageId: "next-steps-msg",
+        });
+    });
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      document.querySelector('[data-message-id="assistant:turn-next-steps"]'),
+    ).not.toBeNull();
+  });
+
+  it("lands an event jump on the exact inline queued-preparation failure", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "event",
+          eventId: "queued-preparation-failure",
+        });
+    });
+
+    const failure = {
+      eventId: "queued-preparation-failure",
+      type: "send.failed",
+      timestamp: 2_000,
+      clientActionId: null,
+      actor: null,
+      message: "The queued prompt could not be prepared.",
+      turnId: null,
+      messageId: null,
+      queueItemId: "queue-item-1",
+      approvalId: null,
+      blockId: null,
+      severity: "warning",
+      metadata: {
+        code: "QUEUED_PROMPT_PREPARATION_FAILED",
+        notificationAnchor: true,
+      },
+    } satisfies ChatEvent;
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        events: [failure],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+        ],
+      ).toBeUndefined();
+    });
+    expect(
+      screen.getByText("The queued prompt could not be prepared."),
+    ).not.toBeNull();
   });
 
   it("expands the target card once a parked block jump resolves", async () => {
@@ -3005,10 +3294,12 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
 
     act(() => {
-      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-        kind: "block",
-        blockId: "next-steps-block",
-      });
+      useChatTranscriptJumpStore
+        .getState()
+        .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+          kind: "block",
+          blockId: "next-steps-block",
+        });
     });
     await act(async () => {
       await Promise.resolve();
@@ -3044,7 +3335,9 @@ describe("<ChatTile />", () => {
       ).toBe(true);
     });
     expect(
-      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+      useChatTranscriptJumpStore.getState().requestsByChatId[
+        chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
+      ],
     ).toBeUndefined();
   });
 
@@ -3057,17 +3350,19 @@ describe("<ChatTile />", () => {
       await waitForChatTileLoaded();
 
       act(() => {
-        useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
-          kind: "message",
-          messageId: "message-that-never-arrives",
-        });
+        useChatTranscriptJumpStore
+          .getState()
+          .requestJump(HOST_ID, CHAT_ARTIFACT.id, {
+            kind: "message",
+            messageId: "message-that-never-arrives",
+          });
       });
       await act(async () => {
         await Promise.resolve();
       });
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).not.toBeUndefined();
 
@@ -3079,7 +3374,7 @@ describe("<ChatTile />", () => {
       // which is the degrade this feature already accepts for anchor-less rows.
       expect(
         useChatTranscriptJumpStore.getState().requestsByChatId[
-          CHAT_ARTIFACT.id
+          chatTranscriptJumpKey(HOST_ID, CHAT_ARTIFACT.id)
         ],
       ).toBeUndefined();
     } finally {

@@ -2,6 +2,7 @@ import type {
   HostLeaseSnapshot,
   SelectionIncompatibility,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { ClientCompatibilityRequirement } from "@traycer/protocol/framework/index";
 import {
   describeVersionSkew,
   type VersionSkewCopy,
@@ -70,6 +71,29 @@ export type WindowNarrationVariant =
        */
       readonly isTargetHost: boolean;
       readonly detail: SelectionIncompatibility;
+    }
+  | {
+      /**
+       * THIS APP is the outdated leg, and the host said so in structured
+       * terms: it refused the connection at its client-compatibility EPOCH
+       * gate.
+       *
+       * A separate variant from `update-host` rather than a flag on it,
+       * because every action question has the opposite answer. `update-host`
+       * offers to re-install the host; here the host is the NEWER leg by
+       * construction, so that action can only fail. The remedy is the app
+       * updater, and nothing about the host is worth showing.
+       *
+       * It is also distinct from the generic `client-outdated` skew
+       * `hostUpdateSkew` can infer from version strings. That inference is a
+       * guess from two SemVers with no shared ordering; this is the host
+       * NAMING what it needs and what to install, which is why it takes
+       * precedence over the inference wherever both could apply.
+       */
+      readonly kind: "update-client";
+      readonly hostId: string;
+      readonly isTargetHost: boolean;
+      readonly requirement: ClientCompatibilityRequirement;
     };
 
 export type WindowNarrationState =
@@ -117,6 +141,17 @@ export interface WindowNarrationInput {
    * cannot happen.
    */
   readonly localHostExpected: boolean;
+  /**
+   * THIS MACHINE's host id, or null when there is none.
+   *
+   * Carried separately from {@link localHostExpected} because they answer
+   * different questions and one cannot stand in for the other:
+   * `localHostExpected` is "can this shell boot SOME local host", a property
+   * of the shell, and stays true on a desktop whose target is a remote
+   * machine. Only this field can settle whether the host the restarting-target
+   * arm is waiting on is the one this app can actually start.
+   */
+  readonly localHostId: string | null;
 }
 
 /**
@@ -175,12 +210,7 @@ export function deriveNoHostVariant(
 ): WindowNarrationVariant {
   const target = findLease(leases, targetHostId);
   if (target !== null && target.dead?.reason === "incompatible") {
-    return {
-      kind: "update-host",
-      hostId: target.hostId,
-      isTargetHost: true,
-      detail: target.dead.detail,
-    };
+    return incompatibleVariant(target.hostId, target.dead.detail, true);
   }
   const allPlanRestricted =
     leases.length > 0 &&
@@ -190,18 +220,40 @@ export function deriveNoHostVariant(
   }
   for (const lease of leases) {
     if (lease.dead?.reason === "incompatible") {
-      return {
-        kind: "update-host",
-        hostId: lease.hostId,
-        // Arm 3: the target is unusable for some other reason and THIS is
-        // merely the recoverable incompatible one. A different machine from
-        // the one this window's lifecycle affordances act on.
-        isTargetHost: false,
-        detail: lease.dead.detail,
-      };
+      // Arm 3: the target is unusable for some other reason and THIS is
+      // merely the recoverable incompatible one. A different machine from
+      // the one this window's lifecycle affordances act on.
+      return incompatibleVariant(lease.hostId, lease.dead.detail, false);
     }
   }
   return { kind: "offline" };
+}
+
+/**
+ * Which of the two incompatibility variants a dead lease is.
+ *
+ * The structured epoch requirement WINS whenever the host supplied one, and
+ * the precedence is not a preference: it is the difference between the host
+ * saying "your app is too old, install X" and this app guessing which leg is
+ * behind by comparing two version strings that have no shared ordering. The
+ * guess is what the generic arm still does, correctly, for every
+ * incompatibility a host cannot describe - a method-manifest disagreement, or
+ * any host predating the epoch gate.
+ */
+function incompatibleVariant(
+  hostId: string,
+  detail: SelectionIncompatibility,
+  isTargetHost: boolean,
+): WindowNarrationVariant {
+  if (detail.clientCompatibility !== null) {
+    return {
+      kind: "update-client",
+      hostId,
+      isTargetHost,
+      requirement: detail.clientCompatibility,
+    };
+  }
+  return { kind: "update-host", hostId, isTargetHost, detail };
 }
 
 /**
@@ -271,10 +323,64 @@ export function deriveWindowNarration(
     // `plan-restricted` reachable at first launch: both derive from dead
     // leases. After the window has served once, ∅ is always the verdict arm;
     // the grace is strictly a launch statement.
+    //
+    // UNLESS THE LOCAL TARGET ITSELF IS RESTARTING, which is a start in
+    // progress stated by the authority's own lease rather than inferred from
+    // the absence of conclusions. The authority holds ∅ for a bounded window
+    // while a never-proven local target cycles (its cold-start hold),
+    // deliberately declining a usable fallback so the app does not hop and hop
+    // back - so during that hold ∅ does NOT mean "nothing can serve this
+    // window", and the scan below would say so anyway the moment the account
+    // contains one dead machine (a retired laptop). That is the same reasoning
+    // the non-∅ cold-start arm already applies further down: whatever else is
+    // wrong out there belongs to the surface chip or the tile, not to the
+    // window's launch story.
+    //
+    // ⚠ THE TARGET MUST BE THIS MACHINE, and `localHostExpected` cannot
+    // establish that - it says the SHELL can boot some local host, which stays
+    // true on a desktop whose target is a remote. Without the identity check,
+    // a preferred REMOTE cycling while the rest of the fleet is offline read
+    // as a launch: the authority skips its (local-only) hold and derives a
+    // real ∅, while this arm relabelled that verdict `cold-start` and put the
+    // local provisioning card - Retry, install progress, the bootstrap log -
+    // in front of a machine this app cannot start, withholding the offline
+    // recovery until the remote's restart episode expired. The narrator's
+    // grace and the authority's hold have to be gated on the SAME premise, or
+    // one of them is narrating a state the other never entered.
+    //
+    // ⚠ ONLY WHERE THE SCAN WOULD HAVE SAID `offline` ANYWAY, and that gate is
+    // the difference between softening a verdict and SUPPRESSING one. This arm
+    // has no clock: it reads a lease status the outage signal can hold for
+    // `LOCAL_EXPECTED_OUTAGE_CEILING_MS` (15 minutes), far past the authority's
+    // 20-second hold, so anything it hides it can hide for the whole outage. On
+    // `offline` there is nothing to hide - the startup card carries the same
+    // recovery, promoting to Retry + Open settings at
+    // `LOCAL_HOST_SLOW_START_THRESHOLD_MS` and adding Report issue once the
+    // install settles in failure - and "Starting Traycer…" is the truer
+    // sentence while the boot is genuinely running. `update-host` is the
+    // opposite: a version fix the user could walk NOW (arm 3 of the scan - an
+    // incompatible OTHER host while the target cycles), and a local restart is
+    // not a reason to withhold it for a quarter of an hour.
+    //
+    // Asking `deriveNoHostVariant` rather than enumerating dead reasons is
+    // deliberate. `plan-restricted` happens to be unreachable in this
+    // population today (its arm needs EVERY lease dead, and a
+    // `restarting-expected` target is not), so an enumeration written against
+    // what is reachable now would be a rule that quietly stops matching when
+    // that precedence moves. Deferring to the scan itself makes a new variant
+    // actionable by default, which is the safe direction to be wrong in.
+    const targetLease = findLease(input.leases, input.targetHostId);
+    const noHostVariant = deriveNoHostVariant(input.leases, input.targetHostId);
+    const localTargetRestarting =
+      input.targetHostId !== null &&
+      input.targetHostId === input.localHostId &&
+      targetLease?.status === "restarting-expected";
     if (
       !input.hasBeenServed &&
       input.localHostExpected &&
-      input.leases.every((lease) => lease.status !== "dead")
+      noHostVariant.kind === "offline" &&
+      (localTargetRestarting ||
+        input.leases.every((lease) => lease.status !== "dead"))
     ) {
       return {
         kind: "narrating",
@@ -285,7 +391,7 @@ export function deriveWindowNarration(
     return {
       kind: "narrating",
       cause: "no-usable-host",
-      variant: deriveNoHostVariant(input.leases, input.targetHostId),
+      variant: noHostVariant,
     };
   }
   if (input.hasBeenServed) return { kind: "silent" };

@@ -10,6 +10,12 @@ import {
 import type { RefObject } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
+import { shouldMountChatTurnMinimap } from "@/components/chat/chat-turn-minimap-logic";
+import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-minimap-scope";
+import {
+  useTileMinimapStore,
+  type TileMinimapAdapter,
+} from "@/stores/tile-minimap";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   DEFAULT_UI_FONT_SIZE,
@@ -104,10 +110,55 @@ function renderMinimap(
   return { onSelect, refreshRef };
 }
 
+function renderRegisteredMinimap(input: {
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly side: "hide" | "left" | "right";
+}) {
+  const viewport = document.createElement("div");
+  const measureRect = vi.fn(
+    () => ({ width: 1200, height: 600, top: 0, left: 0 }) as DOMRect,
+  );
+  viewport.getBoundingClientRect = measureRect;
+  document.body.append(viewport);
+  const onSelect = vi.fn<(messageId: string) => void>();
+  const tree = (messages: ReadonlyArray<ChatMessageModel>) => (
+    <TileMinimapScope tileInstanceId="tile-1">
+      <ChatTurnMinimap
+        bottomInset={0}
+        inViewRefreshRef={{ current: () => undefined }}
+        listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
+        messages={messages}
+        onSelect={onSelect}
+        side={input.side}
+        topOffsetAdjustmentRef={{ current: 0 }}
+        viewportRef={{ current: viewport }}
+      />
+    </TileMinimapScope>
+  );
+  const view = render(tree(input.messages));
+  return {
+    measureRect,
+    onSelect,
+    rerender: (messages: ReadonlyArray<ChatMessageModel>): void => {
+      act(() => {
+        view.rerender(tree(messages));
+      });
+    },
+  };
+}
+
+function registeredAdapter(): TileMinimapAdapter {
+  const adapter =
+    useTileMinimapStore.getState().targetsByTileInstanceId["tile-1"]?.adapter;
+  if (adapter === undefined) throw new Error("no minimap adapter registered");
+  return adapter;
+}
+
 afterEach(() => {
   cleanup();
   document.body.replaceChildren();
   useSettingsStore.setState({ uiFontSize: DEFAULT_UI_FONT_SIZE });
+  useTileMinimapStore.setState({ targetsByTileInstanceId: {} });
 });
 
 describe("ChatTurnMinimap", () => {
@@ -270,5 +321,150 @@ describe("ChatTurnMinimap", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("First question");
     expect(rows[1].textContent).toContain("Second question");
+  });
+});
+
+describe("ChatTurnMinimap publication under a hidden rail", () => {
+  it("still registers a navigable outline the phone tile bar can open", async () => {
+    const viewport = document.createElement("div");
+    viewport.getBoundingClientRect = () =>
+      ({ width: 400, height: 600, top: 0, left: 0 }) as DOMRect;
+    document.body.append(viewport);
+    const onSelect = vi.fn<(messageId: string) => void>();
+    render(
+      <TileMinimapScope tileInstanceId="tile-1">
+        <ChatTurnMinimap
+          bottomInset={0}
+          inViewRefreshRef={{ current: () => undefined }}
+          listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
+          messages={makeTranscript(3)}
+          onSelect={onSelect}
+          side="hide"
+          topOffsetAdjustmentRef={{ current: 0 }}
+          viewportRef={{ current: viewport }}
+        />
+      </TileMinimapScope>,
+    );
+    await flushFrame();
+
+    // The rail itself obeys `hide`.
+    expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+
+    const adapter =
+      useTileMinimapStore.getState().targetsByTileInstanceId["tile-1"]?.adapter;
+    expect(adapter?.title).toBe("Messages");
+    const items = adapter?.getSnapshot().items ?? [];
+    expect(items.map((item) => item.label)).toEqual([
+      "Question 0",
+      "Question 1",
+      "Question 2",
+    ]);
+
+    adapter?.select(1);
+    expect(onSelect).toHaveBeenCalledWith("message-2");
+  });
+
+  it("stays quiet while a reply streams into the same turns", async () => {
+    const question = user(0, "Question 0");
+    const { rerender } = renderRegisteredMinimap({
+      messages: [question, assistant(1, "Rep")],
+      side: "right",
+    });
+    await flushFrame();
+    const adapter = registeredAdapter();
+    const listener = vi.fn();
+    const unsubscribe = adapter.subscribe(listener);
+    const published = adapter.getSnapshot().items;
+
+    for (const token of ["Reply", "Reply so", "Reply so far"]) {
+      rerender([question, assistant(1, token)]);
+    }
+
+    // A token gives the transcript a new array and the same outline. The bar
+    // is subscribed while closed, so a notify here would re-render it - and
+    // whatever it reads - once per token.
+    expect(listener).not.toHaveBeenCalled();
+    expect(adapter.getSnapshot().items).toBe(published);
+    unsubscribe();
+  });
+
+  it("notifies once when a new human turn lands", async () => {
+    const messages = [user(0, "Question 0"), assistant(1, "Reply 0")];
+    const { rerender } = renderRegisteredMinimap({
+      messages,
+      side: "right",
+    });
+    await flushFrame();
+    const adapter = registeredAdapter();
+    const listener = vi.fn();
+    const unsubscribe = adapter.subscribe(listener);
+
+    rerender([...messages, user(2, "Question 1")]);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().items.map((item) => item.label)).toEqual([
+      "Question 0",
+      "Question 1",
+    ]);
+    unsubscribe();
+  });
+
+  it("publishes on a phone without measuring the rail's geometry", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 390,
+      writable: true,
+    });
+    try {
+      const { measureRect } = renderRegisteredMinimap({
+        messages: makeTranscript(3),
+        // The default placement: the rail is a viewport and pointer question,
+        // not a settings one.
+        side: "right",
+      });
+      await flushFrame();
+
+      expect(screen.queryByTestId("chat-turn-minimap")).toBeNull();
+      // The forced layout that lands mid-measure for the transcript's rows.
+      expect(measureRect).not.toHaveBeenCalled();
+      expect(
+        registeredAdapter()
+          .getSnapshot()
+          .items.map((item) => item.label),
+      ).toEqual(["Question 0", "Question 1", "Question 2"]);
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalWidth,
+        writable: true,
+      });
+    }
+  });
+
+  it("only keeps that publication alive on a phone viewport", () => {
+    // Desktop under `hide` unmounts exactly as it did before the button
+    // existed: nothing there reads the outline.
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        side: "hide",
+        mobileViewport: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: true,
+        side: "hide",
+        mobileViewport: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldMountChatTurnMinimap({
+        hasContent: false,
+        side: "right",
+        mobileViewport: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -39,6 +39,7 @@ import {
   getPaneScopedDndId,
   type EpicCanvasManagedCommandOutputDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 import {
   useHeldManagedCommandsForChat,
@@ -565,14 +566,16 @@ function ManagedCommandRow(props: {
   // copy's node. The occurrence key keeps ids unique per mounted row; the drop
   // reads the payload, never the id.
   const occurrenceId = useId();
+  const dragDisabled = useDragSourceDisabled();
   const { listeners, setNodeRef, isDragging } = useDraggable({
     id: getPaneScopedDndId(
       viewTabId,
       getManagedCommandOutputDragId(`${command.id}:${occurrenceId}`),
     ),
     data: dragData,
-    disabled: false,
+    disabled: dragDisabled,
   });
+  const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
 
   return (
     <li className="m-0">
@@ -600,7 +603,8 @@ function ManagedCommandRow(props: {
             }}
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              isDragging ? "cursor-grabbing" : "cursor-grab",
+              // No grab affordance where the gesture is gone.
+              dragDisabled ? null : grabCursor,
             )}
           >
             <ManagedCommandMonitorIcon
@@ -722,7 +726,7 @@ function BackgroundTreeRow(props: {
                 </span>
               </button>
             </TooltipWrapper>
-            <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
               <BackgroundStopButton
                 label={
                   individualStopUnavailableLabel(item) ??

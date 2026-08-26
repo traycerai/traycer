@@ -6,13 +6,17 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useQueryClient } from "@tanstack/react-query";
-import { PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerProfileSchema,
+  PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  type ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { providersMutationKeys } from "@/lib/query-keys";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
@@ -37,9 +41,25 @@ type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
  */
 function withoutLoginCapability(
   state: AwaitLoginProviderState,
-): Omit<AwaitLoginProviderState, "loginCapability"> {
+  cachedProfiles: readonly ProviderProfile[],
+) {
   const { loginCapability: _dropped, ...rest } = state;
-  return rest;
+  return {
+    ...rest,
+    profiles: rest.profiles.map((profile) => {
+      const parsed = providerProfileSchema.parse(profile);
+      const cached = cachedProfiles.find(
+        (candidate) => candidate.profileId === parsed.profileId,
+      );
+      return cached === undefined
+        ? parsed
+        : {
+            ...parsed,
+            enabled: cached.enabled,
+            launchCommand: cached.launchCommand,
+          };
+    }),
+  };
 }
 
 /**
@@ -148,12 +168,36 @@ export function useProvidersAwaitLoginForClient(args: {
                     // the user is looking at it. Capability is a property of
                     // the installed CLI, not of a login attempt; only
                     // `providers.list` may set it.
-                    { ...p, ...withoutLoginCapability(next) }
+                    {
+                      ...p,
+                      ...withoutLoginCapability(next, p.profiles),
+                    }
                   : p,
               ),
               native: prev.native,
             };
           },
+        });
+        // The overlay above is optimistic-only, and deliberately cannot be
+        // the last word. The echo is pinned to
+        // `providerMutationCliStateSchemaV21`, whose field set is the
+        // hand-frozen `providerCliStateBaseShapeV40` - so it carries the new
+        // `enabled` but NOT `enablementMode` / `enablementSource`, which exist
+        // only on the live `providers.list@7.1` shape. Spreading it therefore
+        // flips `enabled` to true while leaving `enablementSource` reading
+        // `"auto-undetected"`, and those two fields are exactly what the
+        // screens the user is looking at render: onboarding keeps offering
+        // "Sign in to enable" and Settings keeps saying "Auto · disabled - no
+        // account detected" beside a provider that just signed in.
+        //
+        // `commitAuthoritativeProvidersList` invalidates every
+        // `PROVIDER_INVALIDATIONS` entry EXCEPT `providers.list` (the one it
+        // just wrote), which is right for the force-refresh callers - their
+        // payload IS a full v7.1 list response. It is wrong here, so this path
+        // adds the one invalidation the helper withholds: without it the
+        // contradiction stands for a full `staleTime` (15 minutes).
+        await queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });
       },
       onError: (error) =>

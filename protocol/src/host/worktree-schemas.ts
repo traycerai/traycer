@@ -10,6 +10,24 @@
  * folders.
  */
 import { z } from "zod";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
+export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 
 // Inlined to avoid a circular import with `epic-schemas.ts` (which
 // references `worktreeIntentSchema`). Structurally compatible with
@@ -839,6 +857,24 @@ export const worktreeDeleteRequestSchema = z.object({
 });
 export type WorktreeDeleteRequest = z.infer<typeof worktreeDeleteRequestSchema>;
 
+/**
+ * `worktree.delete@1.1` request. `stopOwners` defaults to `false` so a 1.1
+ * parse of a 1.0-shaped request is refuse-on-busy — today's behavior.
+ * `true` asks the host to stop enumerated holders, then delete.
+ *
+ * Degrade: a 1.0 host's request schema strips `stopOwners`, so an old host
+ * always refuses on busy. A 1.0 client talking to a 1.1 host is upgraded
+ * with `stopOwners: false`.
+ */
+export const worktreeDeleteRequestSchemaV11 = worktreeDeleteRequestSchema.extend(
+  {
+    stopOwners: z.boolean().default(false),
+  },
+);
+export type WorktreeDeleteRequestV11 = z.infer<
+  typeof worktreeDeleteRequestSchemaV11
+>;
+
 export const worktreeDeleteResponseSchema = z.object({
   deleted: z.boolean(),
 });
@@ -1087,6 +1123,18 @@ export const worktreeHostEntrySchemaV15 = worktreeHostEntrySchemaV14.extend({
 export type WorktreeHostEntryV15 = z.infer<typeof worktreeHostEntrySchemaV15>;
 
 /**
+ * `worktree.listAllForHost` v1.6 entry. `gitUnreadable` is `true` when the
+ * worktree's `.git` gitlink exists but git cannot resolve the repository it
+ * points at (main repo missing / moved / re-cloned, or admin entry pruned).
+ * The row IS resolved; its branch and dirty count are unknowable, so clients
+ * must not treat it as clean.
+ */
+export const worktreeHostEntrySchemaV16 = worktreeHostEntrySchemaV15.extend({
+  gitUnreadable: z.boolean(),
+});
+export type WorktreeHostEntryV16 = z.infer<typeof worktreeHostEntrySchemaV16>;
+
+/**
  * `worktree.listAllForHost` v1.1 request. Adds `includeActivity`: the git
  * probes (reflog, ahead/behind, merged) add per-worktree cost, so the Settings
  * tab passes `false` (or stays on v1.0) to keep the panel snappy while the
@@ -1247,6 +1295,22 @@ export const worktreeListAllForHostResponseSchemaV15 = z.object({
 });
 export type WorktreeListAllForHostResponseV15 = z.infer<
   typeof worktreeListAllForHostResponseSchemaV15
+>;
+
+/**
+ * `worktree.listAllForHost` v1.6 request. Unchanged from v1.5; this minor
+ * adds the response `gitUnreadable` fact only.
+ */
+export const worktreeListAllForHostRequestSchemaV16 =
+  worktreeListAllForHostRequestSchemaV15;
+export type WorktreeListAllForHostRequestV16 = WorktreeListAllForHostRequestV15;
+
+export const worktreeListAllForHostResponseSchemaV16 = z.object({
+  worktrees: z.array(worktreeHostEntrySchemaV16),
+  nextCursor: z.string().nullable(),
+});
+export type WorktreeListAllForHostResponseV16 = z.infer<
+  typeof worktreeListAllForHostResponseSchemaV16
 >;
 
 /**

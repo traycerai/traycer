@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Debug/dev signing keeps this "development" (Apple's sandbox APNs
+	     gateway); distribution signing rewrites it to "production" at export.
+	     Registration code degrades gracefully when provisioning lacks push. -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<!-- Universal links for the link-login QR: the platform's /link URL opens
+	     this app directly instead of Safari, which is what lets a QR scanned by
+	     the SYSTEM camera finish the sign-in. Each domain must serve
+	     /.well-known/apple-app-site-association naming 7YVZ56DZ74.ai.traycer.app.ios;
+	     a domain whose AASA is missing simply falls back to opening the web
+	     page, so listing one before it is served costs nothing. The apex is
+	     listed ahead of need for exactly that reason. Adding this entitlement
+	     requires the Associated Domains capability on the App ID - automatic
+	     signing cannot produce a profile for it otherwise. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:platform.traycer.ai</string>
+		<string>applinks:platform.dev.traycer.ai</string>
+		<string>applinks:traycer.ai</string>
+	</array>
+</dict>
+</plist>

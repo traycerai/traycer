@@ -73,7 +73,7 @@ describe("saveBlobToDisk", () => {
     // browser falls through to the <a download> anchor and still saves it.
     await expect(
       saveBlobToDisk(new Blob(["png"], { type: "image/png" }), "diagram.png"),
-    ).resolves.toBe("diagram.png");
+    ).resolves.toEqual({ name: "diagram.png", path: null });
     expect(createWritable).toHaveBeenCalledTimes(1);
     expect(writable.write).toHaveBeenCalledTimes(1);
     expect(writable.close).not.toHaveBeenCalled();
@@ -81,7 +81,9 @@ describe("saveBlobToDisk", () => {
   });
 
   it("uses the desktop save bridge before browser save APIs", async () => {
-    const saveFile = vi.fn().mockResolvedValue("diagram.png");
+    const saveFile = vi
+      .fn()
+      .mockResolvedValue({ name: "diagram.png", path: "/tmp/diagram.png" });
     const createObjectURL = vi.fn(() => "blob:mermaid");
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -96,9 +98,10 @@ describe("saveBlobToDisk", () => {
       .mockRejectedValue(new DOMException("not allowed", "NotAllowedError"));
 
     const blob = new Blob(["png"], { type: "image/png" });
-    await expect(saveBlobToDisk(blob, "diagram.png")).resolves.toBe(
-      "diagram.png",
-    );
+    await expect(saveBlobToDisk(blob, "diagram.png")).resolves.toEqual({
+      name: "diagram.png",
+      path: "/tmp/diagram.png",
+    });
     expect(saveFile).toHaveBeenCalledTimes(1);
     expect(saveFile).toHaveBeenCalledWith({
       name: "diagram.png",

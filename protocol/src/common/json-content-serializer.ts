@@ -149,6 +149,12 @@ function renderableMarks(
 }
 
 /**
+ * Exported for the composer's recovery seam, which quotes a dead send's text
+ * back to its author and is held to PARITY with this serializer: the marks a
+ * resend would carry have to be the marks the recovery copy shows. It reuses
+ * this rather than imitating it because the run discipline below is the
+ * subtle part, and a second implementation would drift from it silently.
+ *
  * Serializes a run of consecutive inline text nodes, emitting mark
  * delimiters only where the mark set changes between nodes. Wrapping each
  * node independently corrupts continuous marks that contain nested marks:
@@ -166,7 +172,7 @@ function renderableMarks(
  * would open bold outside italic (schema-rank order), and bold ending
  * after "b" would force italic closed and reopened, doubling delimiters.
  */
-function serializeTextRun(nodes: JsonContent[]): string {
+export function serializeTextRun(nodes: JsonContent[]): string {
   const textNodes = nodes.filter((node) => Boolean(node.text));
   const nodeMarks = textNodes.map((node) => renderableMarks(node.marks));
 

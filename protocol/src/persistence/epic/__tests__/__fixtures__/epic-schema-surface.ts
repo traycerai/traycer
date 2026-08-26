@@ -86,7 +86,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "model": {
@@ -181,7 +182,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "sessionId": {
@@ -301,7 +303,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "sessionId": {
@@ -434,7 +437,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -2900,6 +2904,109 @@ export const epicSchemaSurfaceBaseline = {
                                   "opencodeUserMessageId",
                                   "createdAt"
                                 ]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "reasonix"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace"
+                                    ]
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt"
+                                ]
                               }
                             ]
                           },
@@ -2957,7 +3064,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "agentId": {
@@ -3092,7 +3200,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
-                                            "huggingface"
+                                            "huggingface",
+                                            "reasonix"
                                           ]
                                         },
                                         "noticeKind": {
@@ -4658,7 +4767,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
-                                    "huggingface"
+                                    "huggingface",
+                                    "reasonix"
                                   ]
                                 },
                                 "source": {
@@ -4685,7 +4795,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
-                                        "huggingface"
+                                        "huggingface",
+                                        "reasonix"
                                       ]
                                     },
                                     "sessionId": {
@@ -5375,7 +5486,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
-                                                "huggingface"
+                                                "huggingface",
+                                                "reasonix"
                                               ]
                                             },
                                             "agentId": {
@@ -5641,6 +5753,54 @@ export const epicSchemaSurfaceBaseline = {
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -5674,6 +5834,223 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "outcome": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "answered",
+                                        "skipped",
+                                        "failed"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "draftAnswers": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "questionId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "question": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "values": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "notes": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "questionId",
+                                      "question",
+                                      "values",
+                                      "notes"
+                                    ]
+                                  }
+                                },
+                                "settlement": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "settlementId": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "gui",
+                                            "runtime"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "settlementId",
+                                        "source"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "diagnostics": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "diagnosticId": {
+                                        "type": "string"
+                                      },
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "runtime",
+                                          "delivery",
+                                          "reconcile"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "diagnosticId",
+                                      "code",
+                                      "source"
+                                    ]
+                                  }
+                                },
+                                "delivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "deliveryId": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "delivering",
+                                            "delivered",
+                                            "failed"
+                                          ]
+                                        },
+                                        "retryable": {
+                                          "type": "boolean"
+                                        },
+                                        "generation": {
+                                          "default": 0,
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "deliveryId",
+                                        "status",
+                                        "retryable"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "settlementExtensions": {
+                                  "default": {},
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
                                 }
                               },
                               "required": [
@@ -6138,7 +6515,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -7777,7 +8155,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "model": {
@@ -7875,7 +8254,8 @@ export const epicSchemaSurfaceBaseline = {
                         "pi",
                         "hermes",
                         "omp",
-                        "huggingface"
+                        "huggingface",
+                        "reasonix"
                       ]
                     },
                     "sessionId": {
@@ -8000,7 +8380,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "sessionId": {
@@ -8140,7 +8521,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {
@@ -10777,6 +11159,117 @@ export const epicSchemaSurfaceBaseline = {
                                   "accentColor"
                                 ],
                                 "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "harnessId": {
+                                    "type": "string",
+                                    "const": "reasonix"
+                                  },
+                                  "hostId": {
+                                    "type": "string"
+                                  },
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "sessionWorkspaceSnapshot": {
+                                    "type": "object",
+                                    "properties": {
+                                      "workspaceKind": {
+                                        "type": "string",
+                                        "const": "session-snapshot"
+                                      },
+                                      "primaryWorkspace": {
+                                        "type": "string"
+                                      },
+                                      "secondaryWorkspaces": {
+                                        "default": [],
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "createdAt": {
+                                    "type": "number"
+                                  },
+                                  "coveredUntilMessageId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "profileId": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "labelSnapshot": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accountUuid": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "accentColor": {
+                                    "default": null,
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor"
+                                ],
+                                "additionalProperties": false
                               }
                             ]
                           },
@@ -10835,7 +11328,8 @@ export const epicSchemaSurfaceBaseline = {
                               "pi",
                               "hermes",
                               "omp",
-                              "huggingface"
+                              "huggingface",
+                              "reasonix"
                             ]
                           },
                           "agentId": {
@@ -10975,7 +11469,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "pi",
                                             "hermes",
                                             "omp",
-                                            "huggingface"
+                                            "huggingface",
+                                            "reasonix"
                                           ]
                                         },
                                         "noticeKind": {
@@ -12608,7 +13103,8 @@ export const epicSchemaSurfaceBaseline = {
                                     "pi",
                                     "hermes",
                                     "omp",
-                                    "huggingface"
+                                    "huggingface",
+                                    "reasonix"
                                   ]
                                 },
                                 "source": {
@@ -12635,7 +13131,8 @@ export const epicSchemaSurfaceBaseline = {
                                         "pi",
                                         "hermes",
                                         "omp",
-                                        "huggingface"
+                                        "huggingface",
+                                        "reasonix"
                                       ]
                                     },
                                     "sessionId": {
@@ -13302,7 +13799,8 @@ export const epicSchemaSurfaceBaseline = {
                                                 "pi",
                                                 "hermes",
                                                 "omp",
-                                                "huggingface"
+                                                "huggingface",
+                                                "reasonix"
                                               ]
                                             },
                                             "agentId": {
@@ -13578,13 +14076,63 @@ export const epicSchemaSurfaceBaseline = {
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
                                       "questionId",
                                       "question",
                                       "values",
-                                      "notes"
+                                      "notes",
+                                      "selection"
                                     ],
                                     "additionalProperties": false
                                   }
@@ -13612,6 +14160,230 @@ export const epicSchemaSurfaceBaseline = {
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "outcome": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "answered",
+                                        "skipped",
+                                        "failed"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "draftAnswers": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "questionId": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "question": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "values": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "notes": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "selection": {
+                                        "default": null,
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "questionIndex": {
+                                                "type": "integer",
+                                                "minimum": 0,
+                                                "maximum": 9007199254740991
+                                              },
+                                              "optionIndices": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "integer",
+                                                  "minimum": 0,
+                                                  "maximum": 9007199254740991
+                                                }
+                                              },
+                                              "optionLabels": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "customText": {
+                                                "anyOf": [
+                                                  {
+                                                    "type": "string"
+                                                  },
+                                                  {
+                                                    "type": "null"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "questionIndex",
+                                              "optionIndices",
+                                              "optionLabels",
+                                              "customText"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "questionId",
+                                      "question",
+                                      "values",
+                                      "notes",
+                                      "selection"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "settlement": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "settlementId": {
+                                          "type": "string"
+                                        },
+                                        "source": {
+                                          "type": "string",
+                                          "enum": [
+                                            "gui",
+                                            "runtime"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "settlementId",
+                                        "source"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "diagnostics": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "diagnosticId": {
+                                        "type": "string"
+                                      },
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "runtime",
+                                          "delivery",
+                                          "reconcile"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "diagnosticId",
+                                      "code",
+                                      "source"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "delivery": {
+                                  "default": null,
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "deliveryId": {
+                                          "type": "string"
+                                        },
+                                        "status": {
+                                          "type": "string",
+                                          "enum": [
+                                            "pending",
+                                            "delivering",
+                                            "delivered",
+                                            "failed"
+                                          ]
+                                        },
+                                        "retryable": {
+                                          "type": "boolean"
+                                        },
+                                        "generation": {
+                                          "default": 0,
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "deliveryId",
+                                        "status",
+                                        "retryable",
+                                        "generation"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "settlementExtensions": {
+                                  "default": {},
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {}
                                 }
                               },
                               "required": [
@@ -13625,7 +14397,13 @@ export const epicSchemaSurfaceBaseline = {
                                 "questions",
                                 "answers",
                                 "error",
-                                "metadata"
+                                "metadata",
+                                "outcome",
+                                "draftAnswers",
+                                "settlement",
+                                "diagnostics",
+                                "delivery",
+                                "settlementExtensions"
                               ],
                               "additionalProperties": false
                             },
@@ -14096,7 +14874,8 @@ export const epicSchemaSurfaceBaseline = {
                                   "pi",
                                   "hermes",
                                   "omp",
-                                  "huggingface"
+                                  "huggingface",
+                                  "reasonix"
                                 ]
                               },
                               "agentId": {

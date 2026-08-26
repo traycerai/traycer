@@ -15,6 +15,11 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  fetchIsolatedTerminalList,
+  publishExactTerminalListSnapshot,
+  terminalListSnapshotHasSession,
+} from "@/lib/terminals/refresh-host-terminal-list";
 
 interface CreateTerminalMutationContext {
   readonly hostId: string | null;
@@ -63,8 +68,33 @@ export function useTerminalCreate(
           queryKey: hostQueryKeys.methodScope(ctx.hostId, "terminal.list"),
         });
       },
-      onError: (error) =>
-        toastFromHostError(error, "Could not create terminal"),
+      onError: async (error, variables, ctx) => {
+        if (ctx !== undefined && ctx.hostId !== null && client !== null) {
+          try {
+            const snapshot = await fetchIsolatedTerminalList({
+              client,
+              scope: variables.scope,
+            });
+            publishExactTerminalListSnapshot(
+              queryClient,
+              ctx.hostId,
+              variables.scope,
+              snapshot,
+            );
+            if (
+              terminalListSnapshotHasSession(
+                snapshot,
+                variables.desiredSessionId,
+              )
+            ) {
+              return;
+            }
+          } catch {
+            // Isolated list failed: never consult retained cache as proof.
+          }
+        }
+        toastFromHostError(error, "Could not create terminal");
+      },
     }),
   );
 }

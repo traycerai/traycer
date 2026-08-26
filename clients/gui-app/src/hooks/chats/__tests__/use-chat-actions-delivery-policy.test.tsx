@@ -99,6 +99,7 @@ function createDeliveryPolicyHandle(
     deliveredNotices: {
       notices: new WeakSet(),
       clientActionIds: new Set(),
+      retainedClientActionIds: new Set(),
     },
     deliveredRestoreCompletionKeys: new Set(),
     setSurfaceVisibility: (_surfaceId: string, _visible: boolean) => undefined,

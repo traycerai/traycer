@@ -105,6 +105,7 @@ function buildMessengerFactory(
             busy: false,
             busySessionCount: 0,
             updateProgress: null,
+            busyBreakdown: null,
           }),
       },
     });
@@ -208,7 +209,7 @@ function setInitialAuthState(status: AuthStatus): void {
     return;
   }
   if (status === "signing-in") {
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
     return;
   }
   useAuthStore.getState().setSignedOut();

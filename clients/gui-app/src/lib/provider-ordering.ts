@@ -29,6 +29,7 @@ const PROVIDER_ID_ORDER = [
   "pi",
   "hermes",
   "omp",
+  "reasonix",
 ] as const satisfies ReadonlyArray<ProviderId>;
 
 type MissingProviderIdFromOrder = Exclude<
@@ -63,6 +64,7 @@ const GUI_HARNESS_BY_PROVIDER_ID = {
   pi: "pi",
   hermes: "hermes",
   omp: "omp",
+  reasonix: "reasonix",
 } satisfies Readonly<Record<ProviderId, GuiHarnessId>>;
 
 export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
@@ -70,6 +72,32 @@ export const ORDERED_PROVIDERS: ExhaustiveOrderedProviders =
     providerId,
     harnessId: GUI_HARNESS_BY_PROVIDER_ID[providerId],
   }));
+
+/**
+ * `ORDERED_PROVIDERS` split into two groups - effectively enabled first, the
+ * rest after - each keeping its `ORDERED_PROVIDERS` relative order.
+ *
+ * Under auto-enablement a fresh install lights up only the providers the user
+ * actually has accounts for, so a flat list buries them among a dozen-plus
+ * rows they have never heard of. This is a REORDER, not a filter: every
+ * provider stays on screen and reachable, which is what keeps "sign in to
+ * enable this one" a real offer rather than a hidden feature.
+ *
+ * Order within each group comes from the source array, so the result is a
+ * pure function of `isEnabled` - two renders with the same enablement produce
+ * the same list, and a provider only moves when its own enablement changes.
+ * That matters here specifically: this list is on screen while boot derivation
+ * and pack convergence are still settling, so a comparator that could reorder
+ * on equal input would visibly churn.
+ */
+export function orderProvidersByEnablement(
+  isEnabled: (providerId: ProviderId) => boolean,
+): ReadonlyArray<OrderedProvider> {
+  return [
+    ...ORDERED_PROVIDERS.filter((provider) => isEnabled(provider.providerId)),
+    ...ORDERED_PROVIDERS.filter((provider) => !isEnabled(provider.providerId)),
+  ];
+}
 
 const DEFAULT_PROVIDER_ID_ORDER = PROVIDER_ID_ORDER;
 const DEFAULT_GUI_HARNESS_ORDER = ORDERED_PROVIDERS.map(

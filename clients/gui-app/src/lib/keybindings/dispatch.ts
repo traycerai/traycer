@@ -45,7 +45,7 @@ import {
   type FocusDirection,
 } from "@/lib/keybindings/tile-geometry";
 import {
-  SETTINGS_SECTIONS,
+  visibleSettingsSections,
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import { findHostedTileElement } from "@/components/epic-canvas/surface-host/hosted-tile-resolver";
@@ -453,12 +453,17 @@ function moveHeaderTabFocus(router: KeybindingRouter, delta: -1 | 1): boolean {
   return true;
 }
 
+// Indexes the OFFERED sections, which is the same list the sidebar renders and
+// badges - a digit means "the nth row of the rail", so a build that offers
+// fewer sections must resolve the digit against the shorter list or the badge
+// and the shortcut name different rows.
 function switchToSettingsSection(
   router: KeybindingRouter,
   index: number,
 ): boolean {
-  if (index < 0 || index >= SETTINGS_SECTIONS.length) return false;
-  router.navigateSettingsSection(SETTINGS_SECTIONS[index].id);
+  const sections = visibleSettingsSections();
+  if (index < 0 || index >= sections.length) return false;
+  router.navigateSettingsSection(sections[index].id);
   return true;
 }
 

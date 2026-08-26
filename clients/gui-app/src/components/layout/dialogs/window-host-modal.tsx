@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { HostBootCard } from "@/components/centered-card";
 import { BELOW_APP_HEADER_TOP_CLASS } from "@/components/layout/header/app-header-height";
 import { PlanRestrictedUpgradeAction } from "@/components/settings/host-scope/plan-restricted-upgrade-action";
+import { ClientUpdateRequiredAction } from "@/components/host/client-update-required-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { getClientAppVersion } from "@/lib/app-version";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { usePressStartActivation } from "@/lib/host/press-start-activation";
 import type { HostProgressView } from "@/lib/host/host-progress-copy";
 import {
   hostUpdateSkew,
@@ -140,7 +142,12 @@ export function WindowHostModal(props: WindowHostModalProps): ReactNode {
           onInteractOutside={(event) => {
             event.preventDefault();
           }}
-          className="fixed top-1/2 left-1/2 z-[60] flex max-h-[85svh] w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
+          // `top-safe-center-y` / `left-safe-center-x`, not the halfway
+          // marks: a fixed surface escapes `#root`'s safe-area reservation,
+          // and the raw centre lines run through the reserved strips (the
+          // same rule `dialog.tsx` and the migration modal follow). The width
+          // clamp carries `--safe-area-width` for the same reason.
+          className="fixed top-safe-center-y left-safe-center-x z-[60] flex max-h-[85svh] w-[min(92vw,32rem,var(--safe-area-width))] -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-y-auto rounded-xl bg-background p-6 text-foreground ring-1 ring-foreground/10 shadow-2xl outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95"
         >
           <DialogPrimitive.Title
             data-slot="dialog-title"
@@ -290,6 +297,7 @@ function NarrationActions(
     readonly align: "center" | "end";
   },
 ): ReactNode {
+  const settingsActivation = usePressStartActivation(props.onOpenSettings);
   return (
     <div
       className={cn(
@@ -299,6 +307,13 @@ function NarrationActions(
     >
       {props.variant.kind === "plan-restricted" ? (
         <PlanRestrictedUpgradeAction />
+      ) : null}
+      {/* The app updater IS the remedy here, and it is unconditional: this
+          variant only exists because the host stated, in structured terms,
+          that this app is the outdated leg. There is deliberately no
+          `Update host` beside it - see `ClientUpdateRequiredAction`. */}
+      {props.variant.kind === "update-client" ? (
+        <ClientUpdateRequiredAction requirement={props.variant.requirement} />
       ) : null}
       {props.onUpdateHost === null ? null : (
         <Button
@@ -336,12 +351,19 @@ function NarrationActions(
           bypasses the readiness gate - the shell page edits host
           config without a running host, so this is the escape hatch
           for a host that cannot start. Gating it behind the failure
-          it exists to fix is the lockout this whole surface prevents. */}
+          it exists to fix is the lockout this whole surface prevents.
+
+          It activates on PRESS (`usePressStartActivation`), unlike its
+          neighbours in this row, and the asymmetry is deliberate: this card
+          can be replaced by the next boot surface between a press and its
+          release, which produces no click at all. Retry / Update host are
+          MUTATIONS and keep click semantics, so a press the user drags away
+          from does not fire them. */}
       <Button
         type="button"
         size="sm"
         variant={props.settingsEmphasis === "button" ? "outline" : "link"}
-        onClick={props.onOpenSettings}
+        {...settingsActivation}
         data-testid="window-host-modal-open-settings"
         data-emphasis={props.settingsEmphasis}
       >
@@ -370,6 +392,9 @@ function WindowHostModalBody(props: {
 }): ReactNode {
   if (props.variant.kind === "update-host") {
     return <IncompatibleDetail variant={props.variant} />;
+  }
+  if (props.variant.kind === "update-client") {
+    return <ClientCompatibilityDetail variant={props.variant} />;
   }
   if (props.bootBody !== null) return props.bootBody;
   if (props.progress === null) return null;
@@ -456,6 +481,46 @@ function IncompatibleDetail(props: {
   );
 }
 
+/**
+ * The host's own structured requirement, printed as facts rather than folded
+ * into the sentence above it.
+ *
+ * The epoch numbers are HERE and not in the headline, deliberately: a user
+ * acts on an application update, not on an internal protocol generation. They
+ * belong in the block someone screenshots for support, where "needs generation
+ * 2, this app declares 1" is exactly what triage needs.
+ *
+ * `observedClientAppVersion` is the HOST's normalized view of what this app
+ * reported, not `getClientAppVersion()`. That is the point of printing it: if
+ * the two disagree, the bug is in what this build sends, and reading the local
+ * value here would hide precisely that.
+ */
+function ClientCompatibilityDetail(props: {
+  readonly variant: Extract<
+    WindowNarrationVariant,
+    { readonly kind: "update-client" }
+  >;
+}): ReactNode {
+  const { requirement } = props.variant;
+  return (
+    <div
+      // align-ok: a labelled list whose labels only line up on one left edge,
+      // same as `IncompatibleDetail` above.
+      className="flex w-full flex-col gap-1 rounded-md bg-foreground/8 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+      data-testid="window-host-modal-client-compatibility-detail"
+    >
+      <span>
+        This app: {requirement.observedClientAppVersion ?? "unknown version"}
+      </span>
+      <span>
+        Compatibility generation: host needs{" "}
+        {requirement.minimumCompatibilityEpoch}, this app declares{" "}
+        {requirement.observedCompatibilityEpoch ?? "none"}
+      </span>
+    </div>
+  );
+}
+
 interface WindowHostModalCopy {
   readonly title: string;
   readonly description: string;
@@ -494,6 +559,24 @@ function modalCopy(
       reportTitle: "No host available on this plan",
       reportMessage: "Every host on this account is plan-restricted.",
       reportCode: "HOST_PLAN_RESTRICTED",
+    };
+  }
+  if (variant.kind === "update-client") {
+    const { requirement } = variant;
+    return {
+      title: "Update Traycer to continue",
+      // Two bodies, split on whether the host could identify what this app is
+      // running. Naming the observed version is what makes the instruction
+      // checkable ("am I on 1.1.10?"); when the host could not read it, saying
+      // so is more honest than a sentence with a blank in it.
+      description:
+        requirement.observedClientAppVersion === null
+          ? "This Traycer installation is too old to identify a compatible generation. Install the latest Traycer app."
+          : `This host needs a newer Traycer generation. You are running ${requirement.observedClientAppVersion}; install the latest version.`,
+      reportTitle: "Traycer app update required",
+      reportMessage:
+        "The host refused this app at its client-compatibility epoch gate.",
+      reportCode: "CLIENT_INCOMPATIBLE",
     };
   }
   if (variant.kind === "update-host") {

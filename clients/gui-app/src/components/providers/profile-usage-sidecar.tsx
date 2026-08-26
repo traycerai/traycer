@@ -13,6 +13,7 @@ import { MeterRow } from "@/components/settings/panels/traycer-subscription-view
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   formatRelativeTimestamp,
   formatResetCountdown,
@@ -185,7 +186,9 @@ function ProfileUsageSidecarContent({
               />
             ) : null}
             {refreshLabel}
-            <Kbd className="ml-0.5 font-mono">R</Kbd>
+            <ShortcutHint>
+              <Kbd className="ml-0.5 font-mono">R</Kbd>
+            </ShortcutHint>
           </Button>
         ) : null}
       </div>

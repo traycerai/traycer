@@ -9,6 +9,7 @@ const UNPOSITIONED_TRANSFORM = "translate(0px, -200%)";
 const POSITIONED_TRANSFORM = "translate(228px, 100px)";
 const PROFILE: ProviderProfile = {
   profileId: "work",
+  enabled: true,
   kind: "managed",
   authType: "oauth",
   label: "Work",

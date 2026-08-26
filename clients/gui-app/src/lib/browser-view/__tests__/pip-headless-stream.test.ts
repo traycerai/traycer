@@ -63,6 +63,7 @@ function createScreencastClientHarness(): {
     subscribeWithParamsProvider: unusedClientMethod,
     close() {},
     isClosed: () => false,
+    isReady: () => true,
     notifyBearerRotated() {},
     reconnectAll() {},
     getMethodSupport: () => "unknown",

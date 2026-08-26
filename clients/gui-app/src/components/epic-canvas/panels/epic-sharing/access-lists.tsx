@@ -152,7 +152,7 @@ export function TeamsAccess(props: TeamsAccessProps) {
           isSharePending={props.pending.shareTeamId === row.teamId}
           isRoleUpdatePending={props.pending.roleTeamId === row.teamId}
           isRevokePending={props.pending.revokeTeamId === row.teamId}
-          pendingRole={props.teamRolesById[row.teamId] ?? "viewer"}
+          pendingRole={props.teamRolesById[row.teamId] ?? "editor"}
           onPendingRoleChange={(role) => {
             props.onPendingTeamRoleChange(row.teamId, role);
           }}

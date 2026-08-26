@@ -33,6 +33,7 @@ import {
   usePaneActivationOwnership,
 } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
+import { hasTerminalPendingCreate } from "@/lib/terminals/pending-create-identity";
 import {
   useEpicCanvasStore,
   useIsActivePane,
@@ -64,11 +65,14 @@ import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body
 import type {
   EpicCanvasTileRef,
   EpicNodeRef,
+  PublishedChatTileRef,
   SplitDirection,
   TilePane,
 } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
+import { isWorkspaceFileRef } from "@/stores/epics/canvas/types";
+import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
 import { resolveActivePaneTab } from "@/stores/epics/canvas/tile-tree";
 import { surfaceOwnerFor } from "@/components/epic-canvas/surface-host/surface-owner";
 import { TileSurfaceSlot } from "@/components/epic-canvas/surface-host/tile-surface-slot";
@@ -324,8 +328,20 @@ export const TabGroupView = memo(function TabGroupView(
 
   const handleRevealInSidebar = useCallback(
     (tileTabId: string) => {
-      const tabType = tabs.find((tab) => tab.instanceId === tileTabId)?.type;
-      setActivePanelIdAndExpand(tabId, panelIdForTabType(tabType));
+      const tab = tabs.find((t) => t.instanceId === tileTabId);
+      // The Chats / Artifacts trees light their active row on their own; the
+      // workspace file tree cannot - its rows are lazily covered and the
+      // panel may be showing another workspace - so it is TOLD which file to
+      // show. Written BEFORE the panel switch so a panel that mounts on the
+      // switch reads the request on its first render.
+      if (tab !== undefined && isWorkspaceFileRef(tab)) {
+        requestFileTreeReveal(tabId, {
+          hostId: tab.hostId,
+          workspacePath: tab.workspacePath,
+          filePath: tab.filePath,
+        });
+      }
+      setActivePanelIdAndExpand(tabId, panelIdForTabType(tab?.type));
     },
     [tabs, setActivePanelIdAndExpand, tabId],
   );
@@ -485,7 +501,7 @@ export const TabGroupView = memo(function TabGroupView(
   );
 });
 
-interface ActiveTabBodyProps {
+export interface ActiveTabBodyProps {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
   readonly groupId: string;
@@ -684,7 +700,14 @@ function usePublishedChatFallbackRef(args: {
     EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
   readonly activeHostId: string | null;
 }): {
-  readonly fallbackRef: EpicCanvasTileRef | null;
+  /**
+   * Narrowed to the published-chat shape (the only ref this hook ever
+   * builds) so the substitution mount can thread `ownerUserId` - the owner
+   * the OPENING ROW resolved - into the banner instead of leaving the
+   * banner's container to re-derive it from a second cloud lookup that can
+   * fail independently (cold-review finding).
+   */
+  readonly fallbackRef: PublishedChatTileRef | null;
   readonly ownerHostLabel: string;
   readonly reason: ChatDeadTileBannerReason;
   readonly isCloudKnown: boolean;
@@ -820,7 +843,14 @@ function useChatTabRetraction(
   return useEpicChatRetraction(activeTab.type === "chat" ? activeTab.id : null);
 }
 
-function ActiveTabBody(props: ActiveTabBodyProps) {
+/**
+ * Renders one tile body with the desktop remote-deleted guard and `isActive`
+ * computation. Exported so the mobile single-tile view
+ * (`epic-canvas/mobile/mobile-epic-tile-view.tsx`) renders the selected tile
+ * through the identical logic instead of duplicating the deleted-guard and the
+ * `role && selected && globallyActive` derivation.
+ */
+export function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
@@ -863,7 +893,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     s.selfDeletedArtifactIds.has(activeTab.id),
   );
   const isPendingCreate = useEpicCanvasStore((s) =>
-    s.pendingCreateArtifactIds.has(activeTab.id),
+    activeTab.type === "terminal"
+      ? hasTerminalPendingCreate(
+          s.pendingCreateTerminalIdentities,
+          activeTab.hostId,
+          activeTab.id,
+        )
+      : s.pendingCreateArtifactIds.has(activeTab.id),
   );
   // Terminals, browser surfaces, diff/PR tiles, workspace files, output
   // windows, the comm graph, and blank tabs are renderer-only, so a cloud
@@ -966,6 +1002,12 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
         <ChatDeadTileBanner
           hostLabel={ownerHostLabel}
           reason="chat-no-longer-shared"
+          // Both moot for this reason: the revoked copy never varies by owner
+          // and declares `offersClone: false`, so neither flag can render
+          // anything. Passed as the do-nothing pair, like `noopClone`.
+          ownedByViewer
+          cloneAllowed={false}
+          showsPublishedCopy={false}
           onClone={noopClone}
           cloning={false}
           className={undefined}
@@ -985,7 +1027,13 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
           sourceHostId={activeTab.hostId}
           hostLabel={ownerHostLabel}
           reason={deadTileBannerReason}
+          showsPublishedCopy
           testId={`chat-dead-tile-${activeTab.id}`}
+          // The owner the opening row already resolved (the fallback ref is
+          // only built once one exists) - threading it means the banner's
+          // ownership verdict cannot disagree with the copy rendered under
+          // it, and does not depend on the container's own cloud lookup.
+          sourceOwnerUserId={publishedFallbackRef.ownerUserId}
         />
         <EpicNodeTile
           node={publishedFallbackRef}

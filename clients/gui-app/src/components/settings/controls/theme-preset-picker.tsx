@@ -12,6 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { cn } from "@/lib/utils";
 import {
   THEME_PRESETS,
@@ -53,6 +54,8 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
   const { value, onChange } = props;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
   );
@@ -95,6 +98,8 @@ export function ThemePresetPicker(props: ThemePresetPickerProps) {
         collisionBoundary={dialogContainer ?? undefined}
         collisionPadding={8}
         className="w-[min(85vw,17rem)] overflow-hidden p-0"
+        ref={contentRef}
+        onOpenAutoFocus={coarseOpenAutoFocus}
       >
         <Command
           value={commandValue}

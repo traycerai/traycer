@@ -10,6 +10,7 @@ import {
   getChatArtifactDragId,
   type EpicCanvasChatArtifactDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 
 /**
  * Artifact identity a drag source carries. Identity ONLY - no
@@ -76,7 +77,11 @@ export function useArtifactDragSource(args: {
     };
   }, [enabled, epicId, viewTabId, id, type, name, hostId]);
 
-  const isDraggable = dragData !== undefined;
+  // Folded into `isDraggable` rather than only into `disabled`, so a caller's
+  // grab cursor and drag chrome drop out with the gesture instead of advertising
+  // an affordance a touch pointer can no longer reach.
+  const dragDisabled = useDragSourceDisabled();
+  const isDraggable = dragData !== undefined && !dragDisabled;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: getChatArtifactDragId(occurrenceId),
     disabled: !isDraggable,

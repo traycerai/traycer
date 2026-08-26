@@ -73,6 +73,15 @@ vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
   }),
 }));
 
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
@@ -274,6 +283,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label: profileId,

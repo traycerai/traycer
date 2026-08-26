@@ -122,6 +122,8 @@ function remoteEntry(
     transportDialability: "not-dialable",
     publicKey: `pubkey-${hostId}`,
     relayFuseGrace: false,
+    recentHostCheckIn: false,
+    planAllowsRemote: true,
     remoteStatus: {
       connectivity: "offline",
       viewerReachability: "unknown",
@@ -435,6 +437,7 @@ describe("hostLeaseSnapshotEquals", () => {
     code: "host-too-old",
     hostVersion: "1.0.0",
     minSupportedVersion: "1.2.0",
+    clientCompatibility: null,
   } as const;
 
   it("two incompatible leases differing only in detail.code are NOT equal", () => {
@@ -485,6 +488,7 @@ describe("hostLeaseSnapshotEquals", () => {
         detail: {
           ...BASE_INCOMPATIBLE_DETAIL,
           minSupportedVersion: "1.3.0",
+          clientCompatibility: null,
         },
       },
     };

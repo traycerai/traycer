@@ -78,6 +78,7 @@ function ReadOnlyFileHarness(props: { readonly content: string }): ReactNode {
       language="typescript"
       editing={false}
       editAdapter={editAdapter}
+      wordWrap={false}
       revealLine={null}
       revealNonce={null}
       findTarget={null}

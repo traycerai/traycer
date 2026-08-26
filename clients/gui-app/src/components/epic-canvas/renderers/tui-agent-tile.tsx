@@ -632,6 +632,7 @@ function TuiAgentTileLive(
           measureProbe={
             <TerminalGridMeasureProbe
               sessionId={sessionId}
+              hostId={hostId}
               instanceId={instanceId}
               tileKind="terminal-agent"
               chrome="padded"
@@ -1248,6 +1249,7 @@ interface TerminalAgentLiveProps {
 
 function TerminalAgentLive(props: TerminalAgentLiveProps) {
   const { handle } = props;
+  const hostId = useTabHostId();
   const effectiveCols = useStore(handle.store, (s) => s.effectiveCols);
   const effectiveRows = useStore(handle.store, (s) => s.effectiveRows);
   const status = useStore(handle.store, (s) => s.status);
@@ -1376,12 +1378,12 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
   );
 
   const { onSessionLost, onSessionHealthy } = props.recovery;
-  // Automatic recovery off the lifecycle status. A TUI agent reaped while the
-  // app was disconnected lands in "lost"; the owner force-releases and remounts
-  // the bootstrap, which re-issues `prepareLaunch` to resume the conversation.
-  // "running" means a live session, refilling the auto-recovery budget.
+  // Automatic recovery off a handle that can no longer address its PTY. Both
+  // `lost` and `reaped` force-release the old handle and remount the bootstrap,
+  // which either attaches to a host-restored session or re-issues
+  // `prepareLaunch` to resume the conversation. "running" refills the budget.
   useEffect(() => {
-    if (status === "lost") onSessionLost();
+    if (status === "lost" || status === "reaped") onSessionLost();
   }, [status, onSessionLost]);
   useEffect(() => {
     if (status === "running") onSessionHealthy();
@@ -1401,6 +1403,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
       <Suspense fallback={<TerminalLoadingSkeleton />}>
         <TerminalXtermHost
           sessionId={handle.sessionId}
+          hostId={hostId}
           tileKind="terminal-agent"
           chrome="padded"
           instanceId={props.instanceId}
@@ -1429,7 +1432,6 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
         <TerminalConnectionOverlay
           state={overlayState}
           onReconnect={props.recovery.onManualReconnect}
-          onClose={closeCanvasTile}
           testId={`terminal-connection-overlay-${props.tileId}`}
         />
       ) : null}

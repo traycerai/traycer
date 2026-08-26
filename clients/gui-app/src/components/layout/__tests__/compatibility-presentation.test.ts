@@ -46,14 +46,24 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
       status: "compatible",
       retry: () => undefined,
       degraded: false,
-      hostStatus: { busy: true, busySessionCount: 3, hostVersion: "1.4.2" },
+      hostStatus: {
+        busy: true,
+        busySessionCount: 3,
+        busyBreakdown: null,
+        hostVersion: "1.4.2",
+      },
     };
 
     expect(compatibilityPresentation(compatibility)).toEqual({
       status: "compatible",
       degraded: false,
       unreachable: false,
-      hostStatus: { busy: true, busySessionCount: 3, hostVersion: "1.4.2" },
+      hostStatus: {
+        busy: true,
+        busySessionCount: 3,
+        busyBreakdown: null,
+        hostVersion: "1.4.2",
+      },
     });
   });
 
@@ -69,7 +79,12 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
       status: "compatible",
       retry: () => undefined,
       degraded: true,
-      hostStatus: { busy: false, busySessionCount: 0, hostVersion: "1.4.2" },
+      hostStatus: {
+        busy: false,
+        busySessionCount: 0,
+        busyBreakdown: null,
+        hostVersion: "1.4.2",
+      },
     };
 
     const presentation = compatibilityPresentation(compatibility);
@@ -174,6 +189,7 @@ describe("compatibilityPresentation — every arm of the probe verdict", () => {
         hostStatus: {
           busy: false,
           busySessionCount: null,
+          busyBreakdown: null,
           hostVersion: "1.0.0",
         },
       },

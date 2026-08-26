@@ -132,6 +132,7 @@ describe("useHostLease selects by value, not by lease-object identity", () => {
       code: "protocol-major-behind",
       hostVersion: "1.2.3",
       minSupportedVersion: "1.3.0",
+      clientCompatibility: null,
     };
     const dead1: HostLeaseDeadState = {
       reason: "incompatible",
@@ -155,6 +156,7 @@ describe("useHostLease selects by value, not by lease-object identity", () => {
       code: "protocol-major-behind",
       hostVersion: "1.2.3",
       minSupportedVersion: "1.3.0",
+      clientCompatibility: null,
     };
     const dead2: HostLeaseDeadState = {
       reason: "incompatible",
@@ -180,6 +182,7 @@ describe("useHostLease selects by value, not by lease-object identity", () => {
       code: "protocol-major-behind",
       hostVersion: "1.9.9",
       minSupportedVersion: "1.3.0",
+      clientCompatibility: null,
     };
     const third: HostLeaseSnapshot = {
       hostId: "host-a",

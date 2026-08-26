@@ -171,6 +171,18 @@ export interface SettingsState {
    * is not part of this shape - it stays on the diff tile payload.
    */
   diffViewerPreferences: DiffViewerPreferences;
+  /**
+   * Line wrapping in the workspace file viewer. `null` means the user has made
+   * no choice, and the render site resolves it from the pointer type instead -
+   * a persisted boolean would carry one device's answer to every other device,
+   * and whether wrapping is the right default is a fact about the input
+   * hardware, not about the account.
+   *
+   * Deliberately separate from `diffViewerPreferences.wordWrap`: a file being
+   * read is not a diff, and a wrap choice made while reading one must not
+   * re-render every open diff.
+   */
+  workspaceFileWordWrap: boolean | null;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   setComposerMode: (mode: ComposerMode) => void;
@@ -206,6 +218,7 @@ export interface SettingsState {
   setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
+  setWorkspaceFileWordWrap: (value: boolean | null) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -246,6 +259,7 @@ type PersistedSettingsState = Pick<
   | "agentTabSurfacingMode"
   | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
+  | "workspaceFileWordWrap"
 >;
 
 type SetFn = (
@@ -320,6 +334,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     agentTabSurfacingMode: state.agentTabSurfacingMode,
     steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
+    workspaceFileWordWrap: state.workspaceFileWordWrap,
   };
 }
 
@@ -362,6 +377,7 @@ export const useSettingsStore = create<SettingsState>()(
       agentTabSurfacingMode: DEFAULT_AGENT_TAB_SURFACING_MODE,
       steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+      workspaceFileWordWrap: null,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
       setComposerMode: makeSetter(set, "composerMode"),
@@ -466,6 +482,7 @@ export const useSettingsStore = create<SettingsState>()(
           },
         }));
       },
+      setWorkspaceFileWordWrap: makeSetter(set, "workspaceFileWordWrap"),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -475,8 +492,13 @@ export const useSettingsStore = create<SettingsState>()(
       // otherwise corrupted localStorage value would otherwise rehydrate
       // verbatim (the default shallow merge takes persisted fields as-is),
       // flow straight into branch composition, and still mount the editor
-      // showing it as healthy. Every other field keeps the default shallow
-      // merge behavior.
+      // showing it as healthy. `workspaceFileWordWrap` is re-derived for a
+      // narrower reason: its `null` carries meaning ("the user has not
+      // chosen"), and any non-boolean that rehydrated verbatim would be
+      // neither `true`, `false`, nor that third state - a truthy string would
+      // read as "wrap on, chosen deliberately" and the pointer-type default
+      // could never be reached again. Every other field keeps the default
+      // shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -501,6 +523,10 @@ export const useSettingsStore = create<SettingsState>()(
           )
             ? merged.agentTabSurfacingMode
             : DEFAULT_AGENT_TAB_SURFACING_MODE,
+          workspaceFileWordWrap:
+            typeof merged.workspaceFileWordWrap === "boolean"
+              ? merged.workspaceFileWordWrap
+              : null,
         };
       },
     },

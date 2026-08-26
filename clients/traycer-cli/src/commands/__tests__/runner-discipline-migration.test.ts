@@ -20,6 +20,7 @@ import type {
   CredentialsMutationStore,
   MutationResult,
 } from "@traycer/protocol/config/credentials-mutation";
+import { fakeCredentialsMutationStore } from "../../__tests__/support/credentials-mutation-store";
 
 // Native Packaging runner-discipline migration: every runner-aware
 // command (logout, config env set/delete, config shell set/reset,
@@ -221,7 +222,7 @@ function mockLogoutStore(args: {
   readonly hadSession: boolean;
   readonly signOut: MutationResult;
 }): CredentialsMutationStore {
-  const store: CredentialsMutationStore = {
+  const store: CredentialsMutationStore = fakeCredentialsMutationStore({
     read: async () =>
       args.hadSession
         ? {
@@ -232,14 +233,7 @@ function mockLogoutStore(args: {
           }
         : null,
     signOut: vi.fn(async () => args.signOut),
-    rotate: vi.fn(),
-    signIn: vi.fn(),
-    updateProfile: vi.fn(),
-    guardedSignIn: vi.fn(),
-    migrateFirstWrite: vi.fn(),
-    hasPendingContinuation: () => false,
-    dispose: vi.fn(),
-  };
+  });
   vi.doMock("../../store/credentials-store", () => ({
     runWithCliStore: <T>(fn: (s: CredentialsMutationStore) => Promise<T>) =>
       fn(store),

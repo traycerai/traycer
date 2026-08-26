@@ -124,6 +124,7 @@ function controllableSession(): ControllableSession {
       throw new Error("not exercised by this test");
     }),
     notifyBearerRotated: vi.fn(),
+    wake: vi.fn(),
     onClosed: (listener) => {
       // Production refuses new listeners once closed and hands back a noop
       // unsubscribe; a fake that kept accepting them could mint a
@@ -170,6 +171,8 @@ const remoteEntry: RemoteHostDirectoryEntry = {
   },
   publicKey: "pubkey-b",
   relayFuseGrace: false,
+  recentHostCheckIn: false,
+  planAllowsRemote: true,
 };
 
 const localEntry: HostDirectoryEntry = {

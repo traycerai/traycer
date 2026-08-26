@@ -1,7 +1,11 @@
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import type { GitSubmoduleSummary } from "@/lib/git/git-repo-tree";
 import { getBasename } from "@/lib/path/cross-platform-path";
-import { formatWorktreeFolderDisabledReason } from "@/lib/worktree/worktree-folder-disabled-reason";
+import {
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 
@@ -50,6 +54,8 @@ export interface GitDiffRepoSwitcherRootRow {
   readonly moduleChangeCount: number | null;
   readonly selected: boolean;
   readonly disabledLabel: string | null;
+  /** Visible row health; setup failure can be non-blocking. */
+  readonly statusBadge: WorktreeFolderRowBadge | null;
   /** Disabled only by unverified facts: render muted "checking", not an error. */
   readonly pending: boolean;
   readonly unavailable: false;
@@ -94,6 +100,7 @@ function rootSearchText(
   row: WorktreeBindingSelectorRowV12,
   label: string,
   disabledLabel: string | null,
+  statusLabel: string | null,
 ): string {
   return searchableText([
     label,
@@ -103,6 +110,7 @@ function rootSearchText(
     row.workspacePath,
     row.worktreePath,
     disabledLabel,
+    statusLabel,
   ]);
 }
 
@@ -156,6 +164,7 @@ function buildRootRow(
   const label = rootLabel(input.row);
   const pending = isWorkspaceResolvePending(input.row);
   const disabledLabel = rootDisabledLabel(input.row, pending);
+  const statusBadge = worktreeFolderRowBadge(input.row);
   const submodules = rootSubmodules(input.row, activeRootSubmodules, selected);
   const fileChangeCount = input.fileChangeCount;
   const moduleChangeCount = input.moduleChangeCount;
@@ -188,16 +197,23 @@ function buildRootRow(
     moduleChangeCount,
     selected: selectedRoot,
     disabledLabel,
+    statusBadge,
     pending,
     unavailable: false,
     clean:
       disabledLabel === null &&
+      statusBadge === null &&
       fileChangeCount === 0 &&
       moduleChangeCount === 0 &&
       !submoduleStateChanged,
     depth: 0,
     searchText: searchableText([
-      rootSearchText(input.row, label, disabledLabel),
+      rootSearchText(
+        input.row,
+        label,
+        disabledLabel,
+        statusBadge?.label ?? null,
+      ),
       ...submoduleSearch,
     ]),
   };

@@ -84,6 +84,7 @@ import { hostStatusCommand } from "./commands/host-status";
 import { buildHostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
 import { buildHostUpdateCommand } from "./commands/host-update";
+import { buildLinkPhoneCommand } from "./commands/link-phone";
 import { buildLoginCommand } from "./commands/login";
 import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
@@ -601,6 +602,17 @@ function registerAuthCommands(program: Command): void {
     program.command("whoami").description("Print the signed-in user"),
     () => whoamiCommand,
   );
+
+  withRunner(
+    program
+      .command("link-phone")
+      .description("Sign the Traycer mobile app in by scanning a code")
+      .option(
+        "--no-qr",
+        "Print only the typeable code (for terminals that mangle block glyphs)",
+      ),
+    (opts) => buildLinkPhoneCommand({ showQr: opts.qr !== false }),
+  );
 }
 
 function registerHostCommands(program: Command): void {
@@ -1102,10 +1114,29 @@ function registerHostCommands(program: Command): void {
       .option(
         "--include-pre-releases",
         "Include release-candidate and other prerelease host versions",
+      )
+      .option(
+        "--no-include-pre-releases",
+        "Exclude prerelease host versions even when the installed host is a release candidate",
       ),
+    // Three states, and commander gives all three: `--include-…` yields true,
+    // `--no-include-…` yields false, and NEITHER leaves the option unset,
+    // which becomes the `null` the command derives from.
+    //
+    // That third state rests on commander declining to install a default when
+    // a command declares both forms - a library rule, not something this file
+    // states. It has moved across majors (on 9.5.0, a `--no-` declared FIRST
+    // installs an implicit `true`; on the 15.x this package resolves, neither
+    // order does), and if it ever moves back, "neither flag" silently starts
+    // including release candidates on every host. Keep the positive flag
+    // declared first, and see `host-available-entrypoint.test.ts`, which pins
+    // all three parsed values so a dependency bump cannot change this quietly.
     (opts) =>
       buildHostAvailableCommand({
-        includePreReleases: opts.includePreReleases === true,
+        includePreReleases:
+          opts.includePreReleases === undefined
+            ? null
+            : opts.includePreReleases === true,
       }),
   );
 

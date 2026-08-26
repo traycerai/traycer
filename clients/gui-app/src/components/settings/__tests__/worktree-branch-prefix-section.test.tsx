@@ -16,6 +16,16 @@ import {
 const SAVE_DEBOUNCE_MS = 500;
 const SAVED_FLASH_MS = 1600;
 
+/**
+ * Matches a Tailwind `order-*` utility in a SINGLE class token, with or
+ * without a variant prefix and with or without the negative marker - Tailwind
+ * spells a backwards reorder `-order-1`, so a pattern anchored on the letters
+ * alone reads the leading `-` as context and lets it past. Anchoring on token
+ * start or a variant colon, with the marker optional, is what closes that.
+ * `border-*` and friends never match: their `order-` begins mid-token.
+ */
+const ORDER_UTILITY = /(?:^|:)-?order-/;
+
 function resetStore(): void {
   window.localStorage.clear();
   useSettingsStore.setState({
@@ -368,6 +378,94 @@ describe("WorktreeBranchPrefixSection", () => {
 
     expect(input.className).toContain("w-[min(45vw,11rem)]");
     expect(input.className).not.toContain("w-44");
+  });
+
+  it("spans the wrapped control row below md and flexes the input into it", () => {
+    // jsdom does no layout - assert the class contract only. Below md the
+    // cluster has wrapped onto a line of its own, so it takes that line's full
+    // width and the input flexes into it instead of keeping its desktop size
+    // with dead space beside it.
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    const controlCluster = input.parentElement;
+    expect(controlCluster instanceof HTMLElement).toBe(true);
+    if (!(controlCluster instanceof HTMLElement)) return;
+    expect(controlCluster.className).toContain("max-md:w-full");
+
+    // The desktop width survives in markup - flex-basis is what supersedes it
+    // below md, so the two never have to be reconciled by source order.
+    expect(input.className).toContain("w-[min(45vw,11rem)]");
+    expect(input.className).toContain("max-md:flex-1");
+    expect(input.className).toContain("max-md:min-w-0");
+  });
+
+  it("keeps visual order aligned with DOM order in the control cluster", () => {
+    // Focus order follows the DOM; visual order follows `order-*`. Splitting
+    // them puts the keyboard and a screen reader on a control the eye reads
+    // somewhere else - here that would announce "Reset" before the field it
+    // acts on (WCAG 2.4.3 Focus Order, 1.3.2 Meaningful Sequence). The slot
+    // holds a labelled button, so no `order-*` may appear in this cluster at
+    // any breakpoint, and the reset slot leads at every width.
+    //
+    // What that costs is a small leading inset below md, where the slot's
+    // reservation sits ahead of the field. That reservation is the point: it
+    // is why the input does not jump when the button appears mid-edit, and a
+    // steady inset beats a gap opening under the caret.
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    const controlCluster = input.parentElement;
+    expect(controlCluster instanceof HTMLElement).toBe(true);
+    if (!(controlCluster instanceof HTMLElement)) return;
+
+    for (const child of Array.from(controlCluster.children)) {
+      if (!(child instanceof HTMLElement)) continue;
+      for (const token of child.className.split(/\s+/).filter(Boolean)) {
+        expect(token).not.toMatch(ORDER_UTILITY);
+      }
+    }
+
+    // The reservation leads, and the field it protects follows it.
+    const [resetSlot, field] = Array.from(controlCluster.children);
+    expect(resetSlot instanceof HTMLElement).toBe(true);
+    expect(field).toBe(input);
+
+    // The guard's own language, pinned - a sweep that never fires is
+    // indistinguishable from a sweep that cannot. Every spelling of a reorder
+    // must be rejected, INCLUDING the negative one: `-order-1` reverses two
+    // controls exactly as `order-last` does, and it is the spelling a pattern
+    // anchored on the bare letters silently admits.
+    expect("order-last").toMatch(ORDER_UTILITY);
+    expect("max-md:order-first").toMatch(ORDER_UTILITY);
+    expect("-order-1").toMatch(ORDER_UTILITY);
+    expect("max-md:-order-1").toMatch(ORDER_UTILITY);
+    // ...while a class that merely contains those letters is left alone.
+    expect("border-b").not.toMatch(ORDER_UTILITY);
+    expect("max-md:border-t").not.toMatch(ORDER_UTILITY);
+  });
+
+  it("truncates the description only from md up, so it wraps below", () => {
+    // The single-line clamp is a two-column affordance: beside the input there
+    // is one line to spend. Once the control wraps away the sentence owns the
+    // width and should use as many lines as it needs. Scoped as `md:truncate`
+    // rather than an override of `truncate`, so which rule applies below md is
+    // not a question of utility source order.
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    const controlCluster = input.parentElement;
+    expect(controlCluster instanceof HTMLElement).toBe(true);
+    if (!(controlCluster instanceof HTMLElement)) return;
+    const outerRow = controlCluster.parentElement;
+    expect(outerRow instanceof HTMLElement).toBe(true);
+    if (!(outerRow instanceof HTMLElement)) return;
+
+    const description = outerRow.querySelector("p");
+    expect(description instanceof HTMLElement).toBe(true);
+    if (!(description instanceof HTMLElement)) return;
+    expect(description.className).toContain("md:truncate");
+    expect(description.className).not.toMatch(/(^|\s)truncate(\s|$)/);
   });
 
   it("resets the draft and store to the default immediately on reset click", () => {

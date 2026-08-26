@@ -42,3 +42,19 @@ export function focusActiveComposer(): boolean {
   requestPrimaryFocus(fallback.target);
   return true;
 }
+
+/**
+ * Focuses a composer only when one has explicitly registered as active.
+ *
+ * Mount-time autofocus must not use `focusActiveComposer`'s inactive fallback:
+ * the newly active Tiptap editor registers asynchronously, so a retained split
+ * partner may temporarily be the only endpoint in the registry.
+ */
+export function focusRegisteredActiveComposer(): boolean {
+  for (const entry of entries) {
+    if (!entry.isActive) continue;
+    requestPrimaryFocus(entry.target);
+    return true;
+  }
+  return false;
+}

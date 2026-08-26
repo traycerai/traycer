@@ -7,6 +7,7 @@ import {
   useState,
   type ClipboardEvent,
   type DragEvent,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import { Terminal, type ITerminalOptions } from "@xterm/xterm";
@@ -39,8 +40,10 @@ import {
   resolveFileTransferPaths,
   uniquePaths,
 } from "@/lib/files/file-transfer-paths";
+import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
 import { useBrowserLinkRouterForRunnerHost } from "@/lib/browser-view/browser-link-router";
@@ -59,6 +62,8 @@ import {
   focusTerminalInstance,
   registerTerminalFocus,
 } from "@/lib/terminals/terminal-focus-registry";
+import { applyTerminalKeyBarLatchToTypedInput } from "@/lib/terminals/terminal-key-bar-latch";
+import { registerTerminalKeyInput } from "@/lib/terminals/terminal-key-input-registry";
 import {
   acquireXtermHost,
   adoptWarmSessionInstance,
@@ -93,6 +98,9 @@ const GRID_LATCH_WARN_STREAK = 5;
 // terminal pane is this small, so the floor only ever rejects degenerate boxes.
 const MIN_FIT_CONTAINER_PX = 48;
 
+/** Finger travel beyond this is a scroll gesture, not a tap-to-focus. */
+const TOUCH_TAP_SLOP_PX = 10;
+
 interface XtermInitialOptions extends ITerminalOptions {
   readonly vtExtensions: {
     readonly kittyKeyboard: boolean;
@@ -100,6 +108,19 @@ interface XtermInitialOptions extends ITerminalOptions {
 }
 
 const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+
+// xterm's replies to OSC 10/11 default-colour queries, which surface on
+// `onData` like keystrokes do. Filtered out of the user-input forwarding path:
+// the HOST is the single authority for colour queries (it answers with the
+// session's spawn-time `themeHint`), and a per-viewer reply would race it with
+// a different answer per attached client. Deliberately restricted to the exact
+// report grammar xterm generates - `ESC ] 10|11 ; rgb:RRRR/GGGG/BBBB BEL|ST`
+// (16-bit X11 channels, see `toRgbString` in @xterm/xterm) - so a query or
+// colour-SET sequence arriving as genuine user input (a paste) still flows
+// through untouched.
+const OSC_COLOR_REPORT_PATTERN =
+  // eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
+  /\x1b\](?:10|11);rgb:[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)/g;
 const getEmptyFindTargetId = (): string | null => null;
 const ignoreSearchResults = (): void => {};
 
@@ -110,6 +131,11 @@ export interface TerminalXtermHostProps {
    * tile and session store report into.
    */
   readonly sessionId: string;
+  /**
+   * Bound owner host for warm-session identity. Terminal tiles pass the tab's
+   * lifetime `hostId`. `null` is the explicit hostless/non-terminal path.
+   */
+  readonly hostId: string | null;
   readonly tileKind: TerminalTileFindKind;
   /**
    * Per-tab instance id this host's persistent xterm engine is cached under in
@@ -212,6 +238,7 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // `props.instanceId` as dependencies. `sessionId` tags perf marks and builds
   // the engine; `instanceId` is the registry cache key.
   const sessionIdRef = useRef(props.sessionId);
+  const hostIdRef = useRef(props.hostId);
   const instanceIdRef = useRef(props.instanceId);
 
   // Theme + font tokens are read synchronously during render so the first call
@@ -285,6 +312,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     letterSpacing: 0,
     lineHeight: 1,
     theme,
+    // The host never answers OSC 10/11 background queries (the terminal is
+    // viewed from multiple clients whose themes can disagree, so there is no
+    // single true answer), which means a TUI probing for light/dark can guess
+    // wrong and paint its opposite-mode palette - e.g. bright-white text on
+    // ANSI black in a light terminal. Have xterm nudge any foreground toward
+    // WCAG AA against its cell background so a wrong guess degrades to a
+    // mismatched-but-readable theme instead of invisible text.
+    minimumContrastRatio: 4.5,
     // Programs emit arbitrary/binary bytes; xterm's VT parser logs (and
     // recovers from) every malformed sequence. Under a high-rate binary stream
     // that flood of `console.error`s is itself the bottleneck - in Electron each
@@ -345,15 +380,18 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     const mount = mountRef.current;
     if (mount === null) return;
     const sessionId = sessionIdRef.current;
+    const hostId = hostIdRef.current;
     const instanceId = instanceIdRef.current;
     // Adopt a closed tab's warm handle + engine for this session BEFORE the
     // acquire below can build a fresh engine under the new instance id. This
     // host is the earliest toucher of the engine registry (child layout
     // effects run before any parent bootstrap effect), so adoption must
     // happen here to keep the reopened tab's scrollback. Idempotent.
-    adoptWarmSessionInstance(sessionId, instanceId);
+    // Identity is `(hostId, sessionId)` so a same-id terminal on another host
+    // cannot steal this engine or its retained stream.
+    adoptWarmSessionInstance({ hostId, sessionId }, instanceId);
     const entry = acquireXtermHost(instanceId, () =>
-      createXtermEntry(sessionId, initialOptionsRef.current),
+      createXtermEntry(sessionId, hostId, initialOptionsRef.current),
     );
     // Point the engine's live callbacks at this host's current refs. On a
     // reattach this overwrites the previous host's wiring; the refs themselves
@@ -457,6 +495,21 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
       () => paneFocused && mountRef.current !== null,
     );
   }, [paneFocused, props.instanceId, props.registerImperativeFocus]);
+  // Input bridge for the mobile key bar. Registered unconditionally (unlike
+  // focus, which only some surfaces route imperatively): whichever tile hosts
+  // this engine on a phone is the one the bar targets. Injection goes through
+  // `term.input` so bar keys ride the ordinary onData -> writeInput path, and
+  // the cursor-key mode is read live so arrows encode the dialect (CSI vs
+  // SS3) the running program asked for via DECCKM.
+  useEffect(() => {
+    return registerTerminalKeyInput(props.instanceId, {
+      input: (data) => termRef.current?.input(data, true),
+      getCursorKeyMode: () =>
+        termRef.current?.modes.applicationCursorKeysMode === true
+          ? "application"
+          : "normal",
+    });
+  }, [props.instanceId]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
@@ -464,6 +517,37 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     termRef.current?.paste(input);
     termRef.current?.focus();
   }, []);
+
+  // Tap-to-focus for touch devices. xterm's own click-to-focus rides the
+  // compatibility mouse events iOS synthesizes after a tap, which don't
+  // arrive reliably over the terminal (xterm's touch scrolling swallows
+  // them) - so on a phone, tapping the terminal never focused it and the
+  // soft keyboard could not come up. Focus explicitly on a touch TAP, with a
+  // movement slop so finger-scrolling the buffer doesn't yank the keyboard
+  // open. Mouse/pen still use xterm's native mousedown focus path.
+  const touchTapStartRef = useRef<{ x: number; y: number } | null>(null);
+  const handleTouchPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (event.pointerType !== "touch") return;
+      touchTapStartRef.current = { x: event.clientX, y: event.clientY };
+    },
+    [],
+  );
+  const handleTouchPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (event.pointerType !== "touch") return;
+      const start = touchTapStartRef.current;
+      touchTapStartRef.current = null;
+      if (start === null) return;
+      const movedPx = Math.hypot(
+        event.clientX - start.x,
+        event.clientY - start.y,
+      );
+      if (movedPx > TOUCH_TAP_SLOP_PX) return;
+      termRef.current?.focus();
+    },
+    [],
+  );
 
   const handleDragEnter = useCallback(
     (event: DragEvent<HTMLDivElement>): void => {
@@ -571,6 +655,8 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onPasteCapture={handlePaste}
+        onPointerDown={handleTouchPointerDown}
+        onPointerUp={handleTouchPointerUp}
       />
       {isDraggingFiles ? (
         <div
@@ -609,6 +695,7 @@ function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
  */
 function createXtermEntry(
   sessionId: string,
+  hostId: string | null,
   initialOptions: XtermInitialOptions,
 ): XtermHostEntry {
   const live: XtermHostLiveCallbacks = {
@@ -697,9 +784,48 @@ function createXtermEntry(
   // snapshot (transport reconnect / reopen of a kept-alive engine) then arrives
   // for a buffer that already holds pre-disconnect content: see `writerProxy`.
   let hasReceivedContent = false;
+  // Live output chunks currently between `term.write` and its parse callback.
+  // xterm emits its OSC 10/11 colour-query replies synchronously WHILE parsing
+  // written output, so `> 0` is what distinguishes a generated reply from
+  // user input that merely looks like one (a pasted report while the terminal
+  // is idle) - payload shape alone cannot (CodeRabbit review on #1424).
+  let liveParseDepth = 0;
+  // A host answers colour queries itself from `terminal.create@2.1` (it
+  // replies with the session's spawn-time `themeHint`). Older hosts have no
+  // responder, so this viewer's xterm reply - imperfect as it is (it misses
+  // every startup probe and conflicts across viewers) - is the only answer a
+  // late-probing TUI would get there; suppressing it would be a regression
+  // (Codex review on #1424). Read per event, not captured: the negotiated
+  // manifest fills in on the first completed RPC and flips when a host is
+  // upgraded in place. `null` (no handshake recorded, or a legacy name-only
+  // recording) fails toward forwarding, the legacy-safe side.
+  const hostAnswersColorQueries = (): boolean => {
+    if (hostId === null) return false;
+    const version = getNegotiatedHostMethodVersion(hostId, "terminal.create");
+    if (version === null) return false;
+    return version.major > 2 || (version.major === 2 && version.minor >= 1);
+  };
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
-    live.onUserInput(d);
+    // The HOST answers OSC 10/11 default-colour queries (with the theme the
+    // session was spawned under - see `themeHint` on `terminal.create`), so
+    // xterm's own replies to queries it sees in the live stream must not be
+    // forwarded: with N attached viewers the TUI would otherwise hear N+1
+    // answers in unpredictable order, each viewer reporting its own theme.
+    // Replies are emitted as standalone onData payloads while a live chunk is
+    // mid-parse, never mixed with keystrokes; the remainder check keeps any
+    // interleaved real input. A paste that overlaps in-flight output is the
+    // one residual ambiguity and stays filtered only if it is byte-exact
+    // report grammar.
+    const filtered =
+      liveParseDepth > 0 && hostAnswersColorQueries()
+        ? d.replace(OSC_COLOR_REPORT_PATTERN, "")
+        : d;
+    if (filtered.length === 0 && d.length > 0) return;
+    // A sticky modifier latched on the mobile key bar combines with the next
+    // typed character here. Desktop input takes the empty-latch fast path
+    // (only the bar ever sets a latch).
+    live.onUserInput(applyTerminalKeyBarLatchToTypedInput(filtered));
   });
   const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
     live.onSearchResults(result);
@@ -790,7 +916,22 @@ function createXtermEntry(
       return;
     }
     hasReceivedContent = true;
-    term.write(write.chunk, write.onAckable);
+    // Track the parse window (see `liveParseDepth` at the onData handler):
+    // any OSC colour report xterm emits before this chunk's parse callback
+    // fires is a generated query reply, not user input. A zero-length chunk
+    // parses nothing and can reply to nothing, so it skips the window -
+    // xterm's WriteBuffer can drop callbacks queued behind an empty chunk
+    // (see the snapshot emulator's writeSnapshotChunk note host-side), and a
+    // leaked depth here would leave the reply filter latched on forever.
+    if (write.chunk.length === 0) {
+      term.write(write.chunk, write.onAckable);
+      return;
+    }
+    liveParseDepth += 1;
+    term.write(write.chunk, () => {
+      liveParseDepth = Math.max(0, liveParseDepth - 1);
+      write.onAckable();
+    });
   };
 
   // Measure the container's natural grid, or return null when the box is in a
@@ -858,7 +999,7 @@ function createXtermEntry(
         // pane wins"), the host grid legitimately differs from this pane's
         // natural size - still re-report (the host recompute no-ops), but
         // don't log it as a heal.
-        if (!hasPeerXtermHostForSession(sessionId, containerEl)) {
+        if (!hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)) {
           appLogger.warn(
             "[terminal] deferred grid reconcile healed a stale grid",
             {
@@ -891,7 +1032,7 @@ function createXtermEntry(
         latchSkipStreak += 1;
         if (
           latchSkipStreak >= GRID_LATCH_WARN_STREAK &&
-          !hasPeerXtermHostForSession(sessionId, containerEl)
+          !hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)
         ) {
           if (!latchWarned) {
             latchWarned = true;
@@ -985,6 +1126,7 @@ function createXtermEntry(
 
   return {
     sessionId,
+    hostId,
     containerEl,
     term,
     fitAddon,
@@ -1311,6 +1453,12 @@ function useActiveTerminalFocus(
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const focusVisibleTerminal = useCallback(() => {
     if (!shouldFocusOnActivePane) return;
+    // A phone keyboard must be summoned by a tap, not by pane activation: on
+    // the installed mobile app the terminal takes focus only from the tile's
+    // tap-to-focus path, which keeps the pane readable until the user asks to
+    // type. The key bar still reaches the engine while it is unfocused - it
+    // injects through `term.input`, not the hidden textarea.
+    if (isMobileApp()) return;
     if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
     focusTerminalInstance(instanceId);
   }, [instanceId, paneActivationFocusIntent, shouldFocusOnActivePane]);

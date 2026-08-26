@@ -57,7 +57,12 @@ export interface LogicalStreamInit {
 }
 
 export class LogicalStream implements IStreamSession {
-  readonly streamId: number;
+  /**
+   * Mutable via {@link adoptStreamIdForReopen} only: a retryable per-stream
+   * FATAL tombstones the current id on BOTH peers (R-2), so the session
+   * re-keys the stream to a fresh id before re-opening it.
+   */
+  private currentStreamId: number;
   readonly method: string;
   readonly qos: QosClassValue;
   private readonly paramsProvider: () => unknown;
@@ -82,7 +87,7 @@ export class LogicalStream implements IStreamSession {
   private disposed = false;
 
   constructor(init: LogicalStreamInit) {
-    this.streamId = init.streamId;
+    this.currentStreamId = init.streamId;
     this.method = init.method;
     this.paramsProvider = init.paramsProvider;
     this.schemaVersion = init.schemaVersion;
@@ -93,6 +98,10 @@ export class LogicalStream implements IStreamSession {
   /** Reads the latest params at the wire subscribe boundary. */
   readParams(): unknown {
     return this.paramsProvider();
+  }
+
+  get streamId(): number {
+    return this.currentStreamId;
   }
 
   // ---- IStreamSession ---------------------------------------------------- //
@@ -146,6 +155,19 @@ export class LogicalStream implements IStreamSession {
   }
 
   // ---- Session-driven hooks --------------------------------------------- //
+
+  /**
+   * Adopts a fresh wire id for a retryable re-open. The FATAL that made the
+   * re-open necessary tombstoned the old id on BOTH sides (R-2 /
+   * `r2-host-stream-tombstone`): the host drops every later frame for a
+   * terminal id at ingest - a SUBSCRIBE included - so a re-open under the old
+   * id can never be answered on the connection that carried the verdict. The
+   * session owns allocation and its own map re-keying; this hook only moves
+   * the stream's outbound addressing with it.
+   */
+  adoptStreamIdForReopen(streamId: number): void {
+    this.currentStreamId = streamId;
+  }
 
   /** The negotiated on-wire subscribe version for the current connection. */
   currentSchemaVersion(): SchemaVersion {

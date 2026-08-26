@@ -38,6 +38,16 @@ export const authQueryKeys = {
     authService,
     userId,
   ],
+  // "Link a phone" one-time code, keyed to the live AuthService and signed-in
+  // user like `userSessions`. The query re-mints on an interval while the
+  // panel is open; keying by user keeps a previous account's still-cached
+  // code from ever rendering for its replacement.
+  linkLoginCode: (authService: object, userId: string): readonly unknown[] => [
+    "auth",
+    "link-login-code",
+    authService,
+    userId,
+  ],
   // Stable, disabled key for when no `AuthService` binding is available yet
   // (mirrors `uiQueryKeys.hostPickerMissing`).
   registeredHostsMissing: (): readonly unknown[] => [
@@ -48,6 +58,29 @@ export const authQueryKeys = {
   userSessionsMissing: (): readonly unknown[] => [
     "auth",
     "user-sessions",
+    "missing",
+  ],
+  linkLoginCodeMissing: (): readonly unknown[] => [
+    "auth",
+    "link-login-code",
+    "missing",
+  ],
+  // The minter's watch on one displayed code — keyed by the code itself so
+  // rotation naturally starts a fresh watch.
+  linkLoginStatus: (
+    authService: object,
+    userId: string,
+    code: string,
+  ): readonly unknown[] => [
+    "auth",
+    "link-login-status",
+    authService,
+    userId,
+    code,
+  ],
+  linkLoginStatusMissing: (): readonly unknown[] => [
+    "auth",
+    "link-login-status",
     "missing",
   ],
 };

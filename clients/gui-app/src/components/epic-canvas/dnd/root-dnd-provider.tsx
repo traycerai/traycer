@@ -111,6 +111,7 @@ import {
 import { snapCenterToCursor } from "@dnd-kit/modifiers";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 /** Keep every root drag preview centered beneath pointer-based activators. */
 const ROOT_DRAG_OVERLAY_MODIFIERS = [snapCenterToCursor];
@@ -604,6 +605,10 @@ export function RootDndProvider(props: RootDndProviderProps) {
     [updateDropPreview],
   );
 
+  // Handed to the imperative reparent commit so an RPC-routed move can
+  // invalidate the moved node's record query on success - this provider is
+  // the nearest hook context to that commit.
+  const queryClient = useQueryClient();
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       // Pointer-up can race the final collision update: refresh the resolved
@@ -621,6 +626,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
           newParentId: reparent.newParentId,
           panelId: reparent.panelId,
           viewTabId: reparent.viewTabId,
+          queryClient,
         });
         lastResolvedDropRef.current = null;
         lastReparentDropRef.current = null;
@@ -680,7 +686,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       clearLastCollisionPointerPoint();
       useEpicDndStore.getState().dragEnded();
     },
-    [edgeDwell, navigate, navigateNested, updateDropPreview],
+    [edgeDwell, navigate, navigateNested, queryClient, updateDropPreview],
   );
 
   const handleDragCancel = useCallback(() => {

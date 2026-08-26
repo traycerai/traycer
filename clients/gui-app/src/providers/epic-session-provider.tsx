@@ -39,6 +39,7 @@ import {
   getEpicStreamClientFactoryOverride,
   getEpicSessionHandleHostId,
   getOpenEpicRegistry,
+  handleHostClients,
   handleHostIds,
   releaseOpenEpicSessionIfUnused,
 } from "@/lib/registries/epic-session-registry";
@@ -808,6 +809,16 @@ export function EpicSessionProvider(
   }, [epicId]);
 
   const handle = ownershipClaimed ? (session?.handle ?? null) : null;
+  // Stamp the SAME client the context below provides onto the handle, for
+  // imperative callers outside this subtree (the DnD reparent commit) that
+  // must address the host the session's records live on. Re-stamped on
+  // every change, unlike `handleHostIds`: the host id is the handle's
+  // transport binding and must not drift, the client is a requester for that
+  // binding and legitimately rotates (reconnect, identity re-point).
+  useEffect(() => {
+    if (handle === null) return;
+    handleHostClients.set(handle, resolvedSessionHostClient);
+  }, [handle, resolvedSessionHostClient]);
   const sessionPresentation = useMemo(
     () => ({
       ...presentation,

@@ -27,6 +27,7 @@ import {
 import { useImageAsset, type ImageAssetRequest } from "../use-image-asset";
 import type { AssetStreamFailureReason } from "@traycer-clients/shared/host-transport/asset-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 const tabHostIdRef = vi.hoisted(() => ({ value: "host-1" }));
 const wsStreamClientRef = vi.hoisted(() => ({
@@ -168,6 +169,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor() {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,

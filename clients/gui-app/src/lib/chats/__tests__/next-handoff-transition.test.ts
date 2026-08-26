@@ -103,10 +103,19 @@ describe("nextHandoffTransition", () => {
         "action-1": {
           action: "send",
           interviewBlockId: null,
+          interviewDeliveryRetry: null,
           clientActionId: "action-1",
           messageId: "message-1",
           acceptedAt: 1000,
           restoreContent: null,
+          restoreBrowserAnnotations: [],
+          sender: null,
+          settings: null,
+          accountContext: null,
+          deliveryPolicy: null,
+          restoreWorktreeIntent: null,
+          connectionEpoch: 0,
+          confirmedByHost: false,
         },
       },
     });
@@ -153,6 +162,8 @@ describe("nextHandoffTransition", () => {
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
@@ -173,6 +184,8 @@ describe("nextHandoffTransition", () => {
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(handoff, ctx)).toEqual({
@@ -190,6 +203,8 @@ describe("nextHandoffTransition", () => {
         content: CONTENT,
         browserAnnotations: [],
         reason: "Rejected",
+        displacedReason: "Rejected",
+        stated: false,
       },
     });
     expect(nextHandoffTransition(null, ctx)).toEqual({

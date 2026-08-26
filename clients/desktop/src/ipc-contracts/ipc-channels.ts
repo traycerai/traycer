@@ -36,6 +36,7 @@ export const RunnerHostInvoke = {
   authTokenStoreSignIn: "runnerHost:auth:tokenStore:signIn",
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
+  authTokenStoreDeleteIfToken: "runnerHost:auth:tokenStore:deleteIfToken",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
   // Remote Host Support (§7): `GET /api/v3/hosts` with the user bearer. Run in
   // main for the same CORS reason as the token validators — authn-v3's CORS
@@ -77,6 +78,11 @@ export const RunnerHostInvoke = {
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
+  // Opens a file `fileSave` wrote earlier in this process lifetime with the
+  // OS default app (the "Open file" action on the saved toast). Main keeps
+  // the allowlist of paths it saved, so the renderer can only ever open what
+  // the user just chose in the native save dialog - never an arbitrary path.
+  fileOpenSaved: "runnerHost:file:openSaved",
   clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   // The `hostId` in `pid.json`, read as a pure structural parse with no
@@ -188,6 +194,7 @@ export const RunnerHostInvoke = {
   appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
   appUpdateDownload: "runnerHost:appUpdate:download",
   appUpdateInstall: "runnerHost:appUpdate:install",
+  appUpdateResolveCompatRecovery: "runnerHost:appUpdate:resolveCompatRecovery",
   globalShortcutsGetSnapshot: "runnerHost:globalShortcuts:getSnapshot",
   globalShortcutsSet: "runnerHost:globalShortcuts:set",
   systemPreferencesAccentColor: "runnerHost:systemPreferences:accentColor",

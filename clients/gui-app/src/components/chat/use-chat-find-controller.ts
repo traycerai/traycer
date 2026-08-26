@@ -16,7 +16,12 @@ import {
   type ChatTimelineNavigationLocation,
 } from "@/components/chat/chat-messages-scroll-helpers";
 import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
-import { useSetChatFindForcedOpen } from "@/stores/chats/chat-find-force-store-context";
+import {
+  useChatFindActiveTargetClearEpoch,
+  useReconcileChatFindActiveTarget,
+  useSetChatFindActiveTarget,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
 import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -92,6 +97,9 @@ export function useChatFindController(
   } = args;
 
   const setFindForcedOpen = useSetChatFindForcedOpen();
+  const setFindActiveTarget = useSetChatFindActiveTarget();
+  const reconcileFindActiveTarget = useReconcileChatFindActiveTarget();
+  const activeTargetClearEpoch = useChatFindActiveTargetClearEpoch();
   const tileFindContext = use(TileFindContext);
 
   const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
@@ -135,7 +143,13 @@ export function useChatFindController(
     cancelMountedHighlightSyncFrame();
     mountedHighlightSyncFrameRef.current = window.requestAnimationFrame(() => {
       mountedHighlightSyncFrameRef.current = null;
-      if (activeFindRevealRef.current !== null) return;
+      if (activeFindRevealRef.current !== null) {
+        scheduleFindRevealStepRef.current(
+          findRevealGenerationRef.current,
+          findRevealSkipUnitScrollRef.current,
+        );
+        return;
+      }
       chatFindAdapterRef.current?.syncMountedHighlight();
     });
   }, [cancelMountedHighlightSyncFrame]);
@@ -236,6 +250,18 @@ export function useChatFindController(
       // stability mechanism (behavior contract) - the chain-open flows
       // directly into it, with no bespoke scroll-preservation wrapper.
       applyFindOpenedChain(target.owningChain);
+      const interviewKey = target.owningChain.find(
+        (key) => key.kind === "interview",
+      );
+      const findTarget =
+        interviewKey === undefined
+          ? null
+          : { key: interviewKey, unitId: target.unitId };
+      if (forceApply) {
+        setFindActiveTarget(findTarget);
+      } else {
+        reconcileFindActiveTarget(findTarget);
+      }
       findOpenedTargetRef.current = {
         messageId: target.messageId,
         unitId: target.unitId,
@@ -243,24 +269,38 @@ export function useChatFindController(
       };
       return true;
     },
-    [applyFindOpenedChain],
+    [applyFindOpenedChain, reconcileFindActiveTarget, setFindActiveTarget],
   );
 
-  const releaseFindOpenedChain = useCallback((): void => {
-    findOpenedChainRef.current.forEach((key) => {
-      setFindForcedOpen(key, false);
-    });
-    findOpenedChainRef.current = [];
-    findOpenedTargetRef.current = null;
-  }, [setFindForcedOpen]);
+  const releaseFindOpenedChain = useCallback(
+    (clearActiveTarget: boolean): void => {
+      findOpenedChainRef.current.forEach((key) => {
+        setFindForcedOpen(key, false);
+      });
+      findOpenedChainRef.current = [];
+      findOpenedTargetRef.current = null;
+      if (clearActiveTarget) setFindActiveTarget(null);
+    },
+    [setFindActiveTarget, setFindForcedOpen],
+  );
 
   const clearFindReveal = useCallback((): void => {
     findRevealGenerationRef.current += 1;
     activeFindRevealRef.current = null;
     findRevealAnchorMissCountRef.current = 0;
     cancelFindRevealFrame();
-    releaseFindOpenedChain();
+    releaseFindOpenedChain(true);
   }, [cancelFindRevealFrame, releaseFindOpenedChain]);
+
+  useLayoutEffect(() => {
+    if (activeTargetClearEpoch === 0) return;
+    findRevealGenerationRef.current += 1;
+    activeFindRevealRef.current = null;
+    findRevealAnchorMissCountRef.current = 0;
+    cancelFindRevealFrame();
+    releaseFindOpenedChain(false);
+    chatFindAdapterRef.current?.dismissActiveMatch();
+  }, [activeTargetClearEpoch, cancelFindRevealFrame, releaseFindOpenedChain]);
 
   const scheduleFindRevealStep = useCallback(
     (generation: number, skipUnitScroll: boolean): void => {

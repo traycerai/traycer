@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useRouter } from "@tanstack/react-router";
 import {
   clearHistorySearchParams,
@@ -28,6 +28,18 @@ export function useRouteHistorySearchState(
   routeSearch: HistorySearchState,
 ): HistorySearchController {
   const router = useRouter();
+
+  // The route owns the live truth; the ambient store owns the MEMORY. Mirror
+  // every state the route reaches into the store, so the next bare entry to
+  // any history surface (the phone's full-page route, the modal, the home
+  // list) reopens where the user left off. Write-only `getState()` access:
+  // subscribing would wake the route tree on ambient changes, which this hook
+  // deliberately avoids. Spreading the full state makes the patch an
+  // overwrite, so the store adopts the route's state verbatim rather than
+  // merging into whatever it held before.
+  useEffect(() => {
+    useHistorySearchStore.getState().update({ ...routeSearch });
+  }, [routeSearch]);
 
   const update = useCallback(
     (patch: HistorySearchPatch): void => {

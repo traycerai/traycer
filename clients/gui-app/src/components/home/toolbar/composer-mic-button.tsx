@@ -3,6 +3,7 @@ import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
@@ -49,9 +50,13 @@ export function ComposerMicButton({
   const isRecording = state === "recording";
   const label = labelFor(state);
   // Surface the (live, rebindable) shortcut in the tooltip when idle so it's
-  // discoverable; omit it if the user has unbound the action.
+  // discoverable; omit it where the action is unbound, or where shortcut hints
+  // are suppressed - the tooltip then carries the plain action label.
   const boundChord = useBindingForAction(DICTATION_ACTION_ID);
-  const hint = boundChord === null ? null : formatChordForDisplay(boundChord);
+  const hint =
+    boundChord === null || !shortcutHintsVisible()
+      ? null
+      : formatChordForDisplay(boundChord);
   const title =
     (state === "idle" || state === "error") && hint !== null
       ? `${label} (${hint})`

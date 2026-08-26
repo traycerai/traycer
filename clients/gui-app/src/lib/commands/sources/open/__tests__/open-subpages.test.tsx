@@ -318,6 +318,7 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Copilot sign-in",
           cwd: "~",
+          lifecycleOwner: "manager",
         },
         {
           sessionId: "term-setup",
@@ -326,6 +327,16 @@ vi.mock("@/hooks/terminal/use-terminal-list-query", () => ({
           status: "running",
           title: "Setup: traycer feature",
           cwd: "/work/repo",
+          lifecycleOwner: "manager",
+        },
+        {
+          sessionId: "term-registry",
+          scope: { kind: "epic", epicId: "epic-1" },
+          sessionKind: "terminal",
+          status: "running",
+          title: "durable shadow",
+          cwd: "/work/repo",
+          lifecycleOwner: "registry",
         },
       ],
     },
@@ -751,9 +762,15 @@ describe("Terminals opener sub-page", () => {
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
   });
 
-  it("keeps setup-disabled workspaces visible as non-actionable rows", () => {
+  it("keeps failed setup visible while allowing terminal creation", () => {
     terminalBindingsMock.active.data.rows = [
-      { ...ACTIVE_ROWS[0], disabledReason: "setup_failed" },
+      {
+        ...ACTIVE_ROWS[0],
+        setupState: "failed",
+        // Compatibility with an older host that still projected setup failure
+        // as a disabled reason.
+        disabledReason: "setup_failed",
+      },
     ];
     const items = renderItems(useTerminalsOpenerItems);
     const newTerminal = items[0];
@@ -761,17 +778,19 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal workspace subpage");
     }
 
-    const disabled = renderItems(newTerminal.subpage.useItems).find(
+    const warning = renderItems(newTerminal.subpage.useItems).find(
       (item) => item.label === "/work/active-repo",
     );
-    if (disabled === undefined) {
-      throw new Error("expected disabled workspace row");
+    if (warning === undefined) {
+      throw new Error("expected setup warning workspace row");
     }
-    expect(disabled.description).toBe("Workspace unavailable: failed");
-    expect(disabled.statusBadge).toBe("Unavailable: failed");
-    expect(disabled.disabled).toBe(true);
-    void disabled.run(CTX);
-    expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
+    expect(warning.description).toBe(
+      "Setup did not complete, but the worktree is still usable.",
+    );
+    expect(warning.statusBadge).toBe("Setup failed");
+    expect(warning.disabled).not.toBe(true);
+    void warning.run(CTX);
+    expect(spies.openTileIntoTargetGroup).toHaveBeenCalledTimes(1);
   });
 
   it("shows an error when a folderless terminal directory cannot be resolved", () => {
@@ -855,6 +874,43 @@ describe("Terminals opener sub-page", () => {
       throw new Error("expected terminal");
     }
     expect(plainOpened.ref.origin).toBeUndefined();
+  });
+
+  it("carries manager lifecycleOwner from the list without origin-store evidence", () => {
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-setup");
+    const setupOpened = lastTileOpen();
+    if (setupOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(setupOpened.ref.lifecycleOwner).toBe("manager");
+    expect(setupOpened.ref.origin).toBeUndefined();
+    expect(setupOpened.ref.hostId).toBe("default-host");
+    expect(isHostEpicTerminalRef(setupOpened.ref)).toBe(false);
+
+    runById(items, "open:terminals:term-signin");
+    const loginOpened = lastTileOpen();
+    if (loginOpened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(loginOpened.ref.lifecycleOwner).toBe("manager");
+    expect(loginOpened.ref.origin).toBeUndefined();
+  });
+
+  it("keeps a registry listed row as an import candidate even with a stale origin cache", () => {
+    recordSetupTerminal({
+      hostId: "default-host",
+      sessionId: "term-registry",
+    });
+    const items = renderItems(useTerminalsOpenerItems);
+    runById(items, "open:terminals:term-registry");
+    const opened = lastTileOpen();
+    if (opened.ref.type !== "terminal") {
+      throw new Error("expected terminal");
+    }
+    expect(opened.ref.lifecycleOwner).toBe("registry");
+    expect(opened.ref.origin).toBe("setup");
+    expect(isHostEpicTerminalRef(opened.ref)).toBe(false);
   });
 });
 

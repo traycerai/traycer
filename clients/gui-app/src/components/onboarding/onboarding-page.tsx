@@ -29,6 +29,7 @@ import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { getClientAppVersionLabel } from "@/lib/app-version";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import {
   selectIsLastStep,
   selectStep,
@@ -362,11 +363,15 @@ function ProgressRail(props: { activeIndex: number }) {
   );
 }
 
+// The intro's own key cap - tuned to the diorama's palette rather than the
+// app's `components/ui/kbd`. It only ever advertises the tour's navigation
+// chords, so the whole component gates rather than each of its call sites.
 function Kbd(props: {
   readonly children: ReactNode;
   readonly tone: "light" | "dark";
 }) {
   const { children, tone } = props;
+  if (!shortcutHintsVisible()) return null;
   return (
     <kbd
       className={cn(
@@ -651,7 +656,19 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
       />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(14,27,24,0.88),rgba(14,27,24,0.88)),radial-gradient(120%_90%_at_50%_-18%,rgba(95,125,113,0.18),transparent_58%)]" />
 
-      <div className="relative z-10 grid h-full w-full grid-rows-[var(--onboarding-shell-rows)] overflow-hidden">
+      {/* The content layer of a full-bleed surface, so it carries every inset
+          the standalone shell deliberately does not. The shell is `fixed`, so
+          it escapes ALL THREE of `#root`'s reservations at once - the status
+          bar and both landscape sides - and the backdrop siblings above are
+          meant to keep that. Everything the user reads or taps hangs off this
+          grid: the Skip control in the header row, the stage, the progress and
+          action rails, and the footer links.
+          The bottom is this surface's own call rather than something `#root`
+          gave up, and it is taken: the last grid row centres its footer line
+          box, so the row's height stands the ROW off the screen edge while
+          leaving the text inside it much closer. Padding the grid moves the
+          whole band instead, and the flexible middle row absorbs it. */}
+      <div className="relative z-10 grid h-full w-full grid-rows-[var(--onboarding-shell-rows)] overflow-hidden pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left">
         <header className="relative z-10">
           <div className="relative flex h-full items-center justify-center px-10 max-sm:px-5">
             <OnboardingWordmark />

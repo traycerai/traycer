@@ -171,6 +171,7 @@ function renderHost(): void {
   render(
     <TerminalXtermHost
       sessionId="test-session"
+      hostId="host-1"
       tileKind="terminal"
       instanceId="test-instance"
       effectiveCols={80}
@@ -213,6 +214,7 @@ function renderHostWithBrowserRouting(): void {
       }}
     >
       <TerminalXtermHost
+        hostId={SOURCE_TILE.hostId}
         sessionId="test-session"
         tileKind="terminal"
         instanceId="test-instance"

@@ -3,6 +3,8 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreImage,
+  contentBlockSchemaPreReasonix,
+  contentBlockSchemaPreSettlement,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -13,10 +15,13 @@ import {
 import {
   agentSenderSchema,
   agentSenderSchemaPreInReplyTo,
+  agentSenderSchemaPreReasonix,
   chatSessionAnchorSchema,
+  chatSessionAnchorSchemaPreReasonix,
   chatSessionAnchorSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
+  userMessageSenderSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 
@@ -381,6 +386,66 @@ export const messageSchema = z.discriminatedUnion("role", [
 ]);
 export type Message = z.infer<typeof messageSchema>;
 
+// ── Wire-freeze variants (pre-Reasonix, LIVE shape) ─────────────────────────
+// Hand-frozen copies of the LIVE message schemas — every field the live shapes
+// carry, including `imageResolutions` and the `turnTailUuid`-bearing anchor —
+// with only the harness-bearing leaves swapped for their pre-Reasonix copies.
+// Bound to `chat.subscribe@1.6`, which shipped that whole shape at 19 harness
+// ids. The `1.0–1.5` copies above additionally freeze shape; these freeze the
+// enum alone. Field-for-field hand copies, NOT `.extend()` off the live shape.
+export const userMessageSchemaPreReasonix = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchemaPreReasonix,
+    message: userMessagePayloadSchema,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchemaPreReasonix.nullable(),
+  })
+  .superRefine((message, ctx) => {
+    if (message.sender.type === message.message.kind) return;
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["message", "kind"],
+      message: "User message sender.type must match message.kind.",
+    });
+  });
+
+/**
+ * Exact user-message branch released on `chat.subscribe@1.6`: live session
+ * anchors, but neither Reasonix sender ids nor browser payload fields.
+ */
+export const userMessageSchemaV16 = z
+  .object({
+    role: z.literal("user"),
+    messageId: z.string(),
+    sender: userMessageSenderSchemaPreReasonix,
+    message: userMessagePayloadSchemaPreAnnotation,
+    timestamp: z.number(),
+    sessionAnchor: chatSessionAnchorSchemaPreReasonix.nullable(),
+  })
+  .superRefine(userMessageSenderKindRefine);
+
+export const assistantMessageSchemaPreReasonix = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchemaPreReasonix,
+  blocks: z.array(contentBlockSchemaPreReasonix),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+export const messageSchemaPreReasonix = z.discriminatedUnion("role", [
+  userMessageSchemaPreReasonix,
+  assistantMessageSchemaPreReasonix,
+]);
+
 // ── Wire-freeze variants (pre-inReplyTo) ────────────────────────────────────
 // Hand-frozen copies of the message schemas with the sender leaf swapped for
 // its pre-`inReplyTo` freeze (see `agentSenderSchemaPreInReplyTo`). Bound to the
@@ -388,7 +453,9 @@ export type Message = z.infer<typeof messageSchema>;
 // match the shipped wire and strip `inReplyTo` for older peers. Field-for-field
 // hand copies, NOT `.omit()`/`.extend()` off the live shape — a future message
 // field must not silently leak onto the frozen wire. Non-sender fields reuse the
-// live sub-schemas (same convention as the frozen `chatSnapshotSchemaV1x`).
+// live sub-schemas except the session anchor: released peers must also stay on
+// the pre-Reasonix anchor union, otherwise a new host can emit a discriminant
+// their installed schema does not know.
 export const userMessageSchemaPreInReplyTo = z
   .object({
     role: z.literal("user"),
@@ -396,7 +463,7 @@ export const userMessageSchemaPreInReplyTo = z
     sender: userMessageSenderSchemaPreInReplyTo,
     message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
-    sessionAnchor: chatSessionAnchorSchema.nullable(),
+    sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
 
@@ -404,6 +471,8 @@ export const assistantMessageSchemaPreInReplyTo = z.object({
   role: z.literal("assistant"),
   messageId: z.string().min(1),
   sender: agentSenderSchemaPreInReplyTo,
+  // Pre-Reasonix block union: `plan`, `text.providerNotice` and `steer.sender`
+  // all carry a harness id onto this released line.
   blocks: z.array(contentBlockSchemaPreImage),
   startedAt: z.number().nullable().default(null),
   blocksVersion: z.number().int().nonnegative().optional(),
@@ -434,7 +503,9 @@ export const messageSchemaPreInReplyTo = z.discriminatedUnion("role", [
 export const assistantMessageSchemaPreImage = z.object({
   role: z.literal("assistant"),
   messageId: z.string().min(1),
-  sender: agentSenderSchema,
+  // Pre-Reasonix sender + block union. `1.4`/`1.5` shipped `inReplyTo`, so the
+  // sender keeps that field and freezes only the harness enum.
+  sender: agentSenderSchemaPreReasonix,
   blocks: z.array(contentBlockSchemaPreImage),
   startedAt: z.number().nullable().default(null),
   blocksVersion: z.number().int().nonnegative().optional(),
@@ -457,7 +528,9 @@ export const userMessageSchemaPreTurnTail = z
   .object({
     role: z.literal("user"),
     messageId: z.string(),
-    sender: userMessageSenderSchema,
+    // Pre-Reasonix sender: an agent-as-user (A2A) row carries the sending
+    // agent's harness id onto this released line.
+    sender: userMessageSenderSchemaPreReasonix,
     message: userMessagePayloadSchemaPreAnnotation,
     timestamp: z.number(),
     sessionAnchor: chatSessionAnchorSchemaPreTurnTail.nullable(),
@@ -472,4 +545,44 @@ export const userMessageSchemaPreTurnTail = z
 export const messageSchemaPreImage = z.discriminatedUnion("role", [
   userMessageSchemaPreTurnTail,
   assistantMessageSchemaPreImage,
+]);
+
+// ── Wire-freeze variant (pre-interview-settlement, `chat.subscribe@1.6`) ────
+// Hand-frozen copy of `assistantMessageSchema` as the `host-v1.2.0-rc.1` `1.6`
+// line shipped it: the image fields ARE present (that is the minor that added
+// them), and only `blocks` is swapped for the frozen
+// `contentBlockSchemaPreSettlement` union so a `1.6` peer never observes
+// canonical interview settlement or answer selection evidence.
+//
+// `sender` additionally takes its pre-Reasonix freeze: `1.6` is released with a
+// nineteen-id harness enum, so the assistant row's `harnessId` - stamped
+// per-turn off the chat's settings and never rewritten - must not carry an id
+// that cohort cannot decode.
+//
+// Field-for-field hand copy, NOT `.omit()`/`.extend()` - see
+// `assistantMessageSchemaPreImage` for why a released line must not follow the
+// live shape by reference.
+export const assistantMessageSchemaPreSettlement = z.object({
+  role: z.literal("assistant"),
+  messageId: z.string().min(1),
+  sender: agentSenderSchemaPreReasonix,
+  blocks: z.array(contentBlockSchemaPreSettlement),
+  startedAt: z.number().nullable().default(null),
+  blocksVersion: z.number().int().nonnegative().optional(),
+  timestamp: z.number(),
+  turnId: z.string().nullable(),
+  usage: tokenUsageSchema.nullable(),
+  reasoningEffort: z.string().nullable().default(null),
+  serviceTier: z.string().nullable().default(null),
+  imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+
+// The user branch keeps every live field EXCEPT the harness enum: the Claude
+// anchor's `turnTailUuid` predates the `1.6` cut so a real `1.6` peer does
+// observe it, but that peer's `sessionAnchor` union has no Reasonix variant and
+// its A2A sender enum has no Reasonix id. Browser payload fields also arrived
+// after 1.6, so the user branch binds the exact combined freeze.
+export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
+  userMessageSchemaV16,
+  assistantMessageSchemaPreSettlement,
 ]);

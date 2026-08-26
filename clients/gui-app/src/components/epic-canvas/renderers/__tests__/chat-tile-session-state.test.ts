@@ -737,9 +737,12 @@ describe("canModifyChatMessages", () => {
     content: CONTENT,
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
+    accountContext: { type: "PERSONAL" },
+    deliveryPolicy: null,
     timestamp: 0,
     restoreContent: CONTENT,
     restoreBrowserAnnotations: [],
+    restoreWorktreeIntent: null,
   };
 
   function gateState(
@@ -897,7 +900,11 @@ function interviewMessage(
       description: null,
       questions: [],
       answers: [],
+      draftAnswers: [],
+      outcome: null,
+      settlement: null,
       error: null,
+      delivery: null,
       forkedWithoutAnswer: false,
     })),
   };

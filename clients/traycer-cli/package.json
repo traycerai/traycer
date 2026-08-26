@@ -33,6 +33,7 @@
     "@sentry/node": "catalog:",
     "commander": "catalog:",
     "node-stream-zip": "catalog:",
+    "qrcode": "catalog:",
     "tar": "^7.5.22",
     "undici": "catalog:",
     "zod": "catalog:"
@@ -42,6 +43,7 @@
     "@traycer/protocol": "workspace:*",
     "@traycer-clients/shared": "workspace:*",
     "@types/node": "catalog:",
+    "@types/qrcode": "catalog:",
     "@typescript-eslint/eslint-plugin": "catalog:",
     "@typescript-eslint/parser": "catalog:",
     "esbuild": "catalog:",

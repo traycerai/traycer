@@ -10,6 +10,9 @@ import { Analytics } from "@/lib/analytics";
  */
 export type AuthStatus = "signed-out" | "signing-in" | "signed-in";
 
+/** Which sign-in flow started the attempt currently projected as running. */
+export type SignInAttemptKind = "device" | "link";
+
 /**
  * Subset of the AuthnV3 `/api/v3/user` response that the GUI surfaces in the
  * UserMenu. Identity fields are present because `AuthService.validateToken`
@@ -79,7 +82,17 @@ export interface AuthState {
    * successful validation so entitlement-gated surfaces react to restores.
    */
   readonly subscriptionStatus: SubscriptionStatus | null;
-  setSigningIn(): void;
+  /**
+   * Which flow owns the in-flight attempt, or `null` when none is running.
+   *
+   * `status === "signing-in"` alone cannot answer that, and surfaces do need
+   * to know: the device flow's "Taking too long? Retry" is a correct escape
+   * hatch from a stalled browser round trip and a destructive one during a
+   * link claim, where `signIn()` would supersede a claim the user is being
+   * asked to approve on their desktop right now.
+   */
+  readonly signingInAttempt: SignInAttemptKind | null;
+  setSigningIn(attempt: SignInAttemptKind): void;
   setSignedIn(
     profile: AuthProfile,
     contextMetadata: AuthContextMetadata,
@@ -105,12 +118,13 @@ function coalesceUserName(
 
 export const useAuthStore = create<AuthState>()((set) => ({
   status: "signed-out",
+  signingInAttempt: null,
   profile: null,
   contextMetadata: null,
   shareableTeams: [],
   subscriptionStatus: null,
-  setSigningIn: () => {
-    set({ status: "signing-in" });
+  setSigningIn: (attempt: SignInAttemptKind) => {
+    set({ status: "signing-in", signingInAttempt: attempt });
   },
   setSignedIn: (
     profile: AuthProfile,
@@ -132,6 +146,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
     };
     set({
       status: "signed-in",
+      signingInAttempt: null,
       profile: safeProfile,
       contextMetadata,
       shareableTeams,
@@ -147,6 +162,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
   setSignedOut: () => {
     set({
       status: "signed-out",
+      signingInAttempt: null,
       profile: null,
       contextMetadata: null,
       shareableTeams: [],

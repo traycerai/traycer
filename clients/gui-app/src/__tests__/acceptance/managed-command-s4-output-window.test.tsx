@@ -127,6 +127,7 @@ interface OutputWire {
 
 let wire: OutputWire | null = null;
 let epicHandle: OpenEpicStoreHandle | null = null;
+let restoreLayoutGeometry: () => void;
 // Counts every stream open, mount and Retry alike - a Retry test's proof that
 // it opened a NEW stream rather than resuming the failed one.
 let outputWireFactoryCalls = 0;
@@ -153,6 +154,14 @@ function installOutputWire(over: {
           // Everything the viewer sends must itself be a valid client frame.
           current.sentLoadOlder.push(
             managedCommandSubscribeOutputClientFrameSchema.parse(frame),
+          );
+        },
+        resnapshot: () => {
+          current.sentLoadOlder.push(
+            managedCommandSubscribeOutputClientFrameSchema.parse({
+              kind: "resnapshot",
+              hasBinaryPayload: false,
+            }),
           );
         },
         close: () => undefined,
@@ -223,10 +232,14 @@ function emitOutput(lines: readonly ManagedCommandLogLine[]): void {
     kind: "output",
     hasBinaryPayload: false,
     lines,
+    start: { segmentId: "seg-live", byteOffset: T0 },
   });
   if (frame.kind !== "output") throw new Error("unreachable");
   act(() => {
-    connectedWire().callbacks.onOutput(frame.lines);
+    connectedWire().callbacks.onOutput({
+      lines: frame.lines,
+      start: frame.start,
+    });
   });
 }
 
@@ -331,6 +344,21 @@ function setScrollGeometry(
 const START: ManagedCommandLogPosition = { segmentId: "seg-2", byteOffset: 0 };
 
 beforeEach(() => {
+  // The virtualizer reads offset geometry as it attaches. Give jsdom a real
+  // viewport and realistic row heights; per-test scroll geometry below still
+  // owns the follow/load-older decisions being exercised.
+  const heightSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.dataset.index === undefined ? 600 : 24;
+    });
+  const widthSpy = vi
+    .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+    .mockReturnValue(800);
+  restoreLayoutGeometry = () => {
+    heightSpy.mockRestore();
+    widthSpy.mockRestore();
+  };
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
     tabsById: { [TAB_ID]: { tabId: TAB_ID, epicId: EPIC_ID, name: "Epic" } },
@@ -344,6 +372,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  restoreLayoutGeometry();
   __setManagedCommandOutputStreamClientFactoryForTests(null);
   epicHandle?.dispose();
   epicHandle = null;
@@ -471,12 +500,31 @@ describe("S4 · output window", () => {
     fireEvent.scroll(view);
     expect(screen.getByTestId("managed-command-output-jump-live")).toBeTruthy();
 
-    // ...so new lines no longer move the view.
+    // ...so new lines are discarded from the held history window and only
+    // advertise that fresh output is available.
     emitOutput([{ channel: "stdout", text: "line 2", atMs: T0 + 2 }]);
     expect(view.scrollTop).toBe(100);
+    expect(
+      screen.getByTestId("managed-command-output-jump-live").textContent,
+    ).toContain("New output available");
 
-    // The jump-to-live affordance resumes following.
+    // Jump requests one positioned replacement snapshot. The stale history
+    // stays put until that snapshot lands; no disconnected output is appended.
     fireEvent.click(screen.getByTestId("managed-command-output-jump-live"));
+    expect(connectedWire().sentLoadOlder).toContainEqual({
+      kind: "resnapshot",
+      hasBinaryPayload: false,
+    });
+    expect(view.scrollTop).toBe(100);
+    emitSnapshot({
+      command: makeCommand({}),
+      lines: [
+        { channel: "stdout", text: "line 1", atMs: T0 + 1 },
+        { channel: "stdout", text: "line 2", atMs: T0 + 2 },
+      ],
+      start: START,
+      reachedStart: false,
+    });
     expect(view.scrollTop).toBe(1_000);
     expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
     emitOutput([{ channel: "stdout", text: "line 3", atMs: T0 + 3 }]);

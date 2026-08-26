@@ -99,6 +99,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -225,9 +226,11 @@ function renderDropdown(
         digit: String(index + 1),
         label: `Hint ${index + 1}`,
       })}
+      profileEnablementPending={null}
       contentContainer={null}
       onCloseAutoFocus={null}
       usagePresentation={usagePresentation}
+      eligibilityControls={null}
       admissionByProfileId={null}
     />,
   );

@@ -1,5 +1,13 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   act,
   cleanup,
@@ -9,7 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -47,6 +55,13 @@ import {
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { __resetWorkspaceFileListSubscriptionsForTesting } from "@/hooks/workspace/use-workspace-file-list-subscription";
+import {
+  requestFileTreeReveal,
+  useFileTreeRevealStore,
+} from "@/stores/file-tree/file-tree-reveal-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
 
 const HOST_ID = "host-1";
 const EPIC_ID = "epic-1";
@@ -173,6 +188,36 @@ vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
 const expandedInModel = new Set<string>();
 const expandedAtLastReset = new Set<string>();
 
+// Reveal-in-sidebar mechanism state, additive to the expansion/search state
+// above. `selectedInModel` mirrors Pierre's own selection set; `getItem`'s
+// file handles read/write it and report every change through the SAME
+// `onSelectionChange` callback a real click lands in (captured below), which
+// is what lets the reveal effect's programmatic-selection guard be exercised
+// here rather than assumed.
+const selectedInModel = new Set<string>();
+const scrollToPathCalls: Array<{
+  readonly path: string;
+  readonly options: { readonly offset: string };
+}> = [];
+const modelListeners = new Set<() => void>();
+// Captured from the real `useFileTree(options)` call the panel makes - the
+// mocked hook below stashes `options.onSelectionChange` here so a test can
+// invoke it directly, the same way Pierre invokes it on a real row click.
+let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
+  null;
+// Row geometry the panel asked Pierre for. Only observable here: `useFileTree`
+// reads its options once, at construction, and the model exposes no getter the
+// panel could be asked afterwards.
+let capturedItemHeight: number | undefined = undefined;
+
+function notifyModel(): void {
+  for (const listener of modelListeners) listener();
+}
+
+function reportSelectionChange(): void {
+  capturedOnSelectionChange?.([...selectedInModel]);
+}
+
 // Reactive search snapshot for the mocked `useFileTreeSearch`, recomputed on
 // every setSearch/resetPaths so the panel's zero-match empty state is
 // observable. Matching mirrors the real controller: case-insensitive
@@ -253,25 +298,78 @@ const mockModel = {
     mockListedPaths = paths;
     refreshSearchSnapshot();
   },
-  subscribe: () => () => undefined,
-  getItem: (path: string) =>
-    path.endsWith("/")
-      ? {
-          isDirectory: () => true,
-          isExpanded: () => expandedInModel.has(path),
-        }
-      : null,
+  subscribe: (listener: () => void) => {
+    modelListeners.add(listener);
+    return () => {
+      modelListeners.delete(listener);
+    };
+  },
+  // A directory handle is only returned once the host has actually LISTED
+  // that path (membership in `mockListedPaths`), not merely because the
+  // token ends with "/" - the real model has no notion of a directory it has
+  // never been told about. This is what makes the reveal walk incremental in
+  // these tests: `expand()` on an as-yet-unlisted ancestor is simply
+  // unreachable, exactly as `model.getItem` returning `null` gates it in the
+  // real component.
+  getItem: (path: string) => {
+    if (!mockListedPaths.includes(path)) return null;
+    if (path.endsWith("/")) {
+      return {
+        isDirectory: () => true,
+        isExpanded: () => expandedInModel.has(path),
+        expand: () => {
+          expandedInModel.add(path);
+          notifyModel();
+        },
+        isSelected: () => false,
+        select: () => undefined,
+        deselect: () => undefined,
+        getPath: () => path,
+      };
+    }
+    return {
+      isDirectory: () => false,
+      isExpanded: () => false,
+      isSelected: () => selectedInModel.has(path),
+      select: () => {
+        selectedInModel.add(path);
+        reportSelectionChange();
+      },
+      deselect: () => {
+        selectedInModel.delete(path);
+        reportSelectionChange();
+      },
+      getPath: () => path,
+    };
+  },
+  getSelectedPaths: () => [...selectedInModel],
+  scrollToPath: (path: string, options: { readonly offset: string }) => {
+    scrollToPathCalls.push({ path, options });
+  },
 };
 
 vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
   useFileTreeSearch: () =>
     useSyncExternalStore(subscribeToSearchSnapshot, getSearchSnapshot),
-  useFileTree: () => ({ model: mockModel }),
+  useFileTree: (options: {
+    readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
+    readonly itemHeight: number | undefined;
+  }) => {
+    capturedOnSelectionChange = options.onSelectionChange;
+    // Mount-captured, exactly like the real hook's `useState(() => new
+    // FileTree(options))`. Recording it per RENDER instead would make the row
+    // geometry look reactive here when it is not, and the viewport-transition
+    // case below would pass without the body ever having been rebuilt.
+    const [itemHeightAtConstruction] = useState(() => options.itemHeight);
+    capturedItemHeight = itemHeightAtConstruction;
+    return { model: mockModel };
+  },
 }));
 
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
+import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
 
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -307,6 +405,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   constructor(private readonly support: StreamMethodSupport) {
     super({
+      clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
       bearer: () => null,
@@ -488,6 +587,10 @@ describe("sidebar file tree source selection", () => {
     searchCalls.length = 0;
     expandedInModel.clear();
     expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
     installSearchHost({});
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
@@ -603,6 +706,10 @@ describe("sidebar file tree filter source", () => {
     searchCalls.length = 0;
     expandedInModel.clear();
     expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
   });
@@ -862,5 +969,569 @@ describe("sidebar file tree filter source", () => {
       expect(resetPathsCalls.at(-1)?.paths).toEqual(["src/", "live.md"]);
     });
     expect(setSearchCalls.at(-1)).toBeNull();
+  });
+});
+
+describe("reveal in sidebar", () => {
+  const REVEAL_TAB_ID = "tab-1";
+
+  /**
+   * Emits the three listing frames the ancestor walk for `src/lib/a.ts`
+   * needs (root, `src/`, `src/lib/`) and waits for the final one to land,
+   * without asserting the intermediate steps - reused by the tests that only
+   * care that the reveal SETTLED, not how it got there (the detailed,
+   * step-by-step walk is covered on its own below).
+   */
+  async function revealSrcLibAToCompletion(
+    client: MockWsStreamClient,
+  ): Promise<void> {
+    requestFileTreeReveal(REVEAL_TAB_ID, {
+      hostId: HOST_ID,
+      workspacePath: WORKSPACE_PATH,
+      filePath: "src/lib/a.ts",
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          { path: "src/", name: "src", kind: "directory", ignored: false },
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/")).toBe(true);
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/",
+        entries: [
+          { path: "src/lib/", name: "lib", kind: "directory", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/lib/")).toBe(true);
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(scrollToPathCalls.length).toBeGreaterThan(0);
+    });
+  }
+
+  let openPreviewSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
+    listFileTreeCalls.length = 0;
+    resetPathsCalls.length = 0;
+    setSearchCalls.length = 0;
+    searchCalls.length = 0;
+    expandedInModel.clear();
+    expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
+    installSearchHost({});
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    // The panel reads this action to open a row's preview on a genuine
+    // selection; mocked so the "still opens on a real click" case is
+    // observable without a real canvas/tab-strip mounted, and so the reveal
+    // tests can assert it was NOT called for a programmatic selection.
+    openPreviewSpy = vi.fn(() => null);
+    useEpicCanvasStore.setState({
+      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    useFileTreeRevealStore.setState({ requestsByViewTabId: {} }, true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("walks the ancestors one listing at a time and selects the row once listed, without opening a tile", async () => {
+    requestFileTreeReveal(REVEAL_TAB_ID, {
+      hostId: HOST_ID,
+      workspacePath: WORKSPACE_PATH,
+      filePath: "src/lib/a.ts",
+    });
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          { path: "src/", name: "src", kind: "directory", ignored: false },
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(expandedInModel.has("src/")).toBe(true);
+    });
+    expect(
+      useFileTreeStore.getState().expandedPathsByScope[
+        fileTreeExpansionScopeKey(EPIC_ID, HOST_ID, WORKSPACE_PATH)
+      ],
+    ).toContain("src/");
+    await waitFor(() => {
+      expect(client.sessions[0].clientFrameKinds).toContain("watch");
+    });
+    // The next ancestor is not listed yet, so the walk cannot have reached it.
+    expect(expandedInModel.has("src/lib/")).toBe(false);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/",
+        entries: [
+          { path: "src/lib/", name: "lib", kind: "directory", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(expandedInModel.has("src/lib/")).toBe(true);
+    });
+    expect(
+      useFileTreeStore.getState().expandedPathsByScope[
+        fileTreeExpansionScopeKey(EPIC_ID, HOST_ID, WORKSPACE_PATH)
+      ],
+    ).toContain("src/lib/");
+    expect(selectedInModel.has("src/lib/a.ts")).toBe(false);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(selectedInModel.has("src/lib/a.ts")).toBe(true);
+    });
+    expect(scrollToPathCalls).toEqual([
+      { path: "src/lib/a.ts", options: { offset: "nearest" } },
+    ]);
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+    ).toBeUndefined();
+    expect(openPreviewSpy).not.toHaveBeenCalled();
+  });
+
+  it("replaces a multi-row selection with the revealed row without opening a preview for the survivor", async () => {
+    // With TWO rows selected, deselecting the first already reports a
+    // NON-empty selection (the survivor), before the target is ever selected.
+    // A one-shot path marker set just around `select()` lets that
+    // notification through, opening the survivor's preview and then being
+    // consumed so the target's own `select()` opens another. The suppression
+    // has to span the whole rewrite.
+    requestFileTreeReveal(REVEAL_TAB_ID, {
+      hostId: HOST_ID,
+      workspacePath: WORKSPACE_PATH,
+      filePath: "src/lib/a.ts",
+    });
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          { path: "src/", name: "src", kind: "directory", ignored: false },
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+          { path: "notes.md", name: "notes.md", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/")).toBe(true);
+    });
+    // The user's prior multi-selection, seeded directly in the model (a
+    // click-driven selection would open previews of its own).
+    selectedInModel.add("readme.md");
+    selectedInModel.add("notes.md");
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/",
+        entries: [
+          { path: "src/lib/", name: "lib", kind: "directory", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+    await waitFor(() => {
+      expect(expandedInModel.has("src/lib/")).toBe(true);
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(scrollToPathCalls).toHaveLength(1);
+    });
+    expect([...selectedInModel]).toEqual(["src/lib/a.ts"]);
+    expect(openPreviewSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not re-fire a consumed request on a later listing", async () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+    await revealSrcLibAToCompletion(client);
+    expect(scrollToPathCalls).toHaveLength(1);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "src/lib/",
+        entries: [
+          { path: "src/lib/a.ts", name: "a.ts", kind: "file", ignored: false },
+          { path: "src/lib/b.ts", name: "b.ts", kind: "file", ignored: false },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(resetPathsCalls.at(-1)?.paths).toContain("src/lib/b.ts");
+    });
+    expect(scrollToPathCalls).toHaveLength(1);
+  });
+
+  it("still opens the preview for a genuine user selection after a reveal completes", async () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+    await revealSrcLibAToCompletion(client);
+    expect(openPreviewSpy).not.toHaveBeenCalled();
+
+    act(() => {
+      capturedOnSelectionChange?.(["readme.md"]);
+    });
+
+    expect(openPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(openPreviewSpy).toHaveBeenCalledWith(
+      REVEAL_TAB_ID,
+      expect.objectContaining({ filePath: "readme.md" }),
+    );
+  });
+
+  it("ignores a reveal request for another workspace", async () => {
+    requestFileTreeReveal(REVEAL_TAB_ID, {
+      hostId: HOST_ID,
+      workspacePath: "/other",
+      filePath: "a.ts",
+    });
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [{ path: "a.ts", name: "a.ts", kind: "file", ignored: false }],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(resetPathsCalls.at(-1)?.paths).toEqual(["a.ts"]);
+    });
+
+    expect(selectedInModel.size).toBe(0);
+    expect(scrollToPathCalls).toEqual([]);
+    expect(
+      useFileTreeRevealStore.getState().requestsByViewTabId[REVEAL_TAB_ID],
+    ).toEqual({
+      hostId: HOST_ID,
+      workspacePath: "/other",
+      filePath: "a.ts",
+      nonce: 1,
+    });
+  });
+
+  it("clears an active filter before reveal, then completes once the file is listed", async () => {
+    installSearchHost({ outcome: "root_unavailable" });
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+
+    typeFilter("zzz");
+    await waitFor(() => {
+      expect(setSearchCalls.at(-1)).toBe("zzz");
+    });
+
+    act(() => {
+      requestFileTreeReveal(REVEAL_TAB_ID, {
+        hostId: HOST_ID,
+        workspacePath: WORKSPACE_PATH,
+        filePath: "a.ts",
+      });
+    });
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [{ path: "a.ts", name: "a.ts", kind: "file", ignored: false }],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText<HTMLInputElement>("Filter files by name").value,
+      ).toBe("");
+    });
+    await waitFor(() => {
+      expect(scrollToPathCalls).toEqual([
+        { path: "a.ts", options: { offset: "nearest" } },
+      ]);
+    });
+  });
+});
+
+/**
+ * The same panel body under the phone tab switcher, where it is the File tree
+ * category rather than a sidebar column. `useIsMobileViewport` reads
+ * `window.innerWidth` directly, so overriding it before render is what forces
+ * the touch presentation - same pattern as the composer-menu and providers
+ * panel mobile suites.
+ */
+describe("file tree on a touch viewport", () => {
+  const TAB_ID = "tab-1";
+  const MOBILE_WIDTH = 390;
+  const DESKTOP_WIDTH = 1024;
+
+  // The shared setup's `matchMedia` never notifies, which is right for suites
+  // that only need one width. Crossing the breakpoint mid-test needs a real
+  // one: `useIsMobileViewport` is a `useSyncExternalStore` over this event, so
+  // without it a width change reaches no render at all.
+  const breakpointListeners = new Set<() => void>();
+  function installLiveMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: window.innerWidth < 768,
+        media: query,
+        onchange: null,
+        addEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.add(listener);
+        },
+        removeEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.delete(listener);
+        },
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function restoreInertMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+    for (const listener of [...breakpointListeners]) listener();
+  }
+
+  let openPermanentSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+  let openPreviewSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
+    listFileTreeCalls.length = 0;
+    resetPathsCalls.length = 0;
+    setSearchCalls.length = 0;
+    searchCalls.length = 0;
+    expandedInModel.clear();
+    expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
+    capturedItemHeight = undefined;
+    installSearchHost({});
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    openPermanentSpy = vi.fn(() => null);
+    openPreviewSpy = vi.fn(() => null);
+    useEpicCanvasStore.setState({
+      prepareOpenTileInTabFocusTarget: openPermanentSpy,
+      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+    });
+    breakpointListeners.clear();
+    installLiveMatchMedia();
+    setViewportWidth(MOBILE_WIDTH);
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    pinnedStreamBindingRef.value = null;
+    breakpointListeners.clear();
+    restoreInertMatchMedia();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: DESKTOP_WIDTH,
+    });
+  });
+
+  it("asks for touch-sized rows instead of the sidebar's compact ones", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    expect(capturedItemHeight).toBe(44);
+  });
+
+  it("recycles the single preview tile for a tapped row rather than accumulating one per file", () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    act(() => {
+      capturedOnSelectionChange?.(["readme.md"]);
+    });
+
+    expect(openPermanentSpy).not.toHaveBeenCalled();
+    expect(openPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(openPreviewSpy).toHaveBeenCalledWith(
+      TAB_ID,
+      expect.objectContaining({ filePath: "readme.md" }),
+    );
+  });
+
+  it("rebuilds the tree when the window crosses the breakpoint, rather than leaving the other class's rows", () => {
+    setViewportWidth(DESKTOP_WIDTH);
+    renderPanel(new MockWsStreamClient("unknown"));
+    expect(capturedItemHeight).toBeUndefined();
+
+    act(() => {
+      setViewportWidth(MOBILE_WIDTH);
+    });
+
+    // Only a rebuilt model can report this: the mocked hook, like the real
+    // one, reads `itemHeight` once at construction.
+    expect(capturedItemHeight).toBe(44);
   });
 });

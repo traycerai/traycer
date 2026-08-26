@@ -11,7 +11,7 @@ import {
 import { Check, FileText, FolderGit2, Search } from "lucide-react";
 import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Badge } from "@/components/ui/badge";
-import { WorktreeRowDisabledBadge } from "@/components/worktree/worktree-row-disabled-badge";
+import { WorktreeRowStatusBadge } from "@/components/worktree/worktree-row-status-badge";
 import {
   InputGroup,
   InputGroupAddon,
@@ -345,10 +345,23 @@ function RepoSwitcherRowMarker(props: {
 }): ReactNode {
   const { row } = props;
   if (row.disabledLabel !== null) {
+    const status = row.statusBadge;
     return (
-      <WorktreeRowDisabledBadge
+      <WorktreeRowStatusBadge
         label={row.disabledLabel}
         pending={row.pending}
+        tone={status?.tone ?? "error"}
+        detail={status?.detail ?? "This workspace is unavailable."}
+      />
+    );
+  }
+  if (row.statusBadge !== null) {
+    return (
+      <WorktreeRowStatusBadge
+        label={row.statusBadge.label}
+        pending={row.statusBadge.pending}
+        tone={row.statusBadge.tone}
+        detail={row.statusBadge.detail}
       />
     );
   }

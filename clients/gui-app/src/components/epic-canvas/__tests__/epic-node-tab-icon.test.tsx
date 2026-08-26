@@ -121,6 +121,39 @@ describe("<EpicNodeTabIcon /> terminal indicators", () => {
       completedIndicator.querySelector("svg")?.getAttribute("class"),
     ).toContain("lucide-message-square-check");
   });
+
+  it("shows the terminal failure glyph for a failed TUI agent", () => {
+    render(
+      <NotificationIndicatorsProvider
+        indicators={{
+          epics: {},
+          chats: {
+            [COMPLETED_TUI_AGENT_NODE.id]: {
+              pendingApproval: false,
+              pendingInterview: false,
+              unreadFailure: true,
+              unreadDone: false,
+              pendingFork: false,
+            },
+          },
+        }}
+      >
+        <EpicNodeTabIcon
+          node={COMPLETED_TUI_AGENT_NODE}
+          epicId="epic-1"
+          variant="live"
+          className="size-3.5 shrink-0"
+          defaultIcon={undefined}
+        />
+      </NotificationIndicatorsProvider>,
+    );
+
+    const failure = screen.getByRole("status", {
+      name: "Task needs attention",
+    });
+    expect(failure.querySelector(".lucide-square-terminal")).not.toBeNull();
+    expect(failure.querySelector(".lucide-message-square-x")).toBeNull();
+  });
 });
 
 function renderTerminalTabIcon(): void {

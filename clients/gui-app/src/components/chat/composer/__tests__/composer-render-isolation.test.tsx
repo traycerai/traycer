@@ -1,6 +1,12 @@
-import { Profiler, useState, type ProfilerOnRenderCallback } from "react";
+import {
+  Profiler,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ProfilerOnRenderCallback,
+} from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
@@ -16,10 +22,67 @@ import {
   PaneActivationFocusIntentContext,
   type PaneActivationFocusIntent,
 } from "@/components/epic-canvas/pane-activation";
+import {
+  focusTerminalInstance,
+  registerTerminalFocus,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
+import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 
 afterEach(() => {
   cleanup();
+  resetTerminalFocusRegistryForTests();
+  resetPrimaryFocusCoordinatorForTests();
 });
+
+function MaximizedTerminalFocusProbe() {
+  const terminalRef = useRef<HTMLButtonElement | null>(null);
+  const pickerStore = useState<ComposerPickerStore>(() =>
+    createComposerPickerStore(),
+  )[0];
+  useLayoutEffect(() => {
+    const terminal = terminalRef.current;
+    if (terminal === null) return;
+    const unregister = registerTerminalFocus(
+      "delayed-composer-terminal",
+      () => terminal.focus(),
+      (activeElement) => activeElement === terminal,
+      () => terminal.isConnected,
+    );
+    focusTerminalInstance("delayed-composer-terminal");
+    return unregister;
+  }, []);
+  return (
+    <div data-primary-focus-scope="true">
+      <button ref={terminalRef} type="button" aria-label="Terminal input" />
+      <ComposerPromptEditor
+        ref={null}
+        initialContent={emptyContent()}
+        initialSelection={null}
+        pickerStore={pickerStore}
+        placeholder="test"
+        editorClassName={undefined}
+        isActive
+        disabled={false}
+        slashProviderId="claude"
+        hasPastedImageBytes={null}
+        ingestPastedComposerImages={null}
+        stabilizeImageAttachmentCaret={false}
+        onDocumentChange={() => undefined}
+        onSelectionChange={() => undefined}
+        onSubmit={() => undefined}
+        onPaste={() => undefined}
+        onDragOver={() => undefined}
+        onDrop={() => undefined}
+        onKeyDown={undefined}
+        onFocus={() => undefined}
+        onBlur={() => undefined}
+        onEditorReady={null}
+      />
+    </div>
+  );
+}
 
 interface HarnessProps {
   readonly profileRender: ProfilerOnRenderCallback;
@@ -77,17 +140,39 @@ function Harness({
 }
 
 describe("ComposerPromptEditor render isolation", () => {
+  it("does not overwrite restored terminal focus after its delayed editor mount", async () => {
+    const view = render(
+      <PrimaryFocusCoordinatorProvider>
+        <MaximizedTerminalFocusProbe />
+      </PrimaryFocusCoordinatorProvider>,
+    );
+    const terminal = view.getByRole("button", { name: "Terminal input" });
+    expect(document.activeElement).toBe(terminal);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await waitFor(() => {
+      expect(
+        view.container.querySelector("[data-composer-editor]"),
+      ).not.toBeNull();
+    });
+    expect(document.activeElement).toBe(terminal);
+  });
+
   it("does not steal focus from the control that activated its pane", async () => {
     const handleRef: { current: ComposerPromptEditorHandle | null } = {
       current: null,
     };
     const pickerStore = createComposerPickerStore();
     let yieldCheckCount = 0;
+    let shouldYield = true;
     const focusIntent: PaneActivationFocusIntent = {
       mark: () => undefined,
       shouldYieldAutoFocus: () => {
         yieldCheckCount += 1;
-        return true;
+        return shouldYield;
       },
     };
     const initialContent = emptyContent();
@@ -148,6 +233,23 @@ describe("ComposerPromptEditor render isolation", () => {
     });
 
     expect(yieldCheckCount).toBe(2);
+    expect(document.activeElement).toBe(control);
+
+    // Once the bounded activation intent expires, a landing-surface focus
+    // restoration may already have put the keyboard back in its terminal or
+    // another remembered control before this passive composer effect runs.
+    // The composer must not overwrite focus that is already inside its own
+    // primary-focus scope.
+    shouldYield = false;
+    view.container.dataset.primaryFocusScope = "true";
+    view.rerender(renderEditor(false));
+    control.focus();
+    view.rerender(renderEditor(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(yieldCheckCount).toBe(3);
     expect(document.activeElement).toBe(control);
   });
 

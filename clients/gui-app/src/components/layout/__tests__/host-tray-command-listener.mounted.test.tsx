@@ -170,6 +170,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
       Promise.resolve({
         checkedAt: null,
         latestVersion: null,
+        latestCompatibilityEpoch: null,
         installedVersion: null,
         updateAvailable: false,
         reachable: false,

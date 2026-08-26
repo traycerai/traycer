@@ -22,6 +22,8 @@ import {
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 
+const PLAN_ALLOWS_REMOTE = true;
+
 // Matches the production constant of the same name in `host-directory-service.ts`
 // — the app's ONE background cadence for `GET /api/v3/hosts`, moved from 15s to
 // 60s to actually match the Settings observer's poll (see that file's comment).
@@ -182,6 +184,22 @@ function queuedFetcher(outcomes: readonly RemoteHostFetchOutcome[]): {
   return { fetcher, callCount: () => calls };
 }
 
+/** A pending `RemoteHostFetchOutcome` the test settles by hand. */
+function deferredOutcome(): {
+  readonly promise: Promise<RemoteHostFetchOutcome>;
+  readonly settle: (outcome: RemoteHostFetchOutcome) => void;
+} {
+  let resolveOutcome: (outcome: RemoteHostFetchOutcome) => void = () =>
+    undefined;
+  const promise = new Promise<RemoteHostFetchOutcome>((resolve) => {
+    resolveOutcome = resolve;
+  });
+  // Through a wrapper rather than handing `resolveOutcome` out directly: the
+  // assignment happens inside the executor, so a direct reference reads as
+  // the initializer to control-flow analysis.
+  return { promise, settle: (outcome) => resolveOutcome(outcome) };
+}
+
 /**
  * A `RemoteHostFetcher` where each call returns a promise the test resolves
  * explicitly, by call index - for pinning identity-scoping ordering (a caller
@@ -240,6 +258,69 @@ const accountBHostEntry: HostDirectoryEntry = {
 describe("HostDirectoryService", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("P2 FIX - tells listeners when the shell seed adopts a local host id, on a machine whose host has not announced", async () => {
+    // The seed is the ONE `adoptLocalHostId` caller with no emit behind it -
+    // `onLocalHostChange` emits immediately after its own call, and the poll
+    // path's `emitIfSnapshotChanged` can decline. It is also a real state
+    // change: `snapshot()` reads `lastKnownLocalHostId` to neutralise this
+    // machine's registry twin into a `bootingLocalEntry`.
+    //
+    // A machine with NO local snapshot is the population that matters, and it
+    // is also the cold start: nothing has announced, so the durable id is the
+    // only thing that can answer "which host is mine" - and a consumer that
+    // subscribed and was never told still believes the answer is null.
+    const host = makeHost(null);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: () => Promise.resolve("desktop-pid-123"),
+      remoteFetcher: null,
+    });
+    await directory.start();
+
+    expect(directory.getLocalHostId()).toBe("desktop-pid-123");
+    // The live entry is null here and always was - which is exactly why a
+    // consumer reading `getLocalEntry()?.hostId` cannot see this machine.
+    expect(directory.getLocalEntry()).toBeNull();
+  });
+
+  it("P2 FIX - and on the POLL reseed, where the merged snapshot is unchanged and emitIfSnapshotChanged would otherwise decline", async () => {
+    // The start path happens to be covered already (the local-host
+    // subscription emits right after the seed), so this is the arm that
+    // actually needs the emit: the host announces itself to the SHELL later,
+    // the poll picks the id up, and nothing else about the merged snapshot
+    // moves - no local entry, no remote rows - so the poll's own
+    // change-gated emit correctly declines and every consumer is left
+    // believing this machine has no id.
+    vi.useFakeTimers();
+    const host = makeHost(null);
+    let seededId: string | null = null;
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: () => Promise.resolve(seededId),
+      remoteFetcher: null,
+    });
+
+    await directory.start();
+    expect(directory.getLocalHostId()).toBeNull();
+
+    let notifications = 0;
+    directory.onChange(() => {
+      notifications += 1;
+    });
+
+    // The shell can answer now. Nothing else has changed.
+    seededId = "desktop-pid-123";
+    await vi.advanceTimersByTimeAsync(HOST_DIRECTORY_REFRESH_POLL_MS);
+
+    expect(directory.getLocalHostId()).toBe("desktop-pid-123");
+    expect(await directory.list()).toEqual([]);
+    expect(notifications).toBe(1);
   });
 
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
@@ -422,6 +503,240 @@ describe("HostDirectoryService", () => {
 
     expect(directory.getCardinality()).toBe("zero");
     expect(directory.getDefaultEntry()).toBeNull();
+  });
+
+  it("reports cardinality 'unknown' until a registry listing has actually been delivered", async () => {
+    // The relay-only launch bug: a first fetch that FAILED left the merged
+    // directory empty, and an empty directory read as "you own no hosts" - so
+    // a phone whose Mac was registered and online was told to go connect one,
+    // until the 15s poll silently replaced the screen.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "failed" },
+      { kind: "hosts", entries: [] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+
+    expect(directory.getCardinality()).toBe("unknown");
+    await directory.start();
+    expect(directory.getCardinality()).toBe("unknown");
+
+    const emits: number[] = [];
+    directory.onChange((entries) => {
+      emits.push(entries.length);
+    });
+    await directory.refresh();
+
+    expect(directory.getCardinality()).toBe("zero");
+    // The FIRST listing changes no entry when the registry is empty, so the
+    // snapshot-equality guard would swallow the one emit that moves the
+    // readiness gate off its searching state.
+    expect(emits).toEqual([0]);
+  });
+
+  it("does not treat a bearer-less 'signed-out' fetch as a delivered listing", async () => {
+    // `signed-out` is the fetcher saying it had nothing to ask WITH. On a
+    // shell whose auth is still settling that is a race, not the registry's
+    // answer - so the directory stays unknown rather than claiming empty.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "signed-out" },
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.getCardinality()).toBe("unknown");
+
+    await directory.refresh();
+
+    expect(directory.getCardinality()).toBe("one");
+  });
+
+  it("withholds a settled fleet while the registry is unanswered, even though the local host makes the snapshot non-empty", async () => {
+    // The distinction `list()` cannot draw, for callers that destroy durable
+    // state on absence. A machine running a local host renders one ordinary
+    // row whether or not the registry was ever reached, so a FAILED first
+    // fetch looks exactly like a one-host account - and every remote host
+    // reads as deregistered.
+    const host = makeHost(localSnapshot);
+    const { fetcher } = queuedFetcher([
+      { kind: "failed" },
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    // Non-empty, and still no answer about the fleet.
+    expect((await directory.list()).length).toBe(1);
+    expect(directory.hasSettledFleet()).toBe(false);
+
+    await directory.refresh();
+
+    expect(directory.hasSettledFleet()).toBe(true);
+    expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
+      localSnapshot.hostId,
+      mockRemoteHostEntry.hostId,
+    ]);
+  });
+
+  it("withdraws the settled fleet when a later fetch comes back signed-out", async () => {
+    // Same rule as the cardinality arm below: a bearer rotating out is not the
+    // registry saying those hosts are gone, so the fleet re-closes rather than
+    // presenting its cleared remote set as an answer.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+      { kind: "signed-out" },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasSettledFleet()).toBe(true);
+
+    await directory.refresh();
+
+    expect(directory.hasSettledFleet()).toBe(false);
+  });
+
+  it("un-settles the directory when a later fetch comes back signed-out", async () => {
+    // The other side of the race above: a bearer that rotates out from under
+    // a directory that has already seen a real listing must not report
+    // "zero" - that told a user with a live, registered Mac "No host
+    // connected" over what is really a mid-rotation 401.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [mockRemoteHostEntry] },
+      { kind: "signed-out" },
+    ]);
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.getCardinality()).toBe("one");
+
+    const emits: number[] = [];
+    directory.onChange((entries) => {
+      emits.push(entries.length);
+    });
+    await directory.refresh();
+
+    expect(directory.getCardinality()).toBe("unknown");
+    expect(await directory.list()).toEqual([]);
+    expect(emits).toEqual([0]);
+  });
+
+  it("publishes one refresh-pending window per in-flight fetch, however many callers ask", async () => {
+    const host = makeHost(null);
+    const deferred = deferredOutcome();
+    let calls = 0;
+    const remoteFetcher: RemoteHostFetcher = () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve({ kind: "hosts", entries: [] })
+        : deferred.promise;
+    };
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const observed: boolean[] = [];
+    directory.onRefreshStateChange((refreshing) => {
+      observed.push(refreshing);
+    });
+    expect(directory.isRefreshing()).toBe(false);
+
+    const inFlight = directory.refresh();
+    expect(directory.isRefreshing()).toBe(true);
+    expect(observed).toEqual([true]);
+    // `refresh()` coalesces, so a second caller (a poll tick landing on the
+    // user's tap) must not announce a second pending window it cannot end.
+    void directory.refresh();
+    expect(observed).toEqual([true]);
+
+    deferred.settle({ kind: "hosts", entries: [mockRemoteHostEntry] });
+    await inFlight;
+
+    expect(directory.isRefreshing()).toBe(false);
+    expect(observed).toEqual([true, false]);
+    expect(directory.getCardinality()).toBe("one");
+  });
+
+  it("ends the refresh-pending window when the in-flight request is invalidated", async () => {
+    // Dropping the in-flight request on a credential rotation is the OTHER way
+    // `isRefreshing()` goes false, and the manual Refresh affordance is driven
+    // by this subscription alone - without the emit it stays locked in its
+    // pending state until the orphaned request happens to settle, which is a
+    // fetch timeout away.
+    const host = makeHost(null);
+    const deferred = deferredOutcome();
+    let calls = 0;
+    const remoteFetcher: RemoteHostFetcher = () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.resolve({ kind: "hosts", entries: [] })
+        : deferred.promise;
+    };
+    const directory = makeDirectory({
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher,
+    });
+    await directory.start();
+
+    const observed: boolean[] = [];
+    directory.onRefreshStateChange((refreshing) => {
+      observed.push(refreshing);
+    });
+
+    const orphaned = directory.refresh();
+    expect(observed).toEqual([true]);
+
+    directory.invalidateInFlightRefresh();
+    expect(directory.isRefreshing()).toBe(false);
+    expect(observed).toEqual([true, false]);
+
+    // The orphaned request still settles, and must not announce a window it no
+    // longer owns as anything other than the current answer.
+    deferred.settle({ kind: "hosts", entries: [mockRemoteHostEntry] });
+    await orphaned;
+    expect(observed).toEqual([true, false, false]);
   });
 
   it("collapses a REJECTED fetcher into the failed outcome - refresh() resolves, prior remote entries are retained, and the next refresh recovers", async () => {
@@ -736,7 +1051,11 @@ describe("HostDirectoryService", () => {
       updatePolicy: "manual",
     } as const;
     const relayUrl = "wss://relay.example.test/attach";
-    const beforeRotation = hostListItemToDirectoryEntry(item, relayUrl);
+    const beforeRotation = hostListItemToDirectoryEntry(
+      item,
+      relayUrl,
+      PLAN_ALLOWS_REMOTE,
+    );
     // Same row in every other respect - `connectable`, so the derived
     // unavailability verdict and the relay-fuse-grace flag (always `false`
     // off `offline`) cannot be what moves the comparison. Only `publicKey`
@@ -744,6 +1063,7 @@ describe("HostDirectoryService", () => {
     const afterRotation = hostListItemToDirectoryEntry(
       { ...item, publicKey: "pk-generation-2" },
       relayUrl,
+      PLAN_ALLOWS_REMOTE,
     );
     expect(
       isRemoteHostDirectoryEntry(beforeRotation) &&
@@ -889,11 +1209,13 @@ describe("HostDirectoryService", () => {
     const inGrace = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockReturnValue(lastSeenMs + RELAY_FUSE_MAX_ATTACH_MS + 1);
     const aged = hostListItemToDirectoryEntry(
       item,
       "wss://relay.example.test/attach",
+      PLAN_ALLOWS_REMOTE,
     );
     nowSpy.mockRestore();
     expect(inGrace.relayFuseGrace).toBe(true);
@@ -1507,6 +1829,91 @@ describe("HostDirectoryService", () => {
       expect((await directory.list()).map((entry) => entry.hostId)).toEqual([
         accountBHostEntry.hostId,
       ]);
+    });
+
+    it("un-settles the directory when it drops a previous account's hosts", async () => {
+      // The drop empties the directory without the registry having answered
+      // for the NEW identity, so the emptiness is `unknown` - the searching
+      // surface - not `zero`. Reporting `zero` here tells an account that has
+      // never been read that it owns no hosts, which is the same lie the
+      // unknown state exists to prevent, reached through the identity door.
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      const aRefresh = directory.refresh();
+      resolve(0, { kind: "hosts", entries: [accountAHostEntry] });
+      await aRefresh;
+      expect(directory.getCardinality()).toBe("one");
+
+      const emits: number[] = [];
+      directory.onChange((entries) => {
+        emits.push(entries.length);
+      });
+
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      resolve(1, { kind: "failed" });
+      await bRefresh;
+
+      expect(directory.getCardinality()).toBe("unknown");
+      // The gate moves between two surfaces over a directory that is empty
+      // either way, so the snapshot-equality guard must not swallow the emit
+      // that redraws it.
+      expect(emits).toEqual([0]);
+
+      const bRetry = directory.refresh();
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRetry;
+      expect(directory.getCardinality()).toBe("one");
+    });
+
+    it("un-settles the directory when the previous account owned no hosts at all", async () => {
+      // The empty-list boundary. An account that legitimately owns NOTHING
+      // commits `{hosts: []}`: there are no rows to drop, so a reset keyed on
+      // row count never runs - and its OBSERVATION survives into the next
+      // account, which then reads an unanswered registry as "you own no
+      // hosts". The observed listing is foreign state exactly as the rows are.
+      let currentAccount: string | null = "account-a";
+      const { fetcher, resolve } = deferredFetcher();
+      const directory = makeDirectory({
+        authContextId: () => currentAccount,
+        credentialGeneration: null,
+        runnerHost: makeHost(null),
+        localHostIdSeeder: null,
+        remoteFetcher: fetcher,
+      });
+
+      const aRefresh = directory.refresh();
+      resolve(0, { kind: "hosts", entries: [] });
+      await aRefresh;
+      expect(directory.getCardinality()).toBe("zero");
+
+      const emits: number[] = [];
+      directory.onChange((entries) => {
+        emits.push(entries.length);
+      });
+
+      currentAccount = "account-b";
+      const bRefresh = directory.refresh();
+      resolve(1, { kind: "failed" });
+      await bRefresh;
+
+      expect(directory.getCardinality()).toBe("unknown");
+      // Nothing about the snapshot moved - it was empty before and after - so
+      // the redraw depends entirely on the un-observe emitting on its own.
+      expect(emits).toEqual([0]);
+
+      const bRetry = directory.refresh();
+      resolve(2, { kind: "hosts", entries: [accountBHostEntry] });
+      await bRetry;
+      expect(directory.getCardinality()).toBe("one");
     });
 
     it("does not let an old-bearer 401 clear the directory under a new identity", async () => {

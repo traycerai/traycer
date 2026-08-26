@@ -15,6 +15,7 @@ import {
   pollDeviceToken,
   resetPollInterval,
   startDeviceAuthorization,
+  withReturnScheme,
 } from "../device-auth";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
@@ -456,5 +457,38 @@ describe("backoff helper", () => {
     });
     expect(isDeviceExpired(schedule, 600_999)).toBe(false);
     expect(isDeviceExpired(schedule, 601_000)).toBe(true);
+  });
+});
+
+describe("withReturnScheme", () => {
+  it("appends return_scheme to a URL with no existing query", () => {
+    expect(withReturnScheme("https://app.traycer.test/device", "traycer")).toBe(
+      "https://app.traycer.test/device?return_scheme=traycer",
+    );
+  });
+
+  it("preserves existing query params alongside the new one", () => {
+    expect(
+      withReturnScheme(
+        "https://app.traycer.test/device?user_code=ABCDE-FGHIJ",
+        "traycer-dev",
+      ),
+    ).toBe(
+      "https://app.traycer.test/device?user_code=ABCDE-FGHIJ&return_scheme=traycer-dev",
+    );
+  });
+
+  it("overwrites a pre-existing return_scheme rather than duplicating it", () => {
+    expect(
+      withReturnScheme(
+        "https://app.traycer.test/device?return_scheme=stale",
+        "traycer",
+      ),
+    ).toBe("https://app.traycer.test/device?return_scheme=traycer");
+  });
+
+  it("passes an unparseable URI through untouched", () => {
+    expect(withReturnScheme("not-a-url", "traycer")).toBe("not-a-url");
+    expect(withReturnScheme("", "traycer")).toBe("");
   });
 });

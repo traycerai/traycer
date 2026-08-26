@@ -25,6 +25,7 @@
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
+import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -786,6 +787,146 @@ function projectTerminalAgentsSlice(
   };
 }
 
+/**
+ * The harness discriminator travels as an OPEN string on the wire so a newer
+ * host's vendor still parses; this is where the client narrows it to what it
+ * can dispatch. Mirrors {@link projectTerminalAgent}'s reject arm
+ * (`readHarnessType`): `cursor` - a reserved compatibility value with no
+ * runtime surface - and any unknown vendor drop the row rather than reach a
+ * tile that could not launch it.
+ */
+function narrowTuiHarnessId(value: string): TuiHarnessId | null {
+  if (value === "claude" || value === "codex" || value === "opencode") {
+    return value;
+  }
+  return null;
+}
+
+/**
+ * One host-served registry row, in the renderer's terminal-agent shape, or
+ * `null` for a row this build cannot dispatch (unknown/reserved harness).
+ *
+ * Unlike {@link chatProjectionFromRecord} there is no field the row lacks: a
+ * terminal agent's resume metadata IS its record, so the row carries
+ * everything the doc entry ever did and the union has no doc-supplied
+ * exception like the chats' `settings`.
+ *
+ * `archivedAt` is derived from `archived`, not copied - same trap, same fix as
+ * the chat row: the boolean is the rendering-authoritative field, and
+ * `updatedAt` stands in when the plane that answered carried no timestamp.
+ */
+export function tuiAgentProjectionFromRecord(
+  record: TuiAgentRecordSummary,
+): TuiAgentProjection | null {
+  const harnessId = narrowTuiHarnessId(record.harnessId);
+  if (harnessId === null) return null;
+  return {
+    id: record.tuiAgentId,
+    harnessId,
+    title: record.title,
+    parentId: record.parentId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    userId: record.ownerUserId,
+    hostId: record.hostId,
+    workspaceFolders: record.workspaceFolders,
+    workspaceMode: record.workspaceMode ?? undefined,
+    model: record.model,
+    reasoningEffort: record.reasoningEffort,
+    agentMode: record.agentMode,
+    archivedAt: record.archived
+      ? (record.archivedAt ?? record.updatedAt)
+      : null,
+    profileId: record.profileId,
+    harnessSessionId: record.harnessSessionId,
+    terminalAgentArgs: record.terminalAgentArgs,
+    terminalShellCommand: record.terminalShellCommand,
+    terminalShellArgs: record.terminalShellArgs,
+  };
+}
+
+/**
+ * The host-served terminal-agent rows as a slice. A pure mapping, like
+ * {@link chatRecordsSlice}: the ownership filter is the store's ingest
+ * (`publishTuiAgentRecords`), applied when the signed-in user is known, so a
+ * user switch re-derives the slice from retained rows instead of trusting a
+ * selection frozen at arrival time. Undispatchable rows are dropped here.
+ */
+export function tuiAgentRecordsSlice(
+  records: readonly TuiAgentRecordSummary[],
+): TerminalAgentsSlice {
+  const byId: Record<string, TuiAgentProjection> = {};
+  const allIds: string[] = [];
+  for (const record of records) {
+    const projected = tuiAgentProjectionFromRecord(record);
+    if (projected === null) continue;
+    byId[projected.id] = projected;
+    allIds.push(projected.id);
+  }
+  return { byId, allIds: allIds.length === 0 ? EMPTY_ARRAY : allIds };
+}
+
+/**
+ * Whether two terminal-agent tables say the same thing, entry for entry - the
+ * terminal twin of {@link chatSlicesEq}, and the record channel's change gate
+ * for the same reason: every poll answer is freshly parsed objects.
+ */
+export function terminalAgentSlicesEq(
+  a: TerminalAgentsSlice,
+  b: TerminalAgentsSlice,
+): boolean {
+  if (a === b) return true;
+  if (!arrayShallowEq(a.allIds, b.allIds)) return false;
+  return a.allIds.every((id) =>
+    terminalAgentProjectionsEq(a.byId[id], b.byId[id]),
+  );
+}
+
+/**
+ * The renderer's terminal-agent table: the doc projection UNIONED with the
+ * host's registry rows, mirroring {@link unionChatsSlice}.
+ *
+ * The ROW wins every field it shares with a doc entry - the two sources never
+ * overlap for one record on a migrated host (a host new enough to serve
+ * `epic.listTuiAgents` has stopped writing the doc map and swept its own
+ * entries), so an overlap means the doc's copy is a frozen pre-migration
+ * mirror. There is no `settings`-style doc-only field to preserve: the row
+ * carries the full record.
+ *
+ * NO display filter here, unlike the chats' union: the host serves the
+ * CALLER'S OWN rows only (structurally owner-private, per the contract), and
+ * the store's ingest applies `isTerminalAgentVisibleToUser` again when it
+ * selects rows for the current user - the doc arm keeps its own filter in
+ * `projectTerminalAgentsSlice`/`applyTerminalAgentsSlice`.
+ *
+ * Identity: with no record rows the doc slice is returned BY REFERENCE (the
+ * doc-only mode of an older host is free), and an entry present in both
+ * sources keeps its doc reference when nothing differs, so the WeakMap caches
+ * keyed on projection identity (`recordForTerminalAgent`) and `pickStableIds`
+ * stay stable across polls.
+ */
+export function unionTerminalAgentsSlice(
+  docAgents: TerminalAgentsSlice,
+  records: TerminalAgentsSlice,
+): TerminalAgentsSlice {
+  if (records.allIds.length === 0) return docAgents;
+  const byId: Record<string, TuiAgentProjection> = { ...docAgents.byId };
+  const allIds: string[] = [...docAgents.allIds];
+  for (const id of records.allIds) {
+    const record = records.byId[id];
+    if (!Object.hasOwn(byId, id)) {
+      byId[id] = record;
+      allIds.push(id);
+      continue;
+    }
+    const docEntry = byId[id];
+    // Preserve the previous reference when nothing actually differs, so an
+    // agent present in BOTH sources does not churn its entry on every poll.
+    byId[id] = terminalAgentProjectionsEq(docEntry, record) ? docEntry : record;
+  }
+  return { byId, allIds };
+}
+
 function readRoleClaims(doc: Y.Doc): RoleClaim[] {
   const map = getRoleClaimsMap(doc);
   if (map === null) return [];
@@ -1000,12 +1141,19 @@ export function projectFullState(
    * then returns the doc slice itself.
    */
   chatRecords: ChatsSlice,
+  /**
+   * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`),
+   * with exactly the chat records' contract: empty in doc-only mode, and the
+   * union then returns the doc slice itself.
+   */
+  tuiAgentRecords: TerminalAgentsSlice,
 ): EpicProjectedSlices {
   const artifacts = projectArtifactsSlice(doc);
   const deletedArtifacts = projectDeletedArtifactsSlice(doc);
   const docChats = projectChatsSlice(doc, currentUserId);
   const chats = unionChatsSlice(docChats, chatRecords, currentUserId);
-  const tuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
+  const docTuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
+  const tuiAgents = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
   const agentRoles = projectAgentRolesSlice(
     doc,
     currentUserId,
@@ -1023,6 +1171,7 @@ export function projectFullState(
     deletedArtifacts,
     docChats,
     chats,
+    docTuiAgents,
     tuiAgents,
     agentRoles,
     tree,

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { TabSurfaceActivityProvider } from "@/components/layout/tab-surface-activity";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 
 /**
  * Controllable open-epic handle: desktop EpicSessionProvider intentionally
@@ -29,6 +30,9 @@ const pipMountState = vi.hoisted(() => ({
   nextId: 1,
 }));
 
+// No epic route match anywhere in this suite: that is the phone cold-restore
+// state, where the layout has restored the tab but the router is still on the
+// landing route it booted at.
 vi.mock("@tanstack/react-router", () => ({
   useMatch: () => undefined,
 }));
@@ -47,6 +51,11 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatRecords: () => chatRecordsState.chats,
+}));
+
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => viewport.mobile,
 }));
 
 vi.mock("@/providers/epic-session-provider", () => ({
@@ -205,6 +214,8 @@ describe("<EpicSurface />", () => {
     cleanup();
     openEpicHandleState.handle = null;
     readySessionsState.items = [];
+    viewport.mobile = false;
+    useMobileHeaderStore.getState().setRightActions(null);
   });
 
   it("keeps two split Epic panes under independent session and sidebar boundaries", () => {
@@ -295,5 +306,43 @@ describe("<EpicSurface />", () => {
     expect(pipAfterReady.dataset.mountId).toBe(mountId);
     expect(pipMountState.mounts).toBe(1);
     expect(pipMountState.unmounts).toBe(0);
+  });
+
+  // Tab focus, not the route: the switcher trigger has to reach the header on a
+  // cold restore, when no epic route match exists yet.
+  it("fills the mobile header slot from the focused pane", () => {
+    viewport.mobile = true;
+    render(
+      <TabSurfaceActivityProvider activity={{ visible: true, focused: true }}>
+        <EpicSurface epicId="epic-a" tabId="tab-a" />
+      </TabSurfaceActivityProvider>,
+    );
+
+    render(<>{useMobileHeaderStore.getState().rightActions}</>);
+    expect(screen.getByTestId("mobile-epic-switcher-trigger")).not.toBeNull();
+  });
+
+  // Only the focused pane writes, so the single-cell slot keeps one owner even
+  // while a second Epic pane stays mounted beside it.
+  it("leaves the mobile header slot alone from an unfocused pane", () => {
+    viewport.mobile = true;
+    render(
+      <TabSurfaceActivityProvider activity={{ visible: true, focused: false }}>
+        <EpicSurface epicId="epic-b" tabId="tab-b" />
+      </TabSurfaceActivityProvider>,
+    );
+
+    expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+  });
+
+  it("leaves the mobile header slot empty on desktop", () => {
+    viewport.mobile = false;
+    render(
+      <TabSurfaceActivityProvider activity={{ visible: true, focused: true }}>
+        <EpicSurface epicId="epic-a" tabId="tab-a" />
+      </TabSurfaceActivityProvider>,
+    );
+
+    expect(useMobileHeaderStore.getState().rightActions).toBeNull();
   });
 });

@@ -346,8 +346,9 @@ const LATEST_SCHEDULING = {
 
 export const HOST_METHOD_POLL_TABLE = {
   // Opt-in polling (`poll: true`), for one caller: the Overview's drain
-  // affordance. Its `busySessionCount` is the number "Apply now — ends N
-  // sessions" promises and then destroys, so the question is not whether the
+  // affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
+  // promises and then destroys, so the question is not whether the
   // cached value may be reused but whether it is still TRUE. Going stale does
   // not refetch on its own, so without a cadence a focused Overview served the
   // count it read on mount indefinitely.
@@ -424,6 +425,14 @@ export const HOST_METHOD_POLL_TABLE = {
   "providers.consumeRateLimitResetCredit": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // An explicit human maintenance action may probe one disabled profile.
+  // It can spawn the same long-running CLI usage probe as the ordinary read,
+  // but is never polled or coalesced with another profile's action.
+  "providers.refreshProfileStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
     poll: null,
   },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
@@ -1031,6 +1040,17 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: null,
   },
+  // The terminal-agent RECORD read (TUI eviction), the sibling of
+  // `epic.listChatRecords` above and polled at its exact cadence for its
+  // exact reasons: the facts it serves are committed to the host's registry
+  // and written nowhere the renderer already listens per-epic, there is no
+  // response field a condition policy could classify "about to change" from,
+  // and the client's own mutations invalidate the key on success so nothing
+  // user-initiated waits on the interval.
+  "epic.listTuiAgents": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
   // The publisher's own convergence sweep is 30s, so a 45s local read is
   // responsive without asking faster than the underlying state can change.
   "epic.chatBackupStatus": {
@@ -1348,6 +1368,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Enabling a provider changes persisted provider configuration.
   "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Profile eligibility is persisted provider configuration.
+  "providers.setProfileEnabled": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

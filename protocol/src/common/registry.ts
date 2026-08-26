@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   defineRecordContract,
+  defineRecordDowngradePath,
+  defineRecordUpgradePath,
   defineVersionedRecordRegistry,
   type RecordValue,
 } from "@traycer/protocol/framework/index";
@@ -10,6 +12,7 @@ import {
   attachmentMentionNodeSchema,
   epicArtifactKindSchema,
   harnessIdSchema,
+  harnessIdSchemaPreReasonix,
   permissionRoleSchema,
   ticketStatusSchema,
 } from "@traycer/protocol/common/_internal/schemas";
@@ -107,7 +110,41 @@ export const epicArtifactKindRecordV100 = defineRecordContract({
 export const harnessIdRecordV100 = defineRecordContract({
   name: "harness-id",
   schemaVersion: { major: 1, minor: 0 } as const,
+  schema: harnessIdSchemaPreReasonix,
+});
+
+export const harnessIdRecordV200 = defineRecordContract({
+  name: "harness-id",
+  schemaVersion: { major: 2, minor: 0 } as const,
   schema: harnessIdSchema,
+});
+
+const harnessIdUpgradeV100ToV200 = defineRecordUpgradePath<
+  typeof harnessIdRecordV100,
+  typeof harnessIdRecordV200
+>({
+  from: harnessIdRecordV100.schemaVersion,
+  to: harnessIdRecordV200.schemaVersion,
+  upgradeRecord: (record) => record,
+});
+
+const harnessIdDowngradeV200ToV100 = defineRecordDowngradePath<
+  typeof harnessIdRecordV200,
+  typeof harnessIdRecordV100
+>({
+  from: harnessIdRecordV200.schemaVersion,
+  to: harnessIdRecordV100.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = harnessIdRecordV100.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        message: "Reasonix cannot be represented by harness-id record 1.0",
+      },
+    };
+  },
 });
 
 export const commonRecordRegistry = defineVersionedRecordRegistry({
@@ -193,6 +230,16 @@ export const commonRecordRegistry = defineVersionedRecordRegistry({
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: harnessIdRecordV200,
+          upgradeFromPreviousVersion: harnessIdUpgradeV100ToV200,
+        },
+      },
+      downgradePathsFromLatest: { 1: harnessIdDowngradeV200ToV100 },
     },
   },
 });
