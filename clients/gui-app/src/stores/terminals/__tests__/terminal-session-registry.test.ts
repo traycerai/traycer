@@ -484,11 +484,7 @@ describe("TerminalSessionRegistry", () => {
     ).toBeNull();
 
     const fresh = createHandle("terminal-agent");
-    const reacquired = registry.acquire(
-      "tab-2",
-      () => fresh.handle,
-      HOST_ID,
-    );
+    const reacquired = registry.acquire("tab-2", () => fresh.handle, HOST_ID);
     expect(reacquired).toBe(fresh.handle);
     expect(fresh.viewers()).toEqual(["presentation"]);
     expect(fresh.handle.store.getState().status).toBe("creating");
