@@ -2147,7 +2147,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         );
     };
 
-    // ─── The windowed line (`chat.subscribe@1.7`) ───────────────────────────
+    // ─── The windowed line (`chat.subscribe@1.8`) ───────────────────────────
 
     /**
      * A windowed snapshot whose TAIL had no bodies, held until it does.
@@ -2337,11 +2337,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
       },
-      // ─── The windowed line (`chat.subscribe@1.7`) ────────────────────────
+      // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
       //
-      // Unreachable until `chatSubscribeV17` is registered - negotiation
+      // Unreachable until `chatSubscribeV18` is registered - negotiation
       // declares this client's own canonical minor whenever the host's is
-      // newer, so a `1.7` host still settles on `1.6` here.
+      // newer, so a `1.8` host still settles on `1.7` here.
       onWindowedSnapshot: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;

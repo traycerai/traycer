@@ -145,7 +145,7 @@ export interface ChatStreamCallbacks {
     reason: StreamCloseReason | null,
   ) => void;
 
-  // ─── The windowed line (`chat.subscribe@1.7`) ─────────────────────────────
+  // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
   //
   // REQUIRED, not optional, and that is the point. These fire only on a
   // negotiated windowed line, which no released peer has yet - so a consumer
