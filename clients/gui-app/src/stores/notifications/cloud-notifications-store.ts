@@ -17,7 +17,10 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
 
 export type CloudNotificationsConnectionState =
-  "connecting" | "connected" | "reconnecting" | "unavailable";
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "unavailable";
 
 export interface CloudNotificationsState {
   /**

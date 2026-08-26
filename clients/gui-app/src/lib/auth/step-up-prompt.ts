@@ -10,7 +10,9 @@ export const STEP_UP_CODE_LENGTH = 6;
  * user just pressed.
  */
 export type StepUpPromptPurpose =
-  "session-revoke" | "global-revoke" | "host-provision";
+  | "session-revoke"
+  | "global-revoke"
+  | "host-provision";
 
 export interface StepUpPromptRequest {
   readonly id: number;

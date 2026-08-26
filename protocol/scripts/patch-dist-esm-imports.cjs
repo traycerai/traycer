@@ -1,4 +1,9 @@
-const { existsSync, readdirSync, readFileSync, writeFileSync } = require("node:fs");
+const {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} = require("node:fs");
 const { dirname, extname, join, resolve } = require("node:path");
 
 const DIST_DIR = resolve(__dirname, "..", "dist");
@@ -15,7 +20,10 @@ function listJavaScriptFiles(dir) {
 }
 
 function resolveRelativeSpecifier(file, specifier) {
-  if (!specifier.startsWith(".") || EXPLICIT_EXTENSIONS.has(extname(specifier))) {
+  if (
+    !specifier.startsWith(".") ||
+    EXPLICIT_EXTENSIONS.has(extname(specifier))
+  ) {
     return specifier;
   }
 

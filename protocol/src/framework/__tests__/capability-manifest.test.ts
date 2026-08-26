@@ -148,7 +148,7 @@ describe("capability manifest helpers", () => {
         MULTI_MAJOR_MANIFEST_REGISTRY,
         hostManifest,
         {
-        echo: { major: 1, minor: 0 },
+          echo: { major: 1, minor: 0 },
         },
       ),
     ).toEqual({ echo: { major: 1, minor: 1 } });

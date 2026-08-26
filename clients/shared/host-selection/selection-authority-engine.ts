@@ -394,7 +394,8 @@ export function createIncrementingIncarnationIds(): () => string {
  * no account whose choice could be remembered.
  */
 export type PreferredHostSaveResult =
-  { ok: true } | { ok: false; reason: string };
+  | { ok: true }
+  | { ok: false; reason: string };
 
 export interface PreferredHostStore {
   /**

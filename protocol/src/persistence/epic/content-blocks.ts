@@ -1497,4 +1497,5 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
 // different on-disk representation - every other member's persisted shape is
 // its normal (fully-defaulted) domain shape.
 export type PersistedContentBlock =
-  Exclude<ContentBlock, AutonomousResumeBlock> | PersistedAutonomousResumeBlock;
+  | Exclude<ContentBlock, AutonomousResumeBlock>
+  | PersistedAutonomousResumeBlock;

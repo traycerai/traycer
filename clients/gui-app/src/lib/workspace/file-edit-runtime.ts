@@ -55,7 +55,12 @@ export type FileEditStatus =
   | "conflict";
 
 export type FileEditRecoveryStatus =
-  "loading" | "idle" | "pending" | "persisting" | "persisted" | "unavailable";
+  | "loading"
+  | "idle"
+  | "pending"
+  | "persisting"
+  | "persisted"
+  | "unavailable";
 
 export interface FileEditConflict {
   readonly currentRevision: string;

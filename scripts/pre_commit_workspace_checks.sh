@@ -30,7 +30,11 @@ nx_compile_parallel="${NX_COMPILE_PARALLEL:-3}"
 run_full_checks() {
   echo "Running full workspace checks..."
   bun run lint
-  bun run format
+  if [ -n "${CI:-}" ]; then
+    bun run format:check
+  else
+    bun run format
+  fi
   bun run compile
   bun run build
 }
@@ -38,7 +42,11 @@ run_full_checks() {
 run_affected() {
   local args=("$@")
   bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
-  bun x nx affected --target=format "${args[@]}" --parallel="${nx_parallel}"
+  if [ -n "${CI:-}" ]; then
+    bun run format:check
+  else
+    bun run format
+  fi
   bun x nx affected --targets=compile,build "${args[@]}" \
     --parallel="${nx_compile_parallel}"
 }

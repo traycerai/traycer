@@ -1,6 +1,9 @@
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type { ChatHeadCore } from "@traycer/protocol/persistence/chat-sync/core";
-import type { PreservedChatEvent, PreservedChatMessage } from "@traycer/protocol/persistence/chat-sync/entries";
+import type {
+  PreservedChatEvent,
+  PreservedChatMessage,
+} from "@traycer/protocol/persistence/chat-sync/entries";
 import {
   gateChatHeadVersion,
   type ChatHeadPart,
@@ -262,8 +265,10 @@ export async function assembleChat(
   // reports the earliest among those known when the first failure landed. That
   // is a diagnostic-quality property, not a contract a caller may lean on.
   const failures = new Map<number, ChatAssemblyResult>();
-  const verified: { readonly index: number; readonly record: ChatShardRecord }[] =
-    [];
+  const verified: {
+    readonly index: number;
+    readonly record: ChatShardRecord;
+  }[] = [];
 
   try {
     await Promise.all(
@@ -305,8 +310,10 @@ const PART_FAILED = Symbol("chat-part-failed");
 function earliestFailure(
   failures: ReadonlyMap<number, ChatAssemblyResult>,
 ): ChatAssemblyResult {
-  let earliest: { readonly index: number; readonly failure: ChatAssemblyResult } | null =
-    null;
+  let earliest: {
+    readonly index: number;
+    readonly failure: ChatAssemblyResult;
+  } | null = null;
 
   for (const [index, failure] of failures) {
     if (earliest === null || index < earliest.index) {

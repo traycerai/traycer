@@ -213,7 +213,9 @@ export function isRemoteHostDirectoryEntry(
  * named verdict, not by never learning the difference.
  */
 export type HostUnavailability =
-  "offline" | "plan-restricted" | "indeterminate";
+  | "offline"
+  | "plan-restricted"
+  | "indeterminate";
 
 /**
  * The relay DO's hard cap on how long a host leg may stay attached without a

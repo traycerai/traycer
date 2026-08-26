@@ -951,7 +951,6 @@ export const agentGetProviderProfileRateLimitsDowngradeV40ToV10 =
     },
   });
 
-
 export const agentGetProviderProfileRateLimitsUpgradeV40ToV50 =
   defineUpgradePath<
     typeof agentGetProviderProfileRateLimitsV40,

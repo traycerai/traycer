@@ -76,7 +76,11 @@ const closeRawFdImpl = promisify(closeCallback);
 // collision it closes - under-reporting - rather than inventing a crash.
 
 export type BootstrapPhase =
-  "starting" | "exited" | "crashed" | "killed" | "failed-to-spawn";
+  | "starting"
+  | "exited"
+  | "crashed"
+  | "killed"
+  | "failed-to-spawn";
 
 // Every field is explicit (no optional `?:` per project style). Callers
 // pass `undefined` for unset fields; `formatFields` skips any field

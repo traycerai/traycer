@@ -1,5 +1,11 @@
-import { chatHeadReaderSchema, type ChatHeadRecord } from "@traycer/protocol/persistence/chat-sync/head";
-import { chatShardReaderSchema, type ChatShardRecord } from "@traycer/protocol/persistence/chat-sync/shard";
+import {
+  chatHeadReaderSchema,
+  type ChatHeadRecord,
+} from "@traycer/protocol/persistence/chat-sync/head";
+import {
+  chatShardReaderSchema,
+  type ChatShardRecord,
+} from "@traycer/protocol/persistence/chat-sync/shard";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import {
   chatHeadRecordV120,

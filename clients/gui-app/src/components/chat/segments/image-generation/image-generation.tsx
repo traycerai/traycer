@@ -18,7 +18,11 @@ import { EASE_OUT } from "./ease";
 import { useHoverCapable } from "./use-hover-capable";
 
 export type ImageGenerationStatus =
-  "generating" | "complete" | "error" | "stopped" | "superseded";
+  | "generating"
+  | "complete"
+  | "error"
+  | "stopped"
+  | "superseded";
 
 interface ImageGenerationProps {
   readonly children: ReactNode;

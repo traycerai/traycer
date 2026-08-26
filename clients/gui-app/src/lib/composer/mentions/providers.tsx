@@ -166,7 +166,8 @@ export type WorkspaceGitMentionMethod =
   | "workspace.mentionGitCommits";
 
 export type WorkspaceMentionMethod =
-  WorkspacePathMentionMethod | WorkspaceGitMentionMethod;
+  | WorkspacePathMentionMethod
+  | WorkspaceGitMentionMethod;
 
 export type EpicMentionMethod =
   | "epic.mentionEpics"

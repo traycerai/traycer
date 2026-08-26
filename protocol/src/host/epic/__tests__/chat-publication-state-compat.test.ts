@@ -170,14 +170,13 @@ describe("chatPublicationStateResponseSchema definitive", () => {
     publishedThroughTs: null,
   };
 
-  it.each([
-    "chat-deleted",
-    "lineage-superseded",
-    "backup-halted",
-  ] as const)("round-trips definitive: %s", (reason) => {
-    const wire = { ...base, definitive: reason };
-    expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
-  });
+  it.each(["chat-deleted", "lineage-superseded", "backup-halted"] as const)(
+    "round-trips definitive: %s",
+    (reason) => {
+      const wire = { ...base, definitive: reason };
+      expect(chatPublicationStateResponseSchema.parse(wire)).toEqual(wire);
+    },
+  );
 
   it("keeps an explicitly-sent null as null", () => {
     const wire = { ...base, definitive: null };

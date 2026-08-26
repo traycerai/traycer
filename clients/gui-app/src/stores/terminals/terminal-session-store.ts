@@ -44,7 +44,11 @@ export type TerminalReattachMode = "fresh" | "live";
  * bounded recovery must replace the handle and consult current host authority.
  */
 export type TerminalLifecycleStatus =
-  "creating" | "running" | "exited" | "lost" | "reaped";
+  | "creating"
+  | "running"
+  | "exited"
+  | "lost"
+  | "reaped";
 
 const MAX_PENDING_ACTIONS = 64;
 // Cap the pre-writer queue so a misconfigured tile that never registers a

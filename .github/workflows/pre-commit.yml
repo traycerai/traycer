@@ -41,6 +41,21 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
+      - name: Cache Nx
+        uses: actions/cache@v4
+        with:
+          path: .nx/cache
+          key: ${{ runner.os }}-nx-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-nx-${{ hashFiles('bun.lock') }}-
+            ${{ runner.os }}-nx-
+      - name: Cache GUI ESLint fallback
+        uses: actions/cache@v4
+        with:
+          path: clients/gui-app/.eslintcache
+          key: ${{ runner.os }}-eslint-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-eslint-
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

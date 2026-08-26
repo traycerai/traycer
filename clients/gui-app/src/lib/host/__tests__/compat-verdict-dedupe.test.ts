@@ -38,7 +38,9 @@ function requirement(
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
+    // oxlint-disable-next-line typescript/no-deprecated -- Deliberately covered because both dedupe planes still compare this legacy wire member.
     minimumKnownClientAppVersion: "1.2.0-rc.2",
+    // oxlint-disable-next-line typescript/no-deprecated -- Deliberately covered because both dedupe planes still compare this legacy wire member.
     upgradeChannel: "rc",
     ...overrides,
   };
@@ -156,7 +158,9 @@ describe("compat verdict dedupe and the client-compatibility requirement", () =>
       incompatible(
         requirement({
           minimumCompatibilityEpoch: 3,
+          // oxlint-disable-next-line typescript/no-deprecated -- A raised legacy remedy value must still produce a distinct compatibility key.
           minimumKnownClientAppVersion: "1.3.0",
+          // oxlint-disable-next-line typescript/no-deprecated -- A changed legacy channel must still produce a distinct compatibility key.
           upgradeChannel: "stable",
         }),
       ),
@@ -199,6 +203,7 @@ describe("compat verdict dedupe and the client-compatibility requirement", () =>
           observedCompatibilityEpoch: null,
           observedClientKind: "",
           observedClientAppVersion: "",
+          // oxlint-disable-next-line typescript/no-deprecated -- Empty legacy wire text remains distinct from an absent requirement in the dedupe key.
           minimumKnownClientAppVersion: "",
         }),
       ),

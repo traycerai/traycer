@@ -218,7 +218,8 @@ interface RenderTimelineOptions {
     | undefined;
   readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
   readonly followLatchRef:
-    RefObject<ChatTimelineFollowLatch | null> | undefined;
+    | RefObject<ChatTimelineFollowLatch | null>
+    | undefined;
 }
 
 interface RerenderTimelineOptions {

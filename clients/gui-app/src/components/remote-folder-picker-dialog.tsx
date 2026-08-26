@@ -770,7 +770,8 @@ function RemoteFolderPickerListing(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>> | undefined;
+    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
+    | undefined;
   readonly upPresent: boolean;
   readonly selectedIndex: number;
   readonly filtering: boolean;
@@ -873,7 +874,8 @@ function RemoteFolderPickerListingStatus(props: {
   readonly isPending: boolean;
   readonly error: Error | null;
   readonly matches:
-    ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>> | undefined;
+    | ReadonlyArray<FuzzyMatch<WorkspaceBrowseFolderEntryV11>>
+    | undefined;
   readonly filtering: boolean;
   readonly onRetry: () => void;
 }): ReactNode {
@@ -1192,7 +1194,8 @@ function parseBrowseInput(
 function readRecentShortcuts(
   rawInput: string | null,
   recentsData:
-    Pick<WorkspacePrepareFoldersResponseV12, "recentWorkspaces"> | undefined,
+    | Pick<WorkspacePrepareFoldersResponseV12, "recentWorkspaces">
+    | undefined,
 ): ReadonlyArray<WorkspaceRecentEntry> {
   if (rawInput !== null) return [];
   return recentsData?.recentWorkspaces ?? [];

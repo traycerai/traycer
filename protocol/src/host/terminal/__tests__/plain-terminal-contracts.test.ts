@@ -592,9 +592,12 @@ describe("plain-terminal list state", () => {
         terminals: [independent, independent],
       },
     ],
-  ])("rejects duplicate composite identities in a %s state", (_label, state) => {
-    expect(plainTerminalListStateSchema.safeParse(state).success).toBe(false);
-  });
+  ])(
+    "rejects duplicate composite identities in a %s state",
+    (_label, state) => {
+      expect(plainTerminalListStateSchema.safeParse(state).success).toBe(false);
+    },
+  );
 
   it("rejects duplicate identities even when the projections otherwise differ", () => {
     const renamed = terminal(
@@ -738,14 +741,8 @@ describe("plain-terminal collection frames", () => {
         terminals: [dormant, running],
       },
     ],
-    [
-      "initialized",
-      { kind: "initialized", hasBinaryPayload: false },
-    ],
-    [
-      "upsert",
-      { kind: "upsert", hasBinaryPayload: false, terminal: running },
-    ],
+    ["initialized", { kind: "initialized", hasBinaryPayload: false }],
+    ["upsert", { kind: "upsert", hasBinaryPayload: false, terminal: running }],
     [
       "deleted tombstone",
       {
@@ -755,10 +752,7 @@ describe("plain-terminal collection frames", () => {
         revision: 8,
       },
     ],
-    [
-      "state without nested state",
-      { kind: "state", hasBinaryPayload: false },
-    ],
+    ["state without nested state", { kind: "state", hasBinaryPayload: false }],
     [
       "state with extra field",
       {

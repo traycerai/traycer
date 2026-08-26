@@ -11,6 +11,7 @@ import react from "eslint-plugin-react";
 import reactRefresh from "eslint-plugin-react-refresh";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
+import oxlint from "eslint-plugin-oxlint";
 import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
@@ -362,7 +363,7 @@ export default tseslint.config(
   { ignores: [...commonIgnores, "src/routeTree.gen.ts"] },
   linterOptionsConfig,
   js.configs.recommended,
-  ...tseslint.configs.recommendedTypeChecked,
+  ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,
   jsxA11y.flatConfigs.recommended,
   {
@@ -371,10 +372,6 @@ export default tseslint.config(
       ecmaVersion: "latest",
       sourceType: "module",
       globals: { ...globals.browser, ...globals.node, ...globals.es2021 },
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
     },
     settings: {
       react: { version: "detect" },
@@ -866,6 +863,18 @@ export default tseslint.config(
         nestedFocus: ["closeCanvasTab"],
         tabNavigation: null,
       }),
+    },
+  },
+  // Oxlint runs first and owns every rule represented in its generated config,
+  // including the type-aware rules. Keep this last so ESLint retains only the
+  // repository-specific boundaries and rules whose implementations differ.
+  ...oxlint.buildFromOxlintConfigFile(".oxlintrc.json"),
+  {
+    rules: {
+      // Oxlint's local selector plugin owns this rule. Keep one source of
+      // diagnostics while the remaining unsupported/divergent rules stay in
+      // the ESLint fallback.
+      "no-restricted-syntax": "off",
     },
   },
 );

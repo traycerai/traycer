@@ -608,19 +608,13 @@ describe("validateVersionedRpcRegistry (Zod-level compatibility)", () => {
         runtimeKnown: z.boolean().optional(),
       }),
     });
-    const upgradeToV20 = defineUpgradePath<
-      typeof localV10,
-      typeof fleetV20
-    >({
+    const upgradeToV20 = defineUpgradePath<typeof localV10, typeof fleetV20>({
       from: localV10.schemaVersion,
       to: fleetV20.schemaVersion,
       upgradeRequest: (request) => request,
       upgradeResponse: (response) => response,
     });
-    const upgradeToV21 = defineUpgradePath<
-      typeof fleetV20,
-      typeof fleetV21
-    >({
+    const upgradeToV21 = defineUpgradePath<typeof fleetV20, typeof fleetV21>({
       from: fleetV20.schemaVersion,
       to: fleetV21.schemaVersion,
       upgradeRequest: (request) => request,

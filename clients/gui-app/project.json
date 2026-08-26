@@ -19,6 +19,8 @@
         "{projectRoot}/**/*.jsx",
         "{projectRoot}/.eslintrc*",
         "{projectRoot}/eslint.config.*",
+        "{projectRoot}/.oxlintrc*",
+        "{projectRoot}/oxlint.config.*",
         "sharedGlobals"
       ]
     },
