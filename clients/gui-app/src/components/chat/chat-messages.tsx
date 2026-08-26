@@ -187,6 +187,7 @@ export type ChatMessageScrollRequest =
     };
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+const EMPTY_ROW_INDEX_BY_KEY: ReadonlyMap<string, number> = new Map();
 const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
@@ -1006,7 +1007,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
   const listRowsRef = useRef(listRows);
-  const rowIndexByKeyRef = useRef(buildRowKeyToIndex(listRows));
+  // Seeded EMPTY, not with `buildRowKeyToIndex(listRows)`: a `useRef`
+  // argument is evaluated on every render and discarded after the first, and
+  // this one is an O(rows) map build per streaming token. The layout effect
+  // below populates it before paint - and before any of its consumers, which
+  // are all event- or effect-driven - so no read ever sees the empty seed.
+  const rowIndexByKeyRef = useRef(EMPTY_ROW_INDEX_BY_KEY);
   const scrollRequestRef = useRef(scrollRequest);
   const handledScrollRequestIdRef = useRef<number | null>(null);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
