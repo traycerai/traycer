@@ -30,6 +30,7 @@ export * from "./terminal";
 export * from "./usage-analytics";
 export * from "./workspace";
 export * from "./worktree-changed-stream";
+export * from "./providers-changed-stream";
 
 export {
   hostRpcRegistry,

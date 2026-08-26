@@ -223,6 +223,20 @@ describe("useRefreshProviderRateLimitsOnMount", () => {
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
+  it("does not enqueue a disabled authenticated profile when automatic fetching is ineligible", () => {
+    renderHook(() =>
+      useRefreshProviderRateLimitsOnMount({
+        providerId: "codex",
+        profileId: "disabled-authenticated",
+        usageUpdatedAt: null,
+        hasCachedValue: false,
+        fetchEligible: false,
+        refetch: null,
+      }),
+    );
+    expect(enqueueSpy).not.toHaveBeenCalled();
+  });
+
   it("does not enqueue an eligible-but-fresh-and-cached ephemeralProcess provider when fetching is ineligible", () => {
     // Belt-and-suspenders: `fetchEligible` gates before the freshness/cache
     // check runs at all, so an ineligible target never enqueues regardless

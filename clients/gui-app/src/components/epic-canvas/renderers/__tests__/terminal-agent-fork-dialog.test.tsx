@@ -1132,6 +1132,7 @@ function workspaceSeedForFolder(
 function ambientProfile(label: string): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label,
@@ -1154,6 +1155,7 @@ function ambientProfile(label: string): ProviderProfile {
 function managedProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,

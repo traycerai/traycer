@@ -177,12 +177,8 @@ export type ProviderIdV60 = z.infer<typeof providerIdSchemaV60>;
 /**
  * Frozen provider id set as shipped in protocol v7.0 (v6.0 plus huggingface).
  *
- * Pinned BEFORE the line ships, unlike every enum above it. v5.0 and v6.0 were
- * each pinned only once a tag had already caught something riding them (`omp`
- * on v5.0, the provider-pack-registry fields on v6.0). v7.0 is still the head
- * line, so freezing it now is what lets the next line grow the live shape
- * without changing what v7.0 serializes. A new provider opens v8.0 rather than
- * growing this enum.
+ * Pinned before the line shipped, unlike every enum above it. v8.0 now owns
+ * live catalog growth without changing what a v7.0 peer can serialize.
  */
 export const providerIdSchemaV70 = z.enum([
   "claude-code",
@@ -1177,7 +1173,9 @@ export type ProviderProfileRateLimitScope = z.infer<
   typeof providerProfileRateLimitScopeSchema
 >;
 
-export const providerProfileSchema = z.object({
+// Frozen `providers.list@7.0` profile row. Keep new profile fields off this
+// shape; v8.0 is the first line that can represent eligibility.
+const providerProfileShapeV70 = {
   profileId: z.string(),
   kind: providerProfileKindSchema,
   authType: providerProfileAuthTypeSchema,
@@ -1245,8 +1243,52 @@ export const providerProfileSchema = z.object({
     })
     .nullable()
     .optional(),
+} as const;
+
+export const providerProfileSchemaV70 = z.object(providerProfileShapeV70);
+
+export const providerProfileSchema = z.object({
+  ...providerProfileShapeV70,
+  // Host-wide eligibility. Old supporting decoders treat an omitted legacy
+  // field as enabled; older protocol lines omit disabled rows entirely.
+  enabled: z.boolean().default(true).catch(true),
+  // Copyable command for opening this managed account directly in its CLI.
+  // The host owns the absolute config path and shell quoting; ambient rows and
+  // hosts that predate this field omit it. Kept inside v8.0 because that line
+  // is still the unreleased live head opened by profile eligibility.
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
 });
 export type ProviderProfile = z.infer<typeof providerProfileSchema>;
+
+export function isProfileEnabled(profile: {
+  readonly enabled?: boolean;
+}): boolean {
+  return profile.enabled !== false;
+}
+
+export const providersSetProfileEnabledRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+  enabled: z.boolean(),
+});
+export type ProvidersSetProfileEnabledRequest = z.infer<
+  typeof providersSetProfileEnabledRequestSchema
+>;
+
+export const providersSetProfileEnabledResponseSchema = z.object({
+  profileId: z.string(),
+  enabled: z.boolean(),
+});
+export type ProvidersSetProfileEnabledResponse = z.infer<
+  typeof providersSetProfileEnabledResponseSchema
+>;
 
 /**
  * Fold-in for profile rename/remove/recolor/acknowledgeAmbientDrift, carried
@@ -1415,9 +1457,8 @@ const providerCliStateBaseShape = {
   // set does not model them, so the v7->v6 reparse drops them the way every
   // older bridge drops the keys its target never modelled.
   //
-  // v7.0 no longer binds this shape: `providerCliStateBaseShapeV70` below is
-  // its hand-frozen pin, taken when v7.1 opened for the enablement fields. So
-  // growing THIS shape grows the v7.1 wire, not v7.0's. The deep
+  // v7.0 and v7.1 no longer bind this shape: their hand-frozen pins sit below.
+  // Growing THIS shape grows the v8.0 wire. The deep
   // `z.toJSONSchema` snapshot in `__tests__/__fixtures__/frozen-catalog-lines.ts`
   // pins both lines and turns red in a plain `bun run test` either way - when
   // it does, freeze the line that stopped being head, do not regenerate over
@@ -1613,16 +1654,8 @@ export type ProvidersListRequestV70 = z.infer<
  * the list/discover result (or a typed native error). Classic callers receive
  * `native: null`.
  *
- * v1.0 through v7.0 each have their own hand-frozen response; v7.1 - the head
- * line - BINDS THIS ONE. So this is both the shape the host BUILDS and the
- * shape the head serializes: a field added to `providerCliStateBaseShape`
- * reaches the v7.1 wire immediately rather than waiting for a new line to
- * model it. v7.0 used to bind it too (the release collapsed an unreleased v8.0
- * into v7.0); `providersListResponseSchemaV70` is the freeze taken when v7.1
- * opened, and its comment records why that freeze was not skipped.
- *
- * Both lines are guarded by the deep `frozen-catalog-lines` snapshot, which
- * dumps this live shape for the head and the frozen one for v7.0.
+ * v1.0 through v7.0 each have a hand-frozen response. v8.0 binds this live
+ * schema, so new fields do not widen a released line.
  */
 export const providersListResponseSchema = z.object({
   providers: z.array(providerCliStateSchema),
@@ -1746,7 +1779,7 @@ const providerCliStateBaseShapeV40 = {
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
   loginCapability: providerLoginCapabilitySchemaV40.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
+  profiles: z.array(providerProfileSchemaV70).catch([]),
 };
 
 export const providerCliStateSchemaV40 = z.object({
@@ -1819,57 +1852,11 @@ export type ProvidersListResponseV40 = z.infer<
   typeof providersListResponseSchemaV40
 >;
 
-// ── Frozen protocol-v7.0 provider state + list response ────────────────────
-//
-// v7.0 adds `huggingface`, the provider-pack-registry fields
-// (`managedInstallState`, `versionVisibility`, `advisory`), `cliBinaryResolved`,
-// per-provider `nativeCapabilities`, `loginCapability.terminalLogin`, and the
-// `native` list/discover carrier on both request and response. Everything the
-// v6.0 line refused to model reaches clients here, and only here.
-//
-// Frozen the same way v4.0/v5.0/v6.0 are - both halves pinned, id enum AND base
-// shape, both hand-copies rather than `.extend()`/`.omit()` derivations - but
-// frozen for the opposite reason. Those three were pinned RETROACTIVELY, after
-// a release tag proved that fields had already ridden them: `omp` on v5.0, and
-// the registry fields on v5.0 and v6.0 both. Every one of those pins was damage
-// control. v7.0 is not released either (the newest tag, `host-v1.1.11`, still
-// tops out at v6.0), and that is what let the release collapse the unreleased
-// v8.0 above it back into v7.0.
-//
-// THE CONSEQUENCE, because it inverts what this pin used to mean: the additions
-// this comment once called future (a `packId`, a per-pack managed-versions
-// block, a `nextRunBinary`, and a version on `managedInstallState`) LANDED, and
-// they landed on v7.0. The `providersListV70` contract now binds the LIVE
-// request/response schemas, so this shape no longer backs a wire line - which
-// is why it carries `Preimage` in its name instead of a bare `V70`, leaving
-// that name for whoever takes the real v7.0 freeze. It survives as the v6 -> v7
-// bridge's first-pass target, the normalization every upgraded row is re-parsed
-// through before the version-manager fill lands on top, and as the shape the
-// provider compat suites share. Do not read it as a freeze standing between the
-// live shape and the v7.0 wire - there is nothing between them now.
-//
-// The next line's additions go on the live `providerCliStateBaseShape`, and
-// v8.0 opens with a v8->v7 strip bridge exactly as the v7->v6 bridge strips the
-// version-manager group today.
-//
-// WHAT THIS PIN DOES AND DOES NOT COVER, stated plainly so the v8.0 author does
-// not over-trust it: it freezes the pre-image's KEY SET, a provider-id enum, a
-// login capability and a managed-install-state union. It deliberately keeps live
-// references for `providerCliCandidateSchema`, `providerProfileSchema`,
-// `providerVersionVisibilitySchema`, `providerAdvisorySchema`,
-// `providerNativeCapabilitiesSchema` and `nativeListResultSchema` - the same
-// depth `providerCliStateBaseShapeV40` stops at. Those are not unguarded: the
-// deep `z.toJSONSchema` snapshot in
-// `__tests__/__fixtures__/frozen-catalog-lines.ts` pins this schema's ENTIRE
-// nested shape, so growth in any of them turns red in plain `bun run test`
-// instead of leaking silently. That fixture is now the ONLY guard on the v7.0
-// wire itself, since v7.0 binds the live schemas - it dumps their real shape
-// for exactly that reason. When it goes red, hand-freeze the sub-schema that
-// grew, or open v8.0 - do not regenerate the fixture to make it green.
-//
-// `native` on this response now uses `nativeListResultSchemaV70Preimage` because the
-// live skill row grew `origin` / `conflict`. The capabilities descriptor
-// already pointed at `providerNativeCapabilitiesSchemaV70Preimage`.
+// ── Historical v7.0 pre-image ─────────────────────────────────────────────
+// This shape backs no wire contract. The v6 -> v7 upgrade uses it as a first
+// normalization pass before filling the version-manager fields that shipped in
+// v7.0. Its hand-copied key set and deep compatibility snapshot keep that
+// historical upgrade stable while the live v8.0 shape grows.
 const providerCliStateBaseShapeV70Preimage = {
   enabled: z.boolean(),
   disabledBy: providerDisabledBySchema.nullable(),
@@ -1882,7 +1869,7 @@ const providerCliStateBaseShapeV70Preimage = {
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
   loginCapability: providerLoginCapabilitySchemaV70.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
+  profiles: z.array(providerProfileSchemaV70).catch([]),
   // `.optional()` on top of `.catch(null)` is copied deliberately, not
   // tidied away: it is what lets a host-side construction site omit the key
   // entirely, and dropping it here would turn "an old host omitted this" from
@@ -1945,10 +1932,9 @@ export type ProvidersListResponseV70Preimage = z.infer<
 // response. Freezing here lets the v7.1 -> v7.0 contract parse strip the new
 // keys honestly instead. Do not "simplify" this back to a widen-in-place.
 //
-// Like `providersListRequestSchemaV70`, this pin freezes v7.0's own KEY SET
-// and deliberately keeps live references for the leaf schemas
-// (`providerCliCandidateSchema`, `providerProfileSchema`, the managed-version
-// group, `providerNativeCapabilitiesSchema`, `nativeListResultSchema`).
+// Like `providersListRequestSchemaV70`, this pin freezes v7.0's own KEY SET.
+// Its profile leaf is also frozen because v8.0 adds profile eligibility there;
+// the other live leaves remain guarded by the deep snapshot below.
 // Growth inside any of those is caught by the deep `z.toJSONSchema` snapshot in
 // `__tests__/__fixtures__/frozen-catalog-lines.ts`, which pins this shape - and
 // when it goes red, hand-freeze the sub-schema that grew rather than
@@ -1965,7 +1951,7 @@ const providerCliStateBaseShapeV70 = {
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
   loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
   availabilityPending: z.boolean().catch(false),
-  profiles: z.array(providerProfileSchema).catch([]),
+  profiles: z.array(providerProfileSchemaV70).catch([]),
   // `.optional()` on top of `.catch(null)` is copied deliberately, not tidied
   // away - see the live shape's comments for what each half does.
   managedInstallState: providerManagedInstallStateSchema
@@ -3390,20 +3376,24 @@ export function downgradeProviderAuthV20ToV10(
 // this call.
 export type DowngradableToV10ProviderState = (
   | ProviderCliState
+  | ProviderCliStateV70
   | ProviderCliStateV70Preimage
+  | ProviderCliStateV60
+  | ProviderCliStateV50
+  | ProviderCliStateV40
   | ProviderCliStateV30
   | ProviderCliStateV20
   | ProviderMutationCliStateV20
   | ProviderMutationCliStateV21
 ) & {
   // Widened the same way `profiles` is, and for the same reason: only the live
-  // shape carries the v7.1 enablement pair, but every arm of this union reaches
+  // and v7.1 shapes carry the enablement pair, but every arm reaches
   // the strict v1.0 parse below, which strips them either way. Optional here so
   // an arm without them still satisfies the type while the destructure can
   // still name them.
   enablementMode?: ProviderCliState["enablementMode"];
   enablementSource?: ProviderCliState["enablementSource"];
-  profiles?: ProviderCliState["profiles"];
+  profiles?: ProviderCliState["profiles"] | ProviderCliStateV70["profiles"];
   // Widened to the pre-image capability shape as well as the live one for
   // the same reason `loginCapability` below is widened across its own frozen
   // snapshots: callers reach this function holding either shape, and the
@@ -3594,6 +3584,33 @@ export function upgradeProviderCliStateListToV70Preimage(
 }
 
 /**
+ * v7.0 clients cannot render disabled profiles safely. Omit those rows, then
+ * reparse through the frozen v7.0 profile shape to strip `enabled` from the
+ * remaining rows without disturbing the rest of the catalog.
+ */
+function parseProviderStateWithEnabledProfiles(state: unknown) {
+  const current = providerCliStateSchema
+    .extend({ providerId: z.string() })
+    .safeParse(state);
+  if (!current.success) return null;
+  return {
+    ...current.data,
+    profiles: current.data.profiles.filter(isProfileEnabled),
+  };
+}
+
+export function downgradeProviderCliStateListToV71(
+  states: readonly unknown[],
+): ProviderCliStateV71[] {
+  return states.flatMap((state) => {
+    const current = parseProviderStateWithEnabledProfiles(state);
+    if (current === null) return [];
+    const parsed = providerCliStateSchemaV71.safeParse(current);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
  * Drop post-v6.0 providers (currently `huggingface`) for an already-shipped
  * v6.0 client, and strip the provider-pack-registry fields the frozen v6.0
  * state does not model. Same filter-by-reparse shape as the older bridges: an
@@ -3605,27 +3622,6 @@ export function downgradeProviderCliStateListToV60(
 ): ProviderCliStateV60[] {
   return states.flatMap((state) => {
     const parsed = providerCliStateSchemaV60.safeParse(state);
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
-/**
- * Same filter-by-reparse as `downgradeProviderCliStateListToV60`, one line up:
- * drops rows whose `providerId` is not in the frozen v7.0 enum (`reasonix`
- * today) so a major-7 caller's strict decode never sees one.
- *
- * There is nothing to STRIP here - v7.1 and the live shape carry the same keys
- * at this cut - but the filter still has to exist. A straight pass-through
- * throws the whole response away on the first Reasonix row rather than losing
- * one provider, which is exactly the latent bug the `…ToV60` helper was written
- * to fix for `huggingface` (that bridge passed the array through unfiltered
- * until #1011).
- */
-export function downgradeProviderCliStateListToV71(
-  states: readonly unknown[],
-): ProviderCliStateV71[] {
-  return states.flatMap((state) => {
-    const parsed = providerCliStateSchemaV71.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

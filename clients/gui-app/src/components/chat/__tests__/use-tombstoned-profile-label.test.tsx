@@ -66,6 +66,7 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
     advisory: null,
     profiles: profileIds.map((profileId) => ({
       profileId,
+      enabled: true,
       kind:
         profileId === "ambient" ? ("ambient" as const) : ("managed" as const),
       authType: "oauth" as const,

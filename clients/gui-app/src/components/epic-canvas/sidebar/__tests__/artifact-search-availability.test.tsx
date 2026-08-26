@@ -49,6 +49,10 @@ function openStore(): OpenEpicStoreHandle {
     userId: null,
     onAuthError: null,
   });
+  // A writable role, the way the host's meta/permission frames would set it:
+  // the gate also withholds search from viewers (and from a not-yet-known
+  // role), so the artifact-count cases below need write access as a given.
+  handle.store.setState({ permissionRole: "editor" });
   opened = handle;
   return handle;
 }
@@ -154,5 +158,41 @@ describe("useArtifactSearchAvailable against a real Epic store", () => {
 
     // Emptiness is the gate, not a count: one survivor still offers search.
     expect(availability()).toBe("yes");
+  });
+
+  it("answers no for a viewer even when artifacts exist", () => {
+    const handle = openStore();
+    act(() => {
+      seedArtifact(handle.doc, "art-1");
+    });
+    render(
+      <EpicSessionContext.Provider value={handle}>
+        <AvailabilityProbe />
+      </EpicSessionContext.Provider>,
+    );
+    expect(availability()).toBe("yes");
+
+    // A read-only device never runs epic file sync, so the search RPC's disk
+    // mirror never materializes; the gate hides search rather than offering a
+    // permanently "still syncing" dead end.
+    act(() => {
+      handle.store.setState({ permissionRole: "viewer" });
+    });
+
+    expect(availability()).toBe("no");
+  });
+
+  it("answers no while the role is not yet known", () => {
+    const handle = openStore();
+    act(() => {
+      seedArtifact(handle.doc, "art-1");
+      handle.store.setState({ permissionRole: null });
+    });
+    render(
+      <EpicSessionContext.Provider value={handle}>
+        <AvailabilityProbe />
+      </EpicSessionContext.Provider>,
+    );
+    expect(availability()).toBe("no");
   });
 });
