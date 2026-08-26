@@ -54,6 +54,7 @@ import {
   buildOverviewHostFixture,
   type OverviewHostFixture,
 } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
  * `HostIdentityCard`'s restructure (`host-identity-card.tsx`): `actions` moved
@@ -109,10 +110,11 @@ function makeRunnerHost(): IRunnerHost {
   });
 }
 
-function renderPanel(): void {
+function renderPanel(queryClient?: QueryClient): void {
   render(
     <QueryClientProvider
       client={
+        queryClient ??
         new QueryClient({
           defaultOptions: { queries: { retry: false, gcTime: 0 } },
         })
@@ -289,6 +291,69 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
     });
 
     expect(await screen.findByTestId("host-active-sessions")).toBeTruthy();
+  });
+
+  it("keeps the busy chip on screen while host.status is refetching", async () => {
+    let statusCalls = 0;
+    let releaseRefetch: (() => void) | null = null;
+    const refetchGate = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      effectiveName: "Studio Mac",
+      overrideHandlers: {
+        "host.status": async () => {
+          statusCalls += 1;
+          if (statusCalls > 1) {
+            await refetchGate;
+          }
+          return {
+            ready: true,
+            hostVersion: "1.5.0",
+            protocolVersion: { major: 1, minor: 2 },
+            busy: true,
+            busySessionCount: 2,
+            updateProgress: null,
+            busyBreakdown: {
+              workingAgents: 0,
+              activeTerminalAgents: 0,
+              busyTerminals: 2,
+            },
+          };
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 60_000 } },
+    });
+    renderPanel(queryClient);
+
+    const chip = await screen.findByTestId("host-active-sessions");
+    expect(chip.textContent).toBe("2 terminals working");
+
+    act(() => {
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope("host-a", "host.status"),
+      });
+    });
+
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
+      "2 terminals working",
+    );
+
+    await act(async () => {
+      releaseRefetch?.();
+      await refetchGate;
+    });
+
+    expect(screen.getByTestId("host-active-sessions").textContent).toBe(
+      "2 terminals working",
+    );
   });
 });
 
