@@ -34,16 +34,12 @@ export type ErasedConditionPollPolicy<
   readonly resetLaneIds: ReadonlySet<string>;
 };
 
-export type HostMethodPollPolicy<
-  Method extends keyof HostRpcRegistry & string,
-> =
+type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
   | null
   | { readonly kind: "fixed"; readonly intervalMs: number }
   | ErasedConditionPollPolicy<Method>;
 
-export type HostMethodScheduling<
-  Method extends keyof HostRpcRegistry & string,
-> = {
+type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
   readonly mode:
     | RpcSchedulingMode
     | ((params: RequestOfMethod<HostRpcRegistry, Method>) => RpcSchedulingMode);
@@ -51,7 +47,7 @@ export type HostMethodScheduling<
   readonly poll: HostMethodPollPolicy<Method>;
 };
 
-export type HostMethodPolicyTable = {
+type HostMethodPolicyTable = {
   readonly [
     Method in keyof HostRpcRegistry & string
   ]: HostMethodScheduling<Method>;
@@ -1579,7 +1575,7 @@ export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
   },
 };
 
-export type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
+type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
   readonly hostRpcMethod: Method;
 };
 

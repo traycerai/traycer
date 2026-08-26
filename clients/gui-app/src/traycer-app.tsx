@@ -1,5 +1,6 @@
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { BrowserLabsMarkerSync } from "@/components/layout/bridges/browser-labs-marker-sync";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
@@ -289,6 +290,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
   return (
     <>
       <RunnerHostBridges />
+      <BrowserLabsMarkerSync />
       <HostControllerStatusListener />
       <AppUpdateToastController />
       <LinkLoginDeepLinkBridge />

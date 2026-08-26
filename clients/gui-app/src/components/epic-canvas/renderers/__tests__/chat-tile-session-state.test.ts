@@ -280,7 +280,12 @@ function runnableQueue(itemCount: number): ChatQueueState {
       kind: "prompt" as const,
       queueItemId: `item-${index}`,
       messageId: `message-${index}`,
-      message: { kind: "user" as const, content: CONTENT },
+      message: {
+        kind: "user" as const,
+        content: CONTENT,
+        browserContextAttachments: [],
+        browserAnnotations: [],
+      },
       sender: { type: "user" as const, userId: "owner-1" },
       settings: SETTINGS,
       accountContext: { type: "PERSONAL" as const },
@@ -735,6 +740,8 @@ describe("canModifyChatMessages", () => {
     accountContext: { type: "PERSONAL" },
     deliveryPolicy: null,
     timestamp: 0,
+    restoreContent: CONTENT,
+    restoreBrowserAnnotations: [],
     restoreWorktreeIntent: null,
   };
 

@@ -246,6 +246,14 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.browserContextAttachments",
+      "reason": "Parsed-stream field with .default([]): an empty list is exactly what a host that predates ticket 13's browser-tile delivery has - no shipped client renders this field (the composer's own local echo covers the send-time chip; historical playback is a documented follow-up), so an old client simply strips the unknown key and is unaffected."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.providerNotice",
       "reason": "Parsed-stream field, nullable/.default(null): the text block's `text` always carries the full plain rendering and the client falls back to it when the notice is null - the documented pre-#243 behavior."
     },

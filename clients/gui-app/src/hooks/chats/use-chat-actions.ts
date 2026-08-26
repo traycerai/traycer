@@ -19,6 +19,18 @@ import type {
 } from "@/stores/chats/chat-session-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import type { Attachment } from "@/lib/composer/types";
+
+interface SendChatMessageInput {
+  readonly content: JsonContent;
+  readonly sender: UserMessageSender;
+  readonly settings: ChatRunSettings;
+  readonly attachments: ReadonlyArray<Attachment>;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  readonly restoreContent: JsonContent;
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+}
 
 /**
  * Memoised stable callbacks bound to a `ChatSessionStoreHandle`.
@@ -35,10 +47,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  */
 export interface ChatActions {
   readonly sendMessage: (
-    content: JsonContent,
-    sender: UserMessageSender,
-    settings: ChatRunSettings,
-    deliveryPolicy: ChatQueueDeliveryPolicy,
+    input: SendChatMessageInput,
   ) => SentChatMessageAction | null;
   readonly deleteMessageSuffix: (fromMessageId: string) => string | null;
   readonly editUserMessage: (
@@ -132,14 +141,12 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      sendMessage: (content, sender, settings, deliveryPolicy) =>
+      sendMessage: (input) =>
         tracked(
-          handle.store
-            .getState()
-            .sendMessage(content, sender, settings, deliveryPolicy),
+          handle.store.getState().sendMessageWithAttachments(input),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
-              harness: settings.harnessId,
+              harness: input.settings.harnessId,
             });
           },
         ),

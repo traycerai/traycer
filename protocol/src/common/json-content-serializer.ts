@@ -78,7 +78,7 @@ function getIndent(ctx: SerializerContext): string {
   return " ".repeat(ctx.listDepth * (ctx.options.listIndent ?? 2));
 }
 
-function escapeXmlAttr(str: string): string {
+export function escapeXmlAttr(str: string): string {
   return str
     .replace(/&/g, "&amp;")
     .replace(/"/g, "&quot;")
@@ -87,7 +87,7 @@ function escapeXmlAttr(str: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function escapeXmlContent(str: string): string {
+export function escapeXmlContent(str: string): string {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 

@@ -16,6 +16,8 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  browserAnnotationRecordSchema,
+  browserContextAttachmentKindSchema,
   chatEventSchema,
   chatEventSchemaPreInReplyTo,
   chatEventSchemaPreReasonix,
@@ -28,10 +30,11 @@ import {
   chatSchemaV16,
   interviewDeliveryProjectionSchema,
   userMessagePayloadSchema,
+  userMessagePayloadSchemaPreAnnotation,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
-  userMessageSchemaPreReasonix,
   userMessageSchemaPreTurnTail,
+  userMessageSchemaV16,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
@@ -526,7 +529,7 @@ export type ChatQueueState = z.infer<typeof chatQueueStateSchema>;
 const chatQueuedItemSchemaPreInReplyTo = z.object({
   queueItemId: z.string(),
   messageId: z.string(),
-  message: userMessagePayloadSchema,
+  message: userMessagePayloadSchemaPreAnnotation,
   sender: userMessageSenderSchemaPreInReplyTo,
   // Pre-Reasonix freeze: a queued item's settings tuple carries the harness id
   // the turn will run under, and released peers cannot decode `"reasonix"`.
@@ -562,7 +565,7 @@ const chatQueueStateSchemaPreInReplyTo = z.object({
 const chatQueuedItemSchemaPreManagedCommand = z.object({
   queueItemId: z.string(),
   messageId: z.string(),
-  message: userMessagePayloadSchema,
+  message: userMessagePayloadSchemaPreAnnotation,
   // Pre-Reasonix freeze on BOTH leaves: an A2A queue item's sender carries the
   // sending agent's harness id, and the settings tuple carries the harness the
   // queued turn will run under. Released peers cannot decode `"reasonix"` in
@@ -1277,6 +1280,33 @@ const activeProfileUpdateClientFrameSchema = z.object({
   profileId: z.string().nullable(),
 });
 
+/**
+ * Shared-browser-runtime ticket 01. The wire-only shape a `browser-context`
+ * chat attachment sends: origin/pageUrl/composerText the model will
+ * eventually see verbatim, plus `tabId` - the host-minted durable tab id
+ * once the GUI's registration has settled, with a tile-id fallback during
+ * that narrow race. The host's `send` handler resolves `tabId` to its owning
+ * session (if one is registered) and forwards
+ * `{sessionId, tabId}` onto the persisted `browserContextAttachmentRecordSchema`
+ * (`persistence/epic/messages.ts`) and into the prompt - never a raw
+ * Chromium target id, and never anything the host must keep secret.
+ */
+export const browserContextAttachmentWireSchema = z.object({
+  kind: browserContextAttachmentKindSchema,
+  origin: z.string(),
+  pageUrl: z.string(),
+  composerText: z.string(),
+  tabId: z.string(),
+});
+export type BrowserContextAttachmentWire = z.infer<
+  typeof browserContextAttachmentWireSchema
+>;
+
+export {
+  browserAnnotationRecordSchema,
+  type BrowserAnnotationRecord,
+} from "@traycer/protocol/persistence/epic/schemas";
+
 // The client-frame options that precede the two interview actions. Split out
 // (rather than written inline in one array) because `1.7` swaps ONLY the
 // interview pair: keeping the surrounding options in their own consts lets the
@@ -1611,6 +1641,12 @@ export const chatSubscribeClientFrameSchemaV16 = z.discriminatedUnion(
 const chatSubscribeClientFrameSchemaOptions = [
   chatSubscribeClientFrameSchemaOptionsBeforeInterview[0].extend({
     worktreeIntent: worktreeIntentSchema.nullable().default(null),
+    // Browser context entered on the unreleased live line. Every released
+    // 1.0–1.6 union above stays frozen without these fields.
+    browserContextAttachments: z
+      .array(browserContextAttachmentWireSchema)
+      .default([]),
+    browserAnnotations: z.array(browserAnnotationRecordSchema).default([]),
   }),
   deleteMessageSuffixClientFrameSchema,
   chatSubscribeClientFrameSchemaOptionsBeforeInterview[2].extend({
@@ -2355,7 +2391,7 @@ const chatQueuedPromptItemSchemaV16 = z.object({
   kind: z.literal("prompt").default("prompt"),
   queueItemId: z.string(),
   messageId: z.string(),
-  message: userMessagePayloadSchema,
+  message: userMessagePayloadSchemaPreAnnotation,
   sender: userMessageSenderSchemaPreReasonix,
   settings: chatRunSettingsSchemaPreReasonix,
   accountContext: accountContextSchema.default(DEFAULT_ACCOUNT_CONTEXT),
@@ -2422,7 +2458,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV16 = z.object({
 
 const chatSubscribeCommonServerFrameSchemasV16 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchemaPreReasonix,
+    message: userMessageSchemaV16,
     queue: chatQueueStateSchemaV16,
     event: chatEventSchemaPreReasonix,
     action: chatActionSchemaV16,
@@ -2474,15 +2510,13 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * change they cannot observe. So the fast path is retained per-line, not
  * per-"is this the newest line".
  *
- * The one thing `1.6` genuinely lacks is interview settlement, and it lives
- * inside `chat.messages`, which this schema does not walk. So this is
- * deliberately paired with `normalizeInterviewBlocksInShallowSnapshot`: a
- * targeted pass over interview blocks ONLY, supplying `outcome`/
- * `draftAnswers`/`settlement`/`diagnostics`/`delivery` and each answer's
- * `selection` where absent, and touching nothing else. Callers MUST run it
- * before handing the snapshot to consumers, or those consumers read fields
- * typed as present that are genuinely missing — the exact hazard the live
- * schema's doc above describes.
+ * `1.6` lacks interview settlement and browser payload fields inside
+ * `chat.messages`, which this schema does not walk. So this is deliberately
+ * paired with `normalizeV16MessagesInShallowSnapshot`: a targeted pass over
+ * user-authored payloads and interview blocks. Callers MUST run it before
+ * handing the snapshot to consumers, or those consumers read fields typed as
+ * present that are genuinely missing — the exact hazard the live schema's doc
+ * above describes.
  *
  * Every bounded envelope field is still validated deeply, against the FROZEN
  * `1.6` shapes, which is what makes this exact rather than merely permissive.

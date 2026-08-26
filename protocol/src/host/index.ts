@@ -1,5 +1,6 @@
 export * from "./agent";
 export * from "./asset-stream-schemas";
+export * from "./browser";
 export * from "./chat-fork";
 export * from "./comments";
 export * from "./config";

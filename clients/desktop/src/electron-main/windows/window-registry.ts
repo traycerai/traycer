@@ -138,12 +138,20 @@ export class WindowRegistry<
     window.on("focus", onFocus);
     window.on("show", onChange);
     window.on("hide", onChange);
+    window.on("minimize", onChange);
+    window.on("restore", onChange);
+    window.on("maximize", onChange);
+    window.on("unmaximize", onChange);
     window.on("page-title-updated", onChange);
     this.disposersByWindowId.set(windowId, () => {
       window.off("closed", onClosed);
       window.off("focus", onFocus);
       window.off("show", onChange);
       window.off("hide", onChange);
+      window.off("minimize", onChange);
+      window.off("restore", onChange);
+      window.off("maximize", onChange);
+      window.off("unmaximize", onChange);
       window.off("page-title-updated", onChange);
     });
     this.emitChange();

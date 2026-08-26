@@ -7,7 +7,7 @@ import {
   type ChatSubscribeServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
-  normalizeInterviewBlocksInShallowSnapshot,
+  normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -150,17 +150,6 @@ export interface ChatStreamClientOptions {
   readonly callbacks: ChatStreamCallbacks;
 }
 
-/**
- * The oldest `chat.subscribe@1.x` minor whose server frames carry the LIVE
- * message/event SHAPE - i.e. every field the current types promise is present
- * on the wire, with no compatibility default needed to synthesize it.
- *
- * `1.6` is that floor: it shipped image support (`imageResolutions`, the
- * image-bearing `tool_call`) and the turn-tail anchor, and the only difference
- * between its serverFrame and the live `1.7` one is the harness enum, which
- * changes no field's presence. Raise this ONLY when a minor adds or removes a
- * FIELD, not when one merely widens an enum.
- */
 /**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
@@ -309,18 +298,23 @@ export class ChatStreamClient {
       // envelope is validated deeply against the FROZEN `1.6` shapes, so this
       // is exact rather than permissive; the histories stay structural.
       //
-      // The one thing `1.6` genuinely lacks is interview settlement, and it
-      // lives inside the arrays the shallow parse does not walk. The narrow
-      // normalizer below supplies exactly those defaults - the deep schema's
-      // job on this path - so consumers never read `undefined` through a type
-      // that promises a value.
+      // `1.6` lacks interview settlement and browser payload fields. The
+      // message history is structural on this path, so normalize those fields
+      // in place; then run the live SHALLOW schema to apply bounded defaults
+      // (notably queue payloads) and recover the exact live consumer type.
       const shallowV16 =
         chatSubscribeSnapshotServerFrameShallowSchemaV16.safeParse(envelope);
       if (shallowV16.success) {
-        normalizeInterviewBlocksInShallowSnapshot(
+        normalizeV16MessagesInShallowSnapshot(
           shallowV16.data.snapshot.chat.messages,
         );
-        this.callbacks.onSnapshot(shallowV16.data);
+        const upgraded =
+          chatSubscribeSnapshotServerFrameShallowSchema.safeParse(
+            shallowV16.data,
+          );
+        if (upgraded.success) {
+          this.callbacks.onSnapshot(upgraded.data);
+        }
       }
       return;
     }

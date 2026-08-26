@@ -12,9 +12,9 @@
  *    unknown-field parsing as version negotiation" anti-pattern, and it hides
  *    the moment a new field stops being strippable.
  *
- * 2. `normalizeInterviewBlocksInShallowSnapshot` - the narrowly-scoped
- *    interview pass that keeps the `1.6` full-chat snapshot on its shallow
- *    path after `1.7` opened above it.
+ * 2. `normalizeV16MessagesInShallowSnapshot` - the narrowly-scoped message
+ *    pass that keeps the `1.6` full-chat snapshot on its shallow path after
+ *    `1.7` opened above it.
  *
  * Both are pure and dependency-free so the host and the OSS clients run the
  * same code rather than two drifting copies.
@@ -38,7 +38,15 @@ export interface ProjectedChatSubscribeClientFrame {
  * evidence on answers, Skip intent plus saved drafts on `interviewError`.
  * Everything below it gets the fields stripped.
  */
-const CHAT_SUBSCRIBE_INTERVIEW_SETTLEMENT_MINOR = 7;
+const CHAT_SUBSCRIBE_V17_MINOR = 7;
+
+function supportsV17(negotiated: SchemaVersion | null): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_V17_MINOR
+  );
+}
 
 /**
  * Whether the negotiated line can decode the `1.7` interview action fields.
@@ -53,11 +61,7 @@ const CHAT_SUBSCRIBE_INTERVIEW_SETTLEMENT_MINOR = 7;
 export function supportsInterviewSettlementActions(
   negotiated: SchemaVersion | null,
 ): boolean {
-  return (
-    negotiated !== null &&
-    negotiated.major === 1 &&
-    negotiated.minor >= CHAT_SUBSCRIBE_INTERVIEW_SETTLEMENT_MINOR
-  );
+  return supportsV17(negotiated);
 }
 
 /**
@@ -65,6 +69,8 @@ export function supportsInterviewSettlementActions(
  *
  * On `1.7` this is the identity. Below it:
  *
+ * - `send` loses browser context and annotations, which do not exist on the
+ *   released lines.
  * - `interviewAnswer` answers lose `selection`. `values` is untouched, so the
  *   answer the provider receives is byte-for-byte what it always was.
  * - `interviewError` loses its Skip intent and saved drafts, and degrades to
@@ -76,9 +82,9 @@ export function supportsInterviewSettlementActions(
  *   action literal.
  *
  * ONE CLIFF, DELIBERATELY - and the thing to know before adding a `1.8`. This
- * is a single "does the peer know interview settlement" test, not a chain of
- * per-line strips, because `1.7` is the only client-frame growth above the
- * frozen `1.6`. The moment a `1.8` adds another client-frame field, identity
+ * is a single "does the peer know 1.7" test, not a chain of per-line strips,
+ * because `1.7` is the only client-frame growth above the frozen `1.6`. The
+ * moment a `1.8` adds another client-frame field, identity
  * for every minor `>= 7` becomes WRONG: a `1.7` peer would receive the `1.8`
  * field. At that point this must become a per-line projection (strip `1.8`
  * fields below 8, then `1.7` fields below 7), and
@@ -89,9 +95,17 @@ export function projectChatClientFrameForVersion(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
-  if (supportsInterviewSettlementActions(negotiated)) return frame;
+  if (supportsV17(negotiated)) return frame;
 
   switch (frame.kind) {
+    case "send": {
+      const {
+        browserContextAttachments: _browserContextAttachments,
+        browserAnnotations: _browserAnnotations,
+        ...rest
+      } = frame;
+      return rest;
+    }
     case "interviewAnswer": {
       return {
         ...frame,
@@ -131,16 +145,17 @@ function neutralizeAnswerSelection(answers: unknown): void {
 }
 
 /**
- * NEUTRALIZE the interview settlement fields on a snapshot that took the `1.6`
+ * Normalize live-only message fields on a snapshot that took the `1.6`
  * SHALLOW path.
  *
  * The shallow schema validates the whole bounded envelope deeply and leaves
  * `chat.messages` / `chat.events` structural, because a deep zod parse over a
  * full-chat history is seconds of render-thread CPU per snapshot. That skips
  * the compatibility defaults living inside those arrays - which for a `1.6`
- * peer is exactly the interview settlement fields. Consumers are typed as if
- * they are present, so without this pass they read `undefined` where the type
- * promises a value (`block.draftAnswers.map` throws).
+ * peer is the interview settlement fields and the two browser arrays on a
+ * user-authored message. Consumers are typed as if they are present, so
+ * without this pass they read `undefined` where the type promises a value
+ * (`block.draftAnswers.map` throws).
  *
  * This OVERWRITES rather than fills. A legal `1.6` frame cannot carry any of
  * these fields - the frozen `1.6` schemas have no such keys - so a value found
@@ -156,15 +171,22 @@ function neutralizeAnswerSelection(answers: unknown): void {
  * host has no outbox to project from, and inventing one would make history
  * claim a delivery state nobody recorded.
  *
- * The pass stays narrow - interview blocks only, no validation of anything
- * else - and mutates in place rather than rebuilding, because copying the
- * history is the cost the shallow path exists to avoid.
+ * The pass stays narrow - user-authored payloads and interview blocks only -
+ * and mutates in place rather than rebuilding, because copying the history is
+ * the cost the shallow path exists to avoid.
  */
-export function normalizeInterviewBlocksInShallowSnapshot(
+export function normalizeV16MessagesInShallowSnapshot(
   messages: ReadonlyArray<unknown>,
 ): void {
   for (const message of messages) {
     if (!isRecord(message)) continue;
+    if (message.role === "user") {
+      const payload = message.message;
+      if (!isRecord(payload) || payload.kind !== "user") continue;
+      payload.browserContextAttachments = [];
+      payload.browserAnnotations = [];
+      continue;
+    }
     if (message.role !== "assistant") continue;
     const blocks = message.blocks;
     if (!Array.isArray(blocks)) continue;
@@ -236,8 +258,28 @@ function projectBlocks(value: unknown): unknown {
   return changed ? projected : value;
 }
 
+function projectUserAuthoredPayload(value: unknown): unknown {
+  if (!isRecord(value) || value.kind !== "user") return value;
+  if (
+    !Object.hasOwn(value, "browserContextAttachments") &&
+    !Object.hasOwn(value, "browserAnnotations")
+  ) {
+    return value;
+  }
+  const {
+    browserContextAttachments: _browserContextAttachments,
+    browserAnnotations: _browserAnnotations,
+    ...rest
+  } = value;
+  return rest;
+}
+
 function projectMessage(value: unknown): unknown {
   if (!isRecord(value)) return value;
+  if (value.role === "user") {
+    const message = projectUserAuthoredPayload(value.message);
+    return message === value.message ? value : { ...value, message };
+  }
   if (value.role !== "assistant") return value;
   const blocks = projectBlocks(value.blocks);
   return blocks === value.blocks ? value : { ...value, blocks };
@@ -246,6 +288,19 @@ function projectMessage(value: unknown): unknown {
 function projectMessages(value: unknown): unknown {
   if (!Array.isArray(value)) return value;
   return value.map(projectMessage);
+}
+
+function projectQueue(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.items)) return value;
+  let changed = false;
+  const items = value.items.map((item) => {
+    if (!isRecord(item) || item.kind !== "prompt") return item;
+    const message = projectUserAuthoredPayload(item.message);
+    if (message === item.message) return item;
+    changed = true;
+    return { ...item, message };
+  });
+  return changed ? { ...value, items } : value;
 }
 
 function projectSnapshot(
@@ -259,6 +314,7 @@ function projectSnapshot(
     ...frame,
     snapshot: {
       ...snapshot,
+      queue: projectQueue(snapshot.queue),
       chat: {
         ...chat,
         messages: projectMessages(chat.messages),
@@ -288,29 +344,25 @@ function projectSnapshot(
  * negotiation - the exact anti-pattern the plan rules out. Projecting on the
  * send side means the bytes are honest for the negotiated line.
  *
- * Every interview-bearing surface is covered, including the nested ones that
- * are easy to miss because they are several levels below the frame kind:
+ * Every `1.7`-only surface is covered, including the nested ones that are easy
+ * to miss because they are several levels below the frame kind:
  *
  * - `snapshot` → `chat.messages[].blocks[]` interview blocks;
- * - `messageAccepted` → defensive only. On every line this frame's `message`
- *   is `userMessageSchema`, and a user message has no content blocks, so there
- *   is nothing to strip today. The arm is kept because the cost is one
- *   reference comparison and the failure mode if the frame ever widens to the
- *   message union is a silent leak rather than a type error;
+ * - `messageAccepted` → browser context and annotations on its user message;
  * - `blockDelta` → `interview.resolved` answers;
  * - `eventAppended` and the snapshot's `chat.events` → interview settlement
  *   metadata on durable chat events (see `INTERVIEW_SETTLEMENT_METADATA_KEY`);
  * - `interviewAnswered` → answers plus the delivery projection;
  * - `interviewErrored` → outcome, saved drafts and delivery.
  *
- * The queue, background items and managed commands carry no interview content
- * and pass through untouched.
+ * Queue prompt items carry the same user-authored browser payload as accepted
+ * messages, so snapshots and `queueChanged` frames project that payload too.
  */
 export function projectChatServerFrameForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
-  if (supportsInterviewSettlementActions(negotiated)) return frame;
+  if (supportsV17(negotiated)) return frame;
 
   switch (frame.kind) {
     case "actionAck": {
@@ -327,6 +379,10 @@ export function projectChatServerFrameForVersion(
     case "messageAccepted": {
       const message = projectMessage(frame.message);
       return message === frame.message ? frame : { ...frame, message };
+    }
+    case "queueChanged": {
+      const queue = projectQueue(frame.queue);
+      return queue === frame.queue ? frame : { ...frame, queue };
     }
     case "eventAppended": {
       const event = projectChatEvent(frame.event);

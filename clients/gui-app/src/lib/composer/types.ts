@@ -7,6 +7,8 @@ import type {
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/schemas";
+import type { BrowserContextAttachmentPayload } from "@/lib/browser-view/browser-context-attachments";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
@@ -250,7 +252,15 @@ export type MentionAttachment =
   | GitMentionAttachment
   | EntityMentionAttachment
   | GithubMentionAttachment;
-export type Attachment = ImageAttachment | MentionAttachment;
+export type BrowserContextAttachment = {
+  kind: "browser-context";
+  payload: BrowserContextAttachmentPayload;
+};
+export type Attachment =
+  | ImageAttachment
+  | MentionAttachment
+  | BrowserContextAttachment
+  | BrowserAnnotationRecord;
 
 /**
  * Full, untruncated preview content for a picker row - the side preview panel

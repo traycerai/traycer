@@ -7,6 +7,7 @@ import {
   type UncheckedVersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
+  buildStreamOpenAckManifest,
   buildStreamManifest,
   checkStreamCompatibility,
   checkStreamMethodCompatibility,
@@ -350,5 +351,66 @@ describe("stream compatibility", () => {
       "chat.subscribe",
     );
     expect(chatSubscribe.ok).toBe(true);
+  });
+
+  it("builds an old-host openAck without browser methods while existing streams remain compatible", () => {
+    const {
+      "browser.sessions": browserSessionsRegistry,
+      "browser.screencast": browserScreencastRegistry,
+      ...oldHostStreamRpcRegistry
+    } = hostStreamRpcRegistry;
+    void browserSessionsRegistry;
+    void browserScreencastRegistry;
+
+    const newGuiManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const oldHostManifest = buildStreamManifest(oldHostStreamRpcRegistry);
+    const openAckManifest = buildStreamOpenAckManifest(
+      oldHostStreamRpcRegistry,
+      newGuiManifest,
+    );
+
+    expect(openAckManifest).toEqual(oldHostManifest);
+    expect(openAckManifest["browser.sessions"]).toBeUndefined();
+    expect(openAckManifest["browser.screencast"]).toBeUndefined();
+    expect(openAckManifest["terminal.subscribe"]).toEqual({
+      major: 1,
+      minor: 6,
+    });
+
+    const terminalAsHost = checkStreamMethodCompatibility(
+      oldHostStreamRpcRegistry,
+      oldHostManifest,
+      newGuiManifest,
+      "host",
+      "terminal.subscribe",
+    );
+    expect(terminalAsHost.ok).toBe(true);
+
+    const browserSessionsAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "browser.sessions",
+    );
+    expect(browserSessionsAsClient.ok).toBe(false);
+
+    const browserScreencastAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "browser.screencast",
+    );
+    expect(browserScreencastAsClient.ok).toBe(false);
+
+    const terminalAsClient = checkStreamMethodCompatibility(
+      hostStreamRpcRegistry,
+      newGuiManifest,
+      openAckManifest,
+      "client",
+      "terminal.subscribe",
+    );
+    expect(terminalAsClient.ok).toBe(true);
   });
 });

@@ -89,6 +89,8 @@ function userMessage(messageId: string): Extract<Message, { role: "user" }> {
     message: {
       kind: "user",
       content: CONTENT,
+      browserContextAttachments: [],
+      browserAnnotations: [],
     },
     timestamp: 1000 + messageId.length,
     sessionAnchor: null,
@@ -141,6 +143,8 @@ function steerRequestedQueueItem(
     message: {
       kind: "user",
       content: CONTENT,
+      browserContextAttachments: [],
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,
@@ -1049,6 +1053,8 @@ describe("useRenderedMessages", () => {
       message: {
         kind: "user",
         content,
+        browserContextAttachments: [],
+        browserAnnotations: [],
       },
       timestamp: 2002,
     };
@@ -1105,6 +1111,8 @@ describe("useRenderedMessages", () => {
       message: {
         kind: "user",
         content,
+        browserContextAttachments: [],
+        browserAnnotations: [],
       },
       timestamp: 2002,
     };
@@ -2993,6 +3001,8 @@ describe("useRenderedMessages", () => {
           accountContext: { type: "PERSONAL" },
           deliveryPolicy: null,
           timestamp: 3000,
+          restoreContent: CONTENT,
+          restoreBrowserAnnotations: [],
           restoreWorktreeIntent: null,
         },
       ],
@@ -3695,6 +3705,8 @@ describe("useRenderedMessages setup card integration", () => {
           accountContext: { type: "PERSONAL" },
           deliveryPolicy: null,
           timestamp: 1010,
+          restoreContent: CONTENT,
+          restoreBrowserAnnotations: [],
           restoreWorktreeIntent: null,
         },
       ],
@@ -3721,6 +3733,8 @@ describe("useRenderedMessages setup card integration", () => {
           accountContext: { type: "PERSONAL" },
           deliveryPolicy: null,
           timestamp: 3000,
+          restoreContent: CONTENT,
+          restoreBrowserAnnotations: [],
           restoreWorktreeIntent: null,
         },
       ],

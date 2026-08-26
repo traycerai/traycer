@@ -30,6 +30,25 @@ export function buildStreamManifest(
 }
 
 /**
+ * Host-side `/stream` openAck manifest: advertise only stream methods both
+ * peers named. This keeps new-client / old-host pairings connected; unsupported
+ * methods fail only when the client subscribes to that specific method.
+ */
+export function buildStreamOpenAckManifest(
+  registry: VersionedStreamRpcRegistry,
+  peerManifest: ConnectionManifest,
+): ConnectionManifest {
+  const selfManifest = buildStreamManifest(registry);
+  const ackManifest: Record<string, SchemaVersion> = {};
+  for (const [method, version] of Object.entries(selfManifest)) {
+    if (Object.prototype.hasOwnProperty.call(peerManifest, method)) {
+      ackManifest[method] = version;
+    }
+  }
+  return ackManifest;
+}
+
+/**
  * Mirror compatibility check for a `/stream` connection.
  *
  * Structurally parallel to the unary `check` in

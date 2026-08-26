@@ -220,6 +220,10 @@ import {
 import { useShallow } from "zustand/react/shallow";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  BrowsersPanelActions,
+  BrowsersPanelBody,
+} from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
 interface ArtifactReadTarget {
   readonly id: string;
   readonly updatedAt: number;
@@ -493,6 +497,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
       Subtitle: null,
     },
     loading: emptyLoadingSlots(TerminalsLoadingPanelBody),
+  },
+  browsers: {
+    live: {
+      Body: BrowsersPanelBody,
+      Actions: BrowsersPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
   artifacts: {
     live: {

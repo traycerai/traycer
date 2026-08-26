@@ -448,6 +448,8 @@ describe("<QueuedMessagePanel />", () => {
           message: {
             kind: "user",
             content: orderedListContent(["First step", "Second step"]),
+            browserContextAttachments: [],
+            browserAnnotations: [],
           },
         },
       ]),
@@ -927,6 +929,8 @@ function queuedItem(
     message: {
       kind: "user",
       content: content(text),
+      browserContextAttachments: [],
+      browserAnnotations: [],
     },
     sender: { type: "user", userId: "owner-1" },
     settings: SETTINGS,

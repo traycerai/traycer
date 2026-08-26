@@ -1,16 +1,29 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type {
   ChatActiveTurn,
-  ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
-import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import {
+  readComposerDraftSnapshot,
+  useComposerDraftStore,
+} from "@/stores/composer/composer-draft-store";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  appendImageAttachmentAtoms,
+  containsImageAtoms,
+} from "@/lib/composer/image-atoms";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import {
+  getImageBytes,
+  sessionImageBytes,
+} from "@/lib/composer/landing-image-store";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import { v4 as uuidv4 } from "uuid";
 import {
   buildAttachmentsFromJSONContent,
   buildSubmittedChatJSONContent,
@@ -27,6 +40,7 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
 import type { Attachment } from "@/lib/composer/types";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import type { ChatComposerSubmitInput } from "./chat-composer";
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 
 interface UseChatComposerSubmitArgs {
@@ -81,14 +95,6 @@ interface UseChatComposerSubmitArgs {
     | null;
 }
 
-interface ChatComposerSubmitInput {
-  readonly content: JsonContent;
-  readonly contentText: string;
-  readonly attachments: ReadonlyArray<Attachment>;
-  readonly settings: ChatRunSettings;
-  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
-}
-
 interface PendingSteerConflict {
   // The submit INTENT only - deliberately NOT the resolved `deliveryPolicy`. The
   // policy is re-resolved from the CURRENT connection/turn state at confirmation
@@ -98,6 +104,8 @@ interface PendingSteerConflict {
   readonly content: JsonContent;
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
+  readonly restoreContent: JsonContent;
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly settings: ChatRunSettings;
   readonly changed: ReadonlyArray<string>;
   // The turnId this consent was DISPLAYED for. The composer persists across turn
@@ -111,6 +119,7 @@ interface PendingSteerConflict {
 
 export interface ChatComposerSubmitResult {
   readonly submitDraft: (source: ChatComposerSubmitSource) => void;
+  readonly annotationPreparationPending: boolean;
   /**
    * Confirm-dialog state for a `Mod-Enter` steer whose settings differ from the
    * running turn's baked settings (decision 6). Open means the send is staged
@@ -149,6 +158,9 @@ export function useChatComposerSubmit(
   const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
+  const [annotationPreparationPending, setAnnotationPreparationPending] =
+    useState(false);
+  const annotationPrepFlight = useRef(false);
 
   const finalizeSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
@@ -218,70 +230,120 @@ export function useChatComposerSubmit(
       // and clear nothing, letting the just-submitted text resurrect once the
       // editor finishes initializing from that same stale initial content.
       if (editor === null || !editor.isReady()) return;
+      if (annotationPrepFlight.current) return;
+      const draft = useComposerDraftStore.getState().drafts[taskId];
+      const annotationRecords = draft?.browserAnnotations ?? [];
+      const capturedRevision = draft?.revision ?? 0;
+      const browserContextAttachments =
+        draft?.browserContextAttachments?.map((payload) => ({
+          kind: "browser-context" as const,
+          payload,
+        })) ?? [];
       const editorContent = editor.getJSON();
       const contentText =
         extractPlainTextFromComposerJSONContent(editorContent);
-      const trimmed = contentText.trim();
-      const hasImages = containsImageAtoms(editorContent);
-      if (trimmed.length === 0 && !hasImages) return;
-
-      // `toolbar.serviceTier` is already clamped to the selected model in the
-      // toolbar store (the single site shared with the picker display), so a tier
-      // the model doesn't advertise never reaches the wire or the recorded turn.
-      // The raw preference stays sticky in the store's `values` for a later model
-      // that honors it, and the codex-adapter still re-filters against the
-      // model's authoritative supportedServiceTiers at thread/start.
-      const settings = buildChatRunSettings({
-        selection: toolbar.selection,
-        permission: toolbar.permission,
-        reasoning: toolbar.reasoning,
-        serviceTier: toolbar.serviceTier,
-      });
-
-      const submittedContent = buildSubmittedChatJSONContent(
-        editorContent,
-        pickerStore.getState().knownSlashCommands,
-      );
-      const attachments = buildAttachmentsFromJSONContent(submittedContent);
-      const deliveryPolicy = resolveSubmitDeliveryPolicy({
-        source,
-        activeTurnStatus,
-        steerEnabled,
-        steerProtocolSupported,
-      });
-
-      // The drift confirmation is a capability-gated affordance: only a
-      // steer-capable harness can actually restart-under-new-settings, so only it
-      // asks. On an unsupported harness the `after_safe_point` send goes straight
-      // through and the host records the benign fallback ("After turn") row.
-      if (deliveryPolicy === "after_safe_point" && steerCapable) {
-        // A turn-start-baked setting (harness/model/reasoning/tier/agent-mode/
-        // profile - never permissionMode) differing from the running turn can't
-        // fold in silently: confirm ending the turn first (decision 6). The host
-        // owns the actual safe-point-vs-interrupt-restart promotion; this is the
-        // renderer's consent gate. Keep the composer text until the user acts.
-        const originTurn = getActiveTurnForSteer();
-        const decision = decideSteerSettings(originTurn, settings);
-        if (decision.kind === "interrupt_restart") {
-          setPendingConflict({
-            content: submittedContent,
-            contentText,
-            attachments,
-            settings: decision.newSettings,
-            changed: decision.changed,
-            originTurnId: originTurn?.turnId ?? null,
-          });
-          return;
-        }
+      if (
+        isEmptyComposerSubmit({
+          contentText,
+          editorContent,
+          browserContextAttachments,
+          annotationRecords,
+        })
+      ) {
+        return;
       }
 
-      finalizeSend({
-        content: submittedContent,
-        contentText,
-        attachments,
-        settings,
-        deliveryPolicy,
-      });
+      const submitPreparedDraft = (
+        annotationImages: ReadonlyArray<AnnotationImageAtom>,
+      ): void => {
+        if (submitBlocked()) return;
+        const live = readComposerDraftSnapshot(taskId);
+        if (live.revision !== capturedRevision) return;
+        const settings = buildChatRunSettings({
+          selection: toolbar.selection,
+          permission: toolbar.permission,
+          reasoning: toolbar.reasoning,
+          serviceTier: toolbar.serviceTier,
+        });
+        const submittedContent = appendImageAttachmentAtoms(
+          buildSubmittedChatJSONContent(
+            editorContent,
+            pickerStore.getState().knownSlashCommands,
+          ),
+          annotationImages,
+        );
+        const attachments: ReadonlyArray<Attachment> = [
+          ...buildAttachmentsFromJSONContent(submittedContent),
+          ...browserContextAttachments,
+          ...annotationRecords,
+        ];
+        const deliveryPolicy = resolveSubmitDeliveryPolicy({
+          source,
+          activeTurnStatus,
+          steerEnabled,
+          steerProtocolSupported,
+        });
+        const sendInput: ChatComposerSubmitInput = {
+          content: submittedContent,
+          contentText,
+          attachments,
+          settings,
+          deliveryPolicy,
+          restoreContent: editorContent,
+          restoreBrowserAnnotations: annotationRecords,
+        };
+        if (deliveryPolicy === "after_safe_point" && steerCapable) {
+          const originTurn = getActiveTurnForSteer();
+          const decision = decideSteerSettings(originTurn, settings);
+          if (decision.kind === "interrupt_restart") {
+            setPendingConflict({
+              content: submittedContent,
+              contentText,
+              attachments,
+              restoreContent: editorContent,
+              restoreBrowserAnnotations: annotationRecords,
+              settings: decision.newSettings,
+              changed: decision.changed,
+              originTurnId: originTurn?.turnId ?? null,
+            });
+            return;
+          }
+        }
+        finalizeSend(sendInput);
+      };
+
+      if (annotationRecords.length === 0) {
+        submitPreparedDraft([]);
+        return;
+      }
+
+      annotationPrepFlight.current = true;
+      setAnnotationPreparationPending(true);
+      void (async () => {
+        try {
+          const annotationImages =
+            await resolveAnnotationImageAtoms(annotationRecords);
+          if (annotationImages === null) {
+            reportableErrorToast(
+              "Couldn't attach the annotation image.",
+              {
+                description: "The crop is missing. Try attaching again.",
+              },
+              {
+                title: "Annotation image missing",
+                message: null,
+                code: null,
+                source: "Chat composer",
+              },
+            );
+            return;
+          }
+          submitPreparedDraft(annotationImages);
+        } finally {
+          annotationPrepFlight.current = false;
+          setAnnotationPreparationPending(false);
+        }
+      })();
     },
     [
       activeTurnStatus,
@@ -293,6 +355,7 @@ export function useChatComposerSubmit(
       steerEnabled,
       steerProtocolSupported,
       submitBlocked,
+      taskId,
       toolbarStore,
     ],
   );
@@ -335,6 +398,8 @@ export function useChatComposerSubmit(
         attachments: pendingConflict.attachments,
         settings: pendingConflict.settings,
         deliveryPolicy,
+        restoreContent: pendingConflict.restoreContent,
+        restoreBrowserAnnotations: pendingConflict.restoreBrowserAnnotations,
       })
     ) {
       setPendingConflict(null);
@@ -356,6 +421,7 @@ export function useChatComposerSubmit(
 
   return {
     submitDraft,
+    annotationPreparationPending,
     steerConflict: {
       open: pendingConflict !== null,
       changed: pendingConflict?.changed ?? [],
@@ -363,4 +429,46 @@ export function useChatComposerSubmit(
       onRestart,
     },
   };
+}
+
+function isEmptyComposerSubmit(input: {
+  readonly contentText: string;
+  readonly editorContent: JsonContent;
+  readonly browserContextAttachments: ReadonlyArray<Attachment>;
+  readonly annotationRecords: ReadonlyArray<BrowserAnnotationRecord>;
+}): boolean {
+  return (
+    input.contentText.trim().length === 0 &&
+    !containsImageAtoms(input.editorContent) &&
+    input.browserContextAttachments.length === 0 &&
+    input.annotationRecords.length === 0
+  );
+}
+
+type AnnotationImageAtom = {
+  readonly id: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly size: number | null;
+  readonly b64content: string;
+};
+
+async function resolveAnnotationImageAtoms(
+  records: ReadonlyArray<BrowserAnnotationRecord>,
+): Promise<ReadonlyArray<AnnotationImageAtom> | null> {
+  const atoms: AnnotationImageAtom[] = [];
+  for (const record of records) {
+    const sessionBytes = sessionImageBytes(record.imageHash);
+    const bytes =
+      sessionBytes ?? (await getImageBytes(record.imageHash)) ?? null;
+    if (bytes === null) return null;
+    atoms.push({
+      id: uuidv4(),
+      fileName: record.imageFileName,
+      mimeType: "image/png",
+      size: bytes.byteLength,
+      b64content: bytesToBase64(bytes),
+    });
+  }
+  return atoms;
 }

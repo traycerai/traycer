@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 
 const EPIC_ID = "epic-empty";
 const TAB_ID = "tab-empty";
@@ -98,7 +99,9 @@ describe("<TileCanvas /> empty epic", () => {
       const tabId = root.tabInstanceIds[0];
       const tab = canvas.tilesByInstanceId[tabId];
       expect(tab?.type).toBe("blank");
-      expect(tab?.name).toBe("New tab");
+      expect(tab === undefined ? null : epicCanvasTileFallbackName(tab)).toBe(
+        "New tab",
+      );
     });
 
     expect(screen.getByTestId("tab-group-view")).not.toBeNull();

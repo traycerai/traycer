@@ -25,6 +25,7 @@ import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
+  BrowserSessionTileRef,
   GitDiffTileRef,
   GitDiffTileViewState,
   PrDiffTileViewState,
@@ -32,6 +33,7 @@ import type {
 } from "./types";
 import {
   isBlankTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
@@ -432,6 +434,13 @@ function seedRootPane(
   };
 }
 
+function cloneTileForCanvasDuplicate(
+  ref: EpicCanvasTileRef,
+  instanceId: string,
+): EpicCanvasTileRef {
+  return { ...ref, instanceId };
+}
+
 /** Canvas containing exactly one pane with one tab (tear-off, open-in-new-tab). */
 export function createSingleTileCanvas(
   node: EpicCanvasTileRef,
@@ -471,7 +480,10 @@ export function cloneEpicCanvasState(state: EpicCanvasState): EpicCanvasState {
       instanceIdMap.set(instanceId, nextInstanceId);
       const ref = state.tilesByInstanceId[instanceId];
       if (ref !== undefined) {
-        tiles[nextInstanceId] = { ...ref, instanceId: nextInstanceId };
+        tiles[nextInstanceId] = cloneTileForCanvasDuplicate(
+          ref,
+          nextInstanceId,
+        );
       }
       return nextInstanceId;
     });
@@ -1434,6 +1446,7 @@ export function renameArtifact(
     state,
     (ref) => ref.id === artifactId,
     (ref) => {
+      if (isBrowserSessionTileRef(ref)) return ref;
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };
       }
@@ -1462,6 +1475,25 @@ export function renameArtifact(
       return { ...ref, name, titleSource: "manual" };
     },
   );
+}
+
+export function updateBrowserTileViewportPreset(
+  state: EpicCanvasState,
+  tileInstanceId: string,
+  viewportPreset: BrowserSessionTileRef["viewportPreset"],
+): EpicCanvasState {
+  const current = state.tilesByInstanceId[tileInstanceId];
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
+    return state;
+  }
+  if (current.viewportPreset === viewportPreset) return state;
+  return {
+    ...state,
+    tilesByInstanceId: {
+      ...state.tilesByInstanceId,
+      [tileInstanceId]: { ...current, viewportPreset },
+    },
+  };
 }
 
 /**

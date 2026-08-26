@@ -45,6 +45,7 @@ import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -183,6 +184,9 @@ export interface ChatComposerSubmitInput {
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
   readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+  /** Editor document without submit-only crop atoms. */
+  readonly restoreContent: JsonContent;
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
 }
 
 function composerUtilityNeedsClearance(args: {
@@ -192,6 +196,13 @@ function composerUtilityNeedsClearance(args: {
 }): boolean {
   const triggerVisible = args.rowCount > 0 || args.saving;
   return triggerVisible && args.connectedUpperSurface;
+}
+
+function composerAttachmentPending(
+  pastePending: boolean,
+  annotationPreparationPending: boolean,
+): boolean {
+  return pastePending || annotationPreparationPending;
 }
 
 function ComposerUtilityClearanceFill(props: {
@@ -437,7 +448,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isIngestingImages,
     isResolvingFilePaths,
   } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
-  const attachmentPending = isAttachmentIngestPending({
+  const pastePending = isAttachmentIngestPending({
     isIngestingImages,
     isResolvingFilePaths,
   });
@@ -459,7 +470,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const promptStash = usePromptStash({
     active: focused,
-    disabled: attachmentPending,
+    disabled: pastePending,
     editorRef,
     readHashImage: readPromptStashImage,
     source: promptStashSource,
@@ -467,23 +478,28 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
 
   const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
-  const { submitDraft, steerConflict } = useChatComposerSubmit({
-    taskId,
-    editorRef,
-    pickerStore,
-    toolbarStore,
-    activeTurnStatus,
-    steerCapable,
-    steerEnabled,
-    steerProtocolSupported,
-    getActiveTurnForSteer,
-    hasPendingApprovals,
-    sendDisabled: sendBlocked,
-    workspaceBlocked,
-    imagesUnsupported,
-    attachmentPreparationPending: attachmentPending,
-    onSubmitMessage,
-  });
+  const { submitDraft, steerConflict, annotationPreparationPending } =
+    useChatComposerSubmit({
+      taskId,
+      editorRef,
+      pickerStore,
+      toolbarStore,
+      activeTurnStatus,
+      steerCapable,
+      steerEnabled,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
+      hasPendingApprovals,
+      sendDisabled: sendBlocked,
+      workspaceBlocked,
+      imagesUnsupported,
+      attachmentPreparationPending: pastePending,
+      onSubmitMessage,
+    });
+  const attachmentPending = composerAttachmentPending(
+    pastePending,
+    annotationPreparationPending,
+  );
   const ambientDrift = useAmbientDriftGate(
     hostClient,
     reauthGate.state,
@@ -650,6 +666,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                 }
                 attachmentsStrip={
                   <ChatComposerAttachmentsStrip
+                    taskId={taskId}
                     content={draftContent}
                     editingQueueItemId={editingQueueItemId}
                     onCancelQueueEdit={onCancelQueueEdit}

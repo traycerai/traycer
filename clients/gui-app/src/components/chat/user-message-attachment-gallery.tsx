@@ -19,14 +19,31 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
+  readonly excludeHashes: ReadonlySet<string>;
+  readonly excludeFileNames: ReadonlySet<string>;
 }
 
 export function UserMessageAttachmentGallery({
   align,
   attachments,
+  excludeHashes,
+  excludeFileNames,
 }: UserMessageAttachmentGalleryProps): ReactNode {
   const images = useMemo(() => {
-    const imageAttachments = attachments.filter(isImageAttachment);
+    const imageAttachments = attachments
+      .filter(isImageAttachment)
+      .filter((attachment) => {
+        if (attachment.hash !== null && excludeHashes.has(attachment.hash)) {
+          return false;
+        }
+        if (
+          attachment.name !== undefined &&
+          excludeFileNames.has(attachment.name)
+        ) {
+          return false;
+        }
+        return true;
+      });
     const labels = buildImageAttachmentDisplayLabels(
       imageAttachments.map((attachment, index) => ({
         id: String(index),
@@ -40,7 +57,7 @@ export function UserMessageAttachmentGallery({
       attachment,
       label: labels.get(String(index)),
     }));
-  }, [attachments]);
+  }, [attachments, excludeFileNames, excludeHashes]);
   if (images.length === 0) return null;
   return (
     <div

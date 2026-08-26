@@ -23,6 +23,7 @@ import type { OpenTileIntoTargetGroupArgs } from "@/lib/commands/actions/open-in
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { SearchRunTarget } from "@/lib/commands/sources/open/search-target";
 import type { UseWorkspaceSearchTextArgs } from "@/hooks/workspace/use-workspace-search-text-query";
+import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 
 // Only the fields the component actually reads off a query result. `data` is
 // `unknown` so a test can hand it any response shape (vi.mock factories are
@@ -542,7 +543,9 @@ describe("SearchRunView - artifact target (workspace.searchText)", () => {
     const opened = state.openTileIntoTargetGroup.mock.calls.at(0)?.[0];
     expect(opened?.ref.id).toBe("art-1");
     expect(opened?.ref.type).toBe("ticket");
-    expect(opened?.ref.name).toBe("Known");
+    expect(
+      opened === undefined ? null : epicCanvasTileFallbackName(opened.ref),
+    ).toBe("Known");
     expect(opened?.groupId).toBe("group-1");
     // Authoritative artifact open - NOT a workspace-file reveal of the mirror.
     expect(state.setReveal).not.toHaveBeenCalled();

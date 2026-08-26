@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import {
+  buildStreamManifest,
+  buildStreamOpenAckManifest,
+} from "@traycer/protocol/framework/stream-compat";
 import {
   defineStreamRpcContract,
   defineVersionedStreamRpcRegistry,
@@ -1304,6 +1307,95 @@ describe("WsStreamClient", () => {
 
     unsubscribe();
     session.close();
+  });
+
+  it("marks missing browser streams unsupported without poisoning terminal.subscribe", async () => {
+    const {
+      "browser.sessions": browserSessionsRegistry,
+      "browser.screencast": browserScreencastRegistry,
+      ...oldHostStreamRpcRegistry
+    } = hostStreamRpcRegistry;
+    void browserSessionsRegistry;
+    void browserScreencastRegistry;
+
+    const oldHostOpenAckManifest = buildStreamOpenAckManifest(
+      oldHostStreamRpcRegistry,
+      buildStreamManifest(hostStreamRpcRegistry),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const observed: string[] = [];
+    const unsubscribe = client.subscribeMethodSupport(() => {
+      observed.push(
+        [
+          client.getMethodSupport("browser.sessions"),
+          client.getMethodSupport("browser.screencast"),
+          client.getMethodSupport("terminal.subscribe"),
+        ].join("|"),
+      );
+    });
+
+    const sessionsSubscription = client.subscribe("browser.sessions", {
+      epicId: "epic-1",
+    });
+    const screencastSubscription = client.subscribe("browser.screencast", {
+      epicId: "epic-1",
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      role: "tile",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg",
+    });
+    const terminalSubscription = client.subscribe("terminal.subscribe", {
+      sessionId: "terminal-session-1",
+      cols: 80,
+      rows: 24,
+    });
+
+    await flush();
+    expect(sockets).toHaveLength(3);
+    for (const recorded of sockets) {
+      recorded.socket.fireOpen();
+      recorded.socket.fireText({
+        kind: "openAck",
+        manifest: oldHostOpenAckManifest,
+      });
+    }
+
+    expect(client.getMethodSupport("browser.sessions")).toBe("unsupported");
+    expect(client.getMethodSupport("browser.screencast")).toBe("unsupported");
+    expect(client.getMethodSupport("terminal.subscribe")).toBe("supported");
+    expect(observed).toEqual([
+      "unsupported|unsupported|supported",
+      "unsupported|unsupported|supported",
+    ]);
+
+    const terminalSocket = sockets[2].socket;
+    expect(terminalSocket.textSent).toHaveLength(2);
+    expect(parseText(terminalSocket.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "terminal.subscribe",
+      schemaVersion: { major: 1, minor: 6 },
+      params: {
+        sessionId: "terminal-session-1",
+        cols: 80,
+        rows: 24,
+      },
+    });
+
+    unsubscribe();
+    sessionsSubscription.close();
+    screencastSubscription.close();
+    terminalSubscription.close();
   });
 
   it("re-probes the full host manifest after reconnect and discovers a newly enabled method", async () => {

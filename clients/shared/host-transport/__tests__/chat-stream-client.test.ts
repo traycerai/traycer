@@ -186,7 +186,7 @@ function frozenPreImageAssistantMessage(): Record<string, unknown> {
  * A `chat.subscribe@1.6` assistant message carrying a pre-settlement
  * interview block: no outcome/drafts/settlement/diagnostics/delivery, and
  * answers without `selection`. A 1.6 shallow parse leaves those keys
- * absent; `normalizeInterviewBlocksInShallowSnapshot` is what fills them.
+ * absent; `normalizeV16MessagesInShallowSnapshot` is what fills them.
  * Also omits `imageResolutions` so the test can tell shallow from deep.
  */
 function frozenV16InterviewAssistantMessage(): Record<string, unknown> {

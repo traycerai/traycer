@@ -3,6 +3,16 @@ import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import type { BrowserContextAttachmentPayload } from "@/lib/browser-view/browser-context-attachments";
+import {
+  collectDraftAnnotationImageHashes,
+  mergeBrowserAnnotationRecords,
+  parseBrowserAnnotationRecord,
+  parseBrowserAnnotationRecords,
+  type BrowserAnnotationRecord,
+} from "@/lib/browser-view/browser-annotation-record";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 
 export interface DraftSelection {
   readonly from: number;
@@ -12,6 +22,12 @@ export interface DraftSelection {
 export interface DraftState {
   readonly content: JsonContent;
   readonly selection: DraftSelection | null;
+  readonly browserContextAttachments?: ReadonlyArray<BrowserContextAttachmentPayload>;
+  /**
+   * Attached annotation cards. Persisted and rehydrated (unlike the old
+   * `browserContextAttachments` array, which the merge path still drops).
+   */
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * Bumped only when the draft is replaced from outside the editor
    * (queue-edit restore, failed-send handoff, submit-clear). The composer
@@ -55,18 +71,34 @@ interface ComposerDraftStore {
     content: JsonContent,
     selection: DraftSelection | null,
   ) => void;
+  readonly addBrowserContextAttachment: (
+    taskId: string,
+    attachment: BrowserContextAttachmentPayload,
+  ) => void;
+  readonly addBrowserAnnotation: (
+    taskId: string,
+    record: BrowserAnnotationRecord,
+  ) => void;
+  readonly removeBrowserAnnotation: (
+    taskId: string,
+    annotationId: string,
+  ) => void;
   /**
-   * Resets a task's draft to empty via the same `replaceDraft` broadcast used
-   * by queue-edit restore / failed-send handoff, instead of deleting the map
-   * entry. A delete can't reliably notify every mounted composer for this
-   * `taskId` (split panes, keep-alive tabs): a sibling's `resetEpoch` selector
-   * falls back to the same `?? 0` whether the entry never existed or was just
-   * removed, so a delete after routine (non-bumping) keystrokes produces no
-   * observable change and the sibling's stale Tiptap document never clears.
-   * Bumping `resetEpoch` in place is the only way every mounted
-   * `useChatComposerDraft` for this `taskId` reliably observes the clear. The
-   * explicit empty-document caret applies the reset without invoking
-   * `setContent(..., null)`'s focus-at-end behavior in sibling composers.
+   * Rejected-send restore: put records back without duplicating an id that
+   * is already on the draft (the user may have re-attached while the send
+   * was in flight).
+   */
+  readonly restoreBrowserAnnotations: (
+    taskId: string,
+    records: ReadonlyArray<BrowserAnnotationRecord>,
+  ) => void;
+  /**
+   * Resets a task's draft in place (empty content + empty annotations + bumped
+   * resetEpoch/revision) instead of deleting the map entry. A delete can't
+   * reliably notify every mounted composer for this `taskId` (split panes,
+   * keep-alive tabs): a sibling's `resetEpoch` selector falls back to the same
+   * `?? 0` whether the entry never existed or was just removed. The old
+   * `browserContextAttachments` array is left untouched (debug dropdown).
    */
   readonly clearDraft: (taskId: string) => void;
 }
@@ -79,6 +111,8 @@ const EMPTY_COMPOSER_SELECTION: DraftSelection = { from: 1, to: 1 };
 export const EMPTY_COMPOSER_DRAFT: DraftState = {
   content: EMPTY_COMPOSER_CONTENT,
   selection: null,
+  browserContextAttachments: [],
+  browserAnnotations: [],
   resetEpoch: 0,
   revision: 0,
 };
@@ -92,6 +126,24 @@ function ensureDraft(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function persistAnnotationEntries(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const next: unknown[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      next.push(entry);
+      continue;
+    }
+    const withKind =
+      entry.kind === "browser-annotation"
+        ? entry
+        : { ...entry, kind: "browser-annotation" };
+    const parsed = parseBrowserAnnotationRecord(withKind);
+    next.push(parsed ?? withKind);
+  }
+  return next;
 }
 
 function hasDraftMap(
@@ -112,7 +164,7 @@ function isDraftSelection(value: unknown): value is DraftSelection {
 
 export const useComposerDraftStore = create<ComposerDraftStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       drafts: {},
       setSnapshot: (taskId, content, selection) => {
         set((state) => {
@@ -164,12 +216,99 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           };
         });
       },
+      addBrowserContextAttachment: (taskId, attachment) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
+          const attachments = current.browserContextAttachments ?? [];
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                browserContextAttachments: [...attachments, attachment],
+                resetEpoch: current.resetEpoch + 1,
+              },
+            },
+          };
+        });
+      },
+      addBrowserAnnotation: (taskId, record) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
+          const next = mergeBrowserAnnotationRecords(
+            current.browserAnnotations,
+            [record],
+          );
+          if (next === current.browserAnnotations) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                browserAnnotations: next,
+                resetEpoch: current.resetEpoch + 1,
+              },
+            },
+          };
+        });
+      },
+      removeBrowserAnnotation: (taskId, annotationId) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
+          const next = current.browserAnnotations.filter(
+            (record) => record.annotationId !== annotationId,
+          );
+          if (next.length === current.browserAnnotations.length) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                browserAnnotations: next,
+                resetEpoch: current.resetEpoch + 1,
+              },
+            },
+          };
+        });
+      },
+      restoreBrowserAnnotations: (taskId, records) => {
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
+          const next = mergeBrowserAnnotationRecords(
+            current.browserAnnotations,
+            records,
+          );
+          if (next === current.browserAnnotations) return state;
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                browserAnnotations: next,
+                resetEpoch: current.resetEpoch + 1,
+              },
+            },
+          };
+        });
+      },
       clearDraft: (taskId) => {
-        get().replaceDraft(
-          taskId,
-          EMPTY_COMPOSER_CONTENT,
-          EMPTY_COMPOSER_SELECTION,
-        );
+        set((state) => {
+          const current = ensureDraft(state.drafts, taskId);
+          return {
+            drafts: {
+              ...state.drafts,
+              [taskId]: {
+                ...current,
+                content: EMPTY_COMPOSER_CONTENT,
+                selection: EMPTY_COMPOSER_SELECTION,
+                browserAnnotations: [],
+                resetEpoch: current.resetEpoch + 1,
+                revision: current.revision + 1,
+              },
+            },
+          };
+        });
+        scheduleLandingImageReconcile();
       },
     }),
     {
@@ -191,6 +330,9 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
           drafts[taskId] = {
             content: value.content,
             selection: value.selection,
+            browserAnnotations: parseBrowserAnnotationRecords(
+              persistAnnotationEntries(value.browserAnnotations),
+            ),
             resetEpoch: normalizedLegacyResetEpoch(value) + 1,
             revision: normalizedLegacyRevision(value),
           };
@@ -234,3 +376,8 @@ export function readComposerDraftSnapshot(
   if (taskId === undefined) return EMPTY_COMPOSER_DRAFT;
   return ensureDraft(useComposerDraftStore.getState().drafts, taskId);
 }
+
+registerExtraImageRootSource({
+  hashes: () =>
+    collectDraftAnnotationImageHashes(useComposerDraftStore.getState().drafts),
+});

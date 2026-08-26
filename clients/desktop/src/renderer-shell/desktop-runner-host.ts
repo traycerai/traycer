@@ -149,6 +149,7 @@ import type {
   WindowSummary,
 } from "../ipc-contracts/window-types";
 import type { ZoomPercent } from "../ipc-contracts/zoom-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 
 /**
  * Shape of the `window.runnerHost` object installed by the Electron preload
@@ -256,6 +257,7 @@ export interface DesktopPreloadBridge {
   platform: DesktopPlatformBridge;
   power: DesktopPowerBridge;
   zoom: DesktopZoomBridge;
+  browserView: BrowserViewBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
   hostControllerStatus: DesktopHostControllerStatusBridge;
@@ -656,6 +658,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly platform: DesktopPlatformBridge;
   readonly power: DesktopPowerBridge;
   readonly zoom: IZoomHost;
+  readonly browserView: BrowserViewBridge;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
   // No OS push on the desktop: notifications here are native `show` calls, not
@@ -686,6 +689,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
+    this.browserView = options.bridge.browserView;
     // Passed straight through: the client instance, its issued attach
     // generation and its buffering all belong to the preload load, so
     // re-wrapping it here could only add a second identity for the same

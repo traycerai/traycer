@@ -65,6 +65,15 @@ import type {
   StreamConnectionStatus,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import type {
+  Attachment,
+  BrowserContextAttachment,
+} from "@/lib/composer/types";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import { collectAnnotationImageHashes } from "@/lib/browser-view/browser-annotation-record";
+import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
+import { browserContextAttachmentToWire } from "@/lib/browser-view/browser-context-attachments";
 import { addWithFifoEviction } from "@/lib/bounded-set";
 import type {
   RuntimeApprovalDecision,
@@ -159,9 +168,17 @@ export interface PendingUserMessage {
   readonly clientActionId: string;
   readonly messageId: string;
   readonly content: JsonContent;
+  readonly attachments?: ReadonlyArray<Attachment>;
   readonly sender: UserMessageSender;
   readonly settings: ChatRunSettings;
   readonly timestamp: number;
+  /**
+   * Pre-submit composer document (no crop atoms). Used when a settled
+   * turn never recorded the send, so restore does not inline the wire
+   * image atoms.
+   */
+  readonly restoreContent: JsonContent;
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * The billing context this send was stamped with at dispatch. Retained for
    * the same reason `settings` is: it dies with the action, so a resend picks
@@ -214,6 +231,12 @@ export interface PendingChatAction {
   readonly interviewDeliveryRetry: InterviewDeliveryRetryIdentity | null;
   readonly messageId: string | null;
   readonly restoreContent: JsonContent | null;
+  /**
+   * Annotation cards that left the composer with this send. Restored
+   * together with `restoreContent` so a rejection does not inline crop
+   * atoms or drop the records.
+   */
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly sender: UserMessageSender | null;
   readonly settings: ChatRunSettings | null;
   /** See {@link PendingUserMessage.accountContext}. */
@@ -254,6 +277,7 @@ export type PendingChatActionSeed = Omit<PendingChatAction, "connectionEpoch">;
 export interface FailedSendRestorationState {
   readonly clientActionId: string;
   readonly content: JsonContent;
+  readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   readonly reason: string;
   /**
    * Whether the path that created this slot ALREADY said the reason on a
@@ -348,6 +372,7 @@ export interface AcceptedChatAction {
    * the content has been consumed once by `takeSetupFailedRestoration`.
    */
   readonly restoreContent: JsonContent | null;
+  readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
   /**
    * The rest of the recovery tuple, for `send` records only.
    *
@@ -689,6 +714,15 @@ export interface ChatSessionState {
     settings: ChatRunSettings,
     deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
+  sendMessageWithAttachments: (input: {
+    readonly content: JsonContent;
+    readonly sender: UserMessageSender;
+    readonly settings: ChatRunSettings;
+    readonly attachments: ReadonlyArray<Attachment>;
+    readonly deliveryPolicy: ChatQueueDeliveryPolicy;
+    readonly restoreContent: JsonContent;
+    readonly restoreBrowserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+  }) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
    * the host turn-overlap idempotency gate). The driver's fallback `send`
@@ -1227,6 +1261,7 @@ function rejectionRestoration(input: {
   return {
     clientActionId: frame.clientActionId,
     content: pending.restoreContent,
+    browserAnnotations: pending.restoreBrowserAnnotations,
     reason: `${frame.reason ?? "Message was not accepted."}${
       input.account === null ? "" : deadSendAccountClauses(input.account, true)
     }`,
@@ -1393,6 +1428,31 @@ function restoreStagedWorktreeIntent(
     .restoreIntentForDispatch(stagingKey, survivors, source.clientActionId);
   return true;
 }
+
+const liveChatSessionStores = new Set<{
+  getState: () => ChatSessionState;
+}>();
+
+function collectPendingAnnotationImageHashes(): ReadonlyArray<string> {
+  const records: BrowserAnnotationRecord[] = [];
+  for (const sessionStore of liveChatSessionStores) {
+    const state = sessionStore.getState();
+    for (const pending of Object.values(state.pendingActions)) {
+      records.push(...pending.restoreBrowserAnnotations);
+    }
+    for (const message of state.pendingUserMessages) {
+      records.push(...message.restoreBrowserAnnotations);
+    }
+    if (state.failedSendRestoration !== null) {
+      records.push(...state.failedSendRestoration.browserAnnotations);
+    }
+  }
+  return collectAnnotationImageHashes(records);
+}
+
+registerExtraImageRootSource({
+  hashes: collectPendingAnnotationImageHashes,
+});
 
 export function createChatSessionStore(
   options: ChatSessionStoreOptions,
@@ -3074,7 +3134,17 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings, deliveryPolicy) => {
+      sendMessage: (content, sender, settings, deliveryPolicy) =>
+        get().sendMessageWithAttachments({
+          content,
+          sender,
+          settings,
+          attachments: buildAttachmentsFromJSONContent(content),
+          deliveryPolicy,
+          restoreContent: content,
+          restoreBrowserAnnotations: [],
+        }),
+      sendMessageWithAttachments: (input) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;
@@ -3089,6 +3159,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         };
         if (stagedWorktreeIntentIsSuspended(stagedKey)) return null;
         const worktreeIntent = readStagedWorktreeIntent(stagedKey);
+        // Ticket 13: the ONLY attachment kind this frame carries off of
+        // `input.attachments` - image/mention attachments are already
+        // embedded in `input.content` and need no separate wire field.
+        const browserContextAttachments = input.attachments
+          .filter(
+            (attachment): attachment is BrowserContextAttachment =>
+              attachment.kind === "browser-context",
+          )
+          .map((attachment) =>
+            browserContextAttachmentToWire(attachment.payload),
+          );
+        const browserAnnotations = input.attachments.filter(
+          (attachment): attachment is BrowserAnnotationRecord =>
+            attachment.kind === "browser-annotation",
+        );
         const frame: ChatOwnerActionFrame = {
           kind: "send",
           hasBinaryPayload: false,
@@ -3096,12 +3181,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           chatId: options.chatId,
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
           accountContext: useAccountContextStore.getState().accountContext,
-          deliveryPolicy,
+          deliveryPolicy: input.deliveryPolicy,
           worktreeIntent,
+          browserContextAttachments,
+          browserAnnotations,
         };
         // Consume before dispatch so the pending action captures precisely the
         // revision it may later restore. A synchronous action rejection cannot
@@ -3132,9 +3219,10 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
-            restoreContent: content,
-            sender,
-            settings,
+            restoreContent: input.restoreContent,
+            restoreBrowserAnnotations: input.restoreBrowserAnnotations,
+            sender: input.sender,
+            settings: input.settings,
             accountContext: frame.accountContext,
             restoreWorktreeIntent: worktreeIntent,
             deliveryPolicy: frame.deliveryPolicy,
@@ -3154,10 +3242,13 @@ export function createChatSessionStoreWithNotificationDependencies(
             ? {
                 clientActionId,
                 messageId,
-                content,
-                sender,
-                settings,
+                content: input.content,
+                attachments: input.attachments,
+                sender: input.sender,
+                settings: input.settings,
                 timestamp: Date.now(),
+                restoreContent: input.restoreContent,
+                restoreBrowserAnnotations: input.restoreBrowserAnnotations,
                 accountContext: frame.accountContext,
                 deliveryPolicy: frame.deliveryPolicy,
                 restoreWorktreeIntent: worktreeIntent,
@@ -3178,9 +3269,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           state: get(),
           clientActionId,
           messageId,
-          content,
-          sender,
-          settings,
+          content: input.content,
+          sender: input.sender,
+          settings: input.settings,
         });
         if (optimisticQueuedItem !== null) {
           set((state) => ({
@@ -3240,6 +3331,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           // The landing handoff carries its worktree intent via `epic.create`,
           // not the send frame.
           worktreeIntent: null,
+          // The landing page's composer has no browser tile to attach from.
+          browserContextAttachments: [],
+          browserAnnotations: [],
         };
         const sentClientActionId = sendAction({
           set,
@@ -3252,6 +3346,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetry: null,
             messageId: input.messageId,
             restoreContent: input.content,
+            restoreBrowserAnnotations: [],
             sender: input.sender,
             settings: input.settings,
             restoreWorktreeIntent: null,
@@ -3267,11 +3362,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             messageId: input.messageId,
             content: input.content,
+            attachments: buildAttachmentsFromJSONContent(input.content),
             sender: input.sender,
             settings: input.settings,
             accountContext: frame.accountContext,
             deliveryPolicy: frame.deliveryPolicy,
             timestamp: Date.now(),
+            restoreContent: input.content,
+            restoreBrowserAnnotations: [],
             // The landing handoff's worktree rides `epic.create`, not this
             // send, so there is no staged slot for it to give back.
             restoreWorktreeIntent: null,
@@ -3355,6 +3453,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetry: null,
             messageId,
             restoreContent: null,
+            restoreBrowserAnnotations: [],
             sender: null,
             settings: null,
             restoreWorktreeIntent: worktreeIntent,
@@ -3427,6 +3526,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetry: null,
             messageId: null,
             restoreContent: null,
+            restoreBrowserAnnotations: [],
             sender: null,
             settings: null,
             restoreWorktreeIntent: null,
@@ -4070,6 +4170,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        liveChatSessionStores.delete(store);
         unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
@@ -4111,6 +4212,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         },
       );
   }
+
+  liveChatSessionStores.add(store);
 
   return {
     epicId: options.epicId,
@@ -4167,6 +4270,7 @@ function basicPending(
     interviewDeliveryRetry: null,
     messageId: null,
     restoreContent: null,
+    restoreBrowserAnnotations: [],
     sender: null,
     settings: null,
     restoreWorktreeIntent: null,
@@ -4555,6 +4659,10 @@ function optimisticQueuedItemForSend(
     message: {
       kind: "user",
       content: input.content,
+      // Optimistic local echo only - the real `queue.added` event (carrying
+      // the host-minted handles) reconciles this row once it arrives.
+      browserContextAttachments: [],
+      browserAnnotations: [],
     },
     sender: input.sender,
     settings: input.settings,

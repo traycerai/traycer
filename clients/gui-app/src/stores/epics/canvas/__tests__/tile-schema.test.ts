@@ -23,6 +23,7 @@ import type {
   PrDetailTileRef,
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
+import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 import {
   parseReleasedTerminalRef,
   serializeReleasedTerminalRef,
@@ -488,7 +489,9 @@ describe("parseTileRef / serializeTileRef", () => {
     });
 
     expect(parsed).not.toBeNull();
-    expect(parsed?.name).toBe("traycer · Changes");
+    expect(parsed === null ? null : epicCanvasTileFallbackName(parsed)).toBe(
+      "traycer · Changes",
+    );
   });
 
   it("rejects unknown tile kinds", () => {

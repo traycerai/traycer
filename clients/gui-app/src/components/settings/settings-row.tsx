@@ -6,11 +6,19 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
 interface SettingsRowProps {
   label: string;
   description?: string;
+  /**
+   * A standing risk disclosure, always rendered when present (unlike
+   * `hint`, which is conditional). Reserved for accepted-risk copy that
+   * must not be softened or hidden behind an expander - see the
+   * "In-app browser (beta)" row.
+   */
+  risk?: ReactNode;
+  hint?: ReactNode;
   control: ReactNode;
 }
 
 export function SettingsRow(props: SettingsRowProps) {
-  const { label, description, control } = props;
+  const { label, description, risk, hint, control } = props;
   const compact = useSettingsDensity() === "compact";
   return (
     <div
@@ -26,6 +34,16 @@ export function SettingsRow(props: SettingsRowProps) {
         <div className="font-medium text-foreground">{label}</div>
         {description ? (
           <p className="text-ui-sm text-muted-foreground">{description}</p>
+        ) : null}
+        {risk ? (
+          <p className="text-ui-sm font-medium text-amber-700 dark:text-amber-300">
+            {risk}
+          </p>
+        ) : null}
+        {hint ? (
+          <p className="text-ui-sm font-medium text-amber-700 dark:text-amber-300">
+            {hint}
+          </p>
         ) : null}
       </div>
       <div

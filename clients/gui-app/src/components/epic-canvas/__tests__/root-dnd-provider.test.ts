@@ -382,7 +382,7 @@ describe("epicRootCollisionDetection", () => {
     ).toEqual(["composer"]);
   });
 
-  it("returns no hits for unknown sources or missing pointers", () => {
+  it("returns no hits for unknown sources and uses rect collisions for keyboard drags", () => {
     const droppables = [droppableOfKind("tab", "artifact-tab")];
 
     expect(
@@ -396,14 +396,16 @@ describe("epicRootCollisionDetection", () => {
     ).toEqual([]);
 
     expect(
-      epicRootCollisionDetection(
-        makeCollisionArgs({
-          activeData: ARTIFACT_TAB_SOURCE_DATA,
-          droppables,
-          pointer: null,
-        }),
+      hitIds(
+        epicRootCollisionDetection(
+          makeCollisionArgs({
+            activeData: ARTIFACT_TAB_SOURCE_DATA,
+            droppables,
+            pointer: null,
+          }),
+        ),
       ),
-    ).toEqual([]);
+    ).toEqual(["tab"]);
   });
 
   it("ignores hits whose pointer lies outside the target rect", () => {

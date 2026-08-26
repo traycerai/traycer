@@ -11,6 +11,7 @@ import type {
   EpicCanvasTileRef,
   EpicNodeRef,
 } from "@/stores/epics/canvas/types";
+import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { resolveNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import {
@@ -679,7 +680,9 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     const reopened = tileByContentId(tabId, SPEC_A.id);
     expect(reopened).toBeDefined();
     expect(reopened?.instanceId).toBe(SPEC_A.instanceId);
-    expect(reopened?.name).toBe(SPEC_A.name);
+    expect(
+      reopened === undefined ? null : epicCanvasTileFallbackName(reopened),
+    ).toBe(SPEC_A.name);
     // The cache entry is evicted now that the tile is live again.
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[

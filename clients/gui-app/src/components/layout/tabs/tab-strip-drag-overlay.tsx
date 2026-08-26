@@ -26,6 +26,7 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.96, y: 2 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
+      data-browser-overlay="drag-overlay"
       className="pointer-events-none flex h-10 max-w-56 cursor-grabbing select-none items-center gap-2 rounded-md border border-border/80 bg-background px-3 text-ui-sm font-medium text-foreground shadow-lg"
     >
       <TabLeadingIcon icon={tab.icon} />

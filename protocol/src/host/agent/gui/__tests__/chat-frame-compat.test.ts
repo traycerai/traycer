@@ -11,7 +11,7 @@ import {
 import type { InterviewAnswer } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
   INTERVIEW_SETTLEMENT_METADATA_KEY,
-  normalizeInterviewBlocksInShallowSnapshot,
+  normalizeV16MessagesInShallowSnapshot,
   projectChatClientFrameForVersion,
   projectChatServerFrameForVersion,
   supportsInterviewSettlementActions,
@@ -69,6 +69,26 @@ function resumeQueueFrame(): ChatSubscribeClientFrame {
   };
 }
 
+function sendFrame(): ChatSubscribeClientFrame {
+  return chatSubscribeV17.clientFrameSchema.parse({
+    kind: "send",
+    ...OWNER,
+    messageId: "message-1",
+    content: { type: "doc", content: [] },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5.4",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      agentMode: "epic",
+    },
+    accountContext: { type: "PERSONAL" },
+    browserContextAttachments: [],
+    browserAnnotations: [],
+  });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -118,6 +138,7 @@ describe("projectChatClientFrameForVersion", () => {
     const answer = interviewAnswerFrame();
     const error = interviewErrorFrame();
     const resume = resumeQueueFrame();
+    const send = sendFrame();
     expect(
       projectChatClientFrameForVersion(answer, { major: 1, minor: 7 }),
     ).toBe(answer);
@@ -127,6 +148,21 @@ describe("projectChatClientFrameForVersion", () => {
     expect(
       projectChatClientFrameForVersion(resume, { major: 1, minor: 7 }),
     ).toBe(resume);
+    expect(projectChatClientFrameForVersion(send, { major: 1, minor: 7 })).toBe(
+      send,
+    );
+  });
+
+  it("removes browser payload fields from send on every pre-1.7 line", () => {
+    const frame = sendFrame();
+    for (const version of legacyLines()) {
+      const projected = projectChatClientFrameForVersion(frame, version);
+      expect(Object.hasOwn(projected, "browserContextAttachments")).toBe(false);
+      expect(Object.hasOwn(projected, "browserAnnotations")).toBe(false);
+      expect(chatSubscribeV16.clientFrameSchema.parse(projected).kind).toBe(
+        "send",
+      );
+    }
   });
 
   it("removes the selection key from interviewAnswer answers on every pre-1.7 line", () => {
@@ -488,7 +524,7 @@ describe("chatSubscribeSnapshotServerFrameShallowSchemaV16", () => {
   });
 });
 
-describe("normalizeInterviewBlocksInShallowSnapshot", () => {
+describe("normalizeV16MessagesInShallowSnapshot", () => {
   it("neutralizes every interview settlement field in place and leaves non-interview blocks referentially unchanged", () => {
     const text = textBlock("text-1");
     const interview = legacyInterviewBlock("iv-1");
@@ -518,7 +554,11 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       interview,
       populatedInterview,
     ]);
-    const messages: unknown[] = [message];
+    const user = userMessage();
+    const userPayload = asRecord(user.message, "user payload");
+    userPayload.browserContextAttachments = [{ unvalidated: true }];
+    userPayload.browserAnnotations = [{ unvalidated: true }];
+    const messages: unknown[] = [user, message];
     const originalText = asRecord(message, "message").blocks;
     if (!Array.isArray(originalText)) {
       throw new Error("expected blocks array");
@@ -526,8 +566,11 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
     const textRef = originalText[0];
     const populatedRef = originalText[2];
 
-    normalizeInterviewBlocksInShallowSnapshot(messages);
+    normalizeV16MessagesInShallowSnapshot(messages);
 
+    expect(messages[0]).toBe(user);
+    expect(userPayload.browserContextAttachments).toEqual([]);
+    expect(userPayload.browserAnnotations).toEqual([]);
     expect(originalText[0]).toBe(textRef);
     expect(originalText[2]).toBe(populatedRef);
 
@@ -574,7 +617,7 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       draftAnswers: {},
     };
     const messages: unknown[] = [assistantMessage("assistant-1", [malformed])];
-    normalizeInterviewBlocksInShallowSnapshot(messages);
+    normalizeV16MessagesInShallowSnapshot(messages);
     expect(malformed.outcome).toBeNull();
     expect(malformed.settlement).toBeNull();
     expect(malformed.delivery).toBeNull();
@@ -597,7 +640,7 @@ describe("normalizeInterviewBlocksInShallowSnapshot", () => {
       },
       settlementExtensions: { escalation: { level: 2 } },
     };
-    normalizeInterviewBlocksInShallowSnapshot([
+    normalizeV16MessagesInShallowSnapshot([
       assistantMessage("assistant-1", [future]),
     ]);
     expect(future.outcome).toBeNull();
@@ -635,9 +678,7 @@ describe("1.6 shallow snapshot + normalizer vs deep 1.7 parse", () => {
     const shallowCopy = structuredClone(payload);
     const shallowParsed =
       chatSubscribeSnapshotServerFrameShallowSchemaV16.parse(shallowCopy);
-    normalizeInterviewBlocksInShallowSnapshot(
-      shallowParsed.snapshot.chat.messages,
-    );
+    normalizeV16MessagesInShallowSnapshot(shallowParsed.snapshot.chat.messages);
     const shallowInterviews = extractInterviewBlocks(
       shallowParsed.snapshot.chat.messages,
     ).map(interviewFields);
@@ -794,10 +835,19 @@ function userMessage(): Record<string, unknown> {
     message: {
       kind: "user",
       content: { type: "doc", content: [] },
+      browserContextAttachments: [],
+      browserAnnotations: [],
     },
     timestamp: 5,
     sessionAnchor: null,
   };
+}
+
+function expectBrowserPayloadStripped(value: unknown): void {
+  const message = asRecord(value, "user message");
+  const payload = asRecord(message.message, "user payload");
+  expect(Object.hasOwn(payload, "browserContextAttachments")).toBe(false);
+  expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
 }
 
 function asProjectedServerFrame(
@@ -920,7 +970,8 @@ describe("projectChatServerFrameForVersion", () => {
       if (!Array.isArray(chat.messages)) {
         throw new Error("expected messages");
       }
-      expect(chat.messages[0]).toBe(user);
+      expect(chat.messages[0]).not.toBe(user);
+      expectBrowserPayloadStripped(chat.messages[0]);
       const projectedAssistant = asRecord(chat.messages[1], "assistant");
       if (!Array.isArray(projectedAssistant.blocks)) {
         throw new Error("expected blocks");
@@ -976,8 +1027,13 @@ describe("projectChatServerFrameForVersion", () => {
         asRecord(projectedMessage.blocks[1], "interview"),
       );
 
-      expect(projectChatServerFrameForVersion(userFrame, version)).toBe(
+      const projectedUser = projectChatServerFrameForVersion(
         userFrame,
+        version,
+      );
+      expect(projectedUser).not.toBe(userFrame);
+      expectBrowserPayloadStripped(
+        asRecord(projectedUser, "projected user frame").message,
       );
 
       // messageAccepted's frozen schema is a user message, so an
@@ -986,9 +1042,63 @@ describe("projectChatServerFrameForVersion", () => {
       // parse-equals-projected proof for this kind is the user-message
       // identity below (no settlement keys to drop).
       for (const contract of frozenServerContracts()) {
-        const parsedUser = contract.parse(userFrame);
+        const parsedUser = contract.parse(projectedUser);
         expect(parsedUser.kind).toBe("messageAccepted");
       }
+    }
+  });
+
+  it("strips browser payload fields from queueChanged prompt items", () => {
+    const user = userMessage();
+    const frame = asProjectedServerFrame({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      queue: {
+        status: "idle",
+        items: [
+          {
+            kind: "prompt",
+            queueItemId: "queue-1",
+            messageId: "user-1",
+            message: asRecord(user.message, "user payload"),
+            sender: { type: "user", userId: "user-1" },
+            settings: {
+              harnessId: "codex",
+              model: "gpt-5.4",
+              permissionMode: "supervised",
+              reasoningEffort: "high",
+              agentMode: "epic",
+            },
+            accountContext: { type: "PERSONAL" },
+            delivery: "next_turn",
+            status: "pending",
+            targetTurnId: null,
+            steerRequest: null,
+            fallbackReason: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+
+    for (const version of legacyLines()) {
+      const projected = projectChatServerFrameForVersion(frame, version);
+      expect(projected).not.toBe(frame);
+      const queue = asRecord(
+        asRecord(projected, "projected queue frame").queue,
+        "queue",
+      );
+      if (!Array.isArray(queue.items)) throw new Error("expected queue items");
+      const item = asRecord(queue.items[0], "queue item");
+      const payload = asRecord(item.message, "queue payload");
+      expect(Object.hasOwn(payload, "browserContextAttachments")).toBe(false);
+      expect(Object.hasOwn(payload, "browserAnnotations")).toBe(false);
+      expect(chatSubscribeV16.serverFrameSchema.parse(projected).kind).toBe(
+        "queueChanged",
+      );
     }
   });
 
@@ -1540,7 +1650,8 @@ describe("chat-event metadata projection", () => {
       if (!Array.isArray(projectedChat.messages)) {
         throw new Error("expected messages");
       }
-      expect(projectedChat.messages[0]).toBe(user);
+      expect(projectedChat.messages[0]).not.toBe(user);
+      expectBrowserPayloadStripped(projectedChat.messages[0]);
       const projectedAssistant = asRecord(
         projectedChat.messages[1],
         "assistant",

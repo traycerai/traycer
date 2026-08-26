@@ -3,10 +3,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { log } from "./logger";
 import { createJsonFileStore } from "./json-file-store";
+import {
+  handleBrowserViewCertificateError,
+  isBrowserViewWebContents,
+} from "../browser-view/browser-session";
 
 const STORE_FILE_NAME = "trusted-certificates.json";
 
+type CertificateTrustScope = "app-shell" | "browser";
+
 interface TrustEntry {
+  readonly scope: CertificateTrustScope;
   readonly fingerprint: string;
   readonly hostname: string;
   readonly subject: string;
@@ -21,14 +28,15 @@ interface TrustStorePayload {
 const FALLBACK_PAYLOAD: TrustStorePayload = { entries: [] };
 
 function parsePayload(value: unknown): TrustStorePayload {
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    Array.isArray((value as TrustStorePayload).entries)
-  ) {
-    return value as TrustStorePayload;
-  }
-  return FALLBACK_PAYLOAD;
+  if (!isRecord(value)) return FALLBACK_PAYLOAD;
+  const entries = Reflect.get(value, "entries");
+  if (!Array.isArray(entries)) return FALLBACK_PAYLOAD;
+  return {
+    entries: entries.flatMap((entry): TrustEntry[] => {
+      const parsed = parseTrustEntry(entry);
+      return parsed === null ? [] : [parsed];
+    }),
+  };
 }
 
 let storeFactory: JsonFileStoreHandle | null = null;
@@ -70,17 +78,104 @@ function computeFingerprint(certificate: Certificate): string {
   return `sha256/${formatted}`;
 }
 
+function parseTrustEntry(value: unknown): TrustEntry | null {
+  if (!isRecord(value)) return null;
+  const fingerprint = readStringProperty(value, "fingerprint");
+  const hostname = readStringProperty(value, "hostname");
+  const subject = readStringProperty(value, "subject");
+  const issuer = readStringProperty(value, "issuer");
+  const trustedAt = readNumberProperty(value, "trustedAt");
+  if (
+    fingerprint === null ||
+    hostname === null ||
+    subject === null ||
+    issuer === null ||
+    trustedAt === null
+  ) {
+    return null;
+  }
+  return {
+    scope: readTrustScope(Reflect.get(value, "scope")),
+    fingerprint,
+    hostname,
+    subject,
+    issuer,
+    trustedAt,
+  };
+}
+
+function readTrustScope(value: unknown): CertificateTrustScope {
+  return value === "browser" ? "browser" : "app-shell";
+}
+
+function readStringProperty(
+  record: Record<string, unknown>,
+  property: string,
+): string | null {
+  const value = Reflect.get(record, property);
+  return typeof value === "string" ? value : null;
+}
+
+function readNumberProperty(
+  record: Record<string, unknown>,
+  property: string,
+): number | null {
+  const value = Reflect.get(record, property);
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function findTrustEntryIndex(
+  entries: readonly TrustEntry[],
+  scope: CertificateTrustScope,
+  fingerprint: string,
+  hostname: string,
+): number {
+  return entries.findIndex(
+    (entry) =>
+      entry.scope === scope &&
+      entry.fingerprint === fingerprint &&
+      entry.hostname === hostname,
+  );
+}
+
+function hasTrustedCertificate(
+  entries: readonly TrustEntry[],
+  scope: CertificateTrustScope,
+  fingerprint: string,
+  hostname: string,
+): boolean {
+  return findTrustEntryIndex(entries, scope, fingerprint, hostname) >= 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 export async function trustCertificate(
+  hostname: string,
+  certificate: Certificate,
+): Promise<TrustEntry> {
+  return trustCertificateForScope("app-shell", hostname, certificate);
+}
+
+export async function trustBrowserCertificate(
+  hostname: string,
+  certificate: Certificate,
+): Promise<TrustEntry> {
+  return trustCertificateForScope("browser", hostname, certificate);
+}
+
+async function trustCertificateForScope(
+  scope: CertificateTrustScope,
   hostname: string,
   certificate: Certificate,
 ): Promise<TrustEntry> {
   const store = getStore();
   await store.load();
   const fingerprint = computeFingerprint(certificate);
-  const idx = store.memory.findIndex(
-    (entry) => entry.fingerprint === fingerprint && entry.hostname === hostname,
-  );
+  const idx = findTrustEntryIndex(store.memory, scope, fingerprint, hostname);
   const entry: TrustEntry = {
+    scope,
     fingerprint,
     hostname,
     subject: certificate.subject.commonName,
@@ -94,6 +189,7 @@ export async function trustCertificate(
   }
   await store.flush();
   log.info("[cert-trust] trust added", {
+    scope,
     hostname,
     fingerprint,
     issuer: entry.issuer,
@@ -107,8 +203,11 @@ export async function untrustCertificate(
 ): Promise<void> {
   const store = getStore();
   await store.load();
-  const idx = store.memory.findIndex(
-    (entry) => entry.fingerprint === fingerprint && entry.hostname === hostname,
+  const idx = findTrustEntryIndex(
+    store.memory,
+    "app-shell",
+    fingerprint,
+    hostname,
   );
   if (idx >= 0) {
     store.memory.splice(idx, 1);
@@ -122,7 +221,7 @@ export async function listTrustedCertificates(): Promise<
 > {
   const store = getStore();
   await store.load();
-  return [...store.memory];
+  return store.memory.filter((entry) => entry.scope === "app-shell");
 }
 
 /**
@@ -136,7 +235,48 @@ export async function listTrustedCertificates(): Promise<
 export function installCertificateErrorHandler(): void {
   app.on(
     "certificate-error",
-    (event, _webContents, url, error, certificate, callback) => {
+    (event, webContents, url, error, certificate, callback) => {
+      if (isBrowserViewWebContents(webContents)) {
+        void (async () => {
+          const store = getStore();
+          await store.load();
+          const fingerprint = computeFingerprint(certificate);
+          let hostname: string;
+          try {
+            hostname = new URL(url).hostname;
+          } catch {
+            callback(false);
+            return;
+          }
+          const trusted = hasTrustedCertificate(
+            store.memory,
+            "browser",
+            fingerprint,
+            hostname,
+          );
+          if (trusted) {
+            event.preventDefault();
+            callback(true);
+            log.info("[cert-trust] browser allowed via allowlist", {
+              scope: "browser",
+              hostname,
+              fingerprint,
+              error,
+            });
+            return;
+          }
+          callback(false);
+          handleBrowserViewCertificateError({
+            webContentsId: webContents.id,
+            url,
+            hostname,
+            error,
+            fingerprint,
+            certificate,
+          });
+        })();
+        return;
+      }
       void (async () => {
         const store = getStore();
         await store.load();
@@ -148,14 +288,17 @@ export function installCertificateErrorHandler(): void {
           callback(false);
           return;
         }
-        const trusted = store.memory.some(
-          (entry) =>
-            entry.fingerprint === fingerprint && entry.hostname === hostname,
+        const trusted = hasTrustedCertificate(
+          store.memory,
+          "app-shell",
+          fingerprint,
+          hostname,
         );
         if (trusted) {
           event.preventDefault();
           callback(true);
           log.info("[cert-trust] allowed via allowlist", {
+            scope: "app-shell",
             hostname,
             fingerprint,
             error,

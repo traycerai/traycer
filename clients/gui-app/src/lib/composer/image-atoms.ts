@@ -29,6 +29,59 @@ export function collectImageAtoms(
 export function containsImageAtoms(content: JsonContent): boolean {
   return walk(content, (node) => node.type === "imageAttachment");
 }
+
+export function appendImageAttachmentAtoms(
+  content: JsonContent,
+  atoms: ReadonlyArray<{
+    readonly id: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly size: number | null;
+    readonly b64content: string;
+  }>,
+): JsonContent {
+  if (atoms.length === 0) return content;
+  const nodes: JsonContent[] = atoms.map((atom) => ({
+    type: "imageAttachment",
+    attrs: {
+      id: atom.id,
+      fileName: atom.fileName,
+      mimeType: atom.mimeType,
+      size: atom.size,
+      b64content: atom.b64content,
+    },
+  }));
+  const children = content.content ?? [];
+  return {
+    ...content,
+    content: [...children, ...nodes],
+  };
+}
+
+export function omitImageAtomsByFileName(
+  content: JsonContent,
+  fileNames: ReadonlySet<string>,
+): JsonContent {
+  if (fileNames.size === 0) return content;
+  const children = content.content;
+  if (children === undefined) return content;
+  const next: JsonContent[] = [];
+  let changed = false;
+  for (const child of children) {
+    if (child.type === "imageAttachment") {
+      const fileName = stringValue(child.attrs?.fileName);
+      if (fileName !== null && fileNames.has(fileName)) {
+        changed = true;
+        continue;
+      }
+    }
+    const rewritten = omitImageAtomsByFileName(child, fileNames);
+    if (rewritten !== child) changed = true;
+    next.push(rewritten);
+  }
+  if (!changed) return content;
+  return { ...content, content: next };
+}
 function walk(
   node: JsonContent,
   visit: (node: JsonContent) => boolean,

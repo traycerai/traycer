@@ -86,6 +86,7 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateBrowserTileViewportPreset,
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
@@ -104,6 +105,7 @@ import {
   resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
 import {
+  epicCanvasTileFallbackName,
   isUnsupportedEpicTerminalRef,
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
@@ -111,6 +113,7 @@ import {
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type CommGraphTileViewState,
+  type EpicPipGeometry,
   type EpicViewTab,
   type GitDiffTileViewState,
   type PrDiffTileViewState,
@@ -329,6 +332,14 @@ export interface EpicCanvasStore {
   >;
   readonly pendingEpicTitles: Readonly<Record<string, PendingTitleEntry>>;
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
+  /**
+   * Per-epic PiP position/size. Survives relaunch; dismissals and phase
+   * do not. See core-flows retention table.
+   */
+  readonly pipGeometryByEpicId: Readonly<
+    Record<string, EpicPipGeometry | undefined>
+  >;
+  setPipGeometry: (epicId: string, geometry: EpicPipGeometry) => void;
 
   openEpicTab: (epicId: string, name: string | undefined) => string;
   /** Coordinator-only stable-id source creation. */
@@ -531,6 +542,11 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: GitDiffTileViewState,
+  ) => void;
+  updateBrowserTileViewportPresetInTab: (
+    tabId: string,
+    tileInstanceId: string,
+    viewportPreset: string,
   ) => void;
   updateCommGraphTileViewInTab: (
     tabId: string,
@@ -1387,6 +1403,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         pendingRootCreatesByEpic: {},
         pendingEpicTitles: {},
         pendingChatTitles: {},
+        pipGeometryByEpicId: {},
+
+        setPipGeometry: (epicId, geometry) => {
+          set((state) => ({
+            pipGeometryByEpicId: {
+              ...state.pipGeometryByEpicId,
+              [epicId]: geometry,
+            },
+          }));
+        },
 
         openEpicTab: (epicId, name) => {
           const tab = createEpicViewTab(epicId, name);
@@ -1645,7 +1671,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const siblingNames = epicTabNames(state.tabsById, epicId);
           const tabName =
             sourceTab === null
-              ? node.name
+              ? epicCanvasTileFallbackName(node)
               : nextCopyName(sourceTab.name, siblingNames);
           const tab: EpicViewTab = {
             tabId,
@@ -2088,6 +2114,22 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateSnapshotDiffTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateBrowserTileViewportPresetInTab: (
+          tabId,
+          tileInstanceId,
+          viewportPreset,
+        ) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateBrowserTileViewportPreset(
+                canvas,
+                tileInstanceId,
+                viewportPreset,
+              ),
             ),
           );
         },
@@ -3163,6 +3205,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         activeTabId: state.activeTabId,
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,
         artifactTreeByEpicId: state.artifactTreeByEpicId,
+        pipGeometryByEpicId: state.pipGeometryByEpicId,
       }),
       merge: (persistedState, currentState) => {
         const sanitized = sanitizePersistedCanvasState(persistedState);

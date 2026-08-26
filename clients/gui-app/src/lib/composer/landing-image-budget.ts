@@ -57,6 +57,23 @@ export function registerLandingDraftRootSource(
   draftRootSource = source;
 }
 
+/**
+ * Extra content hashes that must survive landing GC. Chat-composer annotation
+ * crops live in this same store (hash + filename on the draft record) and are
+ * not present in landing draft content.
+ */
+export interface ExtraImageRootSource {
+  hashes(): ReadonlyArray<string>;
+}
+
+const extraRootSources: ExtraImageRootSource[] = [];
+
+export function registerExtraImageRootSource(
+  source: ExtraImageRootSource,
+): void {
+  extraRootSources.push(source);
+}
+
 function currentDrafts(): ReadonlyArray<LandingDraftTab> {
   return draftRootSource?.drafts() ?? [];
 }
@@ -108,6 +125,9 @@ export function landingLiveImageRootHashes(): Set<string> {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
   }
   for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
+  for (const source of extraRootSources) {
+    for (const hash of source.hashes()) roots.add(hash);
+  }
   return roots;
 }
 

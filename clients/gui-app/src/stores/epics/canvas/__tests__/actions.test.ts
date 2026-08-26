@@ -25,18 +25,23 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
+  updateBrowserTileViewportPreset,
   updateGitDiffTileView,
 } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type {
+  BrowserSessionTileRef,
   EpicCanvasState,
   EpicCanvasTileRef,
   EpicNodeRef,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
-import { isBlankTileRef } from "@/stores/epics/canvas/types";
+import {
+  epicCanvasTileFallbackName,
+  isBlankTileRef,
+} from "@/stores/epics/canvas/types";
 import {
   GIT_BUNDLE_CHANGES,
   GIT_FILE_A,
@@ -1061,6 +1066,34 @@ describe("cloneEpicCanvasState", () => {
   });
 });
 
+describe("updateBrowserTileViewportPreset", () => {
+  it("writes viewportPreset on a browser-session pointer", () => {
+    const pointer: BrowserSessionTileRef = {
+      id: "browser-session:s:t",
+      instanceId: "inst-session-1",
+      type: "browser-session",
+      hostId: TEST_HOST_ID,
+      sessionId: "s",
+      tabId: "t",
+      viewportPreset: "responsive",
+    };
+    const state = openPinned(createEmptyCanvas(), pointer);
+    const next = updateBrowserTileViewportPreset(
+      state,
+      pointer.instanceId,
+      "mobile",
+    );
+
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      viewportPreset: "mobile",
+    });
+    expect(
+      updateBrowserTileViewportPreset(next, pointer.instanceId, "mobile"),
+    ).toBe(next);
+  });
+});
+
 describe("instanceId / content-id decoupling", () => {
   it("dedup collapses two opens of one content id even with distinct instanceIds", () => {
     const firstInstance: EpicNodeRef = { ...SPEC_A, instanceId: "inst-1" };
@@ -1142,7 +1175,7 @@ describe("instanceId / content-id decoupling", () => {
     expect(renamed.root).toBe(rootBefore);
     const pane = rootPane(renamed);
     const tab = paneTabRefs(renamed, pane)[0];
-    expect(tab.name).toBe("Renamed Spec");
+    expect(epicCanvasTileFallbackName(tab)).toBe("Renamed Spec");
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
   });
@@ -1233,7 +1266,7 @@ describe("openBlankTabInPane", () => {
     expect(pane.tabInstanceIds).toHaveLength(2);
     const blank = paneTabRefs(state, pane)[1];
     expect(isBlankTileRef(blank)).toBe(true);
-    expect(blank.name).toBe("New tab");
+    expect(epicCanvasTileFallbackName(blank)).toBe("New tab");
     expect(pane.activeTabId).toBe(blank.instanceId);
     expect(activationContentIds(state, pane)).toEqual([blank.id, SPEC_A.id]);
     expect(state.activePaneId).toBe(paneId);

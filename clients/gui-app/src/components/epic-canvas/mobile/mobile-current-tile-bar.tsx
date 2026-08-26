@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { TabIcon } from "@/components/epic-canvas/canvas/tab-strip";
+import { useBrowserTabPresentation } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { InlineTitleField } from "@/components/epic-canvas/mobile/inline-title-field";
 import { ContentMinimapButton } from "@/components/minimap/content-minimap-button";
 import {
@@ -14,7 +15,10 @@ import {
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  epicCanvasTileFallbackName,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
@@ -46,10 +50,10 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
     isTerminal ? tile.hostId : null,
   );
   const terminalHostClient = isTerminal ? resolvedHostClient : null;
-  const displayTitle = useEpicTabDisplayTitle(
+  const fallbackDisplayTitle = useEpicTabDisplayTitle(
     {
       id: tile.id,
-      name: tile.name,
+      name: epicCanvasTileFallbackName(tile),
       type: tile.type,
       hostId: "hostId" in tile ? tile.hostId : null,
     },
@@ -59,6 +63,8 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tile.type === "chat" ? tile.id : null,
   );
+  const browserPresentation = useBrowserTabPresentation(tile);
+  const displayTitle = browserPresentation?.title ?? fallbackDisplayTitle;
 
   const renameKind = tileRenameKind(tile);
   const canMutate = isEditableRole(useEpicPermissionRole());
@@ -84,6 +90,7 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
           epicId={epicId}
           tab={tile}
           titleGenerationPending={titleGenerationPending}
+          browserPresentation={browserPresentation}
         />
         <InlineTitleField
           value={displayTitle}

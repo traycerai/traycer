@@ -23,6 +23,7 @@ import {
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 
 interface GitListChangedFilesArgs {
   readonly hostId: string;
@@ -453,7 +454,7 @@ describe("Files opener sub-page (Artifacts step)", () => {
     const opened = lastTileOpen();
     expect(opened.ref.type).toBe("spec");
     expect(opened.ref.id).toBe("a1");
-    expect(opened.ref.name).toBe("First Spec");
+    expect(epicCanvasTileFallbackName(opened.ref)).toBe("First Spec");
   });
 
   it("disambiguates duplicate leaf titles by their ancestor-title path", () => {

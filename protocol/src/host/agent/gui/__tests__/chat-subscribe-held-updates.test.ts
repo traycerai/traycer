@@ -46,7 +46,12 @@ const chat: Chat = {
       role: "user",
       messageId: "message-1",
       sender: { type: "user", userId: "user-1" },
-      message: { kind: "user", content: { type: "doc", content: [] } },
+      message: {
+        kind: "user",
+        content: { type: "doc", content: [] },
+        browserContextAttachments: [],
+        browserAnnotations: [],
+      },
       timestamp: 1000,
       sessionAnchor: null,
     },

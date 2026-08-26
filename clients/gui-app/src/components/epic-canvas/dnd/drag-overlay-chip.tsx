@@ -9,7 +9,14 @@
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import { FileDiff, FilePlus, Folder, GitPullRequest, Lock } from "lucide-react";
+import {
+  FileDiff,
+  FilePlus,
+  Folder,
+  GitPullRequest,
+  Globe,
+  Lock,
+} from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
@@ -28,14 +35,16 @@ import {
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
   isBlankTileRef,
-  isManagedCommandOutputTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
   type BlankTileRef,
+  type BrowserSessionTileRef,
   type ManagedCommandOutputTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
@@ -139,7 +148,11 @@ export function EpicRootDragOverlayContent() {
 
 function WorkspaceFolderDragOverlay(props: { readonly name: string }) {
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <Folder className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.name}</span>
     </m.div>
@@ -174,6 +187,9 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
+  if (isBrowserSessionTileRef(props.node)) {
+    return <BrowserSessionTileDragOverlay node={props.node} />;
+  }
   if (isManagedCommandOutputTileRef(props.node)) {
     return (
       <ManagedCommandOutputTileDragOverlay
@@ -184,7 +200,11 @@ function EpicCanvasNodeDragOverlay(props: {
   }
   if (isCommGraphTileRef(props.node)) {
     return (
-      <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <m.div
+        {...CHIP_MOTION}
+        className={cn(CHIP_CLASS)}
+        data-browser-overlay="drag-overlay"
+      >
         <CommGraphTileIcon className="size-3.5" />
         <span className="min-w-0 truncate font-medium">{props.node.name}</span>
       </m.div>
@@ -222,7 +242,11 @@ function ManagedCommandOutputTileDragOverlay(props: {
     commandId: props.node.id,
   });
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <ManagedCommandMonitorIcon
         monitoring={command !== null && command.monitoring}
         decorative
@@ -237,7 +261,11 @@ function ManagedCommandOutputTileDragOverlay(props: {
 
 function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -246,16 +274,40 @@ function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
 
 function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
   );
 }
 
+function BrowserSessionTileDragOverlay(props: {
+  readonly node: BrowserSessionTileRef;
+}) {
+  return (
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+      data-browser-tab-id={props.node.tabId}
+    >
+      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">Browser</span>
+    </m.div>
+  );
+}
+
 function PrDiffTileDragOverlay(props: { readonly node: PrDiffTileRef }) {
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -267,7 +319,11 @@ function ArtifactNodeDragOverlay(props: {
   readonly epicId: string;
 }) {
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <EpicNodeTabIcon
         node={props.node}
         epicId={props.epicId}
@@ -287,7 +343,11 @@ function DiffTileDragOverlay(props: {
     return <GitDiffTileDragOverlay node={props.node} />;
   }
   return (
-    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+    <m.div
+      {...CHIP_MOTION}
+      className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
+    >
       <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
@@ -311,6 +371,7 @@ function GitDiffTileDragOverlay(props: { readonly node: GitDiffTileRef }) {
       {...CHIP_MOTION}
       aria-label={`${scopeLabel}: ${subjectLabel}`}
       className={cn(CHIP_CLASS)}
+      data-browser-overlay="drag-overlay"
       data-testid="git-diff-drag-overlay"
     >
       <FileDiff className="size-3.5 shrink-0 text-primary" />
@@ -345,6 +406,7 @@ function LeftPanelRailDragOverlay(props: {
   return (
     <m.div
       {...CHIP_MOTION}
+      data-browser-overlay="drag-overlay"
       className={cn(
         "pointer-events-none flex h-9 cursor-grabbing select-none items-center gap-2 rounded-md border border-canvas-border/80 bg-canvas px-3 text-ui-sm font-medium text-canvas-foreground shadow-lg",
       )}

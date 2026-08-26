@@ -200,6 +200,8 @@ import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
+import { BrowserComposerContextChip } from "./browser-composer-context-chip";
+import { useBrowserContextAttachmentHandler } from "./browser-context-attachment-handler";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
 import {
   chatTileUiReducer,
@@ -239,6 +241,7 @@ interface CompactChatState {
 interface ChatTileProps {
   node: EpicNodeRef;
   viewTabId: string;
+  tileId: string;
   /**
    * True when this tile is the active leaf in the epic canvas. The
    * value is drilled into `ChatComposer` so only the active tile's
@@ -252,6 +255,7 @@ interface ChatTileSessionViewProps {
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
+  readonly tileId: string;
   readonly isActive: boolean;
   readonly currentEpicId: string;
   /**
@@ -496,6 +500,7 @@ export function ChatTile(props: ChatTileProps) {
           handle={handle}
           node={node}
           viewTabId={viewTabId}
+          tileId={props.tileId}
           isActive={isActive}
           currentEpicId={epicId}
           readOnlyNotice={null}
@@ -1211,7 +1216,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
 // independent UI concerns surfaced for one tile, not reducible nesting.
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
-  const { handle, node, viewTabId, isActive, currentEpicId } = props;
+  const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
   const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
   // Surface visibility for the stream-flush coordinator's tiered flush rate:
@@ -1586,6 +1591,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     nodeId: node.id,
     scope: handoffScope,
     profileUserId: profile?.userId ?? null,
+  });
+  useBrowserContextAttachmentHandler({
+    chatId: node.id,
+    viewTabId,
   });
   useChatSetupFailureRestoreDriver({
     handle,
@@ -1963,12 +1972,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           content: input.content,
         },
       );
-      const sent = chatActions.sendMessage(
-        input.content,
+      const sent = chatActions.sendMessage({
+        content: input.content,
         sender,
-        input.settings,
-        input.deliveryPolicy,
-      );
+        settings: input.settings,
+        attachments: input.attachments,
+        deliveryPolicy: input.deliveryPolicy,
+        restoreContent: input.restoreContent,
+        restoreBrowserAnnotations: input.restoreBrowserAnnotations,
+      });
       if (sent === null) return false;
       if (shouldMarkTitlePending) {
         useEpicCanvasStore
@@ -2007,8 +2019,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         slashCatalog,
       );
       return (
-        chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
-        null
+        chatActions.sendMessage({
+          content,
+          sender,
+          settings: nextStepSettings,
+          attachments: [],
+          deliveryPolicy: "auto",
+          restoreContent: content,
+          restoreBrowserAnnotations: [],
+        }) !== null
       );
     },
     [canSendNextStep, chatActions, nextStepSettings, profile, slashCatalog],
@@ -2070,12 +2089,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       states.set(handle.chatId, state);
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
-      const sent = chatActions.sendMessage(
+      const sent = chatActions.sendMessage({
         content,
         sender,
-        nextStepSettings,
-        runNow ? "auto" : "after_turn",
-      );
+        settings: nextStepSettings,
+        attachments: [],
+        deliveryPolicy: runNow ? "auto" : "after_turn",
+        restoreContent: content,
+        restoreBrowserAnnotations: [],
+      });
       if (sent === null || runNow) return;
       state.cancelPromotion?.();
       state.cancelPromotion = promoteQueuedMessageToFront({
@@ -2110,8 +2132,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       slashCatalog,
     );
     return (
-      chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
-      null
+      chatActions.sendMessage({
+        content,
+        sender,
+        settings: nextStepSettings,
+        attachments: [],
+        deliveryPolicy: "auto",
+        restoreContent: content,
+        restoreBrowserAnnotations: [],
+      }) !== null
     );
   }, [canAct, chatActions, nextStepSettings, profile, slashCatalog]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
@@ -2245,6 +2274,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       activationQueries.discoverCompactSlashCommands,
     ],
   );
+  const browserContextChip = useMemo(
+    () => (
+      <BrowserComposerContextChip
+        chatId={node.id}
+        chatInstanceId={node.instanceId}
+        viewTabId={viewTabId}
+      />
+    ),
+    [node.id, node.instanceId, viewTabId],
+  );
   // Composer v3 cluster: host select + Workspace rail picker on the left, with
   // the context-usage leaf owning its trailing chip and optional full-width
   // pinned strip. Per-folder Environment config lives inside the selected
@@ -2260,11 +2299,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       <>
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           {hostWorkspaceSelector}
+          <div className="flex shrink-0 items-center gap-2">
+            {browserContextChip}
+          </div>
         </div>
         {usageChip}
       </>
     ),
-    [hostWorkspaceSelector, usageChip],
+    [hostWorkspaceSelector, usageChip, browserContextChip],
   );
 
   const lowerRuntime = useMemo(
@@ -2472,6 +2514,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     handle,
     node,
     viewTabId,
+    tileId,
     tabHostId: activeHostId,
     linkResolutionRoots,
     currentEpicId,
