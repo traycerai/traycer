@@ -17,7 +17,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useSyncExternalStore, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -205,6 +205,10 @@ const modelListeners = new Set<() => void>();
 // invoke it directly, the same way Pierre invokes it on a real row click.
 let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
   null;
+// Row geometry the panel asked Pierre for. Only observable here: `useFileTree`
+// reads its options once, at construction, and the model exposes no getter the
+// panel could be asked afterwards.
+let capturedItemHeight: number | undefined = undefined;
 
 function notifyModel(): void {
   for (const listener of modelListeners) listener();
@@ -350,8 +354,15 @@ vi.mock("@pierre/trees/react", () => ({
     useSyncExternalStore(subscribeToSearchSnapshot, getSearchSnapshot),
   useFileTree: (options: {
     readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
+    readonly itemHeight: number | undefined;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
+    // Mount-captured, exactly like the real hook's `useState(() => new
+    // FileTree(options))`. Recording it per RENDER instead would make the row
+    // geometry look reactive here when it is not, and the viewport-transition
+    // case below would pass without the body ever having been rebuilt.
+    const [itemHeightAtConstruction] = useState(() => options.itemHeight);
+    capturedItemHeight = itemHeightAtConstruction;
     return { model: mockModel };
   },
 }));
@@ -1351,5 +1362,176 @@ describe("reveal in sidebar", () => {
         { path: "a.ts", options: { offset: "nearest" } },
       ]);
     });
+  });
+});
+
+/**
+ * The same panel body under the phone tab switcher, where it is the File tree
+ * category rather than a sidebar column. `useIsMobileViewport` reads
+ * `window.innerWidth` directly, so overriding it before render is what forces
+ * the touch presentation - same pattern as the composer-menu and providers
+ * panel mobile suites.
+ */
+describe("file tree on a touch viewport", () => {
+  const TAB_ID = "tab-1";
+  const MOBILE_WIDTH = 390;
+  const DESKTOP_WIDTH = 1024;
+
+  // The shared setup's `matchMedia` never notifies, which is right for suites
+  // that only need one width. Crossing the breakpoint mid-test needs a real
+  // one: `useIsMobileViewport` is a `useSyncExternalStore` over this event, so
+  // without it a width change reaches no render at all.
+  const breakpointListeners = new Set<() => void>();
+  function installLiveMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: window.innerWidth < 768,
+        media: query,
+        onchange: null,
+        addEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.add(listener);
+        },
+        removeEventListener: (_type: string, listener: () => void) => {
+          breakpointListeners.delete(listener);
+        },
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function restoreInertMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        addListener: () => undefined,
+        removeListener: () => undefined,
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+  function setViewportWidth(width: number): void {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: width,
+    });
+    for (const listener of [...breakpointListeners]) listener();
+  }
+
+  let openPermanentSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+  let openPreviewSpy: Mock<
+    (tabId: string, node: EpicCanvasTileRef) => NestedFocusTarget | null
+  >;
+
+  beforeEach(() => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
+    listFileTreeCalls.length = 0;
+    resetPathsCalls.length = 0;
+    setSearchCalls.length = 0;
+    searchCalls.length = 0;
+    expandedInModel.clear();
+    expandedAtLastReset.clear();
+    selectedInModel.clear();
+    scrollToPathCalls.length = 0;
+    modelListeners.clear();
+    capturedOnSelectionChange = null;
+    capturedItemHeight = undefined;
+    installSearchHost({});
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    openPermanentSpy = vi.fn(() => null);
+    openPreviewSpy = vi.fn(() => null);
+    useEpicCanvasStore.setState({
+      prepareOpenTileInTabFocusTarget: openPermanentSpy,
+      prepareOpenTilePreviewInTabFocusTarget: openPreviewSpy,
+    });
+    breakpointListeners.clear();
+    installLiveMatchMedia();
+    setViewportWidth(MOBILE_WIDTH);
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetWorkspaceFileListSubscriptionsForTesting();
+    useFileTreeStore.setState({ expandedPathsByScope: {} });
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    pinnedStreamBindingRef.value = null;
+    breakpointListeners.clear();
+    restoreInertMatchMedia();
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: DESKTOP_WIDTH,
+    });
+  });
+
+  it("asks for touch-sized rows instead of the sidebar's compact ones", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    expect(capturedItemHeight).toBe(44);
+  });
+
+  it("recycles the single preview tile for a tapped row rather than accumulating one per file", () => {
+    const client = new MockWsStreamClient("unknown");
+    renderPanel(client);
+    act(() => {
+      client.sessions[0].emitFrame({
+        kind: "listing",
+        directoryPath: "",
+        entries: [
+          {
+            path: "readme.md",
+            name: "readme.md",
+            kind: "file",
+            ignored: false,
+          },
+        ],
+        truncated: false,
+        hasBinaryPayload: false,
+      });
+    });
+
+    act(() => {
+      capturedOnSelectionChange?.(["readme.md"]);
+    });
+
+    expect(openPermanentSpy).not.toHaveBeenCalled();
+    expect(openPreviewSpy).toHaveBeenCalledTimes(1);
+    expect(openPreviewSpy).toHaveBeenCalledWith(
+      TAB_ID,
+      expect.objectContaining({ filePath: "readme.md" }),
+    );
+  });
+
+  it("rebuilds the tree when the window crosses the breakpoint, rather than leaving the other class's rows", () => {
+    setViewportWidth(DESKTOP_WIDTH);
+    renderPanel(new MockWsStreamClient("unknown"));
+    expect(capturedItemHeight).toBeUndefined();
+
+    act(() => {
+      setViewportWidth(MOBILE_WIDTH);
+    });
+
+    // Only a rebuilt model can report this: the mocked hook, like the real
+    // one, reads `itemHeight` once at construction.
+    expect(capturedItemHeight).toBe(44);
   });
 });

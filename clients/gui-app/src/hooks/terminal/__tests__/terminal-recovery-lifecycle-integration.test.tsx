@@ -217,6 +217,7 @@ function BootstrapSubtree(props: BootstrapSubtreeProps): ReactNode {
       shellArgs: null,
       cols: 80,
       rows: 24,
+      themeHint: null,
       desiredSessionId: props.sessionId,
       worktreeBusyPaths: [],
     });

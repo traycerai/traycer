@@ -50,8 +50,23 @@ import {
 } from "@/stores/chats/chat-tab-pending-hydration-restore";
 import { evictTileFindUiForEpic } from "@/stores/tile-find/tile-find-store";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
-import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicNodeRef,
+  PublishedChatTileRef,
+} from "@/stores/epics/canvas/types";
 import { CHAT_A, SPEC_A } from "./canvas-test-fixtures";
+
+/**
+ * A second chat, so a preview open can recycle {@link CHAT_A}'s preview in the
+ * same pane. Only the identity fields differ - the sweep resolves a removed
+ * tile by kind, content id and epic, so the rest is irrelevant to it.
+ */
+const CHAT_B: EpicNodeRef = {
+  ...CHAT_A,
+  id: "chat-b",
+  instanceId: "inst-chat-b",
+  name: "Chat B",
+};
 
 const EMPTY_TILE_FIND_CAPABILITIES: ReadonlySet<TileFindCapability> = new Set();
 
@@ -247,6 +262,7 @@ beforeEach(() => {
   evictA2AOpenStores([SPEC_A.instanceId]);
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
+  clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-recycle");
   useTileFindStore.getState().resetForTests();
   resetPendingHydrationRestoreForTesting();
 });
@@ -262,6 +278,7 @@ afterEach(() => {
   evictA2AOpenStores([SPEC_A.instanceId]);
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-evict");
   clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-hide");
+  clearTicket5PerTabState(CHAT_A.instanceId, "epic-t5-recycle");
   useTileFindStore.getState().resetForTests();
   resetPendingHydrationRestoreForTesting();
 });
@@ -363,6 +380,24 @@ describe("canvas store ticket-5 per-tab persistence sweep", () => {
     expectTicket5PerTabStatePresent(epicId);
 
     useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
+
+    expectTicket5TabKeysEvicted(epicId);
+  });
+
+  it("promotes durable state when one preview chat RECYCLES another - a replace is a removal, not a close", () => {
+    const epicId = "epic-t5-recycle";
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab(epicId, "Recycle Ticket5");
+    store.openTilePreviewInTab(tabId, CHAT_A);
+    seedTicket5PerTabState(epicId);
+    expectTicket5PerTabStatePresent(epicId);
+
+    // A second preview into the same pane evicts the first ENTIRELY - the
+    // tile leaves `tabInstanceIds`, and that removal is the only signal the
+    // sweep needs. No close action is involved, and the chat's view never
+    // unmounts through a component lifecycle, so this promotion is the ONLY
+    // thing standing between a recycled chat and a lost draft.
+    store.openTilePreviewInTab(tabId, CHAT_B);
 
     expectTicket5TabKeysEvicted(epicId);
   });

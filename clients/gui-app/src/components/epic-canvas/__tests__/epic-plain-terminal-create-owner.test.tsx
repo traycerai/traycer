@@ -280,6 +280,7 @@ describe("<EpicPlainTerminalCreateOwner />", () => {
       rows: 24,
       desiredSessionId: ref.id,
       worktreeBusyPaths: [],
+      themeHint: null,
     });
     expect(hostCreateCalls("terminal.plain.create")).toEqual([]);
 

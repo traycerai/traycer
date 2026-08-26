@@ -116,6 +116,7 @@ import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
 import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
+import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import {
   findManualCompactCommand,
@@ -584,17 +585,30 @@ export function ChatDeadTileBannerContainer(
     sourceOwnerUserId,
   });
   return (
-    <ChatDeadTileBanner
-      hostLabel={props.hostLabel}
-      reason={props.reason}
-      ownedByViewer={ownedByViewer}
-      cloneAllowed={cloneAllowed}
-      showsPublishedCopy={props.showsPublishedCopy}
-      onClone={offer.clone}
-      cloning={offer.cloning}
-      className={undefined}
-      testId={props.testId}
-    />
+    <>
+      <ChatDeadTileBanner
+        hostLabel={props.hostLabel}
+        reason={props.reason}
+        ownedByViewer={ownedByViewer}
+        cloneAllowed={cloneAllowed}
+        showsPublishedCopy={props.showsPublishedCopy}
+        onClone={offer.clone}
+        cloning={offer.cloning}
+        className={undefined}
+        testId={props.testId}
+      />
+      {offer.profileRecovery !== null ? (
+        <CloneProfileRecovery
+          client={offer.profileRecovery.client}
+          resolution={offer.profileRecovery.resolution}
+          targetHostLabel={offer.profileRecovery.targetHostLabel}
+          onChooseProfile={offer.profileRecovery.chooseProfile}
+          onRetry={offer.profileRecovery.retry}
+          onCancel={offer.profileRecovery.cancel}
+          onOpenProviderSettings={offer.profileRecovery.openProviderSettings}
+        />
+      ) : null}
+    </>
   );
 }
 

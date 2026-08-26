@@ -48,13 +48,17 @@ import {
   setHardwareAccelerationPreference,
 } from "../app/gpu-acceleration";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
-import type { FileSaveInput } from "../../ipc-contracts/platform-types";
+import type {
+  FileSaveInput,
+  FileSaveResult,
+} from "../../ipc-contracts/platform-types";
 import {
   app,
   BrowserWindow,
   clipboard,
   dialog,
   nativeImage,
+  shell,
   type ProxyConfig,
 } from "electron";
 import { randomUUID } from "node:crypto";
@@ -139,9 +143,15 @@ export function registerPlatformIpc(
     },
   );
 
+  // Every path `fileSave` wrote this process lifetime. `fileOpenSaved` opens
+  // only members of this set, so the renderer's "Open file" affordance can
+  // reach exactly the files the user just picked in the native dialog and
+  // nothing else on disk.
+  const savedFilePaths = new Set<string>();
+
   bridge.handleInvoke(
     RunnerHostInvoke.fileSave,
-    async (event, input: unknown): Promise<string | null> => {
+    async (event, input: unknown): Promise<FileSaveResult | null> => {
       const file = parseFileSaveInput(input);
       const defaultPath = path.basename(file.name) || "download";
       const options = {
@@ -155,7 +165,24 @@ export function registerPlatformIpc(
           : await dialog.showSaveDialog(window, options);
       if (result.canceled || !result.filePath) return null;
       await writeFile(result.filePath, Buffer.from(new Uint8Array(file.bytes)));
-      return path.basename(result.filePath);
+      savedFilePaths.add(result.filePath);
+      return { name: path.basename(result.filePath), path: result.filePath };
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.fileOpenSaved,
+    async (_event, input: unknown): Promise<void> => {
+      if (typeof input !== "string" || !savedFilePaths.has(input)) {
+        throw new Error("file.openSaved: path was not saved by this session");
+      }
+      // `shell.openPath` resolves to "" on success and to an OS error message
+      // on failure (file gone, no handler app) - surface that as a rejection
+      // so the renderer can toast it instead of silently doing nothing.
+      const failure = await shell.openPath(input);
+      if (failure.length > 0) {
+        throw new Error(failure);
+      }
     },
   );
 

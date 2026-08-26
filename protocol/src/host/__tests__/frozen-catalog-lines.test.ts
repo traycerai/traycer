@@ -25,6 +25,7 @@ import {
 import {
   providersListRequestSchema,
   providersListRequestSchemaBeforeV70,
+  providersListResponseSchema,
   providersListResponseSchemaV70,
   providersListResponseSchemaV71,
   providersListResponseSchemaV10,
@@ -32,7 +33,6 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
-  providersListResponseSchema,
   providersListResponseSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
 import {

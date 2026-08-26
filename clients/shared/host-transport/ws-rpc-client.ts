@@ -914,13 +914,7 @@ function decodeResponseFrame(
   }
 
   if (frame.error !== null) {
-    throw new HostRpcError({
-      code: isRpcErrorCode(frame.error.code) ? frame.error.code : "RPC_ERROR",
-      message: frame.error.message,
-      requestId,
-      method,
-      fatalDetails: null,
-    });
+    throw HostRpcError.fromWireEnvelope(frame.error, requestId, method);
   }
 
   return frame.result;

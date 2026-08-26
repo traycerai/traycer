@@ -14,6 +14,7 @@ import {
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { PopoverContent } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,7 +27,11 @@ import {
 } from "@/lib/report-issue-context";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { AccentDot } from "@/components/providers/accent-dot";
-import { profileDisplayLabel } from "@/components/providers/provider-profile-model";
+import {
+  profileDisplayLabel,
+  profileEligibilityToggleDisabledReason,
+  profileEnablementTooltipText,
+} from "@/components/providers/provider-profile-model";
 import {
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
@@ -79,6 +84,11 @@ import {
   type PopoverProviderRateLimitState,
 } from "@/lib/provider-rate-limit-content";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProvidersRefreshProfileStatusForClient } from "@/hooks/providers/use-providers-refresh-profile-status-mutation";
 import {
   providerDisplayName,
   providerIdToGuiHarnessId,
@@ -1692,6 +1702,17 @@ function ProfileRateLimitProviderBlock({
   const queueScope = useRateLimitQueueScope();
   const hostId = useAddressableHostId();
   const client = useHostClient();
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    client,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    client,
+    providerId,
+  );
+  const profileEnablementAvailable = profiles.some(
+    (profile) => profile.kind === "managed",
+  );
   const activeProfileId = resolveRateLimitProfileId(
     profileSelection,
     providerId,
@@ -1821,6 +1842,22 @@ function ProfileRateLimitProviderBlock({
               variant={variant}
               query={queries[index]}
               openOpenCodeModelProviders={openOpenCodeModelProviders}
+              profileEnablementAvailable={profileEnablementAvailable}
+              profileEnablementPending={profileEnablementPending(
+                target.profileId,
+              )}
+              profileEnablementDisabledReason={profileEligibilityToggleDisabledReason(
+                true,
+                target.profile,
+                profiles,
+              )}
+              onSetProfileEnabled={(enabled) =>
+                setProfileEnabled.mutate({
+                  providerId,
+                  profileId: target.profile.profileId,
+                  enabled,
+                })
+              }
             />
           );
         })}
@@ -1863,6 +1900,97 @@ function ProviderGroupHeader({
   );
 }
 
+function RateLimitProviderProfileUsageMessage({
+  disabledWithoutUsage,
+  signedOutWithoutUsage,
+  state,
+  variant,
+  profileId,
+  openOpenCodeModelProviders,
+}: {
+  readonly disabledWithoutUsage: boolean;
+  readonly signedOutWithoutUsage: boolean;
+  readonly state: PopoverProviderRateLimitState;
+  readonly variant: PopoverBlockVariant;
+  readonly profileId: string | null;
+  readonly openOpenCodeModelProviders: () => void;
+}): ReactNode {
+  if (disabledWithoutUsage) {
+    return (
+      <p className="text-ui-xs text-muted-foreground">
+        Refresh to check usage without enabling this profile.
+      </p>
+    );
+  }
+  if (signedOutWithoutUsage) return <SignedOutRateLimitMessage />;
+  return (
+    <RateLimitProviderBody
+      state={state}
+      variant={variant}
+      profileId={profileId}
+      openModelProvidersAction={openOpenCodeModelProviders}
+    />
+  );
+}
+
+function RateLimitProviderProfileActions({
+  profile,
+  refresh,
+  refreshing,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
+}: {
+  readonly profile: ProviderProfile;
+  readonly refresh: () => Promise<void>;
+  readonly refreshing: boolean;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: boolean;
+  readonly profileEnablementDisabledReason: string | null;
+  readonly onSetProfileEnabled: (enabled: boolean) => void;
+}): ReactNode {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      {!profile.enabled ? (
+        <RefreshIconButton
+          onRefresh={refresh}
+          label={`Refresh ${profileDisplayLabel(profile)} status and usage limits`}
+          refreshing={refreshing}
+          className="size-7"
+        />
+      ) : null}
+      {profileEnablementAvailable ? (
+        <TooltipWrapper
+          label={profileEnablementTooltipText(
+            profile.enabled,
+            profileEnablementDisabledReason,
+          )}
+          side="left"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span className="mt-0.5 inline-flex shrink-0">
+            <Switch
+              aria-label={`Allow agents to use ${profileDisplayLabel(profile)}`}
+              checked={profile.enabled}
+              disabled={profileEnablementPending}
+              aria-disabled={
+                profileEnablementDisabledReason !== null || undefined
+              }
+              className="relative before:absolute before:inset-x-0 before:-inset-y-1 before:content-['']"
+              onCheckedChange={(enabled) => {
+                if (profileEnablementDisabledReason !== null) return;
+                onSetProfileEnabled(enabled);
+              }}
+            />
+          </span>
+        </TooltipWrapper>
+      ) : null}
+    </div>
+  );
+}
+
 function RateLimitProviderProfileRow({
   providerId,
   profile,
@@ -1872,6 +2000,10 @@ function RateLimitProviderProfileRow({
   variant,
   query,
   openOpenCodeModelProviders,
+  profileEnablementAvailable,
+  profileEnablementPending,
+  profileEnablementDisabledReason,
+  onSetProfileEnabled,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
@@ -1880,6 +2012,10 @@ function RateLimitProviderProfileRow({
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
   readonly openOpenCodeModelProviders: () => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileEnablementPending: boolean;
+  readonly profileEnablementDisabledReason: string | null;
+  readonly onSetProfileEnabled: (enabled: boolean) => void;
   readonly query: {
     readonly isPending: boolean;
     readonly isFetching: boolean;
@@ -1890,6 +2026,9 @@ function RateLimitProviderProfileRow({
     readonly data: ProviderRateLimitEnvelope | undefined;
   };
 }): ReactNode {
+  const client = useHostClient();
+  const refreshProfileStatus =
+    useProvidersRefreshProfileStatusForClient(client);
   const targetPhase = useRateLimitQueueTargetPhase(providerId, profileId);
   const followUpExhausted = useIsRateLimitReadFollowUpExhausted(
     providerId,
@@ -1915,63 +2054,106 @@ function RateLimitProviderProfileRow({
     envelope: query.data,
   };
   const state = resolvePopoverProviderRateLimitState(queryState);
-  const signedOutWithoutUsage = isSignedOutWithoutCachedUsage(
-    fetchEligible,
-    query.data,
-  );
+  const hasNoCachedUsage =
+    query.data === undefined || query.data.lastGood === null;
+  const signedOutWithoutUsage =
+    profile.auth.status === "unauthenticated" && hasNoCachedUsage;
+  const disabledWithoutUsage =
+    !profile.enabled && !signedOutWithoutUsage && hasNoCachedUsage;
   const planLabel = resolveProfileRowPlanLabel(profile, state);
 
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2",
+        "flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2 transition-opacity duration-150",
         active && "border-primary/60 bg-primary/5",
+        !profile.enabled && "opacity-60",
       )}
       aria-current={active ? "true" : undefined}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <AccentDot
-              profileId={profile.profileId}
-              accentColor={profile.accentColor}
-              label={null}
-              variant="inline"
-              size="default"
-              className={undefined}
-            />
-            <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
-              {profileDisplayLabel(profile)}
-            </span>
-            {planLabel !== null ? (
-              <Badge variant="secondary" className="font-normal">
-                {planLabel}
-              </Badge>
-            ) : null}
-            {active ? (
-              <Badge variant="outline" className="font-normal">
-                Active
-              </Badge>
-            ) : null}
-          </div>
+          <RateLimitProviderProfileStatusBadges
+            profile={profile}
+            planLabel={planLabel}
+            active={active}
+          />
           <ProfileUsageUpdatedLabel
             updatedAt={profile.usageUpdatedAt}
-            refreshing={query.isFetching || targetPhase === "fetching"}
+            refreshing={
+              query.isFetching ||
+              targetPhase === "fetching" ||
+              refreshProfileStatus.isPending
+            }
             queued={targetPhase === "queued"}
             signedOut={signedOutWithoutUsage}
+            notChecked={disabledWithoutUsage}
           />
         </div>
-      </div>
-      {signedOutWithoutUsage ? (
-        <SignedOutRateLimitMessage />
-      ) : (
-        <RateLimitProviderBody
-          state={state}
-          variant={variant}
-          profileId={profileId}
-          openModelProvidersAction={openOpenCodeModelProviders}
+        <RateLimitProviderProfileActions
+          profile={profile}
+          refresh={async () => {
+            await refreshProfileStatus.mutateAsync({
+              providerId,
+              profileId: profile.profileId,
+            });
+          }}
+          refreshing={refreshProfileStatus.isPending}
+          profileEnablementAvailable={profileEnablementAvailable}
+          profileEnablementPending={profileEnablementPending}
+          profileEnablementDisabledReason={profileEnablementDisabledReason}
+          onSetProfileEnabled={onSetProfileEnabled}
         />
-      )}
+      </div>
+      <RateLimitProviderProfileUsageMessage
+        disabledWithoutUsage={disabledWithoutUsage}
+        signedOutWithoutUsage={signedOutWithoutUsage}
+        state={state}
+        variant={variant}
+        profileId={profileId}
+        openOpenCodeModelProviders={openOpenCodeModelProviders}
+      />
+    </div>
+  );
+}
+
+function RateLimitProviderProfileStatusBadges({
+  profile,
+  planLabel,
+  active,
+}: {
+  readonly profile: ProviderProfile;
+  readonly planLabel: string | null;
+  readonly active: boolean;
+}): ReactNode {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <AccentDot
+        profileId={profile.profileId}
+        accentColor={profile.accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      <span className="min-w-0 truncate text-ui-sm font-medium text-foreground">
+        {profileDisplayLabel(profile)}
+      </span>
+      {planLabel !== null ? (
+        <Badge variant="secondary" className="font-normal">
+          {planLabel}
+        </Badge>
+      ) : null}
+      {active ? (
+        <Badge variant="outline" className="font-normal">
+          Active
+        </Badge>
+      ) : null}
+      {!profile.enabled ? (
+        <Badge variant="outline" className="font-normal">
+          Disabled
+        </Badge>
+      ) : null}
     </div>
   );
 }
@@ -1981,11 +2163,13 @@ function ProfileUsageUpdatedLabel({
   refreshing,
   queued,
   signedOut,
+  notChecked,
 }: {
   readonly updatedAt: number | null;
   readonly refreshing: boolean;
   readonly queued: boolean;
   readonly signedOut: boolean;
+  readonly notChecked: boolean;
 }): ReactNode {
   const now = useSampledNow();
   const ago = useRelativeTimestamp(updatedAt ?? 0);
@@ -1995,6 +2179,11 @@ function ProfileUsageUpdatedLabel({
   if (refreshing) return <RefreshingText />;
   if (signedOut) {
     return <span className="text-ui-xs text-muted-foreground">signed out</span>;
+  }
+  if (notChecked) {
+    return (
+      <span className="text-ui-xs text-muted-foreground">not checked</span>
+    );
   }
   if (updatedAt === null) {
     return <span className="text-ui-xs text-muted-foreground">stale</span>;
@@ -2401,6 +2590,7 @@ function TraycerAccountCards({
                 refreshing={refreshing}
                 queued={false}
                 signedOut={false}
+                notChecked={false}
               />
             </div>
             <TraycerSubscriptionView

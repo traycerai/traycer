@@ -928,6 +928,27 @@ export type RateLimitUsageResponseV40 = z.infer<
 >;
 
 /**
+ * Explicit single-profile maintenance. The profile id is the provider-list
+ * row id, including the reserved `"ambient"` Terminal sentinel. This request
+ * deliberately has no `force`/bypass flag: reaching the dedicated method is
+ * the user-maintenance intent, while ordinary reads remain execution-gated.
+ */
+export const providersRefreshProfileStatusRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+});
+export type ProvidersRefreshProfileStatusRequest = z.infer<
+  typeof providersRefreshProfileStatusRequestSchema
+>;
+
+export const providersRefreshProfileStatusResponseSchema = z.object({
+  providerRateLimits: providerRateLimitsSchema,
+});
+export type ProvidersRefreshProfileStatusResponse = z.infer<
+  typeof providersRefreshProfileStatusResponseSchema
+>;
+
+/**
  * Uses one of Codex's account-level manual rate-limit reset credits for the
  * selected profile. The idempotency key is generated once by the GUI for a
  * confirmation attempt and reused by the transport if that request is retried.

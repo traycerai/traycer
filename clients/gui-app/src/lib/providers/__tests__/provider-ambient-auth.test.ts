@@ -18,6 +18,7 @@ function auth(status: ProviderAuthStatus): ProviderAuth {
 function ambientProfile(status: ProviderAuthStatus): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",

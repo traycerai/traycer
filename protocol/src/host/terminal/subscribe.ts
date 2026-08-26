@@ -65,6 +65,15 @@
  * `terminal.subscribe@1.5`: adds live `currentCwd` to the nested session
  * metadata. The host initializes it to launch `cwd` and updates it only when
  * the shell emits a supported current-directory OSC sequence.
+ *
+ * `terminal.subscribe@1.6`: adds open-request `viewer: "presentation" | "cache"`.
+ * Intent is open-frame-only — there is no client frame to restate it. A
+ * lease-state change reopens the stream. Absent ⇒ `presentation` (today's
+ * behavior: every attachment counts as a GUI viewer). `cache` is a
+ * warm-reattach attachment with no attention claim; only `presentation`
+ * attachments gate host reap (`viewersAbsentSince`). Degrade: a 1.5-or-older
+ * peer's open schema strips `viewer`, so an old host treats every subscriber
+ * as a presentation viewer — the compatible failure mode.
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
@@ -95,6 +104,23 @@ export const terminalSubscribeOpenRequestSchema = z.object({
 });
 export type TerminalSubscribeOpenRequest = z.infer<
   typeof terminalSubscribeOpenRequestSchema
+>;
+
+export const terminalSubscribeViewerSchema = z.enum(["presentation", "cache"]);
+export type TerminalSubscribeViewer = z.infer<
+  typeof terminalSubscribeViewerSchema
+>;
+
+/**
+ * `terminal.subscribe@1.6` open request. `viewer` defaults to `presentation`
+ * so a 1.6 parse of a 1.5-shaped open is byte-identical to today's attach.
+ */
+export const terminalSubscribeOpenRequestSchemaV16 =
+  terminalSubscribeOpenRequestSchema.extend({
+    viewer: terminalSubscribeViewerSchema.default("presentation"),
+  });
+export type TerminalSubscribeOpenRequestV16 = z.infer<
+  typeof terminalSubscribeOpenRequestSchemaV16
 >;
 
 export const terminalActionSchema = z.enum(["write", "resize"]);
@@ -385,6 +411,14 @@ export const terminalSubscribeServerFrameSchemaV15 = z.discriminatedUnion(
 export type TerminalSubscribeServerFrameV15 = z.infer<
   typeof terminalSubscribeServerFrameSchemaV15
 >;
+
+export const terminalSubscribeV16 = defineStreamRpcContract({
+  method: "terminal.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: terminalSubscribeOpenRequestSchemaV16,
+  serverFrameSchema: terminalSubscribeServerFrameSchemaV15,
+  clientFrameSchema: terminalSubscribeClientFrameSchema,
+});
 
 export const terminalSubscribeV15 = defineStreamRpcContract({
   method: "terminal.subscribe",
