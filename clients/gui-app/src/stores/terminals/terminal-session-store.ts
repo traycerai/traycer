@@ -421,7 +421,10 @@ export function createTerminalSessionStore(
   const pendingWrites: TerminalWrite[] = [];
   let pendingBytes = 0;
   const enqueuePending = (write: TerminalWrite): void => {
-    if (write.chunk.length === 0) return;
+    // Live zero-length writes carry no bytes. An empty snapshot is still an
+    // authoritative full-screen boundary and must reach a retained engine's
+    // reset path (viewer-intent reopen keeps the xterm across streams).
+    if (write.chunk.length === 0 && write.kind !== "snapshot") return;
     pendingWrites.push(write);
     pendingBytes += write.chunk.length;
     while (pendingBytes > MAX_PENDING_BYTES && pendingWrites.length > 1) {
@@ -635,26 +638,28 @@ export function createTerminalSessionStore(
         // `snapshot` kind is load-bearing: xterm can emit protocol responses
         // while parsing historical bytes, and those must not be forwarded back
         // to the live PTY as user input.
-        if (scrollback.length > 0) {
-          // Carry the snapshot's grid so the host resizes xterm to it BEFORE
-          // replaying. `session.cols/rows` are the post-`min()` effective size
-          // the host serialized the redraw at; replaying into a differently
-          // sized grid garbles it (see `TerminalWrite`).
-          const scrollbackAccountLength = contentAccountLength(scrollback);
-          const generationAtWrite = ackGeneration;
-          const write: TerminalWrite = {
-            kind: "snapshot",
-            chunk: scrollback,
-            cols: frame.session.cols,
-            rows: frame.session.rows,
-            onAckable: () =>
-              accountAckableBytes(generationAtWrite, scrollbackAccountLength),
-          };
-          if (writer !== null) {
-            writer(write);
-          } else {
-            enqueuePending(write);
-          }
+        //
+        // Always forward the write, including a zero-length payload. The host
+        // serializes a cleared screen to `""`; dropping that boundary on a
+        // viewer-intent reopen leaves the retained engine showing stale
+        // content. Carry the snapshot's grid so the host resizes xterm to it
+        // BEFORE replaying. `session.cols/rows` are the post-`min()`
+        // effective size the host serialized the redraw at; replaying into a
+        // differently sized grid garbles it (see `TerminalWrite`).
+        const scrollbackAccountLength = contentAccountLength(scrollback);
+        const generationAtWrite = ackGeneration;
+        const write: TerminalWrite = {
+          kind: "snapshot",
+          chunk: scrollback,
+          cols: frame.session.cols,
+          rows: frame.session.rows,
+          onAckable: () =>
+            accountAckableBytes(generationAtWrite, scrollbackAccountLength),
+        };
+        if (writer !== null) {
+          writer(write);
+        } else {
+          enqueuePending(write);
         }
         const lastOutputPreview =
           scrollback.length === 0

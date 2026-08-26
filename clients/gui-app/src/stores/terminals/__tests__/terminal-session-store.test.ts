@@ -688,7 +688,8 @@ describe("createTerminalSessionStore", () => {
       });
 
       emitData(harness.callbacks(), data("x".repeat(64 * 1024)));
-      writes[0].onAckable();
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).not.toHaveBeenCalled();
     });
@@ -704,10 +705,11 @@ describe("createTerminalSessionStore", () => {
 
       const bigChunk = "x".repeat(64 * 1024);
       emitData(harness.callbacks(), data(bigChunk));
-      expect(writes).toHaveLength(1);
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      expect(liveWrites).toHaveLength(1);
 
       // Simulate xterm's own `write(data, callback)` firing once parsed.
-      writes[0].onAckable();
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -731,8 +733,9 @@ describe("createTerminalSessionStore", () => {
 
         emitData(harness.callbacks(), data("a".repeat(1000)));
         emitData(harness.callbacks(), data("b".repeat(2000)));
-        writes[0].onAckable();
-        writes[1].onAckable();
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
+        liveWrites[1].onAckable();
 
         expect(harness.sendAction).not.toHaveBeenCalled();
 
@@ -777,7 +780,7 @@ describe("createTerminalSessionStore", () => {
         });
 
         emitData(harness.callbacks(), data("small chunk"));
-        writes[0].onAckable();
+        writes.filter((write) => write.kind === "live")[0].onAckable();
 
         harness.callbacks().onConnectionStatus("reconnecting", null);
         vi.advanceTimersByTime(1000);
@@ -802,7 +805,7 @@ describe("createTerminalSessionStore", () => {
         // Written before the drop; xterm's own write callback for this
         // chunk hasn't fired yet.
         emitData(harness.callbacks(), data("stale chunk"));
-        const staleWrite = writes[0];
+        const staleWrite = writes.filter((write) => write.kind === "live")[0];
 
         // Reconnect: the host mints a fresh subscriber with unackedBytes
         // reset to 0, and its own snapshot re-confirms ack-credit support -
@@ -879,7 +882,8 @@ describe("createTerminalSessionStore", () => {
       });
 
       harness.callbacks().onData(binaryDataFrame(), new Uint8Array(64 * 1024));
-      writes[0].onAckable();
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
 
       expect(harness.sendAction).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "ack", bytes: 64 * 1024 }),
@@ -902,7 +906,8 @@ describe("createTerminalSessionStore", () => {
         const chunkBytes = new TextEncoder().encode("héllo");
         expect(chunkBytes.byteLength).toBe(6);
         harness.callbacks().onData(binaryDataFrame(), chunkBytes);
-        writes[0].onAckable();
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
         vi.advanceTimersByTime(50);
 
         expect(harness.sendAction).toHaveBeenCalledWith(
@@ -1003,6 +1008,110 @@ describe("createTerminalSessionStore", () => {
 
       handle.store.getState().setViewer("presentation");
       expect(viewers).toEqual(["presentation"]);
+      handle.dispose();
+    });
+
+    it("forwards an empty replacement snapshot after a viewer reopen so a retained engine can reset", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot("stale data"));
+      expect(writes).toMatchObject([
+        { kind: "snapshot", chunk: "stale data", cols: 80, rows: 24 },
+      ]);
+
+      // Lease-free keep-warm reopens as cache; the xterm engine is retained.
+      handle.store.getState().setViewer("cache");
+      opened().onConnectionStatus("open", null);
+      // Host serializes a cleared screen to an empty string. The store must
+      // still deliver a snapshot write so writerProxy can RIS-reset.
+      emitSnapshot(opened(), snapshot(""));
+
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
+      handle.dispose();
+    });
+
+    it("queues an empty replacement snapshot until a retained engine re-registers its writer", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot("stale data"));
+
+      handle.store.getState().setViewer("cache");
+      // Tile unmounted, engine kept warm: writer gone, empty snapshot arrives.
+      handle.store.getState().setWriter(null);
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(writes).toHaveLength(1);
+
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
       handle.dispose();
     });
 
