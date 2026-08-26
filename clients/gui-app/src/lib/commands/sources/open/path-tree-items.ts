@@ -4,11 +4,15 @@ import type { CommandItem } from "@/lib/commands/types";
 export interface PathTreeLeaf {
   readonly item: CommandItem;
   readonly path: string;
+  /** Structured display segments when `/` inside a label is not a separator. */
+  readonly displaySegments: ReadonlyArray<string> | null;
   readonly gitStatus: GitFileStatus | undefined;
 }
 
 interface DirectoryNode {
   readonly path: string;
+  readonly label: string;
+  readonly displayPath: string;
   readonly childDirectories: Map<string, DirectoryNode>;
   readonly leaves: PathTreeLeaf[];
 }
@@ -20,6 +24,8 @@ export function buildPathTreeItems(
 ): ReadonlyArray<CommandItem> {
   const root: DirectoryNode = {
     path: "",
+    label: "",
+    displayPath: "",
     childDirectories: new Map(),
     leaves: [],
   };
@@ -34,23 +40,44 @@ export function buildPathTreeItems(
         directory.path.length === 0 ? segment : `${directory.path}/${segment}`;
       let child = directory.childDirectories.get(segment);
       if (child === undefined) {
-        child = { path, childDirectories: new Map(), leaves: [] };
+        child = {
+          path,
+          label: segment,
+          displayPath: path,
+          childDirectories: new Map(),
+          leaves: [],
+        };
         directory.childDirectories.set(segment, child);
       }
       directory = child;
     }
   }
   for (const leaf of leaves) {
-    const segments = leaf.path
-      .split("/")
-      .filter((segment) => segment.length > 0);
+    const displaySegments =
+      leaf.displaySegments ??
+      leaf.path.split("/").filter((segment) => segment.length > 0);
+    const segments =
+      leaf.displaySegments === null
+        ? displaySegments
+        : displaySegments.map((segment) => encodeURIComponent(segment));
     let directory = root;
-    for (const segment of segments.slice(0, -1)) {
+    for (const [index, segment] of segments.slice(0, -1).entries()) {
       const path =
         directory.path.length === 0 ? segment : `${directory.path}/${segment}`;
       let child = directory.childDirectories.get(segment);
       if (child === undefined) {
-        child = { path, childDirectories: new Map(), leaves: [] };
+        const label = displaySegments[index] ?? segment;
+        const displayPath =
+          directory.displayPath.length === 0
+            ? label
+            : `${directory.displayPath} / ${label}`;
+        child = {
+          path,
+          label,
+          displayPath,
+          childDirectories: new Map(),
+          leaves: [],
+        };
         directory.childDirectories.set(segment, child);
       }
       directory = child;
@@ -64,7 +91,7 @@ export function buildPathTreeItems(
     ancestorIds: ReadonlyArray<string>,
   ): void => {
     const nodeId = `${namespace}:directory:${directory.path}`;
-    const label = directory.path.slice(directory.path.lastIndexOf("/") + 1);
+    const label = directory.label;
     items.push({
       id: nodeId,
       label,
@@ -84,6 +111,7 @@ export function buildPathTreeItems(
         hasChildren: true,
         kind: "directory",
         path: directory.path,
+        displayPath: directory.displayPath,
       },
     });
     const nextAncestors = [...ancestorIds, nodeId];
@@ -99,7 +127,9 @@ export function buildPathTreeItems(
     for (const leaf of directoryLeaves) {
       items.push({
         ...leaf.item,
-        label: leaf.path.slice(leaf.path.lastIndexOf("/") + 1),
+        label:
+          leaf.displaySegments?.at(-1) ??
+          leaf.path.slice(leaf.path.lastIndexOf("/") + 1),
         pathTreeRow: {
           treeId: namespace,
           nodeId: leaf.item.id,
@@ -108,6 +138,10 @@ export function buildPathTreeItems(
           hasChildren: false,
           kind: "file",
           path: leaf.path,
+          displayPath:
+            leaf.displaySegments === null
+              ? leaf.path
+              : leaf.displaySegments.join(" / "),
           gitStatus: leaf.gitStatus,
         },
       });
@@ -118,4 +152,12 @@ export function buildPathTreeItems(
   }
   appendLeaves(root.leaves, []);
   return items;
+}
+
+export function openerPathTreeId(
+  kind: "files" | "diff",
+  hostId: string,
+  workspacePath: string,
+): string {
+  return `open:${kind}:${encodeURIComponent(hostId)}:${encodeURIComponent(workspacePath)}`;
 }

@@ -43,6 +43,11 @@ const state = vi.hoisted(() => ({
   searchRootUnavailable: false,
   searchTruncated: false,
   searchIsError: false,
+  streamSupport: "supported" as "supported" | "unsupported",
+  streamClientAvailable: true,
+  streamIsPending: false,
+  streamError: null as string | null,
+  streamEnabledCalls: [] as boolean[],
   // Force the echoed source to a different root, to exercise the stale-reply
   // guard (a late response for a workspace the user has since left).
   echoRootOverride: null as string | null,
@@ -65,6 +70,19 @@ vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
 vi.mock("@/lib/host", () => ({ useHostClient: () => ({}) }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) => ({ mockHostId: hostId }),
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => ({ hostId }),
+}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  useHostStreamClientFor: () =>
+    state.streamClientAvailable ? { instanceId: "test-stream" } : null,
+}));
+vi.mock("@/lib/host/stream-auth-revalidator", () => ({
+  useStreamAuthRevalidator: () => null,
+}));
+vi.mock("@/lib/host/stream-runtime-context", () => ({
+  useStreamMethodSupportFor: () => state.streamSupport,
 }));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => state.defaultHostId,
@@ -97,7 +115,8 @@ vi.mock("@/hooks/workspace/use-workspace-search-paths-query", async () => {
   };
 });
 vi.mock("@/hooks/workspace/use-workspace-file-list-subscription", () => ({
-  useWorkspaceFileListSubscription: () => {
+  useWorkspaceFileListSubscription: (args: { readonly enabled: boolean }) => {
+    state.streamEnabledCalls.push(args.enabled);
     const files = state.searchResults.flatMap((result) =>
       result.kind === "file" ? [[result.relPath, result.name] as const] : [],
     );
@@ -113,8 +132,8 @@ vi.mock("@/hooks/workspace/use-workspace-file-list-subscription", () => ({
       fileNameByPath: new Map(files),
       ignoredPaths: [],
       truncated: state.searchTruncated,
-      isPending: false,
-      error: null,
+      isPending: state.streamIsPending,
+      error: state.streamError,
     };
   },
 }));
@@ -278,6 +297,11 @@ beforeEach(() => {
   state.searchRootUnavailable = false;
   state.searchTruncated = false;
   state.searchIsError = false;
+  state.streamSupport = "supported";
+  state.streamClientAvailable = true;
+  state.streamIsPending = false;
+  state.streamError = null;
+  state.streamEnabledCalls = [];
   state.echoRootOverride = null;
   state.projection = null;
   state.defaultHostId = "default-host";
@@ -396,7 +420,7 @@ describe("Files opener sub-page (code root step)", () => {
     state.searchResults = [fileResult("src/a.ts", "a.ts")];
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
-      "open:files:default-host:/ws/only:directory:src",
+      "open:files:default-host:%2Fws%2Fonly:directory:src",
       "open:files:/ws/only:src/a.ts",
     ]);
     expect(fileItems[0].pathTreeRow).toMatchObject({
@@ -407,7 +431,7 @@ describe("Files opener sub-page (code root step)", () => {
     expect(fileItems[1].pathTreeRow).toMatchObject({
       kind: "file",
       depth: 1,
-      ancestorIds: ["open:files:default-host:/ws/only:directory:src"],
+      ancestorIds: ["open:files:default-host:%2Fws%2Fonly:directory:src"],
     });
     runById(fileItems, "open:files:/ws/only:src/a.ts");
     const opened = lastTileOpen();
@@ -422,7 +446,7 @@ describe("Files opener sub-page (code root step)", () => {
     state.searchTruncated = true;
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
-      "open:files:default-host:/ws/only:directory:src",
+      "open:files:default-host:%2Fws%2Fonly:directory:src",
       "open:files:/ws/only:src/a.ts",
       "open:files:truncated",
     ]);
@@ -444,6 +468,32 @@ describe("Files opener sub-page (code root step)", () => {
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
       "open:files:ws:/ws/only:unsupported",
+    ]);
+  });
+
+  it("does not open a live file stream while host search is active", () => {
+    state.query = "a";
+    state.searchResults = [fileResult("src/a.ts", "a.ts")];
+    codeStepItems("/ws/only");
+    expect(state.streamEnabledCalls.at(-1)).toBe(false);
+  });
+
+  it("surfaces unsupported, pending, and failed browse states", () => {
+    state.streamSupport = "unsupported";
+    expect(codeStepItems("/ws/only").map((item) => item.label)).toEqual([
+      "File browsing is unavailable on this host",
+    ]);
+
+    state.streamSupport = "supported";
+    state.streamIsPending = true;
+    expect(codeStepItems("/ws/only").map((item) => item.label)).toEqual([
+      "Loading files…",
+    ]);
+
+    state.streamIsPending = false;
+    state.streamError = "stream failed";
+    expect(codeStepItems("/ws/only").map((item) => item.label)).toEqual([
+      "Files could not be loaded",
     ]);
   });
 
@@ -516,11 +566,26 @@ describe("Files opener sub-page (Artifacts step)", () => {
       "Notes",
     ]);
     expect(items.map((i) => i.id)).toEqual([
-      "open:files:artifacts:epic-1:directory:Parent A",
+      "open:files:artifacts:epic-1:directory:Parent%20A",
       "open:files:artifacts:c1",
-      "open:files:artifacts:epic-1:directory:Parent B",
+      "open:files:artifacts:epic-1:directory:Parent%20B",
       "open:files:artifacts:c2",
     ]);
+  });
+
+  it("keeps slashes inside artifact titles instead of fabricating ancestors", () => {
+    state.projection = projectionOf([
+      {
+        id: "a1",
+        folderName: "api-ui",
+        title: "API / UI",
+        parentId: null,
+      },
+    ]);
+    state.searchResults = [fileResult("api-ui", "index.md")];
+    const items = artifactStepItems();
+    expect(items.map((item) => item.label)).toEqual(["API / UI"]);
+    expect(items[0].pathTreeRow?.depth).toBe(0);
   });
 
   it("drops a stale/deleted artifact whose path is not in authoritative state", () => {
@@ -612,7 +677,7 @@ describe("Diff opener sub-page", () => {
     state.changedFiles = [changedFile("src/x.ts")];
     const items = renderItems(useDiffOpenerItems);
     expect(items.map((i) => i.id)).toEqual([
-      "open:diff:default-host:/ws/only:directory:src",
+      "open:diff:default-host:%2Fws%2Fonly:directory:src",
       "open:diff:/ws/only:src/x.ts:unstaged",
     ]);
     runById(items, "open:diff:/ws/only:src/x.ts:unstaged");

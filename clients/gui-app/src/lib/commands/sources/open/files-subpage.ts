@@ -21,6 +21,10 @@ import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import type { WorkspaceSearchSource } from "@traycer/protocol/host/workspace/unary-schemas";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
@@ -57,7 +61,10 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
-import { buildPathTreeItems } from "@/lib/commands/sources/open/path-tree-items";
+import {
+  buildPathTreeItems,
+  openerPathTreeId,
+} from "@/lib/commands/sources/open/path-tree-items";
 import { useWorkspaceFileListSubscription } from "@/hooks/workspace/use-workspace-file-list-subscription";
 import {
   useOpenerFileTreeExpandedPaths,
@@ -65,6 +72,7 @@ import {
 } from "@/stores/file-tree/opener-file-tree-store";
 
 const FILES_SEARCH_DEBOUNCE_MS = 150;
+const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
 // A stable source object so the search hook's query key is stable across
 // renders (the host derives the mirror root from the request `epicId`).
@@ -128,6 +136,7 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
     return [
       {
         path: result.relPath,
+        displaySegments: null,
         gitStatus: undefined,
         item: openerActionLeaf({
           id: `open:files:${workspacePath}:${result.relPath}`,
@@ -155,7 +164,7 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
     ];
   });
   const treeItems = buildPathTreeItems(
-    `open:files:${hostId}:${workspacePath}`,
+    openerPathTreeId("files", hostId, workspacePath),
     leaves,
     [],
   );
@@ -172,9 +181,10 @@ function liveCodeFileLeaves(args: {
   readonly fileNameByPath: ReadonlyMap<string, string>;
   readonly truncated: boolean;
 }): ReadonlyArray<CommandItem> {
-  const treeId = `open:files:${args.hostId}:${args.workspacePath}`;
+  const treeId = openerPathTreeId("files", args.hostId, args.workspacePath);
   const leaves = [...args.fileNameByPath].map(([path, name]) => ({
     path,
+    displaySegments: null,
     gitStatus: undefined,
     item: openerActionLeaf({
       id: `open:files:${args.workspacePath}:${path}`,
@@ -212,13 +222,24 @@ function useCodeRootStepItems(
   // runs there, on the same host the leaves below bind their tiles to.
   const client = useHostClientForHostId(row.hostId);
   const query = usePaletteLiveQuery();
+  const isBrowsing = query.trim().length === 0;
+  const hostEntry = useHostDirectoryEntry(row.hostId);
+  const streamAuth = useStreamAuthRevalidator();
+  const streamClient = useHostStreamClientFor(
+    isBrowsing ? hostEntry : null,
+    streamAuth,
+  );
+  const streamSupport = useStreamMethodSupportFor(
+    streamClient,
+    WORKSPACE_FILE_LIST_METHOD,
+  );
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
   const source = useMemo<WorkspaceSearchSource>(
     () => ({ root: row.runningDir }),
     [row.runningDir],
   );
-  const treeId = `open:files:${row.hostId}:${row.runningDir}`;
+  const treeId = openerPathTreeId("files", row.hostId, row.runningDir);
   const expandedPaths = useOpenerFileTreeExpandedPaths(treeId);
   const prune = useOpenerFileTreeStore((state) => state.prune);
   const onPruned = (directoryPaths: ReadonlyArray<string>) => {
@@ -228,7 +249,12 @@ function useCodeRootStepItems(
     epicId,
     hostId: row.hostId,
     workspacePath: row.runningDir,
-    enabled: ctx.activeEpicId !== null,
+    enabled:
+      ctx.activeEpicId !== null &&
+      isBrowsing &&
+      streamClient !== null &&
+      streamSupport !== "unsupported",
+    streamClient,
     expandedPathsOverride: expandedPaths,
     onPrunedOverride: onPruned,
   });
@@ -250,6 +276,30 @@ function useCodeRootStepItems(
       view,
       isError,
     });
+  }
+  if (streamClient === null || streamSupport === "unsupported") {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-unavailable`,
+        "File browsing is unavailable on this host",
+      ),
+    ];
+  }
+  if (live.error !== null) {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-error`,
+        "Files could not be loaded",
+      ),
+    ];
+  }
+  if (live.isPending) {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-loading`,
+        "Loading files…",
+      ),
+    ];
   }
   return liveCodeFileLeaves({
     ctx,
@@ -308,10 +358,8 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
     if (entry === undefined) return [];
     return [
       {
-        path:
-          entry.titlePath.length > 0
-            ? entry.titlePath.replaceAll(" / ", "/")
-            : entry.title,
+        path: entry.id,
+        displaySegments: entry.titleSegments,
         gitStatus: undefined,
         item: openerActionLeaf({
           id: `open:files:artifacts:${entry.id}`,

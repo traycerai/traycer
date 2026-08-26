@@ -160,6 +160,11 @@ export function useWorkspaceFileListSubscription(args: {
   readonly hostId: string | null;
   readonly workspacePath: string | null;
   readonly enabled: boolean;
+  /** Explicit host-bound transport; `undefined` uses the ambient sidebar client. */
+  readonly streamClient:
+    | IHostStreamClient<HostStreamRpcRegistry>
+    | null
+    | undefined;
   /** Null uses the persistent sidebar expansion store. */
   readonly expandedPathsOverride: ReadonlyArray<string> | null;
   readonly onPrunedOverride:
@@ -167,7 +172,9 @@ export function useWorkspaceFileListSubscription(args: {
     | null;
 }): WorkspaceFileListSubscriptionResult {
   const queryClient = useQueryClient();
-  const wsStreamClient = useWsStreamClient();
+  const ambientStreamClient = useWsStreamClient();
+  const wsStreamClient =
+    args.streamClient === undefined ? ambientStreamClient : args.streamClient;
   const pruneExpandedPaths = useFileTreeStore((s) => s.pruneExpandedPaths);
   const storedExpandedPaths = useFileTreeExpandedPaths(
     args.epicId,

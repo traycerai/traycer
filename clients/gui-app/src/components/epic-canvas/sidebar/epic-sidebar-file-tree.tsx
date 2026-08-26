@@ -222,6 +222,7 @@ function useFileTreeSource(args: {
     hostId: args.hostId,
     workspacePath: args.workspacePath,
     enabled: !useUnaryFallback,
+    streamClient: undefined,
     expandedPathsOverride: null,
     onPrunedOverride: null,
   });

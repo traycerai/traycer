@@ -190,6 +190,7 @@ function renderSubscription(
         hostId: HOST_ID,
         workspacePath: WORKSPACE_PATH,
         enabled: true,
+        streamClient: undefined,
         expandedPathsOverride: null,
         onPrunedOverride: null,
       }),

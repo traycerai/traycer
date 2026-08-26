@@ -36,7 +36,10 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
-import { buildPathTreeItems } from "@/lib/commands/sources/open/path-tree-items";
+import {
+  buildPathTreeItems,
+  openerPathTreeId,
+} from "@/lib/commands/sources/open/path-tree-items";
 
 interface ChangedFileLeavesArgs {
   readonly ctx: CommandContext;
@@ -54,6 +57,7 @@ function changedFileLeaves(
   const shown = matched.slice(0, OPENER_RESULT_CAP);
   const leaves = shown.map((file) => ({
     path: file.path,
+    displaySegments: null,
     gitStatus: file.status,
     item: openerActionLeaf({
       id: `open:diff:${workspacePath}:${file.path}:${file.stage}`,
@@ -76,7 +80,7 @@ function changedFileLeaves(
     }),
   }));
   const treeItems = buildPathTreeItems(
-    `open:diff:${hostId}:${workspacePath}`,
+    openerPathTreeId("diff", hostId, workspacePath),
     leaves,
     [],
   );

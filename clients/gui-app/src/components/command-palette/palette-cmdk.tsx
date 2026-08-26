@@ -569,7 +569,10 @@ function OpenerDeepRows(props: OpenerDeepRowsProps) {
               disabled={item.disabled === true}
               onSelect={() => onSelect(item)}
             >
-              <DeepPathLabel path={path} label={item.label} />
+              <DeepPathLabel
+                path={path}
+                label={item.pathTreeRow?.displayPath ?? item.label}
+              />
               {item.statusBadge !== undefined ? (
                 <RowStatusBadge>{item.statusBadge}</RowStatusBadge>
               ) : null}

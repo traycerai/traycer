@@ -133,6 +133,7 @@ export interface CommandItem {
     readonly hasChildren: boolean;
     readonly kind: "directory" | "file";
     readonly path: string;
+    readonly displayPath: string;
     readonly gitStatus?:
       | "modified"
       | "added"
