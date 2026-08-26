@@ -341,10 +341,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
       if (
-        shouldPassCtrlChordToFocusedTerminal(
-          event,
-          actionId.terminalPolicy,
-        )
+        shouldPassCtrlChordToFocusedTerminal(event, actionId.terminalPolicy)
       ) {
         return;
       }

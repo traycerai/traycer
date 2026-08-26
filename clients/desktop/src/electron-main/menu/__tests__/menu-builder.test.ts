@@ -515,9 +515,7 @@ describe("buildApplicationMenu", () => {
       expect(minimize.registerAccelerator).toBe(false);
       expect(findPrevious.registerAccelerator).toBeUndefined();
       expect(menuByRole(fileMenu, "quit").registerAccelerator).toBe(false);
-      expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(
-        false,
-      );
+      expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(false);
       expect(menuByRole(viewMenu, "reload").registerAccelerator).toBe(false);
       expect(menuByRole(windowMenu, "close").registerAccelerator).toBe(false);
     });
