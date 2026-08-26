@@ -221,7 +221,7 @@ jobs:
   # touching no CLI file. A gate that skips on the riskiest diffs is not a gate.
   test-windows-cli-exit:
     name: test (cli win32 SEA exit code)
-    runs-on: windows-latest
+    runs-on: windows-latest-8-cores
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -232,9 +232,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      # Do not restore Bun's global cache on Windows. The hosted measurement
-      # took 3m27 to unpack plus 32s to install; the following clean run's
-      # uncached frozen install took 3m51, eight seconds less overall.
+      # Restore on the larger runner: the four-core runner spent 3m27
+      # decompressing this cache, but then installed in 32s; the uncached path
+      # took 3m51. More decompression cores make the cached path the useful one.
+      - name: Cache bun global install cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
