@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   downgradeRequestAcrossMajors,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
   upgradeRequestToVersion,
 } from "@traycer/protocol/framework/index";
 import {
@@ -567,6 +568,7 @@ describe("optional-method capability negotiation", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["agent.listProviderProfiles"]).toBeUndefined();
     expect(
@@ -579,13 +581,15 @@ describe("optional-method capability negotiation", () => {
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
       major: 4,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4],
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 4, minor: 0 });
+    ).toEqual({ major: 4, minor: 0, supportedMajors: [1, 2, 3, 4] });
     expect(split.optionalManifest["agent.configure"]).toEqual({
       major: 4,
       minor: 0,
+      supportedMajors: [1, 2, 3, 4],
     });
   });
 

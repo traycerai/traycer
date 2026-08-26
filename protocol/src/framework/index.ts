@@ -209,8 +209,11 @@ export {
   buildConnectionManifest,
   mergeConnectionManifests,
   selectConnectionManifestForPeer,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "./capability-manifest";
+
+export type { ServedMajorsByMethod } from "./capability-manifest";
 
 export type {
   CompatibilityCheckResult,

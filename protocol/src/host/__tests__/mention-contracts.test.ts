@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -144,9 +145,9 @@ describe("GitHub mention schemas", () => {
   });
 
   it("round-trips populated and null pull-request preview fields", () => {
-    expect(
-      githubPullRequestMentionRowSchema.parse(PULL_REQUEST),
-    ).toEqual(PULL_REQUEST);
+    expect(githubPullRequestMentionRowSchema.parse(PULL_REQUEST)).toEqual(
+      PULL_REQUEST,
+    );
     expect(
       githubPullRequestMentionRowSchema.parse(
         PULL_REQUEST_WITH_NULL_PREVIEW_FIELDS,
@@ -175,8 +176,7 @@ describe("GitHub mention schemas", () => {
     const { checksRollup: _checksRollup, ...withoutChecksRollup } =
       PULL_REQUEST;
     expect(
-      githubPullRequestMentionRowSchema.safeParse(withoutChecksRollup)
-        .success,
+      githubPullRequestMentionRowSchema.safeParse(withoutChecksRollup).success,
     ).toBe(false);
   });
 
@@ -385,16 +385,19 @@ describe("GitHub mention RPC contracts", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["mention.githubCatalog"]).toBeUndefined();
     expect(split.manifest["mention.githubSearch"]).toBeUndefined();
     expect(split.optionalManifest["mention.githubCatalog"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
     expect(split.optionalManifest["mention.githubSearch"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
   });
 });

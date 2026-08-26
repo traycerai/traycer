@@ -11,6 +11,7 @@ import {
   checkStreamCompatibility,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 const handshakeV10 = defineStreamRpcContract({
@@ -43,6 +44,32 @@ const handshakeV20 = defineStreamRpcContract({
     z.object({
       kind: z.literal("snapshot"),
       hasBinaryPayload: z.literal(true),
+    }),
+  ]),
+  clientFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+});
+
+/** Additive minor on major 1: one optional open-request field, same frames. */
+const handshakeV11 = defineStreamRpcContract({
+  method: "handshake.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: z.object({
+    id: z.string(),
+    resumeToken: z.string().nullable(),
+  }),
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      hasBinaryPayload: z.literal(true),
+    }),
+    z.object({
+      kind: z.literal("legacy"),
+      hasBinaryPayload: z.literal(false),
     }),
   ]),
   clientFrameSchema: z.discriminatedUnion("kind", [
@@ -314,7 +341,10 @@ describe("validateVersionedStreamRpcRegistry", () => {
 
 describe("stream compatibility", () => {
   it("allows a compatible subscribed method when another stream method has major skew", () => {
-    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const currentManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     // A hypothetical peer on some future, unbridgeable chat.subscribe major -
     // exercises the method-isolation property below, independent of
     // chat.subscribe's real, currently-bridgeable version history.
@@ -351,7 +381,10 @@ describe("stream compatibility", () => {
   });
 
   it("bridges a new multi-major peer to a frozen legacy peer through major 1", () => {
-    const currentManifest = buildStreamManifest(MULTI_MAJOR_STREAM_REGISTRY);
+    const currentManifest = buildStreamManifest(
+      MULTI_MAJOR_STREAM_REGISTRY,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const legacyManifest = {
       ...currentManifest,
       "handshake.subscribe": { major: 1, minor: 0 },
@@ -376,8 +409,94 @@ describe("stream compatibility", () => {
     expect(fromLegacySide).toEqual({ ok: true });
   });
 
+  /**
+   * A retained MAJOR is not a retained released contract.
+   *
+   * This is the negative twin of the test above. Same shape - a multi-major
+   * side meeting a frozen peer pinned at `1.0` - except the retained major-1
+   * line has DELETED its `v1.0` registration while keeping the line alive at
+   * `1.1`. `highestSharedMajor` still answers 1, so before this guard both
+   * release oracles went green while the runtime rejected that peer at
+   * subscribe time: the handshake selects a concrete `{major, minor}`, and
+   * `1.0` was no longer installed to select.
+   *
+   * That gap is the whole reason the oracles exist, so it has to fail HERE,
+   * loudly, at the layer that is supposed to catch it before release.
+   */
+  it("refuses a peer pinned to a released minor the retained major line no longer installs", () => {
+    const registryMissingV10 = defineVersionedStreamRpcRegistry({
+      "handshake.subscribe": {
+        1: {
+          latestMinor: 1,
+          versions: { 1: { contract: handshakeV11 } },
+        },
+        2: {
+          latestMinor: 0,
+          versions: { 0: { contract: handshakeV20 } },
+        },
+      },
+    });
+    const currentManifest = buildStreamManifest(
+      registryMissingV10,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    // Exactly what a frozen host-v1.0.0 fixture advertises.
+    const legacyManifest = {
+      ...currentManifest,
+      "handshake.subscribe": { major: 1, minor: 0 },
+    };
+
+    const fromNewSide = checkStreamMethodCompatibility(
+      registryMissingV10,
+      currentManifest,
+      legacyManifest,
+      "host",
+      "handshake.subscribe",
+    );
+
+    expect(fromNewSide.ok).toBe(false);
+    if (fromNewSide.ok) {
+      throw new Error("expected the deleted released minor to be refused");
+    }
+    expect(fromNewSide.details.code).toBe("INCOMPATIBLE");
+
+    // Control: restoring v1.0 to the same line makes it bridge again, so the
+    // refusal above is attributable to the missing minor and nothing else.
+    const registryWithV10 = defineVersionedStreamRpcRegistry({
+      "handshake.subscribe": {
+        1: {
+          latestMinor: 1,
+          versions: {
+            0: { contract: handshakeV10 },
+            1: { contract: handshakeV11 },
+          },
+        },
+        2: {
+          latestMinor: 0,
+          versions: { 0: { contract: handshakeV20 } },
+        },
+      },
+    });
+    const restoredManifest = buildStreamManifest(
+      registryWithV10,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    expect(
+      checkStreamMethodCompatibility(
+        registryWithV10,
+        restoredManifest,
+        { ...restoredManifest, "handshake.subscribe": { major: 1, minor: 0 } },
+        "host",
+        "handshake.subscribe",
+      ),
+    ).toEqual({ ok: true });
+  });
+
   it("keeps a method incompatible when the advertised majors do not intersect", () => {
-    const currentManifest = buildStreamManifest(MULTI_MAJOR_STREAM_REGISTRY);
+    const currentManifest = buildStreamManifest(
+      MULTI_MAJOR_STREAM_REGISTRY,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const peerManifest = {
       ...currentManifest,
       "handshake.subscribe": {
@@ -416,7 +535,10 @@ describe("stream compatibility", () => {
   // major 1 and shipping the background-items controls as additive minors, so a
   // current app must still bridge to a host that only advertises 1.0.
   it("bridges chat.subscribe@1.3 to a host still on chat.subscribe@1.0 (host-v1.0.0)", () => {
-    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const currentManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const hostV100Manifest = {
       ...currentManifest,
       "chat.subscribe": { major: 1, minor: 0 },

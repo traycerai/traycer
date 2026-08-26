@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
@@ -21,6 +24,7 @@ describe("released floor production module", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
 
     // Latest advertised major for list is 2 (native projections), at minor 1

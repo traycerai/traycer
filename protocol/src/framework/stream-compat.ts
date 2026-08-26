@@ -5,7 +5,10 @@ import {
   type FatalErrorDetails,
   type ManifestMethodEntry,
 } from "@traycer/protocol/framework/ws-protocol";
-import { buildConnectionManifest } from "@traycer/protocol/framework/capability-manifest";
+import {
+  buildConnectionManifest,
+  type ServedMajorsByMethod,
+} from "@traycer/protocol/framework/capability-manifest";
 import {
   buildIncompatibleReason,
   collectManifestMethods,
@@ -20,12 +23,19 @@ import {
 /**
  * Version manifest for the combined stream registry. Same shape the unary
  * handshake produces: one canonical `{ major, minor }` plus every installed
- * major per method.
+ * major per method - narrowed to the majors `served` says this peer can
+ * actually handle.
+ *
+ * `served` is required rather than defaulted because forgetting it is exactly
+ * the bug it exists to prevent, and a default would make forgetting silent.
+ * A peer that implements everything its registry installs passes
+ * {@link SERVES_EVERY_INSTALLED_MAJOR}, which says so out loud.
  */
 export function buildStreamManifest(
   registry: VersionedStreamRpcRegistry,
+  served: ServedMajorsByMethod,
 ): ConnectionManifest {
-  return buildConnectionManifest(registry);
+  return buildConnectionManifest(registry, served);
 }
 
 /**
@@ -123,6 +133,30 @@ function checkStreamCompatibilityForMethods(
   };
 }
 
+/**
+ * Whether our own registry installs `minor` on `method`'s `major` line.
+ *
+ * Shared by both bridging branches on purpose. It used to exist only on the
+ * same-major path, and the cross-major path's failure to ask the same
+ * question is what let a deleted released contract pass the release oracles.
+ */
+function lineInstallsMinor(
+  registry: VersionedStreamRpcRegistry,
+  method: string,
+  major: number,
+  minor: number,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(registry, method)) {
+    return false;
+  }
+  const methodRegistry = registry[method];
+  if (!Object.prototype.hasOwnProperty.call(methodRegistry, major)) {
+    return false;
+  }
+  const line = methodRegistry[major];
+  return Object.prototype.hasOwnProperty.call(line.versions, minor);
+}
+
 function canBridgeStream(
   registry: VersionedStreamRpcRegistry,
   method: string,
@@ -133,20 +167,32 @@ function canBridgeStream(
     return true;
   }
   if (mine.major !== theirs.major) {
-    return highestSharedMajor(mine, theirs) !== null;
+    const shared = highestSharedMajor(mine, theirs);
+    if (shared === null) return false;
+    // A shared MAJOR is not a bridge. Retaining a major says nothing about
+    // which of its MINORS are still installed, and the handshake selects a
+    // concrete `{major, minor}` - so "we both have major 1" passed here while
+    // the peer's actual v1.0 contract had been deleted from the line. Both
+    // release oracles went green and the subscribe-time check then rejected
+    // the released peer, which is precisely the outage this guard exists to
+    // prevent.
+    //
+    // When the shared line is THEIR canonical major, their canonical minor is
+    // the one they will speak on it, so our line has to install exactly that.
+    if (shared === theirs.major) {
+      return lineInstallsMinor(registry, method, shared, theirs.minor);
+    }
+    // When the shared line is OUR canonical major they are the newer side,
+    // and additive-minors makes the frames we author parse against whatever
+    // they grew. Their minor on a non-canonical major is not in the manifest,
+    // so this direction is not checkable from here - the symmetric check runs
+    // on their side, where it is.
+    return true;
   }
   if (mine.minor < theirs.minor) {
     // Older side never transforms; additive-minors guarantees the frames
     // we author still parse on their newer schemas.
     return true;
   }
-  if (!Object.prototype.hasOwnProperty.call(registry, method)) {
-    return false;
-  }
-  const methodRegistry = registry[method];
-  if (!Object.prototype.hasOwnProperty.call(methodRegistry, mine.major)) {
-    return false;
-  }
-  const line = methodRegistry[mine.major];
-  return Object.prototype.hasOwnProperty.call(line.versions, theirs.minor);
+  return lineInstallsMinor(registry, method, mine.major, theirs.minor);
 }

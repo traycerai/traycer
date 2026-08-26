@@ -671,7 +671,7 @@ describe("WsRpcClient", () => {
       kind: "request",
       requestId: "req-1",
       method: "host.echo",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 0, supportedMajors: [1] },
       params: { message: "hi" },
     });
     expect(stub.closed).toBeNull();
@@ -3374,7 +3374,11 @@ describe("WsRpcClient", () => {
 
       expect(sockets[0].sent).toHaveLength(2);
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
-      expect(requestFrame.schemaVersion).toEqual({ major: 1, minor: 0 });
+      expect(requestFrame.schemaVersion).toEqual({
+        major: 1,
+        minor: 0,
+        supportedMajors: [1],
+      });
       expect(requestFrame.params).toEqual({ message: "hi" });
 
       sockets[0].socket.fireMessage({
@@ -3485,7 +3489,11 @@ describe("WsRpcClient", () => {
 
       expect(sockets[0].sent).toHaveLength(2);
       const requestFrame = expectRequestFrame(sockets[0].sent[1]);
-      expect(requestFrame.schemaVersion).toEqual({ major: 1, minor: 1 });
+      expect(requestFrame.schemaVersion).toEqual({
+        major: 1,
+        minor: 1,
+        supportedMajors: [1],
+      });
       expect(requestFrame.params).toEqual({ message: "hi", loud: true });
 
       sockets[0].socket.fireMessage({

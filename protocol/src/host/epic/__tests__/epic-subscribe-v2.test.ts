@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/framework/stream-compat";
 import {
   selectConnectionManifestForPeer,
+  SERVES_EVERY_INSTALLED_MAJOR,
   type ManifestRegistry,
 } from "@traycer/protocol/framework/index";
 import { highestSharedMajor } from "@traycer/protocol/framework/compat-helpers";
@@ -226,7 +227,12 @@ function replacementStateFixture(
     case "epicStateSnapshot":
       return {
         kind,
-        artifactRecords: [SPEC_RECORD, TICKET_RECORD, STORY_RECORD, REVIEW_RECORD],
+        artifactRecords: [
+          SPEC_RECORD,
+          TICKET_RECORD,
+          STORY_RECORD,
+          REVIEW_RECORD,
+        ],
         deletedArtifacts: [],
         roleClaims: [ROLE_CLAIM],
         epicMeta: { title: "Epic", updatedAt: 10 },
@@ -286,7 +292,9 @@ function epochOnlyFixture(
   };
 }
 
-function epochOnlyByKind(kind: EpochOnlyKind): (typeof EPOCH_ONLY_KIND_FIXTURES)[number] {
+function epochOnlyByKind(
+  kind: EpochOnlyKind,
+): (typeof EPOCH_ONLY_KIND_FIXTURES)[number] {
   const fixture = EPOCH_ONLY_KIND_FIXTURES.find((entry) => entry.kind === kind);
   if (fixture === undefined) {
     throw new Error(`missing epoch-only fixture for ${kind}`);
@@ -380,7 +388,11 @@ function applyEpicV2Ordering(
   const isSnapshot = frame.kind === "epicStateSnapshot";
   const seq = replacementStateSeq(frame);
 
-  if (state.epoch !== null && frame.streamEpoch !== state.epoch && !isSnapshot) {
+  if (
+    state.epoch !== null &&
+    frame.streamEpoch !== state.epoch &&
+    !isSnapshot
+  ) {
     return { decision: "discard", next: state };
   }
 
@@ -425,7 +437,11 @@ describe("epic.subscribe@2 registry and open request", () => {
   });
 
   it("advertises canonical @2 with both installed majors", () => {
-    expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
+    expect(
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
+        METHOD
+      ],
+    ).toEqual({
       major: 2,
       minor: 0,
       supportedMajors: [1, 2],
@@ -461,7 +477,10 @@ describe("epic.subscribe@2 registry and open request", () => {
 });
 
 describe("epic.subscribe@2 peer combinations", () => {
-  const newManifest = buildStreamManifest(hostStreamRpcRegistry);
+  const newManifest = buildStreamManifest(
+    hostStreamRpcRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
   const legacyEpicSubscribe = frozenLegacyEpicSubscribe();
   const oldClientManifest: ConnectionManifest = {
     [METHOD]: legacyEpicSubscribe,
@@ -494,9 +513,9 @@ describe("epic.subscribe@2 peer combinations", () => {
         METHOD,
       ),
     ).toEqual({ ok: true });
-    expect(
-      highestSharedMajor(legacyEpicSubscribe, legacyEpicSubscribe),
-    ).toBe(1);
+    expect(highestSharedMajor(legacyEpicSubscribe, legacyEpicSubscribe)).toBe(
+      1,
+    );
   });
 
   it("old client × new host selects @1 and still bridges", () => {
@@ -551,10 +570,7 @@ describe("epic.subscribe@2 peer combinations", () => {
       ),
     ).toEqual({ ok: true });
     expect(
-      highestSharedMajor(
-        requireMethodEntry(newManifest),
-        legacyEpicSubscribe,
-      ),
+      highestSharedMajor(requireMethodEntry(newManifest), legacyEpicSubscribe),
     ).toBe(1);
   });
 
@@ -714,9 +730,9 @@ describe("epic.subscribe@2 subscription-scoped server frames", () => {
       void _seq;
       const { streamEpoch: _streamEpoch, ...missingEpoch } = withSeq;
       void _streamEpoch;
-      expect(epicSubscribeServerFrameSchemaV20.safeParse(missingSeq).success).toBe(
-        false,
-      );
+      expect(
+        epicSubscribeServerFrameSchemaV20.safeParse(missingSeq).success,
+      ).toBe(false);
       expect(
         epicSubscribeServerFrameSchemaV20.safeParse(missingEpoch).success,
       ).toBe(false);
@@ -981,9 +997,9 @@ describe("epic.subscribe@2 ArtifactRecord derived-union round-trip", () => {
   it("rejects a live ticket that drops status, and a wire row that invents a kind", () => {
     const { status: _status, ...ticketWithoutStatus } = TICKET_RECORD;
     void _status;
-    expect(epicArtifactRecordSchema.safeParse(ticketWithoutStatus).success).toBe(
-      false,
-    );
+    expect(
+      epicArtifactRecordSchema.safeParse(ticketWithoutStatus).success,
+    ).toBe(false);
     expect(
       epicArtifactRecordSchema.safeParse({
         ...SPEC_RECORD,

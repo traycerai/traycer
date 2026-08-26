@@ -4,6 +4,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { streamSupportMatrix } from "./__fixtures__/stream-support-matrix";
 
 /**
@@ -50,7 +51,10 @@ import { streamSupportMatrix } from "./__fixtures__/stream-support-matrix";
  * header and `RELEASE-INVARIANT.md` for the append procedure).
  */
 describe("two-sided release invariant: current stream registry vs stream support matrix", () => {
-  const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+  const currentManifest = buildStreamManifest(
+    hostStreamRpcRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
 
   it.each(streamSupportMatrix)(
     "forward-compat: every $version method still bridges from today's registry",

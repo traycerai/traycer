@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
@@ -39,6 +42,7 @@ describe("epic.fetchArtifactAttachment is optional, not floor", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.optionalManifest[METHOD]).toEqual({
       major: 1,
@@ -57,7 +61,9 @@ describe("fetchArtifactAttachmentRequestSchema", () => {
   };
 
   it("requires epicId, artifactId, and a lowercase sha256 hex", () => {
-    expect(fetchArtifactAttachmentRequestSchema.parse(request)).toEqual(request);
+    expect(fetchArtifactAttachmentRequestSchema.parse(request)).toEqual(
+      request,
+    );
     expect(fetchArtifactAttachmentRequestSchema.shape.hash).toBe(
       imageSha256HexSchema,
     );

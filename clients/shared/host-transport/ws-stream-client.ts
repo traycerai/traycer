@@ -8,6 +8,7 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -937,7 +938,7 @@ export class WsStreamClient<
   ): void {
     const myManifest = selectConnectionManifestForPeer(
       this.options.registry,
-      buildStreamManifest(this.options.registry),
+      buildStreamManifest(this.options.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     let changed = false;
@@ -1694,7 +1695,10 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = buildStreamManifest(this.config.registry);
+    const manifest = buildStreamManifest(
+      this.config.registry,
+      CLIENT_SERVED_STREAM_MAJORS,
+    );
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -1874,7 +1878,7 @@ class StreamSession<
     const theirManifest = ackParse.data.manifest;
     const myManifest = selectConnectionManifestForPeer(
       this.config.registry,
-      buildStreamManifest(this.config.registry),
+      buildStreamManifest(this.config.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     const compat = checkStreamMethodCompatibility(
