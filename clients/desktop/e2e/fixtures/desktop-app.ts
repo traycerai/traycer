@@ -70,14 +70,12 @@ export async function readManagerDebug(
   }, method);
 }
 
-type DebugMethodName =
-  "boundsByKeyId" | "occludedKeyIds" | "frameCacheStats" | "evictedKeyIds";
+type DebugMethodName = "boundsByKeyId" | "occludedKeyIds" | "frameCacheStats";
 
 interface BrowserViewManagerDebug {
   boundsByKeyId(): unknown;
   occludedKeyIds(): unknown;
   frameCacheStats(): unknown;
-  evictedKeyIds(): unknown;
 }
 
 export { expect };

@@ -2,15 +2,30 @@ import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ReactNode } from "react";
-import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import {
+  BrowserSessionsHostProvider,
+  BrowserSessionsProvider,
+} from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 
 type StreamConnectionStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
   durableTransport: null as FakeDurableTransport | null,
+  durableTransportsByHostId: new Map<string, FakeDurableTransport>(),
+  durableTransportQueuesByHostId: new Map<string, FakeDurableTransport[]>(),
+  hostEntriesByHostId: new Map<string, HostDirectoryEntry>(),
+  ownerIdentityKeysByClient: new Map<object, string>(),
   openedHostIds: [] as string[],
   hostEntry: {
     hostId: "host-test",
@@ -34,13 +49,22 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => hookState.hostEntry,
+  useHostDirectoryEntry: (hostId: string) =>
+    hookState.hostEntriesByHostId.get(hostId) ??
+    (hostId === hookState.hostEntry.hostId ? hookState.hostEntry : null),
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  authenticatedHostStreamKey: () =>
-    hookState.hostEntry.websocketUrl === null ? null : hookState.transportKey,
-  authenticatedOwnerIdentityKey: () => hookState.ownerIdentityKey,
+  authenticatedHostStreamKey: (
+    _hostClient: object,
+    hostEntry: HostDirectoryEntry | null,
+  ) =>
+    hostEntry?.websocketUrl === null || hostEntry === null
+      ? null
+      : hookState.transportKey,
+  authenticatedOwnerIdentityKey: (hostClient: object) =>
+    hookState.ownerIdentityKeysByClient.get(hostClient) ??
+    hookState.ownerIdentityKey,
 }));
 
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
@@ -51,7 +75,12 @@ const openTransport = vi.hoisted(
   () =>
     (hostId: string): FakeDurableTransport => {
       hookState.openedHostIds.push(hostId);
-      const transport = hookState.durableTransport;
+      const queuedTransport =
+        hookState.durableTransportQueuesByHostId.get(hostId)?.shift() ?? null;
+      const transport =
+        queuedTransport ??
+        hookState.durableTransportsByHostId.get(hostId) ??
+        hookState.durableTransport;
       if (transport === null) {
         throw new Error("expected durable stream transport");
       }
@@ -347,7 +376,7 @@ function Probe(): ReactNode {
       <span data-testid="close-tab-status">{closeTabStatus}</span>
       <ul>
         {sessions.items.map((session) => (
-          <li key={session.sessionId}>{session.name}</li>
+          <li key={session.sessionId}>{session.sessionId}</li>
         ))}
       </ul>
       <button
@@ -368,6 +397,18 @@ function Probe(): ReactNode {
       >
         close-tab
       </button>
+    </div>
+  );
+}
+
+function SharedProbe(props: { readonly id: string }): ReactNode {
+  const sessions = useBrowserSessionsContext();
+  return (
+    <div>
+      <span data-testid={`${props.id}-count`}>{sessions.items.length}</span>
+      <span data-testid={`${props.id}-sessions`}>
+        {sessions.items.map((session) => session.sessionId).join(",")}
+      </span>
     </div>
   );
 }
@@ -428,6 +469,10 @@ function installTransport(dropUntilLive: boolean): void {
   });
   hookState.durableTransport = transport;
   hookState.streamClient = transport.wsStreamClient;
+  hookState.durableTransportsByHostId.clear();
+  hookState.durableTransportQueuesByHostId.clear();
+  hookState.hostEntriesByHostId.clear();
+  hookState.ownerIdentityKeysByClient.clear();
   hookState.openedHostIds = [];
   hookState.hostEntry = {
     ...hookState.hostEntry,
@@ -435,8 +480,56 @@ function installTransport(dropUntilLive: boolean): void {
   };
 }
 
+function installTransportForHost(
+  hostId: string,
+  endpoint: string,
+): FakeDurableTransport {
+  const transport = new FakeDurableTransport({
+    dropUntilLive: false,
+    initialEndpoint: endpoint,
+  });
+  hookState.durableTransportsByHostId.set(hostId, transport);
+  hookState.hostEntriesByHostId.set(hostId, {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: endpoint,
+    version: "test-version",
+    transportDialability: "dialable",
+  });
+  return transport;
+}
+
+function createTestHostClient(id: string): HostClient<HostRpcRegistry> {
+  return new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `request-${id}`,
+      handlers: {},
+    }),
+  });
+}
+
+function browserSessionFixture(
+  hostId: string,
+  sessionId: string,
+): BrowserSessionInfo {
+  return {
+    sessionId,
+    epicId: "epic-1",
+    hostId,
+    profile: "primary",
+    lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
+    tabs: [],
+  };
+}
+
 describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
   beforeEach(() => {
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(false);
     hookState.browserViewBridge = null;
   });
@@ -455,6 +548,220 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         params: { epicId: "epic-1" },
       },
     ]);
+  });
+
+  it("shares one coordinator until the last same-owner provider unmounts", async () => {
+    const rendered = render(
+      <>
+        <BrowserSessionsProvider key="first" epicId="epic-1">
+          <SharedProbe id="first" />
+        </BrowserSessionsProvider>
+        <BrowserSessionsProvider key="second" epicId="epic-1">
+          <SharedProbe id="second" />
+        </BrowserSessionsProvider>
+      </>,
+    );
+    const transport = hookState.durableTransport;
+    if (transport === null) throw new Error("expected durable transport");
+    const client = transport.wsStreamClient;
+
+    await waitFor(() => {
+      expect(hookState.openedHostIds).toEqual(["host-test"]);
+      expect(client.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: { epicId: "epic-1" },
+        },
+      ]);
+    });
+    const stream = client.sessions[0];
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-test", "shared-session")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("first-count").textContent).toBe("1");
+    expect(screen.getByTestId("second-count").textContent).toBe("1");
+
+    rendered.rerender(
+      <BrowserSessionsProvider key="second" epicId="epic-1">
+        <SharedProbe id="second" />
+      </BrowserSessionsProvider>,
+    );
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+    expect(client.subscribes).toHaveLength(1);
+    expect(screen.getByTestId("second-sessions").textContent).toBe(
+      "shared-session",
+    );
+
+    rendered.unmount();
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("keeps different hosts separate for the same owner identity", async () => {
+    const hostATransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
+    const hostBTransport = installTransportForHost(
+      "host-b",
+      "ws://host-b/stream",
+    );
+    const hostClientA = createTestHostClient("user-a");
+    const hostClientB = createTestHostClient("user-b");
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientA,
+      "shared-owner-identity",
+    );
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientB,
+      "shared-owner-identity",
+    );
+
+    const rendered = render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="host-a"
+          hostClient={hostClientA}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="host-b"
+          hostClient={hostClientB}
+          epicId="epic-1"
+        >
+          <SharedProbe id="host-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+
+    await waitFor(() => {
+      expect([...hookState.openedHostIds].sort()).toEqual(["host-a", "host-b"]);
+      expect(hostATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(hostBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const hostAStream = hostATransport.wsStreamClient.sessions[0];
+    const hostBStream = hostBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      hostAStream.emitStatus("open");
+      hostAStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-a", "session-a")],
+        },
+        null,
+      );
+      hostBStream.emitStatus("open");
+      hostBStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-b", "session-b")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("host-a-sessions").textContent).toBe("session-a");
+    expect(screen.getByTestId("host-b-sessions").textContent).toBe("session-b");
+
+    rendered.unmount();
+    expect(hostATransport.closed).toBe(true);
+    expect(hostBTransport.closed).toBe(true);
+  });
+
+  it("keeps different owners on one host in separate coordinators", async () => {
+    const ownerATransport = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: "ws://shared-host/owner-a",
+    });
+    const ownerBTransport = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: "ws://shared-host/owner-b",
+    });
+    hookState.durableTransportQueuesByHostId.set("shared-host", [
+      ownerATransport,
+      ownerBTransport,
+    ]);
+    hookState.hostEntriesByHostId.set("shared-host", {
+      hostId: "shared-host",
+      label: "Shared host",
+      kind: "local",
+      websocketUrl: "ws://shared-host/stream",
+      version: "test-version",
+      transportDialability: "dialable",
+    });
+    const hostClientA = createTestHostClient("owner-a");
+    const hostClientB = createTestHostClient("owner-b");
+    hookState.ownerIdentityKeysByClient.set(hostClientA, "owner-a");
+    hookState.ownerIdentityKeysByClient.set(hostClientB, "owner-b");
+
+    const rendered = render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="shared-host"
+          hostClient={hostClientA}
+          epicId="epic-1"
+        >
+          <SharedProbe id="owner-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="shared-host"
+          hostClient={hostClientB}
+          epicId="epic-1"
+        >
+          <SharedProbe id="owner-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(hookState.openedHostIds).toEqual(["shared-host", "shared-host"]);
+      expect(ownerATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(ownerBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const ownerAStream = ownerATransport.wsStreamClient.sessions[0];
+    const ownerBStream = ownerBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      ownerAStream.emitStatus("open");
+      ownerAStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("shared-host", "owner-a-session")],
+        },
+        null,
+      );
+      ownerBStream.emitStatus("open");
+      ownerBStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("shared-host", "owner-b-session")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("owner-a-sessions").textContent).toBe(
+      "owner-a-session",
+    );
+    expect(screen.getByTestId("owner-b-sessions").textContent).toBe(
+      "owner-b-session",
+    );
+
+    rendered.unmount();
+    expect(ownerATransport.closed).toBe(true);
+    expect(ownerBTransport.closed).toBe(true);
   });
 
   it("advertises native capability only after the stream snapshot", () => {
@@ -662,9 +969,6 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
               epicId: "epic-1",
               hostId: "host-test",
               profile: "primary",
-              name: "Main",
-              createdBy: { chatId: "chat-alpha", agentRunId: "run-1" },
-              createdAt: 1,
               lastActivityAt: 2,
               runtime: { kind: "electron", revision: 0 },
               tabs: [
@@ -686,7 +990,79 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     });
 
     expect(screen.getByTestId("count").textContent).toBe("1");
-    expect(screen.getByText("Main")).toBeTruthy();
+    expect(screen.getByText("sess-1")).toBeTruthy();
+  });
+
+  it("hides inventory and blocks actions from a retired owner identity", async () => {
+    const rendered = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+    const retiredTransport = hookState.durableTransport;
+    const retiredStream = retiredTransport?.wsStreamClient.sessions[0];
+    if (retiredTransport === null || retiredStream === undefined) {
+      throw new Error("expected retired browser sessions stream");
+    }
+    act(() => {
+      retiredStream.emitStatus("open");
+      retiredStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [
+            {
+              sessionId: "sess-1",
+              epicId: "epic-1",
+              hostId: "host-test",
+              profile: "primary",
+              lastActivityAt: 2,
+              runtime: { kind: "electron", revision: 0 },
+              tabs: [
+                {
+                  tabId: "tab-1",
+                  url: "https://example.com",
+                  originTier: "dev",
+                  status: "ready",
+                  title: "Example",
+                  viewed: false,
+                  drivenBy: [],
+                },
+              ],
+            },
+          ],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("count").textContent).toBe("1");
+
+    act(() => {
+      hookState.ownerIdentityKey = "local\u0000host-test\u0000other-user";
+      installTransport(false);
+      rendered.rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(retiredTransport.closed).toBe(true);
+      expect(hookState.streamClient?.sessions).toHaveLength(1);
+    });
+    expect(screen.getByTestId("count").textContent).toBe("0");
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "Browser sessions stream is not ready.",
+      );
+    });
+    expect(
+      retiredStream.sentFrames.filter((frame) => frame.kind === "closeTab"),
+    ).toEqual([]);
   });
 
   it("makes each stream inventory authoritative only after its snapshot", () => {
@@ -866,6 +1242,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
  */
 describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
   beforeEach(() => {
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(true);
     hookState.browserViewBridge = null;
   });

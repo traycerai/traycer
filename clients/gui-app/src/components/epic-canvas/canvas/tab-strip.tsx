@@ -11,11 +11,9 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
-  Bot,
   FileDiff,
   FilePlus,
   GitPullRequest,
-  Globe,
   Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
@@ -62,6 +60,7 @@ import type {
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
+  epicCanvasTileFallbackName,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
@@ -535,7 +534,7 @@ function useTabRenameControl(args: {
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
     {
       id: tab.id,
-      name: tab.name,
+      name: epicCanvasTileFallbackName(tab),
       type: tab.type,
       hostId: tabHostId(tab),
     },
@@ -1137,11 +1136,6 @@ function renderFixedTabIcon(
       );
     case "blank":
       return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
-    case "browser":
-    case "browser-peek":
-      return <Globe className="size-3.5 shrink-0 text-muted-foreground" />;
-    case "agent-browser":
-      return <Bot className="size-3.5 shrink-0 text-muted-foreground" />;
     case "managed-command-output":
       return (
         <ManagedCommandMonitorIcon

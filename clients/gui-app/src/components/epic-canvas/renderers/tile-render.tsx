@@ -15,9 +15,7 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
 import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
-import { BrowserPeekTile } from "./browser-peek-tile";
 import { BrowserSessionTile } from "./browser-session-tile";
-import { BrowserTile } from "./browser-tile";
 import { ChatTile } from "./chat-tile";
 import { ReviewTile } from "./review-tile";
 import { SpecTile } from "./spec-tile";
@@ -108,27 +106,6 @@ const TILE_RENDERERS: TileRendererRegistry = {
       tileId={tileId}
       isActive={isActive}
     />
-  ),
-  browser: ({ node, viewTabId, tileId, epicId }) => (
-    <BrowserTile
-      node={node}
-      viewTabId={viewTabId}
-      paneId={tileId}
-      epicId={epicId}
-    />
-  ),
-  "browser-peek": ({ node, epicId, viewTabId, tileId }) => (
-    <BrowserPeekTile
-      epicId={epicId}
-      node={node}
-      viewTabId={viewTabId}
-      paneId={tileId}
-    />
-  ),
-  "agent-browser": () => (
-    <div className="flex h-full w-full items-center justify-center px-4 text-center text-ui-sm text-muted-foreground">
-      This legacy browser tile is no longer attached to a live session.
-    </div>
   ),
   "browser-session": ({ node, viewTabId, tileId, epicId }) => (
     <BrowserSessionTile

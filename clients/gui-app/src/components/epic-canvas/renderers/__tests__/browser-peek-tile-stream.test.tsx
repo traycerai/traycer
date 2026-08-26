@@ -7,8 +7,10 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
-import type { BrowserPeekTileRef } from "@/stores/epics/canvas/types";
+import {
+  BrowserPeekTile,
+  type BrowserPeekNode,
+} from "@/components/epic-canvas/renderers/browser-peek-tile";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -193,13 +195,10 @@ Object.defineProperty(globalThis, "ResizeObserver", {
   value: ControllableResizeObserver,
 });
 
-const PEEK_NODE: BrowserPeekTileRef = {
+const PEEK_NODE: BrowserPeekNode = {
   id: "browser-peek-headless-1",
   instanceId: "peek-instance-1",
-  type: "browser-peek",
-  name: "Peek app.local",
   hostId: "host-test",
-  chatId: "chat-1",
   sessionId: "headless-1",
   tabId: "headless-tab-1",
   initialUrl: "http://localhost:3000",
@@ -328,6 +327,55 @@ describe("BrowserPeekTile", () => {
         },
         null,
       );
+    });
+
+    expect(screen.getByText("Ended")).toBeTruthy();
+    expect(screen.getByText("Screencast ended.")).toBeTruthy();
+  });
+
+  it("ignores callbacks from a replaced screencast subscription", () => {
+    const rendered = render(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const retired = liveStream();
+    hookState.visible = false;
+    rendered.rerender(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    hookState.visible = true;
+    rendered.rerender(
+      <BrowserPeekTile
+        viewTabId="view-tab-1"
+        paneId="pane-1"
+        epicId="epic-1"
+        node={PEEK_NODE}
+      />,
+    );
+    const current = liveStream();
+    expect(current).not.toBe(retired);
+    act(() => {
+      current.emit({ kind: "complete", hasBinaryPayload: false }, null);
+      retired.emit(
+        {
+          kind: "started",
+          hasBinaryPayload: false,
+          frameWidth: 800,
+          frameHeight: 600,
+          deviceScaleFactor: 1,
+        },
+        null,
+      );
+      retired.emitStatus("closed");
     });
 
     expect(screen.getByText("Ended")).toBeTruthy();

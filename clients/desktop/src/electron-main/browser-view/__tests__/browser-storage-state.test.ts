@@ -1,23 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Cookie } from "electron";
+import { describe, expect, it, vi } from "vitest";
 import type { BrowserCookieCryptoState } from "../../../ipc-contracts/browser-view-types";
-import { log } from "../../app/logger";
-import { BROWSER_VIEW_PARTITION } from "../browser-session";
 import {
-  applyBrowserViewStorageStateWithDependencies,
+  BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserPrimaryProfileWithDependencies,
   captureBrowserViewStorageStateWithDependencies,
+  seedBrowserViewCookies,
   type BrowserPrimaryProfileCaptureDependencies,
-  type BrowserStorageStateApplyDependencies,
+  type BrowserPrimaryProfileOriginSnapshot,
   type BrowserStorageStateCaptureDependencies,
 } from "../browser-storage-state";
 
 vi.mock("electron", () => ({
-  session: {
-    fromPartition: () => {
-      throw new Error("unexpected production electron session access");
-    },
-  },
   app: {
     commandLine: {
       hasSwitch: () => false,
@@ -26,13 +20,6 @@ vi.mock("electron", () => ({
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
-  },
-}));
-
-vi.mock("../../app/logger", () => ({
-  log: {
-    info: vi.fn(),
-    warn: vi.fn(),
   },
 }));
 
@@ -66,206 +53,75 @@ const degradedState: BrowserCookieCryptoState = {
   mockKeychainEnabled: true,
 };
 
-const APPLY_CONTEXT = {
-  sessionId: "session-test",
-  tabId: "tab-test",
-  purpose: "sync-back" as const,
-};
+describe("seedBrowserViewCookies", () => {
+  it("seeds supplied cookies without replacing unrelated cookies", async () => {
+    const unrelated: CookieSetDetails = {
+      url: "https://unrelated.test/",
+      name: "unrelated",
+      value: "keep-me",
+      path: "/",
+      expirationDate: undefined,
+      httpOnly: false,
+      secure: true,
+      sameSite: "lax",
+    };
+    const storedCookies = new Map([[unrelated.name, unrelated]]);
+    const seededCookies: CookieSetDetails[] = [];
+    const flushStore = vi.fn(async () => {});
 
-describe("applyBrowserViewStorageStateWithDependencies", () => {
-  let cookieSets: CookieSetDetails[];
-  let cookieRemoves: Array<{ readonly url: string; readonly name: string }>;
-  let fromPartitionCalls: Array<{
-    readonly partition: string;
-    readonly options: { readonly cache: boolean };
-  }>;
-
-  beforeEach(() => {
-    cookieSets = [];
-    cookieRemoves = [];
-    fromPartitionCalls = [];
-    vi.mocked(log.info).mockClear();
-  });
-
-  it("validates and applies cookies to the persistent browser partition", async () => {
-    await expect(
-      applyBrowserViewStorageStateWithDependencies(
-        {
-          sessionId: "session-cookie-map",
-          tabId: "tab-cookie-map",
-          purpose: "primary-profile-seed",
-          storageState: {
-            cookies: [
-              {
-                name: "sid",
-                value: "abc",
-                domain: ".example.test",
-                path: "/",
-                expires: 4102444800,
-                httpOnly: true,
-                secure: true,
-                sameSite: "Lax",
-              },
-            ],
-            origins: [
-              {
-                origin: "https://example.test",
-                localStorage: [{ name: "theme", value: "dark" }],
-              },
-            ],
+    await seedBrowserViewCookies(
+      {
+        cookies: [
+          { ...storageCookie("host-only"), value: "first" },
+          {
+            ...storageCookie("domain-cookie"),
+            value: "second",
+            domain: ".secure.test",
+            secure: true,
+            expires: 4_102_444_800,
+          },
+        ],
+        origins: [],
+      },
+      {
+        session: {
+          cookies: {
+            get: async (): Promise<Cookie[]> => [],
+            set: async (details: CookieSetDetails): Promise<void> => {
+              seededCookies.push(details);
+              storedCookies.set(details.name, details);
+            },
+            flushStore,
           },
         },
-        dependencies(realState, cookieSets, fromPartitionCalls),
-      ),
-    ).resolves.toEqual({
-      status: "applied",
-      cookieCount: 1,
-      localStorageApplied: false,
-      reason: "cookies-only",
-    });
+      },
+    );
 
-    expect(fromPartitionCalls).toEqual([
-      { partition: BROWSER_VIEW_PARTITION, options: { cache: true } },
-    ]);
-    expect(cookieSets).toEqual([
+    expect(seededCookies).toEqual([
       {
-        url: "https://example.test/",
-        name: "sid",
-        value: "abc",
-        domain: ".example.test",
+        url: "http://example.test/",
+        name: "host-only",
+        value: "first",
         path: "/",
-        expirationDate: 4102444800,
-        httpOnly: true,
+        expirationDate: undefined,
+        httpOnly: false,
+        secure: false,
+        sameSite: "lax",
+      },
+      {
+        url: "https://secure.test/",
+        name: "domain-cookie",
+        value: "second",
+        domain: ".secure.test",
+        path: "/",
+        expirationDate: 4_102_444_800,
+        httpOnly: false,
         secure: true,
         sameSite: "lax",
       },
     ]);
-    expect(log.info).toHaveBeenCalledWith(
-      "[browser-view] primary profile storage apply",
-      {
-        kind: "primary_profile_storage_apply",
-        sessionId: "session-cookie-map",
-        tabId: "tab-cookie-map",
-        purpose: "primary-profile-seed",
-        cookieCount: 1,
-        originCount: 1,
-        cookiesSet: 1,
-        cookiesRemoved: 0,
-        outcome: "applied",
-      },
-    );
-    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("abc");
-    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain(
-      "dark",
-    );
-  });
-
-  it("omits host-only cookie domains while preserving dotted domain cookies", async () => {
-    await applyBrowserViewStorageStateWithDependencies(
-      {
-        ...APPLY_CONTEXT,
-        storageState: {
-          cookies: [
-            {
-              ...storageCookie("host-only"),
-              domain: "example.test",
-            },
-            {
-              ...storageCookie("domain-cookie"),
-              domain: ".example.test",
-            },
-          ],
-          origins: [],
-        },
-      },
-      dependencies(realState, cookieSets, fromPartitionCalls),
-    );
-
-    expect(cookieSets.map(({ name, domain }) => ({ name, domain }))).toEqual([
-      { name: "host-only", domain: undefined },
-      { name: "domain-cookie", domain: ".example.test" },
-    ]);
-    expect(cookieSets[0]).not.toHaveProperty("domain");
-    expect(cookieSets[1]).toHaveProperty("domain", ".example.test");
-  });
-
-  it("removes deleted cookies, retains incoming cookies, and logs counts without values", async () => {
-    const deleted = electronCookie("deleted", "secret-value");
-    const retained = electronCookie("retained", "old-value");
-    const nextStorageState = {
-      cookies: [storageCookie("retained"), storageCookie("new")],
-      origins: [],
-    };
-
-    await expect(
-      applyBrowserViewStorageStateWithDependencies(
-        { ...APPLY_CONTEXT, storageState: nextStorageState },
-        dependenciesWithExistingCookies(
-          realState,
-          cookieSets,
-          cookieRemoves,
-          fromPartitionCalls,
-          [deleted, retained],
-        ),
-      ),
-    ).resolves.toMatchObject({
-      status: "applied",
-      cookieCount: 2,
-      reason: "cookies-only",
-    });
-
-    expect(cookieRemoves).toEqual([
-      { url: "http://example.test/", name: "deleted" },
-    ]);
-    expect(cookieSets.map((cookie) => cookie.name)).toEqual([
-      "retained",
-      "new",
-    ]);
-    expect(log.info).toHaveBeenCalledWith(
-      "[browser-view] primary profile sync-back applied",
-      {
-        kind: "primary_profile_sync_back",
-        cookiesSet: 2,
-        cookiesRemoved: 1,
-      },
-    );
-    const logCall = vi.mocked(log.info).mock.calls.at(-1);
-    expect(JSON.stringify(logCall)).not.toContain("secret-value");
-    expect(JSON.stringify(logCall)).not.toContain("old-value");
-  });
-
-  it("skips persistent writes when browser cookie crypto is degraded", async () => {
-    await expect(
-      applyBrowserViewStorageStateWithDependencies(
-        {
-          ...APPLY_CONTEXT,
-          storageState: {
-            cookies: [
-              {
-                name: "sid",
-                value: "abc",
-                domain: "example.test",
-                path: "/",
-                expires: -1,
-                httpOnly: false,
-                secure: false,
-                sameSite: "None",
-              },
-            ],
-            origins: [],
-          },
-        },
-        dependencies(degradedState, cookieSets, fromPartitionCalls),
-      ),
-    ).resolves.toEqual({
-      status: "skipped-degraded",
-      cookieCount: 0,
-      localStorageApplied: false,
-      reason: "mock-keychain",
-    });
-
-    expect(fromPartitionCalls).toEqual([]);
-    expect(cookieSets).toEqual([]);
+    expect(storedCookies.get("unrelated")).toBe(unrelated);
+    expect(flushStore).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -275,117 +131,76 @@ describe("applyBrowserViewStorageStateWithDependencies", () => {
     ["whitespace", "example. test"],
     ["control character", "example.test\n"],
     ["hostname normalization mismatch", "éxample.test"],
-  ])(
-    "rejects cookie domain with %s before opening the partition",
-    async (_label, domain) => {
-      await expect(
-        applyBrowserViewStorageStateWithDependencies(
-          {
-            ...APPLY_CONTEXT,
-            storageState: {
-              cookies: [
-                {
-                  name: "sid",
-                  value: "abc",
-                  domain,
-                  path: "/",
-                  expires: -1,
-                  httpOnly: false,
-                  secure: false,
-                  sameSite: "Lax",
-                },
-              ],
-              origins: [],
+  ])("rejects cookie domain with %s before writing", async (_label, domain) => {
+    const set = vi.fn();
+
+    await expect(
+      seedBrowserViewCookies(
+        {
+          cookies: [{ ...storageCookie("sid"), domain }],
+          origins: [],
+        },
+        {
+          session: {
+            cookies: {
+              get: async () => [],
+              set,
+              flushStore: async () => {},
             },
           },
-          dependencies(realState, cookieSets, fromPartitionCalls),
-        ),
-      ).rejects.toThrow("domain");
-
-      expect(fromPartitionCalls).toEqual([]);
-      expect(cookieSets).toEqual([]);
-    },
-  );
-
-  it("rejects cookie paths that URL parsing would reshape before opening the partition", async () => {
-    await expect(
-      applyBrowserViewStorageStateWithDependencies(
-        {
-          ...APPLY_CONTEXT,
-          storageState: {
-            cookies: [
-              {
-                name: "sid",
-                value: "abc",
-                domain: "example.test",
-                path: "/account?admin=true",
-                expires: -1,
-                httpOnly: false,
-                secure: false,
-                sameSite: "Lax",
-              },
-            ],
-            origins: [],
-          },
         },
-        dependencies(realState, cookieSets, fromPartitionCalls),
       ),
-    ).rejects.toThrow("path");
+    ).rejects.toThrow("domain");
 
-    expect(fromPartitionCalls).toEqual([]);
-    expect(cookieSets).toEqual([]);
+    expect(set).not.toHaveBeenCalled();
   });
 
-  it("writes cookies sequentially and stops on runtime set failure", async () => {
+  it("writes sequentially and stops on a cookie-store failure", async () => {
+    const written: string[] = [];
+
     await expect(
-      applyBrowserViewStorageStateWithDependencies(
+      seedBrowserViewCookies(
         {
-          ...APPLY_CONTEXT,
-          storageState: {
-            cookies: [
-              storageCookie("first"),
-              storageCookie("second"),
-              storageCookie("third"),
-            ],
-            origins: [],
+          cookies: [
+            storageCookie("first"),
+            storageCookie("second"),
+            storageCookie("third"),
+          ],
+          origins: [],
+        },
+        {
+          session: {
+            cookies: {
+              get: async () => [],
+              flushStore: async () => {},
+              set: async (details) => {
+                written.push(details.name);
+                if (details.name === "second") {
+                  throw new Error("set failed for second");
+                }
+              },
+            },
           },
         },
-        dependenciesThatRejectCookie(
-          realState,
-          cookieSets,
-          fromPartitionCalls,
-          "second",
-        ),
       ),
     ).rejects.toThrow("set failed for second");
 
-    expect(fromPartitionCalls).toEqual([
-      { partition: BROWSER_VIEW_PARTITION, options: { cache: true } },
-    ]);
-    expect(cookieSets.map((details) => details.name)).toEqual([
-      "first",
-      "second",
-    ]);
+    expect(written).toEqual(["first", "second"]);
   });
 });
 
 describe("captureBrowserViewStorageStateWithDependencies", () => {
-  it("round-trips a host-only cookie from URL capture through native apply without widening scope", async () => {
-    const calls: string[] = [];
-    const appliedCookies: CookieSetDetails[] = [];
-    const webContents = {
-      getURL: () => "http://localhost:3000/dashboard",
-      executeJavaScript: (script: string, userGesture: boolean) => {
-        calls.push(`${userGesture ? "gesture" : "no-gesture"}:${script}`);
-        return Promise.resolve([{ name: "token", value: "abc" }]);
-      },
-    };
-
+  it("captures host-only cookie scope without widening it", async () => {
+    const scripts: string[] = [];
     const captured = await captureBrowserViewStorageStateWithDependencies(
+      { origin: "http://localhost:3000" },
       {
-        origin: "http://localhost:3000",
+        getURL: () => "http://localhost:3000/dashboard",
+        executeJavaScript: (script, userGesture) => {
+          scripts.push(`${userGesture ? "gesture" : "no-gesture"}:${script}`);
+          return Promise.resolve([{ name: "token", value: "abc" }]);
+        },
       },
-      webContents,
       captureDependencies("http://localhost:3000", [
         {
           name: "sid",
@@ -428,35 +243,25 @@ describe("captureBrowserViewStorageStateWithDependencies", () => {
       localStorageAvailable: true,
       localStorageReason: null,
     });
-    expect(calls).toHaveLength(1);
-
-    await applyBrowserViewStorageStateWithDependencies(
-      { ...APPLY_CONTEXT, storageState: captured.storageState },
-      dependencies(realState, appliedCookies, []),
-    );
-    expect(appliedCookies).toHaveLength(1);
-    expect(appliedCookies[0]).not.toHaveProperty("domain");
+    expect(scripts).toHaveLength(1);
   });
 
-  it("keeps capture read-only and returns cookies when the source tile is no longer at the origin", async () => {
+  it("returns cookies without inventing local storage when navigation races capture", async () => {
+    let currentUrl = "https://example.test/start";
     await expect(
       captureBrowserViewStorageStateWithDependencies(
+        { origin: "https://example.test" },
         {
-          origin: "https://example.test",
-        },
-        {
-          getURL: () => "https://other.test",
+          getURL: () => currentUrl,
           executeJavaScript: () => {
-            throw new Error("localStorage script should not run");
+            currentUrl = "https://other.test";
+            return Promise.resolve([{ name: "stale", value: "value" }]);
           },
         },
         captureDependencies("https://example.test", []),
       ),
     ).resolves.toMatchObject({
-      storageState: {
-        cookies: [],
-        origins: [],
-      },
+      storageState: { cookies: [], origins: [] },
       cookieCount: 0,
       cookieDomains: [],
       localStorageCount: 0,
@@ -465,160 +270,9 @@ describe("captureBrowserViewStorageStateWithDependencies", () => {
   });
 });
 
-function storageCookie(name: string): {
-  readonly name: string;
-  readonly value: string;
-  readonly domain: string;
-  readonly path: string;
-  readonly expires: number;
-  readonly httpOnly: boolean;
-  readonly secure: boolean;
-  readonly sameSite: "Lax";
-} {
-  return {
-    name,
-    value: `${name}-value`,
-    domain: "example.test",
-    path: "/",
-    expires: -1,
-    httpOnly: false,
-    secure: false,
-    sameSite: "Lax",
-  };
-}
-
-function electronCookie(name: string, value: string): Cookie {
-  return {
-    name,
-    value,
-    domain: "example.test",
-    hostOnly: true,
-    path: "/",
-    secure: false,
-    httpOnly: false,
-    session: true,
-    sameSite: "lax",
-  };
-}
-
-function dependencies(
-  cryptoState: BrowserCookieCryptoState,
-  cookieSets: CookieSetDetails[],
-  fromPartitionCalls: Array<{
-    readonly partition: string;
-    readonly options: { readonly cache: boolean };
-  }>,
-): BrowserStorageStateApplyDependencies {
-  return {
-    readCryptoState: () => cryptoState,
-    fromPartition: (partition, options) => {
-      fromPartitionCalls.push({ partition, options });
-      return {
-        cookies: {
-          get: () => Promise.resolve([]),
-          remove: () => Promise.resolve(),
-          flushStore: () => Promise.resolve(),
-          set: (details) => {
-            cookieSets.push(details);
-            return Promise.resolve();
-          },
-        },
-      };
-    },
-  };
-}
-
-function dependenciesThatRejectCookie(
-  cryptoState: BrowserCookieCryptoState,
-  cookieSets: CookieSetDetails[],
-  fromPartitionCalls: Array<{
-    readonly partition: string;
-    readonly options: { readonly cache: boolean };
-  }>,
-  rejectedCookieName: string,
-): BrowserStorageStateApplyDependencies {
-  return {
-    readCryptoState: () => cryptoState,
-    fromPartition: (partition, options) => {
-      fromPartitionCalls.push({ partition, options });
-      return {
-        cookies: {
-          get: () => Promise.resolve([]),
-          remove: () => Promise.resolve(),
-          flushStore: () => Promise.resolve(),
-          set: (details) => {
-            cookieSets.push(details);
-            if (details.name === rejectedCookieName) {
-              return Promise.reject(
-                new Error(`set failed for ${rejectedCookieName}`),
-              );
-            }
-            return Promise.resolve();
-          },
-        },
-      };
-    },
-  };
-}
-
-function dependenciesWithExistingCookies(
-  cryptoState: BrowserCookieCryptoState,
-  cookieSets: CookieSetDetails[],
-  cookieRemoves: Array<{ readonly url: string; readonly name: string }>,
-  fromPartitionCalls: Array<{
-    readonly partition: string;
-    readonly options: { readonly cache: boolean };
-  }>,
-  existingCookies: Cookie[],
-): BrowserStorageStateApplyDependencies {
-  return {
-    readCryptoState: () => cryptoState,
-    fromPartition: (partition, options) => {
-      fromPartitionCalls.push({ partition, options });
-      return {
-        cookies: {
-          get: () => Promise.resolve(existingCookies),
-          remove: (url, name) => {
-            cookieRemoves.push({ url, name });
-            return Promise.resolve();
-          },
-          flushStore: () => Promise.resolve(),
-          set: (details) => {
-            cookieSets.push(details);
-            return Promise.resolve();
-          },
-        },
-      };
-    },
-  };
-}
-
-function captureDependencies(
-  expectedUrl: string,
-  cookies: Cookie[],
-): BrowserStorageStateCaptureDependencies {
-  return {
-    fromPartition: (partition, options) => {
-      expect(partition).toBe(BROWSER_VIEW_PARTITION);
-      expect(options).toEqual({ cache: true });
-      return {
-        cookies: {
-          get: (filter) => {
-            expect(filter).toEqual({ url: expectedUrl });
-            return Promise.resolve(cookies);
-          },
-          flushStore: () => Promise.resolve(),
-          set: () => Promise.resolve(),
-        },
-      };
-    },
-  };
-}
-
 describe("captureBrowserPrimaryProfileWithDependencies", () => {
-  it("round-trips partition capture through native apply without widening host-only scope", async () => {
+  it("preserves host-only and domain cookie scope", async () => {
     const cookieGetFilters: Array<{ readonly url?: string }> = [];
-    const appliedCookies: CookieSetDetails[] = [];
     const origins = [
       {
         origin: "https://a.example",
@@ -688,22 +342,10 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
       },
       reason: null,
     });
-    if (result.status !== "captured") throw new Error("expected capture");
-
-    await applyBrowserViewStorageStateWithDependencies(
-      { ...APPLY_CONTEXT, storageState: result.storageState },
-      dependencies(realState, appliedCookies, []),
-    );
-    expect(
-      appliedCookies.map(({ name, domain }) => ({ name, domain })),
-    ).toEqual([
-      { name: "host-only", domain: undefined },
-      { name: "domain-cookie", domain: ".example.com" },
-    ]);
   });
 
-  it("short-circuits unavailable on degraded crypto without reading the partition", async () => {
-    const fromPartition = vi.fn();
+  it("short-circuits when cookie persistence is unavailable", async () => {
+    const getSession = vi.fn();
     const result = await captureBrowserPrimaryProfileWithDependencies(
       [
         {
@@ -713,7 +355,7 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
       ],
       {
         readCryptoState: () => degradedState,
-        fromPartition,
+        getSession,
       },
     );
 
@@ -722,9 +364,109 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
       storageState: null,
       reason: "mock-keychain",
     });
-    expect(fromPartition).not.toHaveBeenCalled();
+    expect(getSession).not.toHaveBeenCalled();
   });
 });
+
+describe("BrowserPrimaryProfileSnapshotCoordinator", () => {
+  it("waits for prior observations and keeps the newest eight origins", async () => {
+    const captureResolvers: Array<
+      (snapshot: BrowserPrimaryProfileOriginSnapshot) => void
+    > = [];
+    const capturedOrigins: string[][] = [];
+    const coordinator = new BrowserPrimaryProfileSnapshotCoordinator(
+      (origins) => {
+        capturedOrigins.push(origins.map((origin) => origin.origin));
+        return Promise.resolve({
+          status: "captured",
+          storageState: {
+            cookies: [],
+            origins: origins.map((origin) => ({
+              origin: origin.origin,
+              localStorage: [...origin.localStorage],
+            })),
+          },
+          reason: null,
+        });
+      },
+      (origin) =>
+        new Promise((resolve) => {
+          captureResolvers.push((snapshot) => resolve(snapshot));
+        }),
+    );
+    const webContents = {
+      getURL: () => "https://unused.example/",
+      executeJavaScript: () => Promise.resolve([]),
+    };
+    for (let index = 0; index < 10; index += 1) {
+      coordinator.observe(`https://origin-${index}.example/path`, webContents);
+    }
+
+    const capture = coordinator.capture();
+    await Promise.resolve();
+    expect(capturedOrigins).toEqual([]);
+    captureResolvers.forEach((resolve, index) => {
+      resolve({
+        origin: `https://origin-${index}.example`,
+        localStorage: [{ name: "index", value: String(index) }],
+      });
+    });
+    await capture;
+
+    expect(capturedOrigins).toEqual([
+      [
+        "https://origin-9.example",
+        "https://origin-8.example",
+        "https://origin-7.example",
+        "https://origin-6.example",
+        "https://origin-5.example",
+        "https://origin-4.example",
+        "https://origin-3.example",
+        "https://origin-2.example",
+      ],
+    ]);
+  });
+});
+
+function storageCookie(name: string): {
+  readonly name: string;
+  readonly value: string;
+  readonly domain: string;
+  readonly path: string;
+  readonly expires: number;
+  readonly httpOnly: boolean;
+  readonly secure: boolean;
+  readonly sameSite: "Lax";
+} {
+  return {
+    name,
+    value: `${name}-value`,
+    domain: "example.test",
+    path: "/",
+    expires: -1,
+    httpOnly: false,
+    secure: false,
+    sameSite: "Lax",
+  };
+}
+
+function captureDependencies(
+  expectedUrl: string,
+  cookies: Cookie[],
+): BrowserStorageStateCaptureDependencies {
+  return {
+    getSession: () => ({
+      cookies: {
+        get: (filter) => {
+          expect(filter).toEqual({ url: expectedUrl });
+          return Promise.resolve(cookies);
+        },
+        flushStore: () => Promise.resolve(),
+        set: () => Promise.resolve(),
+      },
+    }),
+  };
+}
 
 function primaryCaptureDependencies(
   cryptoState: BrowserCookieCryptoState,
@@ -733,19 +475,15 @@ function primaryCaptureDependencies(
 ): BrowserPrimaryProfileCaptureDependencies {
   return {
     readCryptoState: () => cryptoState,
-    fromPartition: (partition, options) => {
-      expect(partition).toBe(BROWSER_VIEW_PARTITION);
-      expect(options).toEqual({ cache: true });
-      return {
-        cookies: {
-          get: (filter) => {
-            cookieGetFilters.push(filter);
-            return Promise.resolve(cookies);
-          },
-          flushStore: () => Promise.resolve(),
-          set: () => Promise.resolve(),
+    getSession: () => ({
+      cookies: {
+        get: (filter) => {
+          cookieGetFilters.push(filter);
+          return Promise.resolve(cookies);
         },
-      };
-    },
+        flushStore: () => Promise.resolve(),
+        set: () => Promise.resolve(),
+      },
+    }),
   };
 }

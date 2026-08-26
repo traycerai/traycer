@@ -1,5 +1,6 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 import type { BrowserViewBounds } from "../../ipc-contracts/browser-view-types";
+import type { BrowserStorageSession } from "./browser-storage-state";
 
 export interface BrowserViewDebugger {
   isAttached(): boolean;
@@ -92,6 +93,7 @@ export interface BrowserViewPopupWindow {
 
 export interface BrowserViewWebContents {
   readonly id: number;
+  readonly session: BrowserStorageSession;
   readonly debugger: BrowserViewDebugger;
   readonly navigationHistory: BrowserViewNavigationHistory | undefined;
   loadURL(url: string): Promise<unknown>;

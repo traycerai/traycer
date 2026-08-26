@@ -1,5 +1,11 @@
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ExternalToast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,11 +15,15 @@ import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
 import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
-  isBrowserTileRef,
+  isBrowserSessionTileRef,
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -33,12 +43,16 @@ const neutralToast = vi.hoisted(() =>
     () => "toast-id",
   ),
 );
+const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
+  Promise.resolve({ sessionId: "session-markdown", tabId: "tab-markdown" }),
+);
 
 vi.mock("sonner", () => ({ toast: neutralToast }));
 
 afterEach(() => {
   cleanup();
   neutralToast.mockClear();
+  openTab.mockClear();
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
     inAppBrowserBetaEnabled: false,
@@ -105,25 +119,38 @@ function renderMarkdownWithBrowserRouting(
   });
   return render(
     <RunnerHostContext.Provider value={host}>
-      <BrowserLinkRoutingProvider
-        source={{
-          viewTabId: VIEW_TAB_ID,
-          paneId: pane.id,
+      <BrowserSessionsContext.Provider
+        value={{
           hostId: SOURCE_TILE.hostId,
+          lifecycle: "live",
+          inventoryReady: true,
+          items: [],
+          errorMessage: null,
+          retry: () => undefined,
+          openTab,
+          closeTab: () => Promise.resolve(),
         }}
       >
-        <TraycerMarkdown
-          className={null}
-          proseSize="normal"
-          components={null}
-          remarkPlugins={null}
-          rehypePlugins={null}
-          quotable={false}
-          isStreaming={false}
+        <BrowserLinkRoutingProvider
+          source={{
+            viewTabId: VIEW_TAB_ID,
+            paneId: pane.id,
+            hostId: SOURCE_TILE.hostId,
+          }}
         >
-          {markdown}
-        </TraycerMarkdown>
-      </BrowserLinkRoutingProvider>
+          <TraycerMarkdown
+            className={null}
+            proseSize="normal"
+            components={null}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {markdown}
+          </TraycerMarkdown>
+        </BrowserLinkRoutingProvider>
+      </BrowserSessionsContext.Provider>
     </RunnerHostContext.Provider>,
   );
 }
@@ -138,20 +165,30 @@ describe("MarkdownAnchor", () => {
     expect(host.openedExternalLinks).toEqual(["https://example.com/docs"]);
   });
 
-  it("routes markdown http links into a browser tile when enabled", () => {
+  it("opens markdown http links through the host and places its session pointer", async () => {
     const host = createRunnerHost();
     useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
     renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
 
     fireEvent.click(screen.getByRole("link", { name: "Docs" }));
 
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    expect(openTab).toHaveBeenCalledWith(null, "https://example.com/docs");
     expect(host.openedExternalLinks).toEqual([]);
-    expect(
-      Object.values(canvas?.tilesByInstanceId ?? {}).filter(
-        (tile) => tile !== undefined && isBrowserTileRef(tile),
-      ),
-    ).toMatchObject([{ url: "https://example.com/docs" }]);
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+      expect(
+        Object.values(canvas?.tilesByInstanceId ?? {}).filter(
+          (tile) => tile !== undefined && isBrowserSessionTileRef(tile),
+        ),
+      ).toMatchObject([
+        {
+          type: "browser-session",
+          hostId: SOURCE_TILE.hostId,
+          sessionId: "session-markdown",
+          tabId: "tab-markdown",
+        },
+      ]);
+    });
   });
 
   it("lets in-page anchors keep browser default navigation", () => {

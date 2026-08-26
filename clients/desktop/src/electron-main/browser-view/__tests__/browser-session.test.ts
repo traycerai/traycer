@@ -1,6 +1,10 @@
 import { EventEmitter } from "node:events";
+import type { Certificate, CertificatePrincipal } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { BrowserSessionDownloadChange } from "../browser-session";
+import type {
+  BrowserSessionCertificateErrorChange,
+  BrowserSessionDownloadChange,
+} from "../browser-session";
 
 type BrowserPermissionRequestHandler = (
   webContents: unknown,
@@ -154,6 +158,30 @@ class FakeTrackedWebContents extends EventEmitter {
   once(event: "destroyed", listener: () => void): this {
     return super.once(event, listener);
   }
+}
+
+class FakeCertificate implements Certificate {
+  data = "certificate";
+  fingerprint = "fingerprint";
+  issuer = certificatePrincipal("issuer");
+  issuerCert: Certificate = this;
+  issuerName = "issuer";
+  serialNumber = "01";
+  subject = certificatePrincipal("subject");
+  subjectName = "subject";
+  validExpiry = 4_102_444_800;
+  validStart = 1_704_067_200;
+}
+
+function certificatePrincipal(commonName: string): CertificatePrincipal {
+  return {
+    commonName,
+    country: "",
+    locality: "",
+    organizations: [],
+    organizationUnits: [],
+    state: "",
+  };
 }
 
 class FakeDownloadItem {
@@ -473,14 +501,37 @@ describe("browser view session policy", () => {
     offDownloadChange();
   });
 
-  it("tracks browser webContents only for their lifetime", async () => {
+  it("clears browser identity and pending certificate errors on destruction", async () => {
     const mod = await import("../browser-session");
     const webContents = new FakeTrackedWebContents(42);
+    const certificateErrors: BrowserSessionCertificateErrorChange[] = [];
+    const stop = mod.onBrowserViewCertificateError((change) => {
+      certificateErrors.push(change);
+    });
 
     mod.registerBrowserViewWebContents(webContents);
     expect(mod.isBrowserViewWebContents(webContents)).toBe(true);
+    mod.handleBrowserViewCertificateError({
+      webContentsId: webContents.id,
+      url: "https://invalid.test",
+      hostname: "invalid.test",
+      error: "net::ERR_CERT_AUTHORITY_INVALID",
+      fingerprint: "fingerprint",
+      certificate: new FakeCertificate(),
+    });
+    const certificateErrorId = certificateErrors[0]?.certificateErrorId;
+    if (certificateErrorId === undefined) {
+      throw new Error("certificate error was not recorded");
+    }
+    expect(
+      mod.readBrowserViewPendingCertificateError(certificateErrorId),
+    ).not.toBeNull();
 
     webContents.emit("destroyed");
     expect(mod.isBrowserViewWebContents(webContents)).toBe(false);
+    expect(
+      mod.readBrowserViewPendingCertificateError(certificateErrorId),
+    ).toBeNull();
+    stop();
   });
 });

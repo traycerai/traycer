@@ -7,12 +7,14 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import {
+  BrowserPeekTile,
+  type BrowserPeekNode,
+} from "@/components/epic-canvas/renderers/browser-peek-tile";
 import {
   FakeStreamClient,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import type { BrowserPeekTileRef } from "@/stores/epics/canvas/types";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -41,13 +43,10 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
 
-const PEEK_NODE: BrowserPeekTileRef = {
+const PEEK_NODE: BrowserPeekNode = {
   id: "browser-peek-headless-1",
   instanceId: "peek-instance-1",
-  type: "browser-peek",
-  name: "Peek app.local",
   hostId: "host-test",
-  chatId: "chat-1",
   sessionId: "headless-1",
   tabId: "headless-tab-1",
   initialUrl: "http://localhost:3000",
@@ -966,7 +965,7 @@ describe("BrowserPeekTile input capture", () => {
     ]);
   });
 
-  it("disarms and closes capture when the tile is hidden", () => {
+  it("closes the stream and releases capture when the tile is hidden", () => {
     const view = render(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
     const stream = liveStream();
     presentLiveFrame(stream, 7, JPEG_SEQ_7);
@@ -987,11 +986,6 @@ describe("BrowserPeekTile input capture", () => {
     hookState.visible = false;
     view.rerender(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
 
-    expect(framesOfKind(stream, "disarm")).toContainEqual({
-      kind: "disarm",
-      hasBinaryPayload: false,
-      armEpoch: 1,
-    });
     expect(stream.closed).toBe(true);
     expect(releasePointerCapture).toHaveBeenCalledWith(1);
     expect(peekTile().querySelector(".ring-primary")).toBeNull();

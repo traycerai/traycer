@@ -17,6 +17,10 @@ import {
   settleLegendList,
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { modLabel } from "@/lib/keybindings/platform";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 interface ForkCreateRequest {
   readonly forkSource: {
@@ -39,6 +43,17 @@ const cloudChatListTestState = vi.hoisted(() => ({
 // cannot drift apart into a fixture that tests a host the tile never sees.
 // Hoisted because the module mocks below read it from their factories.
 const { HOST_ID } = vi.hoisted(() => ({ HOST_ID: "host-test" }));
+
+const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
+  hostId: HOST_ID,
+  lifecycle: "live",
+  inventoryReady: true,
+  items: [],
+  errorMessage: null,
+  retry: () => undefined,
+  openTab: () => Promise.reject(new Error("not used")),
+  closeTab: () => Promise.resolve(),
+};
 
 vi.mock(
   "@/components/home/host-workspace-selector/host-workspace-selector",
@@ -934,20 +949,22 @@ function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
             })
           }
         >
-          <TooltipProvider>
-            <TestEpicSessionWrapper epicId={EPIC_ID}>
-              <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
-                {chatVisible ? (
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-test"
-                    tileId="pane-test"
-                    isActive
-                  />
-                ) : null}
-              </TabHostProvider>
-            </TestEpicSessionWrapper>
-          </TooltipProvider>
+          <BrowserSessionsContext.Provider value={EMPTY_BROWSER_SESSIONS_STATE}>
+            <TooltipProvider>
+              <TestEpicSessionWrapper epicId={EPIC_ID}>
+                <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
+                  {chatVisible ? (
+                    <ChatTile
+                      node={CHAT_ARTIFACT}
+                      viewTabId="tab-test"
+                      tileId="pane-test"
+                      isActive
+                    />
+                  ) : null}
+                </TabHostProvider>
+              </TestEpicSessionWrapper>
+            </TooltipProvider>
+          </BrowserSessionsContext.Provider>
         </RunnerHostProvider>
       </QueryClientProvider>
     </TestRouterProvider>

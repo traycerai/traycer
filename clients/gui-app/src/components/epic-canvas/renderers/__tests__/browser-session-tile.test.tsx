@@ -16,11 +16,13 @@ const harness = vi.hoisted(() => ({
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => ({
+    hostId: "host-test",
     lifecycle: harness.lifecycle,
     inventoryReady: harness.inventoryReady,
     items: harness.items,
     errorMessage: null,
     retry: vi.fn(),
+    openTab: vi.fn(),
     closeTab: vi.fn(),
   }),
 }));
@@ -72,10 +74,10 @@ const NODE: BrowserSessionTileRef = {
   id: "browser-session:sess-1:tab-1",
   instanceId: "pointer-instance-1",
   type: "browser-session",
-  name: "Pointer tab",
   hostId: "host-test",
   sessionId: "sess-1",
   tabId: "tab-1",
+  viewportPreset: "responsive",
 };
 
 function session(
@@ -87,9 +89,6 @@ function session(
     epicId: "epic-1",
     hostId: "host-test",
     profile: "primary",
-    name: "Main",
-    createdBy: { chatId: "chat-route", agentRunId: "run-1" },
-    createdAt: 1,
     lastActivityAt: 2,
     runtime: { kind: runtime, revision: 1 },
     tabs: [

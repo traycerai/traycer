@@ -17,7 +17,6 @@ import { setInAppBrowserBetaEnabledMarker } from "../app/browser-labs-state";
 import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
   BrowserViewManager,
-  scheduleBrowserViewDebugSnapshot,
 } from "../browser-view/browser-view-manager";
 import type {
   BrowserViewWindow,
@@ -37,10 +36,11 @@ import {
 } from "../browser-view/browser-session";
 import { getBrowserCookieCryptoState } from "../browser-view/browser-cookie-crypto";
 import {
-  applyBrowserViewStorageState,
+  BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   captureBrowserViewStorageState,
+  seedBrowserViewCookies,
 } from "../browser-view/browser-storage-state";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
@@ -48,6 +48,10 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 export function registerBrowserViewIpc(
   bridge: RunnerIpcBridge,
 ): BrowserViewManager {
+  const primaryProfileSnapshots = new BrowserPrimaryProfileSnapshotCoordinator(
+    captureBrowserPrimaryProfile,
+    captureBrowserOriginLocalStorage,
+  );
   const manager = new BrowserViewManager({
     createView: createElectronBrowserView,
     getWindow: (windowId) =>
@@ -71,13 +75,6 @@ export function registerBrowserViewIpc(
     },
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
-    },
-    notifyStatus: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewStatusChange,
-        change,
-      );
     },
     notifyNativeTabStatus: (windowId, change) => {
       bridge.safeSendToWindow(
@@ -121,13 +118,6 @@ export function registerBrowserViewIpc(
         change,
       );
     },
-    notifyDebugSnapshot: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewDebugSnapshotChange,
-        change,
-      );
-    },
     notifyElectronTabHandoff: (windowId, change) => {
       return bridge.safeSendToWindow(
         windowId,
@@ -149,11 +139,11 @@ export function registerBrowserViewIpc(
         change,
       );
     },
-    scheduleDebugSnapshot: scheduleBrowserViewDebugSnapshot,
-    applyStorageState: applyBrowserViewStorageState,
+    seedStorageState: seedBrowserViewCookies,
     captureStorageState: captureBrowserViewStorageState,
-    capturePrimaryProfile: captureBrowserPrimaryProfile,
-    capturePrimaryProfileLocalStorage: captureBrowserOriginLocalStorage,
+    observePrimaryProfileOrigin: (url, webContents) => {
+      primaryProfileSnapshots.observe(url, webContents);
+    },
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
@@ -164,17 +154,8 @@ export function registerBrowserViewIpc(
       boundsByKeyId: () => manager.debugBoundsByKeyId(),
       occludedKeyIds: () => manager.debugOccludedKeyIds(),
       frameCacheStats: () => manager.frameCacheStats(),
-      evictedKeyIds: () => manager.debugEvictedKeyIds(),
     });
   }
-
-  bridge.handleInvoke(RunnerHostInvoke.browserViewUpsert, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.upsertTile(
-      windowId,
-      browserViewIpcPayload.tileUpsert.parse(payload),
-    );
-  });
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
     manager.ensureTab(
@@ -255,22 +236,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewSetViewportPreset,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.setViewportPreset(
-        windowId,
-        browserViewIpcPayload.viewportPresetChange.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(RunnerHostInvoke.browserViewRelease, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.releaseTile(windowId, browserViewIpcPayload.tileKey.parse(payload));
-  });
-
   // BT-202 flicker fix: renderer confirms the replacement frame is decoded
   // and on screen; only then does the manager move the native view offscreen.
   bridge.handleInvoke(
@@ -287,24 +252,6 @@ export function registerBrowserViewIpc(
     RunnerHostInvoke.browserViewSetReservedChords,
     (_event, payload) => {
       manager.setReservedChords(parseReservedChordTokens(payload));
-    },
-  );
-
-  bridge.handleInvoke(RunnerHostInvoke.browserViewReload, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.reloadTile(windowId, browserViewIpcPayload.tileKey.parse(payload));
-  });
-
-  bridge.handleInvoke(RunnerHostInvoke.browserViewGoBack, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.goBack(windowId, browserViewIpcPayload.tileKey.parse(payload));
-  });
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewGoForward,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.goForward(windowId, browserViewIpcPayload.tileKey.parse(payload));
     },
   );
 
@@ -361,24 +308,6 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(RunnerHostInvoke.browserViewZoomIn, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.zoomIn(windowId, browserViewIpcPayload.tileKey.parse(payload));
-  });
-
-  bridge.handleInvoke(RunnerHostInvoke.browserViewZoomOut, (event, payload) => {
-    const windowId = readSenderWindowId(bridge, event);
-    manager.zoomOut(windowId, browserViewIpcPayload.tileKey.parse(payload));
-  });
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewResetZoom,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.resetZoom(windowId, browserViewIpcPayload.tileKey.parse(payload));
-    },
-  );
-
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewOccludeForOverlay,
     (event, payload) => {
@@ -423,38 +352,8 @@ export function registerBrowserViewIpc(
     },
   );
 
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewClearDebugEvents,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.clearDebugEvents(
-        windowId,
-        browserViewIpcPayload.tileKey.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewStorageStateApply,
-    (_event, payload) =>
-      manager.applyStorageState(
-        browserViewIpcPayload.storageStateApply.parse(payload),
-      ),
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewStorageStateCapture,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.captureStorageState(
-        windowId,
-        browserViewIpcPayload.storageStateCapture.parse(payload),
-      );
-    },
-  );
-
   bridge.handleInvoke(RunnerHostInvoke.browserViewPrimaryProfileCapture, () =>
-    manager.capturePrimaryProfile(),
+    primaryProfileSnapshots.capture(),
   );
 
   bridge.handleInvoke(
@@ -497,17 +396,6 @@ export function registerBrowserViewIpc(
       manager.reportAnnotationAttachResult(
         windowId,
         browserViewIpcPayload.annotationAttachResult.parse(payload),
-      );
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewOpenDevTools,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      manager.openDevTools(
-        windowId,
-        browserViewIpcPayload.tileKey.parse(payload),
       );
     },
   );

@@ -84,15 +84,11 @@ import {
   nextSettledTabIdentity,
   type SettledTabIdentity,
 } from "@/lib/browser-view/browser-tab-display";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { cn } from "@/lib/utils";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import {
-  DEFAULT_BROWSER_TILE_NAME,
   DEFAULT_BROWSER_TILE_URL,
-  DEFAULT_BROWSER_VIEWPORT_PRESET,
   makeBrowserSessionTileRef,
-  makeBrowserTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import {
   findOpenTileInTab,
@@ -128,35 +124,59 @@ function resolveCloseAriaLabel(
   return `Close ${title} (${secondaryLabel ?? tabId})`;
 }
 
-/**
- * Shared open-a-new-browser-tile action behind both the panel header's "Add
- * browser" button and the empty-state's own button - the same tile-open path
- * the pane opener's "New browser" command uses.
- */
 function useAddBrowserAction(epicId: string, tabId: string): () => void {
-  const surfaceKey = useTabSurfaceKey("browsers", tabId);
-  const hostId =
-    useSurfaceHostPin(surfaceKey).resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const sessions = useBrowserSessionsContext();
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpen = useEpicCanvasStore(
     (state) => state.prepareOpenTileInTabFocusTarget,
   );
   return useCallback(() => {
-    navigateNested(epicId, tabId, () =>
-      prepareOpen(
-        tabId,
-        makeBrowserTileRef({
-          name: DEFAULT_BROWSER_TILE_NAME,
-          hostId,
-          url: DEFAULT_BROWSER_TILE_URL,
-          viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
-        }),
-      ),
-    );
-  }, [epicId, hostId, navigateNested, prepareOpen, tabId]);
+    if (sessions.lifecycle !== "live" || sessions.hostId === null) {
+      toast.error("Browsers are not connected yet.");
+      return;
+    }
+    const hostId = sessions.hostId;
+    void sessions
+      .openTab(null, DEFAULT_BROWSER_TILE_URL)
+      .then((opened) => {
+        navigateNested(epicId, tabId, () =>
+          prepareOpen(
+            tabId,
+            makeBrowserSessionTileRef({
+              hostId,
+              sessionId: opened.sessionId,
+              tabId: opened.tabId,
+            }),
+          ),
+        );
+      })
+      .catch((cause: unknown) => {
+        toast.error(
+          cause instanceof Error ? cause.message : "Couldn't open a browser.",
+        );
+      });
+  }, [epicId, navigateNested, prepareOpen, sessions, tabId]);
 }
 
 export function BrowsersPanelActions(props: LeftPanelSlotProps) {
+  const canvasHostId = useCanvasHostId();
+  const surfaceKey = useTabSurfaceKey("browsers", props.tabId);
+  const hostPin = useSurfaceHostPin(surfaceKey);
+  const hostClient = useSurfaceHostClient(hostPin.resolvedHostId);
+  const actions = <BrowsersPanelActionsLive {...props} />;
+  if (hostPin.resolvedHostId === canvasHostId) return actions;
+  return (
+    <BrowserSessionsHostProvider
+      hostId={hostPin.resolvedHostId}
+      hostClient={hostClient}
+      epicId={props.epicId}
+    >
+      {actions}
+    </BrowserSessionsHostProvider>
+  );
+}
+
+function BrowsersPanelActionsLive(props: LeftPanelSlotProps) {
   const collapsed = useLeftPanelSectionCollapsed("browsers");
   const searchOpen = usePanelHeaderSearchOpen(props.tabId, BROWSERS_PANEL_ID);
   const setPanelSectionCollapsed = useEpicLeftPanelStore(
@@ -510,7 +530,6 @@ function BrowsersPanelBodyLive(props: {
   const openTab = useCallback(
     (session: BrowserSessionInfo, tab: BrowserTabInfo) => {
       const tile = makeBrowserSessionTileRef({
-        name: tab.title ?? session.name,
         hostId: session.hostId,
         sessionId: session.sessionId,
         tabId: tab.tabId,
@@ -835,12 +854,11 @@ function BrowserTabRow(props: BrowserTabRowProps) {
   const tile = useMemo(
     () =>
       makeBrowserSessionTileRef({
-        name: tab.title ?? session.name,
         hostId: session.hostId,
         sessionId: session.sessionId,
         tabId: tab.tabId,
       }),
-    [session.hostId, session.name, session.sessionId, tab.tabId, tab.title],
+    [session.hostId, session.sessionId, tab.tabId],
   );
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareClose = useEpicCanvasStore(

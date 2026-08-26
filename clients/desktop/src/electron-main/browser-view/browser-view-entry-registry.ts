@@ -121,7 +121,3 @@ export function nativeBrowserViewGuestKey(
 ): string {
   return ["native", key.hostId, key.sessionId, key.tabId].join("\u001f");
 }
-
-export function unmanagedBrowserViewGuestKey(pageSessionId: string): string {
-  return ["unmanaged", pageSessionId].join("\u001f");
-}

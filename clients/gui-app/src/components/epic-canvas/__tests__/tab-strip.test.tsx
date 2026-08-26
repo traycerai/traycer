@@ -114,11 +114,16 @@ vi.mock("@dnd-kit/core", () => ({
   },
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
-  useEpicLiveArtifactTitleGenerating: () => false,
-  useRegisteredEpicNodeArchived: () => false,
-}));
+vi.mock("@/lib/epic-selectors", async () => {
+  const { epicCanvasTileFallbackName } =
+    await import("@/stores/epics/canvas/types");
+  return {
+    useEpicTabDisplayTitle: (node: EpicCanvasTileRef) =>
+      epicCanvasTileFallbackName(node),
+    useEpicLiveArtifactTitleGenerating: () => false,
+    useRegisteredEpicNodeArchived: () => false,
+  };
+});
 
 // TabItem resolves the tab's bound-host client for terminal renames; these
 // tests render outside a <HostRuntimeProvider>, so stub the host seam.
@@ -200,11 +205,13 @@ function browserSessionsState(
   items: readonly BrowserSessionInfo[],
 ): BrowserSessionsState {
   return {
+    hostId: "host-A",
     lifecycle: "live",
     inventoryReady: true,
     items,
     errorMessage: null,
     retry: () => undefined,
+    openTab: () => Promise.reject(new Error("not used")),
     closeTab: () => Promise.resolve(),
   };
 }
@@ -324,10 +331,10 @@ describe("<TabStrip />", () => {
       id: "browser-session:session-1:browser-tab-1",
       instanceId: "browser-instance-1",
       type: "browser-session",
-      name: "www.google.com",
       hostId: "host-A",
       sessionId: "session-1",
       tabId: "browser-tab-1",
+      viewportPreset: "responsive",
     };
     renderTabStripForTab(
       browserTab,
@@ -343,9 +350,6 @@ describe("<TabStrip />", () => {
           epicId: "epic-1",
           hostId: "host-A",
           profile: "primary",
-          name: "Browser",
-          createdBy: { chatId: "chat-1", agentRunId: "run-1" },
-          createdAt: 1,
           lastActivityAt: 2,
           runtime: { kind: "electron", revision: 0 },
           tabs: [

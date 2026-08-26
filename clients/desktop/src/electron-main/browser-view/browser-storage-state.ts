@@ -1,4 +1,4 @@
-import { session, type Cookie } from "electron";
+import type { Cookie } from "electron";
 import { z } from "zod";
 import {
   browserStorageCookieSchema as protocolStorageCookieSchema,
@@ -11,18 +11,15 @@ import {
 import type {
   BrowserCookieCryptoState,
   BrowserPrimaryProfileCaptureResult,
-  BrowserViewStorageStateApply,
-  BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCaptureResult,
 } from "../../ipc-contracts/browser-view-types";
 import { getBrowserCookieCryptoState } from "./browser-cookie-crypto";
-import { BROWSER_VIEW_PARTITION } from "./browser-session";
-import { log } from "../app/logger";
+import { ensureBrowserViewSession } from "./browser-session";
 
 type BrowserStorageCookieSameSite = "Strict" | "Lax" | "None";
+const PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT = 8;
 
-// The protocol shape deliberately has no partition key, so capture/apply does
-// not claim CHIPS identity preservation.
+// The protocol shape has no partition key, so seed/capture cannot preserve
+// CHIPS identity.
 const desktopStorageCookieSchema = protocolStorageCookieSchema.transform(
   (cookie) => ({
     ...cookie,
@@ -55,7 +52,7 @@ export interface BrowserStorageLocalStorageEntry {
   readonly value: string;
 }
 
-interface BrowserCookieSetDetails {
+export interface BrowserCookieSetDetails {
   readonly url: string;
   readonly name: string;
   readonly value: string;
@@ -67,22 +64,18 @@ interface BrowserCookieSetDetails {
   readonly sameSite: "strict" | "lax" | "no_restriction";
 }
 
-interface BrowserCookieStore {
+export interface BrowserCookieStore {
   set(details: BrowserCookieSetDetails): Promise<void>;
   get(filter: { readonly url?: string }): Promise<Cookie[]>;
   flushStore(): Promise<void>;
 }
 
-interface BrowserCookieApplyStore extends BrowserCookieStore {
-  remove(url: string, name: string): Promise<void>;
-}
-
-interface BrowserStorageSession {
+export interface BrowserStorageSession {
   readonly cookies: BrowserCookieStore;
 }
 
-interface BrowserStorageApplySession {
-  readonly cookies: BrowserCookieApplyStore;
+export interface BrowserStorageSeedWebContents {
+  readonly session: BrowserStorageSession;
 }
 
 export interface BrowserStorageCaptureWebContents {
@@ -95,23 +88,22 @@ export interface BrowserPrimaryProfileOriginSnapshot {
   readonly localStorage: readonly BrowserStorageLocalStorageEntry[];
 }
 
-export interface BrowserStorageStateApplyDependencies {
-  readonly readCryptoState: () => BrowserCookieCryptoState;
-  readonly fromPartition: (
-    partition: string,
-    options: { readonly cache: boolean },
-  ) => BrowserStorageApplySession;
-}
-
 export interface BrowserStorageStateCaptureDependencies {
-  readonly fromPartition: (
-    partition: string,
-    options: { readonly cache: boolean },
-  ) => BrowserStorageSession;
+  readonly getSession: () => BrowserStorageSession;
 }
 
-export interface BrowserPrimaryProfileCaptureDependencies extends BrowserStorageStateCaptureDependencies {
+export interface BrowserStorageStateCaptureResult {
+  readonly storageState: ProtocolStorageState;
+  readonly cookieCount: number;
+  readonly cookieDomains: readonly string[];
+  readonly localStorageCount: number;
+  readonly localStorageAvailable: boolean;
+  readonly localStorageReason: string | null;
+}
+
+export interface BrowserPrimaryProfileCaptureDependencies {
   readonly readCryptoState: () => BrowserCookieCryptoState;
+  readonly getSession: () => BrowserStorageSession;
 }
 
 export async function captureBrowserPrimaryProfile(
@@ -119,8 +111,7 @@ export async function captureBrowserPrimaryProfile(
 ): Promise<BrowserPrimaryProfileCaptureResult> {
   return captureBrowserPrimaryProfileWithDependencies(origins, {
     readCryptoState: getBrowserCookieCryptoState,
-    fromPartition: (partition, options) =>
-      session.fromPartition(partition, options),
+    getSession: ensureBrowserViewSession,
   });
 }
 
@@ -136,9 +127,7 @@ export async function captureBrowserPrimaryProfileWithDependencies(
       reason: cryptoState.reason,
     };
   }
-  const browserSession = dependencies.fromPartition(BROWSER_VIEW_PARTITION, {
-    cache: true,
-  });
+  const browserSession = dependencies.getSession();
   await browserSession.cookies.flushStore();
   const cookies = (await browserSession.cookies.get({}))
     .map(toStorageCookie)
@@ -164,6 +153,60 @@ export async function captureBrowserOriginLocalStorage(
   return captured.available ? { origin, localStorage: captured.entries } : null;
 }
 
+type SequencedPrimaryProfileOrigin = BrowserPrimaryProfileOriginSnapshot & {
+  readonly sequence: number;
+};
+
+/** Owns recent localStorage observations and the capture barrier over them. */
+export class BrowserPrimaryProfileSnapshotCoordinator {
+  private readonly origins = new Map<string, SequencedPrimaryProfileOrigin>();
+  private readonly observations = new Set<Promise<void>>();
+  private sequence = 0;
+
+  constructor(
+    private readonly captureProfile: (
+      origins: readonly BrowserPrimaryProfileOriginSnapshot[],
+    ) => Promise<BrowserPrimaryProfileCaptureResult>,
+    private readonly captureOrigin: (
+      origin: string,
+      webContents: BrowserStorageCaptureWebContents,
+    ) => Promise<BrowserPrimaryProfileOriginSnapshot | null>,
+  ) {}
+
+  observe(url: string, webContents: BrowserStorageCaptureWebContents): void {
+    const origin = parseCurrentOrigin(url);
+    if (origin === null) return;
+    const sequence = ++this.sequence;
+    let observation: Promise<void>;
+    observation = this.captureOrigin(origin, webContents)
+      .then((snapshot) => {
+        if (snapshot === null) return;
+        const current = this.origins.get(origin);
+        if (current !== undefined && current.sequence > sequence) return;
+        this.origins.delete(origin);
+        this.origins.set(origin, { ...snapshot, sequence });
+        while (this.origins.size > PRIMARY_PROFILE_LOCAL_STORAGE_ORIGIN_LIMIT) {
+          const oldest = this.origins.keys().next().value;
+          if (oldest === undefined) break;
+          this.origins.delete(oldest);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.observations.delete(observation);
+      });
+    this.observations.add(observation);
+  }
+
+  async capture(): Promise<BrowserPrimaryProfileCaptureResult> {
+    await Promise.all([...this.observations]);
+    const origins = [...this.origins.values()]
+      .reverse()
+      .map(({ origin, localStorage }) => ({ origin, localStorage }));
+    return this.captureProfile(origins);
+  }
+}
+
 export function browserLocalStorageSeedScript(
   storageState: ProtocolStorageState | null,
 ): string | null {
@@ -181,98 +224,25 @@ export function browserLocalStorageSeedScript(
   ].join("\n");
 }
 
-export async function applyBrowserViewStorageState(
-  input: BrowserViewStorageStateApply,
-): Promise<BrowserViewStorageStateApplyResult> {
-  return applyBrowserViewStorageStateWithDependencies(input, {
-    readCryptoState: getBrowserCookieCryptoState,
-    fromPartition: (partition, options) =>
-      session.fromPartition(partition, options),
-  });
-}
-
-export async function applyBrowserViewStorageStateWithDependencies(
-  input: BrowserViewStorageStateApply,
-  dependencies: BrowserStorageStateApplyDependencies,
-): Promise<BrowserViewStorageStateApplyResult> {
-  // Cookies apply live. localStorage is installed only by the create-time seed
-  // script, so an already-open native tab stays localStorage-stale until recreated.
-  const storageState = parseStorageState(input.storageState);
-  const cookieDetails = storageState.cookies.map(toCookieSetDetails);
-  const cryptoState = dependencies.readCryptoState();
-  if (cryptoState.mode === "degraded") {
-    log.info("[browser-view] primary profile storage apply", {
-      kind: "primary_profile_storage_apply",
-      sessionId: input.sessionId,
-      tabId: input.tabId,
-      purpose: input.purpose,
-      cookieCount: storageState.cookies.length,
-      originCount: storageState.origins.length,
-      cookiesSet: 0,
-      cookiesRemoved: 0,
-      outcome: "skipped-degraded",
-    });
-    return {
-      status: "skipped-degraded",
-      cookieCount: 0,
-      localStorageApplied: false,
-      reason: cryptoState.reason,
-    };
-  }
-
-  const browserSession = dependencies.fromPartition(BROWSER_VIEW_PARTITION, {
-    cache: true,
-  });
-  await browserSession.cookies.flushStore();
-  const wantedCookieKeys = new Set(
-    storageState.cookies.map((cookie) => cookieKey(cookie)),
-  );
-  const removedCookies = (await browserSession.cookies.get({})).filter(
-    (cookie) => !wantedCookieKeys.has(cookieKey(toStorageCookie(cookie))),
-  );
-  for (const cookie of removedCookies) {
-    const parsed = toStorageCookie(cookie);
-    await browserSession.cookies.remove(cookieUrl(parsed), parsed.name);
-  }
+export async function seedBrowserViewCookies(
+  storageState: ProtocolStorageState | null,
+  webContents: BrowserStorageSeedWebContents,
+): Promise<void> {
+  if (storageState === null) return;
+  const cookieDetails =
+    parseStorageState(storageState).cookies.map(toCookieSetDetails);
   for (const details of cookieDetails) {
-    await browserSession.cookies.set(details);
+    await webContents.session.cookies.set(details);
   }
-  await browserSession.cookies.flushStore();
-  log.info("[browser-view] primary profile sync-back applied", {
-    kind: "primary_profile_sync_back",
-    cookiesSet: cookieDetails.length,
-    cookiesRemoved: removedCookies.length,
-  });
-  log.info("[browser-view] primary profile storage apply", {
-    kind: "primary_profile_storage_apply",
-    sessionId: input.sessionId,
-    tabId: input.tabId,
-    purpose: input.purpose,
-    cookieCount: storageState.cookies.length,
-    originCount: storageState.origins.length,
-    cookiesSet: cookieDetails.length,
-    cookiesRemoved: removedCookies.length,
-    outcome: "applied",
-  });
-  return {
-    status: "applied",
-    cookieCount: cookieDetails.length,
-    localStorageApplied: false,
-    reason: "cookies-only",
-  };
-}
-
-function cookieKey(cookie: BrowserStorageCookie): string {
-  return [cookie.domain, cookie.name, cookie.path].join("\u001f");
+  await webContents.session.cookies.flushStore();
 }
 
 export async function captureBrowserViewStorageState(
   input: { readonly origin: string },
-  webContents: BrowserStorageCaptureWebContents,
-): Promise<BrowserViewStorageStateCaptureResult> {
+  webContents: BrowserStorageCaptureWebContents & BrowserStorageSeedWebContents,
+): Promise<BrowserStorageStateCaptureResult> {
   return captureBrowserViewStorageStateWithDependencies(input, webContents, {
-    fromPartition: (partition, options) =>
-      session.fromPartition(partition, options),
+    getSession: () => webContents.session,
   });
 }
 
@@ -280,11 +250,9 @@ export async function captureBrowserViewStorageStateWithDependencies(
   input: { readonly origin: string },
   webContents: BrowserStorageCaptureWebContents,
   dependencies: BrowserStorageStateCaptureDependencies,
-): Promise<BrowserViewStorageStateCaptureResult> {
+): Promise<BrowserStorageStateCaptureResult> {
   const origin = parseHttpOrigin(input.origin);
-  const browserSession = dependencies.fromPartition(BROWSER_VIEW_PARTITION, {
-    cache: true,
-  });
+  const browserSession = dependencies.getSession();
   await browserSession.cookies.flushStore();
   const cookies = (await browserSession.cookies.get({ url: origin })).map(
     toStorageCookie,
@@ -416,6 +384,13 @@ async function captureLocalStorageForOrigin(
     LOCAL_STORAGE_SCRIPT,
     false,
   );
+  if (parseCurrentOrigin(webContents.getURL()) !== origin) {
+    return {
+      entries: [],
+      available: false,
+      reason: "Selected browser tile navigated during localStorage capture.",
+    };
+  }
   if (!Array.isArray(result)) {
     return {
       entries: [],

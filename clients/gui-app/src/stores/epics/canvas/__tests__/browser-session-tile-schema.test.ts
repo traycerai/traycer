@@ -19,13 +19,11 @@ const HOST = "host-1";
 describe("makeBrowserSessionTileRef", () => {
   it("mints a deterministic pointer id from {sessionId, tabId}", () => {
     const first = makeBrowserSessionTileRef({
-      name: "Docs",
       hostId: HOST,
       sessionId: "sess-a",
       tabId: "tab-1",
     });
     const second = makeBrowserSessionTileRef({
-      name: "Docs again",
       hostId: HOST,
       sessionId: "sess-a",
       tabId: "tab-1",
@@ -37,6 +35,7 @@ describe("makeBrowserSessionTileRef", () => {
     expect(first.instanceId).not.toBe(second.instanceId);
     expect(first.sessionId).toBe("sess-a");
     expect(first.tabId).toBe("tab-1");
+    expect(first.viewportPreset).toBe("responsive");
     expect(first).not.toHaveProperty("url");
     expect(first).not.toHaveProperty("chatId");
   });
@@ -48,10 +47,10 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       id: "browser-session:sess-1:tab-9",
       instanceId: "inst-1",
       type: TILE_KIND_BROWSER_SESSION,
-      name: "Tab",
       hostId: HOST,
       sessionId: "sess-1",
       tabId: "tab-9",
+      viewportPreset: "responsive",
     };
 
     expect(
@@ -65,10 +64,10 @@ describe("browserSessionTileSchema / parseTileRef", () => {
       id: "browser-session:sess-1:tab-1",
       instanceId: "inst-1",
       type: TILE_KIND_BROWSER_SESSION,
-      name: "Tab",
       hostId: HOST,
       sessionId: "sess-1",
       tabId: "tab-1",
+      viewportPreset: "responsive",
     };
     expect(
       browserSessionTileSchema.parse({ ...base, sessionId: undefined }),
@@ -86,24 +85,20 @@ describe("isBrowserSessionTileRef", () => {
       id: "browser-session:s:t",
       instanceId: "i",
       type: TILE_KIND_BROWSER_SESSION,
-      name: "P",
       hostId: HOST,
       sessionId: "s",
       tabId: "t",
+      viewportPreset: "responsive",
     };
-    const peek = {
-      id: "browser-peek-s",
+    const blank: EpicCanvasTileRef = {
+      id: "blank",
       instanceId: "i2",
-      type: "browser-peek" as const,
-      name: "Peek",
+      type: "blank",
+      name: "New tab",
       hostId: HOST,
-      chatId: "chat",
-      sessionId: "s",
-      tabId: "t",
-      initialUrl: "https://example.com",
     };
 
     expect(isBrowserSessionTileRef(pointer)).toBe(true);
-    expect(isBrowserSessionTileRef(peek as EpicCanvasTileRef)).toBe(false);
+    expect(isBrowserSessionTileRef(blank)).toBe(false);
   });
 });

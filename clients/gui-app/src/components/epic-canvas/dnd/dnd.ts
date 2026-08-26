@@ -1,6 +1,5 @@
 import { plainTerminalFleetIdentityKey } from "@traycer/protocol/host/terminal/plain-schemas";
 import type {
-  AgentBrowserTileRef,
   BrowserSessionTileRef,
   DropPosition,
   EpicTerminalRef,
@@ -9,7 +8,6 @@ import type {
   WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
 import {
-  isAgentBrowserTileRef,
   isBrowserSessionTileRef,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
@@ -124,7 +122,7 @@ export interface EpicCanvasBrowserTileDragData {
   readonly kind: typeof BROWSER_TILE_DND_TYPE;
   readonly epicId: string;
   readonly viewTabId: string;
-  readonly tile: BrowserSessionTileRef | AgentBrowserTileRef;
+  readonly tile: BrowserSessionTileRef;
 }
 
 export interface EpicCanvasGitDiffTileDragData {
@@ -573,11 +571,7 @@ function readBrowserTileSource(
 ): EpicCanvasDragSourceData | null {
   const scope = readCanvasSourceScope(value);
   const ref = parseTileRef(value.tile);
-  if (
-    scope === null ||
-    ref === null ||
-    (!isBrowserSessionTileRef(ref) && !isAgentBrowserTileRef(ref))
-  ) {
+  if (scope === null || ref === null || !isBrowserSessionTileRef(ref)) {
     return null;
   }
   return { kind: BROWSER_TILE_DND_TYPE, ...scope, tile: ref };

@@ -16,12 +16,6 @@ import type {
 
 export type { BrowserViewTileKey };
 
-export interface BrowserViewTileUpsert extends BrowserViewTileKey {
-  readonly url: string;
-  readonly visible: boolean;
-  readonly viewportPreset: BrowserViewViewportPresetId;
-}
-
 /** Stable identity of an Electron-owned browser guest. Presentation is separate. */
 export interface BrowserViewNativeTabKey {
   readonly hostId: string;
@@ -42,7 +36,6 @@ export interface BrowserViewEnsureTab extends BrowserViewNativeTabKey {
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
   readonly bindingId: string;
   readonly surface: BrowserViewTileKey;
-  readonly visible: boolean;
 }
 
 export interface BrowserViewDetachSurface extends BrowserViewNativeTabCapability {
@@ -87,21 +80,7 @@ export interface BrowserViewBoundsUpdate extends BrowserViewTileKey {
 export type BrowserViewViewportPresetId =
   "responsive" | "mobile" | "tablet" | "desktop";
 
-export interface BrowserViewViewportPresetChange extends BrowserViewTileKey {
-  readonly viewportPreset: BrowserViewViewportPresetId;
-}
-
 export type BrowserViewStatus = "loading" | "ready" | "dead";
-
-export interface BrowserViewStatusChange extends BrowserViewTileKey {
-  readonly url: string;
-  readonly title: string;
-  readonly status: BrowserViewStatus;
-  readonly reason: string | null;
-  readonly canGoBack: boolean;
-  readonly canGoForward: boolean;
-  readonly zoomPercent: number;
-}
 
 export interface BrowserViewNativeTabStatusChange extends BrowserViewNativeTabCapability {
   readonly url: string;
@@ -204,26 +183,6 @@ export interface BrowserViewSnapshotInvalidatedChange extends BrowserViewTileKey
   readonly reason: string;
 }
 
-export interface BrowserViewStorageStateApply {
-  readonly storageState: BrowserStorageState;
-  readonly sessionId: string | null;
-  readonly tabId: string | null;
-  readonly purpose: "primary-profile-seed" | "sync-back";
-}
-
-export interface BrowserViewStorageStateCapture extends BrowserViewTileKey {
-  readonly origin: string;
-}
-
-export interface BrowserViewStorageStateCaptureResult {
-  readonly storageState: BrowserStorageState;
-  readonly cookieCount: number;
-  readonly cookieDomains: readonly string[];
-  readonly localStorageCount: number;
-  readonly localStorageAvailable: boolean;
-  readonly localStorageReason: string | null;
-}
-
 export type BrowserPrimaryProfileCaptureResult =
   | {
       readonly status: "captured";
@@ -254,20 +213,6 @@ export interface BrowserViewElectronTabHandoffChange extends BrowserViewNativeTa
   readonly siblingTabs: readonly BrowserViewElectronTabHandoffSibling[];
   readonly reason: "gui-quit" | "tab-released" | "crash-no-capture";
 }
-
-export type BrowserViewStorageStateApplyResult =
-  | {
-      readonly status: "applied";
-      readonly cookieCount: number;
-      readonly localStorageApplied: false;
-      readonly reason: "cookies-only";
-    }
-  | {
-      readonly status: "skipped-degraded";
-      readonly cookieCount: 0;
-      readonly localStorageApplied: false;
-      readonly reason: BrowserCookieCryptoReason;
-    };
 
 type BrowserCookieCryptoMode = "real" | "basic" | "degraded";
 type BrowserCookiePersistence = "persistent" | "ephemeral";
@@ -347,7 +292,7 @@ export interface BrowserViewDebugSnapshotData {
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
 }
 
-export interface BrowserViewDebugSnapshotChange
+export interface BrowserViewDebugSnapshot
   extends BrowserViewTileKey, BrowserViewDebugSnapshotData {}
 
 export interface BrowserViewCapturePageResult extends BrowserViewTileKey {
@@ -366,26 +311,16 @@ export type {
 } from "@traycer/protocol/persistence/epic/schemas";
 
 export interface BrowserViewBridge {
-  upsertTile(input: BrowserViewTileUpsert): Promise<void>;
   updateBounds(input: BrowserViewBoundsUpdate): Promise<void>;
-  setViewportPreset(input: BrowserViewViewportPresetChange): Promise<void>;
-  releaseTile(input: BrowserViewTileKey): Promise<void>;
   setReservedChords(tokens: readonly string[]): Promise<void>;
-  reloadTile(input: BrowserViewTileKey): Promise<void>;
-  goBack(input: BrowserViewTileKey): Promise<void>;
-  goForward(input: BrowserViewTileKey): Promise<void>;
   findInPage(input: BrowserViewFindRequest): Promise<void>;
   stopFindInPage(input: BrowserViewFindStop): Promise<void>;
   cancelDownload(input: BrowserViewDownloadCancel): Promise<void>;
   trustCertificate(input: BrowserViewCertificateTrust): Promise<void>;
-  zoomIn(input: BrowserViewTileKey): Promise<void>;
-  zoomOut(input: BrowserViewTileKey): Promise<void>;
-  resetZoom(input: BrowserViewTileKey): Promise<void>;
   capturePage(input: BrowserViewTileKey): Promise<BrowserViewCapturePageResult>;
   getDebugSnapshot(
     input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshotChange>;
-  clearDebugEvents(input: BrowserViewTileKey): Promise<void>;
+  ): Promise<BrowserViewDebugSnapshot>;
   startAnnotation(
     input: BrowserViewTileKey,
   ): Promise<BrowserAnnotationStartResult>;
@@ -396,7 +331,6 @@ export interface BrowserViewBridge {
   reportAnnotationAttachResult(
     input: BrowserAnnotationAttachResultInput,
   ): Promise<void>;
-  openDevTools(input: BrowserViewTileKey): Promise<void>;
   occludeForOverlay(
     input: BrowserViewOverlayOcclusion,
   ): Promise<BrowserViewOverlayOcclusionResult>;
@@ -407,16 +341,7 @@ export interface BrowserViewBridge {
   setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
-  applyStorageState(
-    input: BrowserViewStorageStateApply,
-  ): Promise<BrowserViewStorageStateApplyResult>;
-  captureStorageState(
-    input: BrowserViewStorageStateCapture,
-  ): Promise<BrowserViewStorageStateCaptureResult>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;
-  onStatusChange(handler: (change: BrowserViewStatusChange) => void): {
-    dispose: () => void;
-  };
   onFindChange(handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   };
@@ -433,11 +358,6 @@ export interface BrowserViewBridge {
   };
   onSnapshotInvalidated(
     handler: (change: BrowserViewSnapshotInvalidatedChange) => void,
-  ): {
-    dispose: () => void;
-  };
-  onDebugSnapshotChange(
-    handler: (change: BrowserViewDebugSnapshotChange) => void,
   ): {
     dispose: () => void;
   };

@@ -270,24 +270,6 @@ describe("browserContextAttachmentToWire (ticket 01)", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("emits tabId from the tile key, not the retired tileInstanceId wire field", () => {
-    const payload = createBrowserScreenshotAttachment({
-      tile: TILE,
-      pageUrl: "http://localhost:3000/page",
-      capture: CAPTURE,
-    });
-    const wire = browserContextAttachmentToWire(payload);
-    expect(wire).toEqual({
-      kind: "browser-screenshot",
-      origin: "http://localhost:3000",
-      pageUrl: "http://localhost:3000/page",
-      composerText: payload.composerText,
-      tabId: "tile",
-    });
-    expect(wire).not.toHaveProperty("tileInstanceId");
-    expect(wire).not.toHaveProperty("handle");
-  });
-
   it("reads the host-minted tab id from its BrowserSessionTileRef", () => {
     useEpicCanvasStore.setState({
       canvasByTabId: {
@@ -295,10 +277,10 @@ describe("browserContextAttachmentToWire (ticket 01)", () => {
           id: "browser-session:session-durable:durable-tab-1",
           instanceId: TILE.tileInstanceId,
           type: "browser-session",
-          name: "Durable tab",
           hostId: "host-1",
           sessionId: "session-durable",
           tabId: "durable-tab-1",
+          viewportPreset: "responsive",
         }),
       },
     });

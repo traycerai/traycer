@@ -1,8 +1,7 @@
-# Browser tile E2E suite (BT-501 … BT-504)
+# Browser tile E2E suite (BT-501 … BT-503)
 
 Playwright `_electron` specs covering the behavior that lives BELOW the unit
-seam: native bounds streaming, overlay occlusion, reserved-chord routing,
-hidden-guest eviction, and multi-window geometry (ADR 0001 R13).
+seam: native bounds streaming, overlay occlusion, and reserved-chord routing.
 
 ## One-time setup
 
@@ -35,15 +34,13 @@ Specs read native truth through `app.evaluate()` against
 - `boundsByKeyId()` — applied native rect per entry key id
 - `occludedKeyIds()` — entries parked under an overlay owner
 - `frameCacheStats()` — frame-cache counters (BT-205)
-- `evictedKeyIds()` — guests evicted by the hidden-guest LRU (BT-403)
 
 ## First-live-run TODOs
 
 The specs were authored without a live driver; during the first run:
 
 1. Replace placeholder `data-testid`s (`canvas-pane-splitter`,
-   `browser-tab-menu`, `browser-tile-surface`, `new-browser-tile-input`,
-   `switch-pane-group`, `reopen-first-browser-tile`) with the real hooks.
+   `browser-tab-menu`, `browser-tile-surface`) with the real hooks.
 2. Pack A: add the renderer probe hook that reports the DOM surface rect so
    mid-drag native-vs-DOM delta can be asserted numerically (≤1-frame trail,
    ADR 0001 R1) instead of the current "bounds kept flowing" check.

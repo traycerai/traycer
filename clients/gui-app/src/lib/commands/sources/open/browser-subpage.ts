@@ -1,17 +1,10 @@
-/**
- * Opener "Browser" sub-page: pinned "New browser" creates a fresh page
- * session in the target pane. The ref is minted inside `run` so repeated
- * invocations never reuse the browser page-session id.
- */
 import { useMemo } from "react";
-import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { toast } from "sonner";
+import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { openTileIntoTargetGroup } from "@/lib/commands/actions";
-import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
 import {
-  DEFAULT_BROWSER_TILE_NAME,
   DEFAULT_BROWSER_TILE_URL,
-  DEFAULT_BROWSER_VIEWPORT_PRESET,
-  makeBrowserTileRef,
+  makeBrowserSessionTileRef,
 } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { openerActionLeaf } from "@/lib/commands/sources/open/open-leaf";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
@@ -19,8 +12,7 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 export function useBrowserOpenerItems(
   ctx: CommandContext,
 ): ReadonlyArray<CommandItem> {
-  const hostId =
-    useActiveEpicHostId(ctx.activeEpicId) ?? UNKNOWN_HOST_PLACEHOLDER;
+  const sessions = useBrowserSessionsContext();
 
   return useMemo<ReadonlyArray<CommandItem>>(
     () => [
@@ -28,25 +20,41 @@ export function useBrowserOpenerItems(
         id: "open:browser:new",
         label: "New browser",
         keywords: ["new", "browser", "web", "page"],
-        run: () =>
-          openTileIntoTargetGroup({
-            tabId: ctx.activeTabId,
-            groupId: ctx.targetGroupId,
-            navigateNestedFocus: ctx.router.navigateNestedFocus,
-            ref: makeBrowserTileRef({
-              name: DEFAULT_BROWSER_TILE_NAME,
-              hostId,
-              url: DEFAULT_BROWSER_TILE_URL,
-              viewportPreset: DEFAULT_BROWSER_VIEWPORT_PRESET,
-            }),
-          }),
+        run: () => {
+          if (sessions.lifecycle !== "live" || sessions.hostId === null) {
+            toast.error("Browsers are not connected yet.");
+            return;
+          }
+          const hostId = sessions.hostId;
+          void sessions
+            .openTab(null, DEFAULT_BROWSER_TILE_URL)
+            .then((opened) => {
+              openTileIntoTargetGroup({
+                tabId: ctx.activeTabId,
+                groupId: ctx.targetGroupId,
+                navigateNestedFocus: ctx.router.navigateNestedFocus,
+                ref: makeBrowserSessionTileRef({
+                  hostId,
+                  sessionId: opened.sessionId,
+                  tabId: opened.tabId,
+                }),
+              });
+            })
+            .catch((cause: unknown) => {
+              toast.error(
+                cause instanceof Error
+                  ? cause.message
+                  : "Couldn't open a browser.",
+              );
+            });
+        },
       }),
     ],
     [
       ctx.activeTabId,
       ctx.router.navigateNestedFocus,
       ctx.targetGroupId,
-      hostId,
+      sessions,
     ],
   );
 }

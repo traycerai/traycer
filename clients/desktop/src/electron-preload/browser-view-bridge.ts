@@ -9,7 +9,7 @@ import type {
   BrowserPrimaryProfileCaptureResult,
   BrowserViewCapturePageResult,
   BrowserViewCertificateErrorChange,
-  BrowserViewDebugSnapshotChange,
+  BrowserViewDebugSnapshot,
   BrowserViewDownloadChange,
   BrowserViewFindChange,
   BrowserViewOpenTileRequest,
@@ -19,9 +19,6 @@ import type {
   BrowserViewElectronTabHandoffChange,
   BrowserViewNativeTabCapability,
   BrowserViewNativeTabStatusChange,
-  BrowserViewStatusChange,
-  BrowserViewStorageStateApplyResult,
-  BrowserViewStorageStateCaptureResult,
   BrowserCdpResult,
 } from "../ipc-contracts/browser-view-types";
 import type {
@@ -35,11 +32,6 @@ import { subscribe } from "./subscribe";
 export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
   return {
     browserView: {
-      upsertTile: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewUpsert,
-          input,
-        ) as Promise<void>,
       ensureTab: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewEnsureTab,
@@ -75,16 +67,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewUpdateBounds,
           input,
         ) as Promise<void>,
-      setViewportPreset: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewSetViewportPreset,
-          input,
-        ) as Promise<void>,
-      releaseTile: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewRelease,
-          input,
-        ) as Promise<void>,
       setReservedChords: async (tokens) => {
         await ipcRenderer.invoke(
           RunnerHostInvoke.browserViewSetReservedChords,
@@ -96,21 +78,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           overlayId,
         });
       },
-      reloadTile: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewReload,
-          input,
-        ) as Promise<void>,
-      goBack: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewGoBack,
-          input,
-        ) as Promise<void>,
-      goForward: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewGoForward,
-          input,
-        ) as Promise<void>,
       findInPage: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewFindInPage,
@@ -131,21 +98,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewTrustCertificate,
           input,
         ) as Promise<void>,
-      zoomIn: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewZoomIn,
-          input,
-        ) as Promise<void>,
-      zoomOut: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewZoomOut,
-          input,
-        ) as Promise<void>,
-      resetZoom: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewResetZoom,
-          input,
-        ) as Promise<void>,
       capturePage: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewCapturePage,
@@ -155,12 +107,7 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewGetDebugSnapshot,
           input,
-        ) as Promise<BrowserViewDebugSnapshotChange>,
-      clearDebugEvents: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewClearDebugEvents,
-          input,
-        ) as Promise<void>,
+        ) as Promise<BrowserViewDebugSnapshot>,
       startAnnotation: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewStartAnnotation,
@@ -179,11 +126,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       reportAnnotationAttachResult: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewAnnotationAttachResult,
-          input,
-        ) as Promise<void>,
-      openDevTools: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewOpenDevTools,
           input,
         ) as Promise<void>,
       occludeForOverlay: (input) =>
@@ -205,25 +147,10 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
           RunnerHostInvoke.browserViewLabsStateSet,
           input,
         ) as Promise<void>,
-      applyStorageState: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStorageStateApply,
-          input,
-        ) as Promise<BrowserViewStorageStateApplyResult>,
-      captureStorageState: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewStorageStateCapture,
-          input,
-        ) as Promise<BrowserViewStorageStateCaptureResult>,
       capturePrimaryProfile: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,
         ) as Promise<BrowserPrimaryProfileCaptureResult>,
-      onStatusChange: (handler) =>
-        subscribe<BrowserViewStatusChange>(
-          RunnerHostEvent.browserViewStatusChange,
-          handler,
-        ),
       onFindChange: (handler) =>
         subscribe<BrowserViewFindChange>(
           RunnerHostEvent.browserViewFindChange,
@@ -247,11 +174,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
       onSnapshotInvalidated: (handler) =>
         subscribe<BrowserViewSnapshotInvalidatedChange>(
           RunnerHostEvent.browserViewSnapshotInvalidated,
-          handler,
-        ),
-      onDebugSnapshotChange: (handler) =>
-        subscribe<BrowserViewDebugSnapshotChange>(
-          RunnerHostEvent.browserViewDebugSnapshotChange,
           handler,
         ),
       onAnnotationEvent: (handler) =>

@@ -18,13 +18,12 @@ import type {
   BrowserViewCapturePageResult,
   BrowserViewDownloadCancel,
   BrowserViewDownloadChange,
-  BrowserViewDebugSnapshotChange,
+  BrowserViewDebugSnapshot,
   BrowserViewFindChange,
   BrowserViewFindRequest,
   BrowserViewFindStop,
   BrowserViewOpenTileRequest,
   BrowserViewSnapshotInvalidatedChange,
-  BrowserViewStatusChange,
   BrowserViewTileKey,
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
@@ -125,16 +124,12 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
 
   getDebugSnapshot(
     input: BrowserViewTileKey,
-  ): Promise<BrowserViewDebugSnapshotChange> {
+  ): Promise<BrowserViewDebugSnapshot> {
     return Promise.resolve({
       ...input,
       consoleEntries: [],
       networkEntries: [],
     });
-  }
-
-  clearDebugEvents(): Promise<void> {
-    return Promise.resolve();
   }
 
   startAnnotation(): Promise<{ readonly ok: true }> {
@@ -204,44 +199,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     return Promise.resolve();
   }
 
-  applyStorageState(): Promise<{
-    readonly status: "applied";
-    readonly cookieCount: 0;
-    readonly localStorageApplied: false;
-    readonly reason: "cookies-only";
-  }> {
-    return Promise.resolve({
-      status: "applied",
-      cookieCount: 0,
-      localStorageApplied: false,
-      reason: "cookies-only",
-    });
-  }
-
-  captureStorageState(): Promise<{
-    readonly storageState: { readonly cookies: []; readonly origins: [] };
-    readonly cookieCount: 0;
-    readonly cookieDomains: [];
-    readonly localStorageCount: 0;
-    readonly localStorageAvailable: true;
-    readonly localStorageReason: null;
-  }> {
-    return Promise.resolve({
-      storageState: { cookies: [], origins: [] },
-      cookieCount: 0,
-      cookieDomains: [],
-      localStorageCount: 0,
-      localStorageAvailable: true,
-      localStorageReason: null,
-    });
-  }
-
-  onStatusChange(_handler: (change: BrowserViewStatusChange) => void): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
-  }
-
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {
     dispose: () => void;
   } {
@@ -279,14 +236,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
         this.snapshotInvalidationHandlers.delete(handler);
       },
     };
-  }
-
-  onDebugSnapshotChange(
-    _handler: (change: BrowserViewDebugSnapshotChange) => void,
-  ): {
-    dispose: () => void;
-  } {
-    return { dispose: () => undefined };
   }
 
   onAnnotationEvent(): { dispose: () => void } {

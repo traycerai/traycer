@@ -87,9 +87,11 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
   useEffect(() => {
     const adapter = routerAdapterFor(router);
-    const armedRef = { current: useScreencastArmedStore.getState().armed };
+    const armedRef = {
+      current: useScreencastArmedStore.getState().ownerId !== null,
+    };
     const unsubscribeArmed = useScreencastArmedStore.subscribe((state) => {
-      armedRef.current = state.armed;
+      armedRef.current = state.ownerId !== null;
     });
 
     const clearHintTimer = () => {

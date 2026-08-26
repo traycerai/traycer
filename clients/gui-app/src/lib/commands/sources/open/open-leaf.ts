@@ -11,7 +11,10 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  epicCanvasTileFallbackName,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 
 /**
  * Cap on rows handed to the renderer for a large two-step list (Files / Diff).
@@ -101,13 +104,14 @@ export function openerExistingLeaf(
   ref: EpicCanvasTileRef,
   hostBadge: string | null,
 ): CommandItem {
+  const name = epicCanvasTileFallbackName(ref);
   const leaf = openerActionLeaf({
     // Row id is keyed on the stable content id (unique among a category's
     // existing items); the ref's instanceId is a placeholder re-minted by
     // openTileInPane on open.
     id: `open:${categoryId}:${ref.id}`,
-    label: ref.name,
-    keywords: [ref.name],
+    label: name,
+    keywords: [name],
     run: () =>
       openTileIntoTargetGroup({
         tabId: ctx.activeTabId,

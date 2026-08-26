@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { BrowserComposerContextChip } from "@/components/epic-canvas/renderers/browser-composer-context-chip";
 import { useBrowserContextAttachmentHandler } from "@/components/epic-canvas/renderers/browser-context-attachment-handler";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { TILE_KIND_BROWSER } from "@/stores/epics/canvas/tile-kinds";
 import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
@@ -21,7 +20,7 @@ import type {
   BrowserCookieCryptoState,
   BrowserViewCapturePageResult,
   BrowserViewConsoleEntry,
-  BrowserViewDebugSnapshotChange,
+  BrowserViewDebugSnapshot,
   BrowserViewDownloadCancel,
   BrowserViewFindRequest,
   BrowserViewFindStop,
@@ -41,6 +40,41 @@ const canvasHarness = vi.hoisted<{
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: bridgeHarness.current }),
+}));
+
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
+  useBrowserSessionsContext: () => ({
+    hostId: "host-1",
+    lifecycle: "live",
+    inventoryReady: true,
+    items: [
+      {
+        sessionId: "session-1",
+        epicId: "epic-1",
+        hostId: "host-1",
+        profile: "primary",
+        name: "Browser",
+        createdAt: 1,
+        lastActivityAt: 2,
+        runtime: { kind: "electron", revision: 0 },
+        tabs: [
+          {
+            tabId: "tab-1",
+            url: "https://example.com/page",
+            originTier: "external",
+            status: "ready",
+            title: "Example",
+            viewed: false,
+            drivenBy: [],
+          },
+        ],
+      },
+    ],
+    errorMessage: null,
+    retry: vi.fn(),
+    openTab: vi.fn(),
+    closeTab: vi.fn(),
+  }),
 }));
 
 vi.mock("@/stores/epics/canvas/store", () => ({
@@ -69,7 +103,7 @@ const TILE: BrowserViewTileKey = {
   viewTabId: "view-tab",
   paneId: "browser-pane",
   tileInstanceId: "browser-instance",
-  pageSessionId: "browser-page",
+  pageSessionId: "browser-session:session-1:tab-1",
 };
 
 const CAPTURE: BrowserViewCapturePageResult = {
@@ -309,12 +343,12 @@ function canvasWithSiblingBrowser(): EpicCanvasState {
         hostId: "host-1",
       },
       "browser-instance": {
-        id: "browser-page",
+        id: "browser-session:session-1:tab-1",
         instanceId: "browser-instance",
-        type: TILE_KIND_BROWSER,
-        name: "Example",
+        type: "browser-session",
         hostId: "host-1",
-        url: "https://example.com/page",
+        sessionId: "session-1",
+        tabId: "tab-1",
         viewportPreset: "responsive",
       },
     },
@@ -323,13 +357,11 @@ function canvasWithSiblingBrowser(): EpicCanvasState {
 
 interface FakeBridge extends BrowserViewBridge {
   readonly capturePageMock: Mock<() => Promise<BrowserViewCapturePageResult>>;
-  readonly getDebugSnapshotMock: Mock<
-    () => Promise<BrowserViewDebugSnapshotChange>
-  >;
+  readonly getDebugSnapshotMock: Mock<() => Promise<BrowserViewDebugSnapshot>>;
 }
 
 function createFakeBridge(): FakeBridge {
-  const snapshot: BrowserViewDebugSnapshotChange = {
+  const snapshot: BrowserViewDebugSnapshot = {
     ...TILE,
     consoleEntries: [ERROR_ENTRY, INFO_ENTRY],
     networkEntries: [FAILED_REQUEST, SUCCESS_REQUEST],
@@ -339,32 +371,21 @@ function createFakeBridge(): FakeBridge {
   return {
     capturePageMock,
     getDebugSnapshotMock,
-    upsertTile: vi.fn(() => Promise.resolve()),
-    setViewportPreset: vi.fn(() => Promise.resolve()),
     updateBounds: vi.fn(() => Promise.resolve()),
-    releaseTile: vi.fn(() => Promise.resolve()),
     setReservedChords: vi.fn(() => Promise.resolve()),
     overlayPaintAck: vi.fn(() => Promise.resolve()),
-    reloadTile: vi.fn(() => Promise.resolve()),
-    goBack: vi.fn(() => Promise.resolve()),
-    goForward: vi.fn(() => Promise.resolve()),
     findInPage: vi.fn((_input: BrowserViewFindRequest) => Promise.resolve()),
     stopFindInPage: vi.fn((_input: BrowserViewFindStop) => Promise.resolve()),
     cancelDownload: vi.fn((_input: BrowserViewDownloadCancel) =>
       Promise.resolve(),
     ),
     trustCertificate: vi.fn(() => Promise.resolve()),
-    zoomIn: vi.fn(() => Promise.resolve()),
-    zoomOut: vi.fn(() => Promise.resolve()),
-    resetZoom: vi.fn(() => Promise.resolve()),
     capturePage: capturePageMock,
     getDebugSnapshot: getDebugSnapshotMock,
-    clearDebugEvents: vi.fn(() => Promise.resolve()),
     startAnnotation: vi.fn(() => Promise.resolve({ ok: true as const })),
     cancelAnnotation: vi.fn(() => Promise.resolve()),
     setAnnotationTargetChatLabel: vi.fn(() => Promise.resolve()),
     reportAnnotationAttachResult: vi.fn(() => Promise.resolve()),
-    openDevTools: vi.fn(() => Promise.resolve()),
     occludeForOverlay: vi.fn(() =>
       Promise.resolve({ snapshots: [], restoredTiles: [] }),
     ),
@@ -380,24 +401,6 @@ function createFakeBridge(): FakeBridge {
       }),
     ),
     setLabsState: vi.fn(() => Promise.resolve()),
-    applyStorageState: vi.fn(() =>
-      Promise.resolve({
-        status: "applied" as const,
-        cookieCount: 0,
-        localStorageApplied: false as const,
-        reason: "cookies-only" as const,
-      }),
-    ),
-    captureStorageState: vi.fn(() =>
-      Promise.resolve({
-        storageState: { cookies: [], origins: [] },
-        cookieCount: 0,
-        cookieDomains: [],
-        localStorageCount: 0,
-        localStorageAvailable: true,
-        localStorageReason: null,
-      }),
-    ),
     capturePrimaryProfile: vi.fn(() =>
       Promise.resolve({
         status: "unavailable" as const,
@@ -405,13 +408,11 @@ function createFakeBridge(): FakeBridge {
         reason: "test",
       }),
     ),
-    onStatusChange: vi.fn(() => ({ dispose: () => undefined })),
     onFindChange: vi.fn(() => ({ dispose: () => undefined })),
     onDownloadChange: vi.fn(() => ({ dispose: () => undefined })),
     onCertificateError: vi.fn(() => ({ dispose: () => undefined })),
     onOpenTileRequest: vi.fn(() => ({ dispose: () => undefined })),
     onSnapshotInvalidated: vi.fn(() => ({ dispose: () => undefined })),
-    onDebugSnapshotChange: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationEvent: vi.fn(() => ({ dispose: () => undefined })),
     onAnnotationAttached: vi.fn(() => ({ dispose: () => undefined })),
     ensureTab: vi.fn<BrowserViewBridge["ensureTab"]>((input) =>

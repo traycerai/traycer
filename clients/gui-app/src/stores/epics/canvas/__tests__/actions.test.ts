@@ -25,7 +25,6 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
-  updateBrowserTileDocument,
   updateBrowserTileViewportPreset,
   updateGitDiffTileView,
 } from "@/stores/epics/canvas/actions";
@@ -33,15 +32,16 @@ import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import type { TilePane } from "@/stores/epics/canvas/tile-tree";
 import type {
-  AgentBrowserTileRef,
   BrowserSessionTileRef,
-  BrowserTileRef,
   EpicCanvasState,
   EpicCanvasTileRef,
   EpicNodeRef,
   GitDiffTileRef,
 } from "@/stores/epics/canvas/types";
-import { isBlankTileRef, isBrowserTileRef } from "@/stores/epics/canvas/types";
+import {
+  epicCanvasTileFallbackName,
+  isBlankTileRef,
+} from "@/stores/epics/canvas/types";
 import {
   GIT_BUNDLE_CHANGES,
   GIT_FILE_A,
@@ -1064,108 +1064,18 @@ describe("cloneEpicCanvasState", () => {
     expect(findPaneById(cloned.root, cloned.activePaneId ?? "")).not.toBeNull();
     expectCanvasInvariants(cloned);
   });
-
-  it("duplicates browser tiles as fresh page sessions at the same URL", () => {
-    const browser: BrowserTileRef = {
-      id: "browser-session-source",
-      instanceId: "inst-browser-source",
-      type: "browser",
-      name: "Browser",
-      hostId: TEST_HOST_ID,
-      url: "https://example.com/app",
-      viewportPreset: "desktop",
-    };
-    const state = openPinned(createEmptyCanvas(), browser);
-
-    const cloned = cloneEpicCanvasState(state);
-    const clonedRef = Object.values(cloned.tilesByInstanceId).find(
-      (ref): ref is BrowserTileRef =>
-        ref !== undefined && isBrowserTileRef(ref),
-    );
-
-    expect(clonedRef).not.toBeUndefined();
-    expect(clonedRef?.id).not.toBe(browser.id);
-    expect(clonedRef?.instanceId).not.toBe(browser.instanceId);
-    expect(clonedRef?.url).toBe(browser.url);
-    expect(clonedRef?.viewportPreset).toBe(browser.viewportPreset);
-    expectCanvasInvariants(cloned);
-  });
-
-  it("updates browser document metadata without changing page-session identity", () => {
-    const browser: BrowserTileRef = {
-      id: "browser-session-source",
-      instanceId: "inst-browser-source",
-      type: "browser",
-      name: "Browser",
-      hostId: TEST_HOST_ID,
-      url: "https://example.com/app",
-      viewportPreset: "desktop",
-    };
-    const state = openPinned(createEmptyCanvas(), browser);
-    const updated = updateBrowserTileDocument(state, browser.instanceId, {
-      url: "https://example.com/next",
-      name: "Next page",
-    });
-    const ref = updated.tilesByInstanceId[browser.instanceId];
-
-    expect(ref).toMatchObject({
-      id: browser.id,
-      instanceId: browser.instanceId,
-      url: "https://example.com/next",
-      name: "Next page",
-    });
-    expect(
-      updateBrowserTileDocument(updated, browser.instanceId, {
-        url: "https://example.com/next",
-        name: "Next page",
-      }),
-    ).toBe(updated);
-    expectCanvasInvariants(updated);
-  });
 });
 
 describe("updateBrowserTileViewportPreset", () => {
-  it("writes viewportPreset on an AgentBrowserTileRef", () => {
-    const agent: AgentBrowserTileRef = {
-      id: "agent-browser-1",
-      sessionId: "agent-session-1",
-      instanceId: "inst-agent-1",
-      type: "agent-browser",
-      name: "Agent browser",
-      hostId: TEST_HOST_ID,
-      url: "https://example.com",
-      viewportPreset: "responsive",
-      runtime: "isolated",
-    };
-    const state = openPinned(createEmptyCanvas(), agent);
-    const updated = updateBrowserTileViewportPreset(
-      state,
-      agent.instanceId,
-      "mobile",
-    );
-    const ref = updated.tilesByInstanceId[agent.instanceId];
-
-    expect(ref).toMatchObject({
-      id: agent.id,
-      instanceId: agent.instanceId,
-      type: "agent-browser",
-      viewportPreset: "mobile",
-    });
-    expect(
-      updateBrowserTileViewportPreset(updated, agent.instanceId, "mobile"),
-    ).toBe(updated);
-    expectCanvasInvariants(updated);
-  });
-
-  it("no-ops a browser-session pointer", () => {
+  it("writes viewportPreset on a browser-session pointer", () => {
     const pointer: BrowserSessionTileRef = {
       id: "browser-session:s:t",
       instanceId: "inst-session-1",
       type: "browser-session",
-      name: "Session",
       hostId: TEST_HOST_ID,
       sessionId: "s",
       tabId: "t",
+      viewportPreset: "responsive",
     };
     const state = openPinned(createEmptyCanvas(), pointer);
     const next = updateBrowserTileViewportPreset(
@@ -1174,8 +1084,13 @@ describe("updateBrowserTileViewportPreset", () => {
       "mobile",
     );
 
-    expect(next).toBe(state);
-    expect(state.tilesByInstanceId[pointer.instanceId]).toEqual(pointer);
+    expect(next.tilesByInstanceId[pointer.instanceId]).toEqual({
+      ...pointer,
+      viewportPreset: "mobile",
+    });
+    expect(
+      updateBrowserTileViewportPreset(next, pointer.instanceId, "mobile"),
+    ).toBe(next);
   });
 });
 
@@ -1260,7 +1175,7 @@ describe("instanceId / content-id decoupling", () => {
     expect(renamed.root).toBe(rootBefore);
     const pane = rootPane(renamed);
     const tab = paneTabRefs(renamed, pane)[0];
-    expect(tab.name).toBe("Renamed Spec");
+    expect(epicCanvasTileFallbackName(tab)).toBe("Renamed Spec");
     expect(tab.instanceId).toBe(SPEC_A.instanceId);
     expect(pane.previewTabId).toBe(SPEC_A.instanceId);
   });
@@ -1351,7 +1266,7 @@ describe("openBlankTabInPane", () => {
     expect(pane.tabInstanceIds).toHaveLength(2);
     const blank = paneTabRefs(state, pane)[1];
     expect(isBlankTileRef(blank)).toBe(true);
-    expect(blank.name).toBe("New tab");
+    expect(epicCanvasTileFallbackName(blank)).toBe("New tab");
     expect(pane.activeTabId).toBe(blank.instanceId);
     expect(activationContentIds(state, pane)).toEqual([blank.id, SPEC_A.id]);
     expect(state.activePaneId).toBe(paneId);

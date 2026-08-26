@@ -11,10 +11,7 @@ import type {
   TileLayoutNode,
 } from "./tile-tree";
 import {
-  TILE_KIND_AGENT_BROWSER,
   TILE_KIND_BLANK,
-  TILE_KIND_BROWSER,
-  TILE_KIND_BROWSER_PEEK,
   TILE_KIND_BROWSER_SESSION,
   TILE_KIND_COMM_GRAPH,
   TILE_KIND_GIT_DIFF,
@@ -167,67 +164,15 @@ interface EpicTerminalRefBase {
   readonly lifecycleOwner?: "registry" | "manager";
 }
 
-/**
- * Browser tab. `id` is a page-session identity, not a URL-derived content key:
- * opening or duplicating the same URL creates a new page session with a fresh
- * id while `url` remains mutable tile state.
- */
-export interface BrowserTileRef {
-  readonly id: string;
-  readonly instanceId: string;
-  readonly type: typeof TILE_KIND_BROWSER;
-  readonly name: string;
-  readonly hostId: string;
-  readonly url: string;
-  readonly viewportPreset: string;
-}
-
-/**
- * Screencast mirror of a host-owned headless browser session. `sessionId` is
- * the authoritative headless session handle. The tile can arm page input
- * over the screencast contract; it is not a read-only surface.
- */
-export interface BrowserPeekTileRef {
-  readonly id: string;
-  readonly instanceId: string;
-  readonly type: typeof TILE_KIND_BROWSER_PEEK;
-  readonly name: string;
-  readonly hostId: string;
-  readonly chatId: string;
-  readonly sessionId: string;
-  readonly tabId: string;
-  readonly initialUrl: string;
-}
-
 /** Renderer-local view pointer to one host-owned epic browser tab. */
 export interface BrowserSessionTileRef {
   readonly id: string;
   readonly instanceId: string;
   readonly type: typeof TILE_KIND_BROWSER_SESSION;
-  readonly name: string;
   readonly hostId: string;
   readonly sessionId: string;
   readonly tabId: string;
-}
-
-/**
- * An agent-opened browser tab presented through the shared Electron tab
- * lifecycle.
- * `id` is the page-session id used as the Electron tile key's
- * `pageSessionId`. `sessionId` is the host browser session. Do not
- * swap those when wiring chrome. `runtime` is the partition/bridge
- * this tile should attach to, not who created it.
- */
-export interface AgentBrowserTileRef {
-  readonly id: string;
-  readonly sessionId: string;
-  readonly instanceId: string;
-  readonly type: typeof TILE_KIND_AGENT_BROWSER;
-  readonly name: string;
-  readonly hostId: string;
-  readonly url: string;
   readonly viewportPreset: string;
-  readonly runtime: "primary" | "isolated";
 }
 
 /** Pre-migration ref. These semantic fields are import/old-host evidence only. */
@@ -656,10 +601,7 @@ export interface PrDiffTileRef {
 
 export type EpicCanvasTileRef =
   | EpicNodeRef
-  | BrowserTileRef
-  | BrowserPeekTileRef
   | BrowserSessionTileRef
-  | AgentBrowserTileRef
   | GitDiffTileRef
   | SnapshotDiffTileRef
   | ManagedCommandOutputTileRef
@@ -668,6 +610,10 @@ export type EpicCanvasTileRef =
   | PrDetailTileRef
   | PrDiffTileRef
   | BlankTileRef;
+
+export function epicCanvasTileFallbackName(ref: EpicCanvasTileRef): string {
+  return ref.type === TILE_KIND_BROWSER_SESSION ? "Browser" : ref.name;
+}
 
 export function isPublishedChatTileRef(
   value: EpicCanvasTileRef,
@@ -699,28 +645,10 @@ export function isGitDiffTileRef(
   return value.type === TILE_KIND_GIT_DIFF;
 }
 
-export function isBrowserTileRef(
-  value: EpicCanvasTileRef,
-): value is BrowserTileRef {
-  return value.type === TILE_KIND_BROWSER;
-}
-
-export function isBrowserPeekTileRef(
-  value: EpicCanvasTileRef,
-): value is BrowserPeekTileRef {
-  return value.type === TILE_KIND_BROWSER_PEEK;
-}
-
 export function isBrowserSessionTileRef(
   value: EpicCanvasTileRef,
 ): value is BrowserSessionTileRef {
   return value.type === TILE_KIND_BROWSER_SESSION;
-}
-
-export function isAgentBrowserTileRef(
-  value: EpicCanvasTileRef,
-): value is AgentBrowserTileRef {
-  return value.type === TILE_KIND_AGENT_BROWSER;
 }
 
 export function isWorkspaceFileRef(

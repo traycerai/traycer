@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Bug, Camera, Globe2, Send } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,15 +18,15 @@ import {
 import type {
   BrowserViewBridge,
   BrowserViewConsoleEntry,
-  BrowserViewDebugSnapshotChange,
+  BrowserViewDebugSnapshot,
   BrowserViewNetworkEntry,
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { isBrowserTileRef } from "@/stores/epics/canvas/types";
+import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
 import type {
-  BrowserTileRef,
+  BrowserSessionTileRef,
   EpicCanvasState,
 } from "@/stores/epics/canvas/types";
 import {
@@ -37,9 +38,13 @@ import {
 type BrowserAttachLevel = "screenshot" | "debug-errors" | "debug-snapshot";
 
 interface BrowserContextCandidate {
-  readonly tile: BrowserTileRef;
+  readonly tile: BrowserSessionTileRef;
   readonly tileKey: BrowserViewTileKey;
+}
+
+interface ResolvedBrowserContextCandidate extends BrowserContextCandidate {
   readonly title: string;
+  readonly pageUrl: string;
 }
 
 const browserContextCandidateCache = new WeakMap<
@@ -54,12 +59,32 @@ export function BrowserComposerContextChip(props: {
 }) {
   const runnerHost = useRunnerHost();
   const browserView = runnerHost.browserView;
-  const candidate = useEpicCanvasStore((state) =>
+  const sessions = useBrowserSessionsContext();
+  const pointer = useEpicCanvasStore((state) =>
     selectStableBrowserContextCandidate(
       state.canvasByTabId[props.viewTabId] ?? null,
       props.viewTabId,
       props.chatInstanceId,
     ),
+  );
+  const session = sessions.items.find(
+    (item) =>
+      item.hostId === pointer?.tile.hostId &&
+      item.sessionId === pointer.tile.sessionId,
+  );
+  const tab = session?.tabs.find((item) => item.tabId === pointer?.tile.tabId);
+  const candidate = useMemo<ResolvedBrowserContextCandidate | null>(
+    () =>
+      pointer !== null &&
+      session?.runtime.kind === "electron" &&
+      tab !== undefined
+        ? {
+            ...pointer,
+            title: tab.title ?? "Browser",
+            pageUrl: tab.url,
+          }
+        : null,
+    [pointer, session?.runtime, tab],
   );
   const [pendingLevel, setPendingLevel] = useState<BrowserAttachLevel | null>(
     null,
@@ -129,7 +154,7 @@ export function BrowserComposerContextChip(props: {
 
 async function captureBrowserContext(
   browserView: BrowserViewBridge,
-  candidate: BrowserContextCandidate,
+  candidate: ResolvedBrowserContextCandidate,
   level: BrowserAttachLevel,
 ): Promise<BrowserContextAttachmentPayload> {
   const capture = await browserView.capturePage(candidate.tileKey);
@@ -141,7 +166,7 @@ async function captureBrowserContext(
   const networkEntries = networkEntriesForLevel(level, snapshot.networkEntries);
   return createBrowserDebugContextAttachment({
     tile: candidate.tileKey,
-    pageUrl: candidate.tile.url,
+    pageUrl: candidate.pageUrl,
     dataLevel: level,
     capture,
     consoleEntries,
@@ -219,7 +244,6 @@ function browserContextCandidatesEqual(
   if (a === undefined || a === null || b === null) return false;
   return (
     a.tile === b.tile &&
-    a.title === b.title &&
     a.tileKey.viewTabId === b.tileKey.viewTabId &&
     a.tileKey.paneId === b.tileKey.paneId &&
     a.tileKey.tileInstanceId === b.tileKey.tileInstanceId &&
@@ -265,7 +289,7 @@ function activeBrowserInPane(
   if (pane.activeTabId === null) return [];
   const tile = canvas.tilesByInstanceId[pane.activeTabId];
   if (tile === undefined) return [];
-  if (!isBrowserTileRef(tile)) return [];
+  if (!isBrowserSessionTileRef(tile)) return [];
   return [
     {
       tile,
@@ -275,24 +299,13 @@ function activeBrowserInPane(
         tileInstanceId: tile.instanceId,
         pageSessionId: tile.id,
       },
-      title: browserContextTitle(tile),
     },
   ];
 }
 
-function browserContextTitle(tile: BrowserTileRef): string {
-  if (tile.name.length > 0 && tile.name !== "New browser") return tile.name;
-  try {
-    const parsed = new URL(tile.url);
-    return parsed.hostname.length === 0 ? tile.url : parsed.hostname;
-  } catch {
-    return tile.url;
-  }
-}
-
 function emptyDebugSnapshot(
   tileKey: BrowserViewTileKey,
-): BrowserViewDebugSnapshotChange {
+): BrowserViewDebugSnapshot {
   return {
     ...tileKey,
     consoleEntries: [],

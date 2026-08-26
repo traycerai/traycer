@@ -321,7 +321,6 @@ export const RunnerHostInvoke = {
   zoomStepIn: "runnerHost:zoom:stepIn",
   zoomStepOut: "runnerHost:zoom:stepOut",
   zoomReset: "runnerHost:zoom:reset",
-  browserViewUpsert: "runnerHost:browserView:upsert",
   browserViewEnsureTab: "runnerHost:browserView:nativeTab:ensure",
   browserViewAcceptTab: "runnerHost:browserView:nativeTab:accept",
   browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
@@ -331,27 +330,16 @@ export const RunnerHostInvoke = {
   browserViewElectronTabCdpDispatch:
     "runnerHost:browserView:nativeTab:cdp:dispatch",
   browserViewUpdateBounds: "runnerHost:browserView:updateBounds",
-  browserViewSetViewportPreset: "runnerHost:browserView:setViewportPreset",
-  browserViewRelease: "runnerHost:browserView:release",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewOverlayPaintAck: "runnerHost:browserView:overlayPaintAck",
-  browserViewReload: "runnerHost:browserView:reload",
-  browserViewGoBack: "runnerHost:browserView:goBack",
-  browserViewGoForward: "runnerHost:browserView:goForward",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
   browserViewCancelDownload: "runnerHost:browserView:cancelDownload",
   browserViewTrustCertificate: "runnerHost:browserView:trustCertificate",
-  browserViewZoomIn: "runnerHost:browserView:zoomIn",
-  browserViewZoomOut: "runnerHost:browserView:zoomOut",
-  browserViewResetZoom: "runnerHost:browserView:resetZoom",
   browserViewOccludeForOverlay: "runnerHost:browserView:occludeForOverlay",
   browserViewReleaseOverlay: "runnerHost:browserView:releaseOverlay",
   browserViewCapturePage: "runnerHost:browserView:capturePage",
   browserViewGetDebugSnapshot: "runnerHost:browserView:getDebugSnapshot",
-  browserViewClearDebugEvents: "runnerHost:browserView:clearDebugEvents",
-  browserViewStorageStateApply: "runnerHost:browserView:storageState:apply",
-  browserViewStorageStateCapture: "runnerHost:browserView:storageState:capture",
   browserViewPrimaryProfileCapture:
     "runnerHost:browserView:primaryProfile:capture",
   browserViewCookieCryptoStateGet:
@@ -363,7 +351,6 @@ export const RunnerHostInvoke = {
     "runnerHost:browserView:annotation:setTargetChatLabel",
   browserViewAnnotationAttachResult:
     "runnerHost:browserView:annotation:attachResult",
-  browserViewOpenDevTools: "runnerHost:browserView:openDevTools",
   // Native-tab PiP capture (agent-browser-pip ticket 02). Rides the existing
   // debugger attach; frames are pushed on `pipCaptureFrame`.
   pipCaptureStart: "runnerHost:pipCapture:start",
@@ -422,7 +409,6 @@ export const RunnerHostEvent = {
   // (browser/dev, the single-window topology D16 names).
   registeredHostsChange: "runnerHost:event:host:registeredHostsChange",
   zoomChange: "runnerHost:event:zoom:change",
-  browserViewStatusChange: "runnerHost:event:browserView:statusChange",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
   browserViewElectronTabHandoff:
@@ -433,8 +419,6 @@ export const RunnerHostEvent = {
   browserViewOpenTileRequest: "runnerHost:event:browserView:openTileRequest",
   browserViewSnapshotInvalidated:
     "runnerHost:event:browserView:snapshotInvalidated",
-  browserViewDebugSnapshotChange:
-    "runnerHost:event:browserView:debugSnapshotChange",
   browserViewAnnotationEvent: "runnerHost:event:browserView:annotation",
   browserViewAnnotationAttached:
     "runnerHost:event:browserView:annotationAttached",

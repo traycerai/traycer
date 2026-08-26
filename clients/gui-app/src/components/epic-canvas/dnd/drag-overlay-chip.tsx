@@ -10,7 +10,6 @@
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import {
-  Bot,
   FileDiff,
   FilePlus,
   Folder,
@@ -35,11 +34,8 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
-  isAgentBrowserTileRef,
   isBlankTileRef,
-  isBrowserPeekTileRef,
   isBrowserSessionTileRef,
-  isBrowserTileRef,
   isCommGraphTileRef,
   isPublishedChatTileRef,
   isDiffTileRef,
@@ -47,11 +43,8 @@ import {
   isManagedCommandOutputTileRef,
   isPrDetailTileRef,
   isPrDiffTileRef,
-  type AgentBrowserTileRef,
   type BlankTileRef,
-  type BrowserPeekTileRef,
   type BrowserSessionTileRef,
-  type BrowserTileRef,
   type ManagedCommandOutputTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
@@ -194,14 +187,8 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
-  if (isBrowserTileRef(props.node)) {
-    return <BrowserTileDragOverlay node={props.node} />;
-  }
-  if (isBrowserPeekTileRef(props.node) || isBrowserSessionTileRef(props.node)) {
-    return <BrowserPeekTileDragOverlay node={props.node} />;
-  }
-  if (isAgentBrowserTileRef(props.node)) {
-    return <AgentBrowserTileDragOverlay node={props.node} />;
+  if (isBrowserSessionTileRef(props.node)) {
+    return <BrowserSessionTileDragOverlay node={props.node} />;
   }
   if (isManagedCommandOutputTileRef(props.node)) {
     return (
@@ -285,19 +272,6 @@ function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {
   );
 }
 
-function BrowserTileDragOverlay(props: { readonly node: BrowserTileRef }) {
-  return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
-      <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
-    </m.div>
-  );
-}
-
 function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
   return (
     <m.div
@@ -311,32 +285,18 @@ function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
   );
 }
 
-function BrowserPeekTileDragOverlay(props: {
-  readonly node: BrowserPeekTileRef | BrowserSessionTileRef;
+function BrowserSessionTileDragOverlay(props: {
+  readonly node: BrowserSessionTileRef;
 }) {
   return (
     <m.div
       {...CHIP_MOTION}
       className={cn(CHIP_CLASS)}
       data-browser-overlay="drag-overlay"
+      data-browser-tab-id={props.node.tabId}
     >
       <Globe className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate">{props.node.name}</span>
-    </m.div>
-  );
-}
-
-function AgentBrowserTileDragOverlay(props: {
-  readonly node: AgentBrowserTileRef;
-}) {
-  return (
-    <m.div
-      {...CHIP_MOTION}
-      className={cn(CHIP_CLASS)}
-      data-browser-overlay="drag-overlay"
-    >
-      <Bot className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+      <span className="min-w-0 truncate">Browser</span>
     </m.div>
   );
 }

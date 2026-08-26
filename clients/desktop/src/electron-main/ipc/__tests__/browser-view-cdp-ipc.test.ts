@@ -129,7 +129,6 @@ vi.mock("../../browser-view/browser-view-manager", () => ({
 
     dispose(): void {}
   },
-  scheduleBrowserViewDebugSnapshot: vi.fn(),
 }));
 
 vi.mock("../../browser-view/browser-session", () => ({
@@ -157,20 +156,23 @@ vi.mock("../../browser-view/browser-cookie-crypto", () => ({
 }));
 
 vi.mock("../../browser-view/browser-storage-state", () => ({
+  BrowserPrimaryProfileSnapshotCoordinator: class {
+    observe(): void {}
+
+    capture() {
+      return Promise.resolve({
+        status: "captured",
+        storageState: { cookies: [], origins: [] },
+        reason: null,
+      });
+    }
+  },
   captureBrowserOriginLocalStorage: vi.fn(() => Promise.resolve(null)),
   captureBrowserPrimaryProfile: vi.fn(() =>
     Promise.resolve({
       status: "captured",
       storageState: { cookies: [], origins: [] },
       reason: null,
-    }),
-  ),
-  applyBrowserViewStorageState: vi.fn(() =>
-    Promise.resolve({
-      status: "applied",
-      cookieCount: 0,
-      localStorageApplied: false,
-      reason: "cookies-only",
     }),
   ),
   captureBrowserViewStorageState: vi.fn(() =>
@@ -183,6 +185,7 @@ vi.mock("../../browser-view/browser-storage-state", () => ({
       localStorageReason: null,
     }),
   ),
+  seedBrowserViewCookies: vi.fn(() => Promise.resolve()),
 }));
 
 function makeBridge() {

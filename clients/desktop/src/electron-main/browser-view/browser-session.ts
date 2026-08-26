@@ -229,6 +229,11 @@ export function registerBrowserViewWebContents(
   browserWebContentsIds.add(webContents.id);
   webContents.once("destroyed", () => {
     browserWebContentsIds.delete(webContents.id);
+    for (const [id, pending] of pendingCertificateErrorsById) {
+      if (pending.webContentsId === webContents.id) {
+        pendingCertificateErrorsById.delete(id);
+      }
+    }
   });
 }
 

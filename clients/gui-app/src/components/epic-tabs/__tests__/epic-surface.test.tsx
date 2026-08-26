@@ -90,11 +90,13 @@ vi.mock(
       }) => {
         const ready = openEpicHandleState.handle !== null;
         const value: BrowserSessionsState = {
+          hostId: "host-test",
           lifecycle: ready ? "live" : "connecting",
           inventoryReady: ready,
           items: ready ? readySessionsState.items : [],
           errorMessage: null,
           retry: () => undefined,
+          openTab: () => Promise.reject(new Error("not used")),
           closeTab: () => Promise.resolve(),
         };
         return (
@@ -184,9 +186,6 @@ const SAMPLE_SESSION: BrowserSessionInfo = {
   epicId: "epic-a",
   hostId: "host-test",
   profile: "primary",
-  name: "Main",
-  createdBy: { chatId: "chat-a", agentRunId: null },
-  createdAt: 1,
   lastActivityAt: 2,
   runtime: { kind: "electron", revision: 0 },
   tabs: [],

@@ -1,18 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
-  collectNewAgentTabsFromSessionFrame,
   decideAgentTabDisposition,
   findPaneIdHostingSessionTile,
-  forgetSeenAgentTabsForSession,
   isEpicSurfaceVisible,
   isManualPipActive,
-  placeAgentElectronTile,
-  placeHeadlessAgentSessionTile,
-  rememberElectronTabCreate,
-  resetAgentTabSurfacingForTests,
+  placeAgentTabTile,
   setEpicSurfaceVisibility,
-  surfaceAgentTabsFromSessionFrame,
+  surfaceAgentTab,
 } from "../agent-tab-surfacing";
 import {
   convertBrowserTabToPip,
@@ -21,60 +15,26 @@ import {
 } from "../pip-store";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import {
-  makeBrowserSessionTileRef,
-  makeBrowserTileRef,
-} from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import { makeBlankTileRef } from "@/stores/epics/canvas/tile-schema/blank-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type {
-  BrowserSessionTileRef,
-  BrowserTileRef,
-} from "@/stores/epics/canvas/types";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const EPIC = "epic-surface-1";
 const HOST = "host-1";
 const VIEW_TAB_ID = "view-agent-tab-surfacing";
 
-function agentSessionFixture(
-  overrides:
-    | {
-        readonly sessionId?: string;
-        readonly agentRunId?: string | null;
-      }
-    | undefined,
-): BrowserSessionInfo {
+function agentTabFixture(overrides: { readonly tabId: string }) {
   return {
-    sessionId: overrides?.sessionId ?? "session-a",
     epicId: EPIC,
     hostId: HOST,
-    profile: "isolated",
-    name: "Agent browser",
-    createdBy: {
-      chatId: "chat-1",
-      agentRunId:
-        overrides?.agentRunId === undefined ? "agent-1" : overrides.agentRunId,
-    },
-    createdAt: 0,
-    lastActivityAt: 0,
-    runtime: { kind: "electron", revision: 0 },
-    tabs: [
-      {
-        tabId: "tab-a1",
-        url: "https://example.com/a",
-        originTier: "external",
-        status: "ready",
-        title: null,
-        viewed: false,
-        drivenBy: [],
-      },
-    ],
+    sessionId: "session-a",
+    tabId: overrides.tabId,
   };
 }
 
-function seedCanvasWithTile(
-  tile: BrowserTileRef | BrowserSessionTileRef,
-): string {
+function seedCanvasWithTile(tile: EpicCanvasTileRef): string {
   const canvas = createSingleTileCanvas(tile);
   const pane = collectPanes(canvas.root).at(0);
   if (pane === undefined) throw new Error("expected a pane");
@@ -139,124 +99,6 @@ describe("decideAgentTabDisposition", () => {
   });
 });
 
-describe("collectNewAgentTabsFromSessionFrame", () => {
-  beforeEach(() => {
-    resetAgentTabSurfacingForTests();
-  });
-
-  it("seeds on first sight without reporting existing tabs", () => {
-    expect(
-      collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined)),
-    ).toEqual([]);
-  });
-
-  it("reports only genuinely new tabs of an agent-created session", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
-    const updated = agentSessionFixture(undefined);
-    const next = {
-      ...updated,
-      tabs: [
-        ...updated.tabs,
-        {
-          tabId: "tab-a2",
-          url: "https://example.com/b",
-          originTier: "external" as const,
-          status: "provisioning" as const,
-          title: null,
-          viewed: false,
-          drivenBy: [],
-        },
-      ],
-    };
-    expect(collectNewAgentTabsFromSessionFrame(next)).toEqual([
-      { tabId: "tab-a2", url: "https://example.com/b" },
-    ]);
-    // Replay of the same frame must not re-report.
-    expect(collectNewAgentTabsFromSessionFrame(next)).toEqual([]);
-  });
-
-  it("does not re-surface a tab whose targeted Electron create owns presentation", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
-    rememberElectronTabCreate("session-a", "tab-a2");
-    const updated = agentSessionFixture(undefined);
-
-    expect(
-      collectNewAgentTabsFromSessionFrame({
-        ...updated,
-        tabs: [
-          ...updated.tabs,
-          {
-            ...updated.tabs[0],
-            tabId: "tab-a2",
-            url: "https://example.com/b",
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  it("ignores new tabs on sessions no agent created or drove", () => {
-    collectNewAgentTabsFromSessionFrame(
-      agentSessionFixture({ sessionId: "session-user", agentRunId: null }),
-    );
-    const updated = agentSessionFixture({
-      sessionId: "session-user",
-      agentRunId: null,
-    });
-    expect(
-      collectNewAgentTabsFromSessionFrame({
-        ...updated,
-        tabs: [
-          ...updated.tabs,
-          {
-            tabId: "tab-u2",
-            url: "https://example.com/u",
-            originTier: "external",
-            status: "provisioning",
-            title: null,
-            viewed: false,
-            drivenBy: [],
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  it("treats a session with any driven tab as agent-created", () => {
-    collectNewAgentTabsFromSessionFrame(
-      agentSessionFixture({ sessionId: "session-mixed", agentRunId: null }),
-    );
-    const updated = agentSessionFixture({
-      sessionId: "session-mixed",
-      agentRunId: null,
-    });
-    const driven = {
-      ...updated,
-      tabs: [
-        {
-          ...updated.tabs[0],
-          tabId: "tab-driven",
-          url: "https://example.com/driven",
-          drivenBy: [
-            { chatId: "chat-9", agentRunId: "agent-9", requestId: "req-9" },
-          ],
-        },
-      ],
-    };
-    expect(collectNewAgentTabsFromSessionFrame(driven)).toEqual([
-      { tabId: "tab-driven", url: "https://example.com/driven" },
-    ]);
-  });
-
-  it("re-seeds after the session is forgotten (closed)", () => {
-    collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined));
-    forgetSeenAgentTabsForSession("session-a");
-    expect(
-      collectNewAgentTabsFromSessionFrame(agentSessionFixture(undefined)),
-    ).toEqual([]);
-  });
-});
-
 describe("isManualPipActive", () => {
   beforeEach(() => {
     dismissPip(EPIC);
@@ -295,7 +137,6 @@ describe("canvas placement", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     dismissPip(EPIC);
-    resetAgentTabSurfacingForTests();
     setEpicSurfaceVisibility(EPIC, true);
   });
 
@@ -305,19 +146,17 @@ describe("canvas placement", () => {
 
   it("groups a same-session electron open as a tab instead of splitting", () => {
     const sourceTile = makeBrowserSessionTileRef({
-      name: "Source",
       hostId: HOST,
       sessionId: "session-shared",
       tabId: "tab-source",
     });
     seedCanvasWithTile(sourceTile);
 
-    const placed = placeAgentElectronTile({
+    const placed = placeAgentTabTile({
       epicId: EPIC,
       hostId: HOST,
       sessionId: "session-shared",
       tabId: "tab-second",
-      url: "https://example.com/second",
     });
     expect(placed).toBe(true);
 
@@ -332,20 +171,14 @@ describe("canvas placement", () => {
   });
 
   it("splits right of the anchor pane for a brand-new session", () => {
-    const sourceTile = makeBrowserTileRef({
-      name: "Source browser",
-      hostId: HOST,
-      url: "https://app.example/source",
-      viewportPreset: "responsive",
-    });
+    const sourceTile = makeBlankTileRef();
     const anchorPaneId = seedCanvasWithTile(sourceTile);
 
-    const placed = placeAgentElectronTile({
+    const placed = placeAgentTabTile({
       epicId: EPIC,
       hostId: HOST,
       sessionId: "session-fresh",
       tabId: "tab-fresh",
-      url: "https://example.com/fresh",
     });
     expect(placed).toBe(true);
 
@@ -363,21 +196,13 @@ describe("canvas placement", () => {
   });
 
   it("places a read-only session tile split beside the active pane for headless opens", () => {
-    seedCanvasWithTile(
-      makeBrowserTileRef({
-        name: "Chat pane filler",
-        hostId: HOST,
-        url: "https://app.example/chat",
-        viewportPreset: "responsive",
-      }),
-    );
+    seedCanvasWithTile(makeBlankTileRef());
 
-    const placed = placeHeadlessAgentSessionTile({
+    const placed = placeAgentTabTile({
       epicId: EPIC,
       hostId: HOST,
       sessionId: "session-headless",
       tabId: "tab-h1",
-      url: "https://example.com/headless",
     });
     expect(placed).toBe(true);
 
@@ -402,50 +227,25 @@ describe("canvas placement", () => {
   });
 });
 
-describe("surfaceAgentTabsFromSessionFrame", () => {
+describe("surfaceAgentTab", () => {
   beforeEach(() => {
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     dismissPip(EPIC);
-    resetAgentTabSurfacingForTests();
     useSettingsStore.setState({ agentTabSurfacingMode: "off" });
   });
 
-  function frameWithExtraTab(tabId: string): BrowserSessionInfo {
-    const base = agentSessionFixture(undefined);
-    collectNewAgentTabsFromSessionFrame(base);
-    return {
-      ...base,
-      tabs: [
-        ...base.tabs,
-        {
-          tabId,
-          url: `https://example.com/${tabId}`,
-          originTier: "external",
-          status: "provisioning",
-          title: null,
-          viewed: false,
-          drivenBy: [],
-        },
-      ],
-    };
-  }
-
-  it("does nothing in off mode beyond bookkeeping", () => {
-    surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-x"));
+  it("suppresses in off mode", () => {
+    surfaceAgentTab(agentTabFixture({ tabId: "tab-x" }));
     expect(getPipSnapshot(EPIC).target).toBeNull();
     expect(getPipSnapshot(EPIC).pendingTarget).toBeNull();
     const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     expect(canvas === undefined || canvas.root === null).toBe(true);
-    // A second identical frame reports nothing new.
-    expect(
-      collectNewAgentTabsFromSessionFrame(frameWithExtraTab("tab-x")),
-    ).toEqual([]);
   });
 
   it("arms a pending agent PiP in pip mode on a visible epic", () => {
     useSettingsStore.setState({ agentTabSurfacingMode: "pip" });
     setEpicSurfaceVisibility(EPIC, true);
-    surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-pip"));
+    surfaceAgentTab(agentTabFixture({ tabId: "tab-pip" }));
     expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
       sessionId: "session-a",
       tabId: "tab-pip",
@@ -466,7 +266,7 @@ describe("surfaceAgentTabsFromSessionFrame", () => {
       onReady: () => {},
       onError: () => {},
     });
-    surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-respected"));
+    surfaceAgentTab(agentTabFixture({ tabId: "tab-respected" }));
     expect(getPipSnapshot(EPIC).pendingTarget).toMatchObject({
       sessionId: "other-session",
     });
@@ -476,15 +276,8 @@ describe("surfaceAgentTabsFromSessionFrame", () => {
   it("places a canvas tile in tile mode even for hidden epics", () => {
     useSettingsStore.setState({ agentTabSurfacingMode: "tile" });
     setEpicSurfaceVisibility(EPIC, false);
-    seedCanvasWithTile(
-      makeBrowserTileRef({
-        name: "Anchor",
-        hostId: HOST,
-        url: "https://app.example",
-        viewportPreset: "responsive",
-      }),
-    );
-    surfaceAgentTabsFromSessionFrame(frameWithExtraTab("tab-tiled"));
+    seedCanvasWithTile(makeBlankTileRef());
+    surfaceAgentTab(agentTabFixture({ tabId: "tab-tiled" }));
     const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
     if (canvas === undefined || canvas.root === null) {
       throw new Error("expected canvas");

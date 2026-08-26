@@ -689,7 +689,6 @@ export interface AnalyticsEventProperties {
     readonly disposition: "float" | "tile" | "suppress";
     readonly disposition_reason:
       "mode-off" | "manual-pip-active" | "pip-epic-hidden" | null;
-    readonly origin: "electron-create" | "headless-session";
   };
   readonly [AnalyticsEvent.TabMoved]: { readonly target: AnalyticsTargetKind };
   readonly [AnalyticsEvent.TabClosed]: { readonly target: AnalyticsTargetKind };
@@ -1371,7 +1370,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
   ...eventKeyEntries([AnalyticsEvent.ArtifactCreated], ["kind"]),
   ...eventKeyEntries(
     [AnalyticsEvent.AgentTabSurfaced],
-    ["disposition", "disposition_reason", "origin"],
+    ["disposition", "disposition_reason"],
   ),
   ...eventKeyEntries([AnalyticsEvent.ArtifactOpened], ["source", "kind"]),
   ...eventKeyEntries(
@@ -1720,11 +1719,6 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     [AnalyticsEvent.AgentTabSurfaced],
     "disposition",
     new Set(["float", "tile", "suppress"]),
-  ),
-  ...eventValueEntries(
-    [AnalyticsEvent.AgentTabSurfaced],
-    "origin",
-    new Set(["electron-create", "headless-session"]),
   ),
   ...eventValueEntries(
     [

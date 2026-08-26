@@ -15,7 +15,10 @@ import {
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  epicCanvasTileFallbackName,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 
 interface MobileCurrentTileBarProps {
   readonly epicId: string;
@@ -50,7 +53,7 @@ export function MobileCurrentTileBar(props: MobileCurrentTileBarProps) {
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
     {
       id: tile.id,
-      name: tile.name,
+      name: epicCanvasTileFallbackName(tile),
       type: tile.type,
       hostId: "hostId" in tile ? tile.hostId : null,
     },

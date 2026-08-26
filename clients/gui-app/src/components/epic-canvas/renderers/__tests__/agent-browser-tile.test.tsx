@@ -192,12 +192,8 @@ describe("ElectronTabSurface", () => {
   });
 
   it("attaches the accepted native incarnation before enabling tile chrome", async () => {
-    const update = vi.fn(() => Promise.resolve());
     const detach = vi.fn(() => Promise.resolve());
-    const lease: ElectronTabSurfaceLease = {
-      update,
-      detach,
-    };
+    const lease: ElectronTabSurfaceLease = { detach };
     const bindSurface = vi.fn(() => Promise.resolve(lease));
     renderTile(createBinding(bindSurface));
 
@@ -211,28 +207,33 @@ describe("ElectronTabSurface", () => {
           tileInstanceId: "tile-1",
           pageSessionId: "browser-session:session-1:tab-1",
         },
-        visible: false,
       });
       expect(state.chromeInputs.at(-1)?.surfaceServices).toBe(state.bridge);
     });
   });
 
-  it("updates presentation state through the lease and detaches on unmount", async () => {
-    const update = vi.fn(() => Promise.resolve());
+  it("detaches the native surface when the tile becomes hidden", async () => {
     const detach = vi.fn(() => Promise.resolve());
-    const lease: ElectronTabSurfaceLease = {
-      update,
-      detach,
-    };
-    const view = renderTile(createBinding(() => Promise.resolve(lease)));
+    const lease: ElectronTabSurfaceLease = { detach };
+    const bindSurface = vi.fn(() => Promise.resolve(lease));
+    const binding = createBinding(bindSurface);
+    const view = renderTile(binding);
     await waitFor(() => {
-      expect(update).toHaveBeenCalledWith(
-        expect.objectContaining({ visible: true }),
-      );
+      expect(bindSurface).toHaveBeenCalledOnce();
     });
 
-    view.unmount();
-    expect(detach).toHaveBeenCalledTimes(1);
+    state.visible = false;
+    view.rerender(
+      <ElectronTabSurface
+        node={NODE}
+        binding={binding}
+        viewTabId="view-1"
+        paneId="pane-1"
+      />,
+    );
+    await waitFor(() => {
+      expect(detach).toHaveBeenCalledOnce();
+    });
   });
 
   it("shows an attach failure without creating or releasing another tab", async () => {

@@ -1,20 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  browserTileNameForUrl,
   normalizeBrowserAddressInput,
-  openFreshBrowserTileFromBrowserPage,
+  openBrowserSessionTileFromPage,
   routeBrowserLink,
   type BrowserLinkSource,
 } from "@/lib/browser-view/browser-link-routing-core";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
-import { makeBrowserTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
-  isBrowserTileRef,
-  type BrowserTileRef,
-  type EpicCanvasTileRef,
+  isBrowserSessionTileRef,
+  type BrowserSessionTileRef,
   type EpicCanvasState,
+  type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -29,10 +27,7 @@ const SOURCE_TILE: EpicCanvasTileRef = {
 };
 
 function resetStores(): void {
-  useEpicCanvasStore.setState({
-    canvasByTabId: {},
-    tabsById: {},
-  });
+  useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
     inAppBrowserBetaEnabled: false,
     browserLinkDefaultMode: "in-app",
@@ -43,9 +38,7 @@ function resetStores(): void {
 }
 
 function mockRunnerHost() {
-  return {
-    openExternalLink: vi.fn(() => Promise.resolve()),
-  };
+  return { openExternalLink: vi.fn(() => Promise.resolve()) };
 }
 
 function seedCanvas(node: EpicCanvasTileRef): BrowserLinkSource {
@@ -59,15 +52,9 @@ function seedCanvas(node: EpicCanvasTileRef): BrowserLinkSource {
         name: "Routing",
       },
     },
-    canvasByTabId: {
-      [VIEW_TAB_ID]: canvas,
-    },
+    canvasByTabId: { [VIEW_TAB_ID]: canvas },
   });
-  return {
-    viewTabId: VIEW_TAB_ID,
-    paneId: pane.id,
-    hostId: node.hostId,
-  };
+  return { viewTabId: VIEW_TAB_ID, paneId: pane.id, hostId: node.hostId };
 }
 
 function singlePane(canvas: EpicCanvasState) {
@@ -76,12 +63,12 @@ function singlePane(canvas: EpicCanvasState) {
   return pane;
 }
 
-function browserTiles(): ReadonlyArray<BrowserTileRef> {
+function browserSessionTiles(): ReadonlyArray<BrowserSessionTileRef> {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
   if (canvas === undefined) return [];
   return Object.values(canvas.tilesByInstanceId).filter(
-    (tile): tile is BrowserTileRef =>
-      tile !== undefined && isBrowserTileRef(tile),
+    (tile): tile is BrowserSessionTileRef =>
+      tile !== undefined && isBrowserSessionTileRef(tile),
   );
 }
 
@@ -90,145 +77,68 @@ describe("browser link routing", () => {
   afterEach(resetStores);
 
   it("keeps web links external while the browser beta is disabled", () => {
+    const runnerHost = mockRunnerHost();
+    const openInApp = vi.fn(() => true);
+
+    const result = routeBrowserLink({
+      runnerHost,
+      source: seedCanvas(SOURCE_TILE),
+      kind: "terminal",
+      url: "https://example.test/docs",
+      event: null,
+      openInApp,
+    });
+
+    expect(result).toBe("external");
+    expect(openInApp).not.toHaveBeenCalled();
+    expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
+      "https://example.test/docs",
+    );
+  });
+
+  it("delegates enabled in-app links to the host-backed opener", () => {
     const source = seedCanvas(SOURCE_TILE);
     const runnerHost = mockRunnerHost();
+    const openInApp = vi.fn(() => true);
+    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
 
     const result = routeBrowserLink({
       runnerHost,
       source,
-      kind: "terminal",
+      kind: "markdown",
       url: "https://example.test/docs",
       event: null,
+      openInApp,
+    });
+
+    expect(result).toBe("in-app");
+    expect(openInApp).toHaveBeenCalledWith(source, "https://example.test/docs");
+    expect(runnerHost.openExternalLink).not.toHaveBeenCalled();
+  });
+
+  it("falls back externally when host-backed opening is unavailable", () => {
+    const runnerHost = mockRunnerHost();
+    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
+
+    const result = routeBrowserLink({
+      runnerHost,
+      source: seedCanvas(SOURCE_TILE),
+      kind: "markdown",
+      url: "https://example.test/docs",
+      event: null,
+      openInApp: () => false,
     });
 
     expect(result).toBe("external");
     expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
       "https://example.test/docs",
     );
-    expect(browserTiles()).toHaveLength(0);
-  });
-
-  it("opens http links in a new browser page session when enabled", () => {
-    const source = seedCanvas(SOURCE_TILE);
-    const runnerHost = mockRunnerHost();
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
-
-    const result = routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "markdown",
-      url: "https://example.test/docs",
-      event: null,
-    });
-
-    expect(result).toBe("in-app");
-    expect(runnerHost.openExternalLink).not.toHaveBeenCalled();
-    expect(browserTiles()).toMatchObject([
-      {
-        type: "browser",
-        hostId: HOST_ID,
-        name: "example.test",
-        url: "https://example.test/docs",
-      },
-    ]);
-  });
-
-  it("does not derive browser page-session identity from URL", () => {
-    const source = seedCanvas(SOURCE_TILE);
-    const runnerHost = mockRunnerHost();
-    const backgroundBrowser = makeBrowserTileRef({
-      name: "Background browser",
-      hostId: HOST_ID,
-      url: "https://example.test/reuse",
-      viewportPreset: "responsive",
-    });
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
-    useEpicCanvasStore
-      .getState()
-      .openTileInBackgroundTab(VIEW_TAB_ID, backgroundBrowser);
-
-    routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "terminal",
-      url: "https://example.test/reuse",
-      event: null,
-    });
-
-    const tiles = browserTiles();
-    expect(tiles).toHaveLength(2);
-    expect(tiles.map((tile) => tile.url)).toEqual([
-      "https://example.test/reuse",
-      "https://example.test/reuse",
-    ]);
-    expect(new Set(tiles.map((tile) => tile.id)).size).toBe(2);
-  });
-
-  it("reuses a focused browser tile in another pane for non-browser source links", () => {
-    const source = seedCanvas(SOURCE_TILE);
-    const runnerHost = mockRunnerHost();
-    const browserTile = makeBrowserTileRef({
-      name: "Browser",
-      hostId: HOST_ID,
-      url: "https://old.example/",
-      viewportPreset: "responsive",
-    });
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
-    useEpicCanvasStore
-      .getState()
-      .splitPaneWithNode(VIEW_TAB_ID, source.paneId, "right", browserTile);
-
-    const result = routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "terminal",
-      url: "https://new.example/docs",
-      event: null,
-    });
-
-    const tiles = browserTiles();
-    expect(result).toBe("in-app");
-    expect(runnerHost.openExternalLink).not.toHaveBeenCalled();
-    expect(tiles).toHaveLength(1);
-    expect(tiles[0]).toMatchObject({
-      id: browserTile.id,
-      instanceId: browserTile.instanceId,
-      url: "https://new.example/docs",
-    });
-  });
-
-  it("updates an active browser tile through the mutable URL path", () => {
-    const browserTile = makeBrowserTileRef({
-      name: "Old",
-      hostId: HOST_ID,
-      url: "https://old.example/",
-      viewportPreset: "responsive",
-    });
-    const source = seedCanvas(browserTile);
-    const runnerHost = mockRunnerHost();
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
-
-    const result = routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "markdown",
-      url: "https://new.example/docs",
-      event: null,
-    });
-
-    const tiles = browserTiles();
-    expect(result).toBe("in-app");
-    expect(tiles).toHaveLength(1);
-    expect(tiles[0]).toMatchObject({
-      id: browserTile.id,
-      instanceId: browserTile.instanceId,
-      url: "https://new.example/docs",
-    });
   });
 
   it("honors per-kind settings and the alt-click override", () => {
     const source = seedCanvas(SOURCE_TILE);
     const runnerHost = mockRunnerHost();
+    const openInApp = vi.fn(() => true);
     useSettingsStore.setState({
       inAppBrowserBetaEnabled: true,
       browserLinkDefaultMode: "per-kind",
@@ -243,6 +153,7 @@ describe("browser link routing", () => {
         kind: "markdown",
         url: "https://example.test/markdown",
         event: null,
+        openInApp,
       }),
     ).toBe("external");
     expect(
@@ -252,6 +163,7 @@ describe("browser link routing", () => {
         kind: "markdown",
         url: "https://example.test/markdown-alt",
         event: { altKey: true },
+        openInApp,
       }),
     ).toBe("in-app");
     expect(
@@ -261,12 +173,15 @@ describe("browser link routing", () => {
         kind: "terminal",
         url: "https://example.test/terminal-alt",
         event: { altKey: true },
+        openInApp,
       }),
     ).toBe("external");
 
-    expect(browserTiles().map((tile) => tile.url)).toEqual([
+    expect(openInApp).toHaveBeenCalledOnce();
+    expect(openInApp).toHaveBeenCalledWith(
+      source,
       "https://example.test/markdown-alt",
-    ]);
+    );
   });
 
   it("records terminal dev-server origins from URL output only", () => {
@@ -274,57 +189,46 @@ describe("browser link routing", () => {
     const runnerHost = mockRunnerHost();
     useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
 
-    routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "terminal",
-      url: "http://localhost:5173/ready",
-      event: null,
-    });
-    routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "terminal",
-      url: "http://localhost:5173/again",
-      event: null,
-    });
-    routeBrowserLink({
-      runnerHost,
-      source,
-      kind: "markdown",
-      url: "http://localhost:5174/docs",
-      event: null,
-    });
+    for (const [kind, url] of [
+      ["terminal", "http://localhost:5173/ready"],
+      ["terminal", "http://localhost:5173/again"],
+      ["markdown", "http://localhost:5174/docs"],
+    ] as const) {
+      routeBrowserLink({
+        runnerHost,
+        source,
+        kind,
+        url,
+        event: null,
+        openInApp: () => true,
+      });
+    }
 
     expect(useSettingsStore.getState().browserDevOrigins).toEqual([
       "http://localhost:5173",
     ]);
   });
 
-  it("opens browser page popup requests as fresh browser tiles", () => {
-    const browserTile = makeBrowserTileRef({
-      name: "Source browser",
-      hostId: HOST_ID,
-      url: "https://source.example/",
-      viewportPreset: "responsive",
-    });
-    const source = seedCanvas(browserTile);
+  it("places a host-created popup as a browser-session pointer", () => {
+    const source = seedCanvas(SOURCE_TILE);
 
-    const opened = openFreshBrowserTileFromBrowserPage({
-      viewTabId: source.viewTabId,
-      paneId: source.paneId,
-      hostId: source.hostId,
+    const opened = openBrowserSessionTileFromPage({
+      ...source,
+      sessionId: "session-popup",
+      tabId: "tab-popup",
       url: "https://popup.example/oauth",
     });
 
-    const tiles = browserTiles();
     expect(opened).toBe(true);
-    expect(tiles).toHaveLength(2);
-    expect(tiles.map((tile) => tile.url)).toEqual([
-      "https://source.example/",
-      "https://popup.example/oauth",
+    expect(browserSessionTiles()).toMatchObject([
+      {
+        type: "browser-session",
+        hostId: HOST_ID,
+        sessionId: "session-popup",
+        tabId: "tab-popup",
+        viewportPreset: "responsive",
+      },
     ]);
-    expect(new Set(tiles.map((tile) => tile.id)).size).toBe(2);
   });
 });
 
@@ -338,12 +242,5 @@ describe("browser address helpers", () => {
     );
     expect(normalizeBrowserAddressInput("about:blank")).toBe("about:blank");
     expect(normalizeBrowserAddressInput("   ")).toBe("about:blank");
-  });
-
-  it("derives browser tile names from URL hostnames", () => {
-    expect(browserTileNameForUrl("https://docs.example.test/path")).toBe(
-      "docs.example.test",
-    );
-    expect(browserTileNameForUrl("about:blank")).toBe("New browser");
   });
 });

@@ -617,8 +617,9 @@ function usePipTargetMeta(
       ? undefined
       : findPipSession(items, target.hostId, target.sessionId);
   const tab = session?.tabs.find((item) => item.tabId === target?.tabId);
+  const driverChatId = tab?.drivenBy.at(-1)?.chatId ?? null;
   const agentName =
-    chats.find((chat) => chat.id === session?.createdBy.chatId)?.title ?? null;
+    chats.find((chat) => chat.id === driverChatId)?.title ?? null;
   const hostLabel = resolvePipHostLabel(
     target,
     canvasHostId,
@@ -651,7 +652,6 @@ function useOpenPipTarget(
       const tab = session?.tabs.find((item) => item.tabId === target.tabId);
       if (session === undefined || tab === undefined) return;
       const tile = makeBrowserSessionTileRef({
-        name: resolveTabTitle(tab),
         hostId: target.hostId,
         sessionId: target.sessionId,
         tabId: target.tabId,

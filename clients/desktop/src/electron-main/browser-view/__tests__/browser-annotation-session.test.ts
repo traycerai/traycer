@@ -295,7 +295,6 @@ function createHarness(attached: boolean): SessionHarness {
 function createDebugSession(webContents: FakeWebContents): BrowserDebugSession {
   return new BrowserDebugSession({
     webContents,
-    onSnapshotChange: () => undefined,
     onDetached: () => undefined,
   });
 }

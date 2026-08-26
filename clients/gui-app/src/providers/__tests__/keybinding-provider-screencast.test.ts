@@ -77,13 +77,15 @@ describe("KeybindingProvider screencast armed flag", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
-    useScreencastArmedStore.getState().setArmed(false);
+    const store = useScreencastArmedStore.getState();
+    if (store.ownerId !== null) store.release(store.ownerId);
   });
 
   afterEach(() => {
     cleanup();
     document.body.innerHTML = "";
-    useScreencastArmedStore.getState().setArmed(false);
+    const store = useScreencastArmedStore.getState();
+    if (store.ownerId !== null) store.release(store.ownerId);
     setSystemTabModalApi(null);
     vi.restoreAllMocks();
   });
@@ -102,7 +104,7 @@ describe("KeybindingProvider screencast armed flag", () => {
       ...platformModKeys(),
     };
 
-    useScreencastArmedStore.getState().setArmed(true);
+    useScreencastArmedStore.getState().claim("peek-owner");
     act(() => {
       dispatchWindowKey("keydown", chordInit);
     });
@@ -110,12 +112,22 @@ describe("KeybindingProvider screencast armed flag", () => {
     expect(openHistory).not.toHaveBeenCalled();
     expect(router.state.location.pathname).toBe("/");
 
-    useScreencastArmedStore.getState().setArmed(false);
+    useScreencastArmedStore.getState().release("peek-owner");
     act(() => {
       dispatchWindowKey("keydown", chordInit);
     });
 
     expect(openHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a stale release from a superseded owner", () => {
+    const store = useScreencastArmedStore.getState();
+    store.claim("owner-a");
+    store.claim("owner-b");
+
+    store.release("owner-a");
+
+    expect(useScreencastArmedStore.getState().ownerId).toBe("owner-b");
   });
 
   it("lets a consumed app chord keyup reach its focused target", () => {

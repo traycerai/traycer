@@ -176,6 +176,13 @@ export class FakeWebContents
 {
   readonly id = 1;
   readonly debugger = new FakeDebugger();
+  readonly session = {
+    cookies: {
+      get: () => Promise.resolve([]),
+      set: () => Promise.resolve(),
+      flushStore: () => Promise.resolve(),
+    },
+  };
   readonly navigationHistory = undefined;
   readonly qualities: number[] = [];
   captureCount = 0;
@@ -271,7 +278,6 @@ export function createHarness(): BrowserDebugSessionHarness {
   const frames: PipCaptureIpcPayload[] = [];
   const session = new BrowserDebugSession({
     webContents,
-    onSnapshotChange: () => undefined,
     onDetached: () => undefined,
   });
   return { session, webContents, frames };

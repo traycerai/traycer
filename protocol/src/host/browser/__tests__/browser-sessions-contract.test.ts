@@ -14,9 +14,6 @@ const SAMPLE_SESSION = {
   epicId: "epic-1",
   hostId: "host-1",
   profile: "primary" as const,
-  name: "Browser",
-  createdBy: { chatId: "chat-1", agentRunId: null },
-  createdAt: 10,
   lastActivityAt: 20,
   runtime: { kind: "headless" as const, revision: 0 },
   tabs: [
@@ -154,6 +151,18 @@ describe("browser.screencast@1.0 control frames", () => {
 });
 
 describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () => {
+  it("parses agentTabOpened as a one-way tab lifecycle event", () => {
+    const opened = {
+      kind: "agentTabOpened",
+      hasBinaryPayload: false,
+      sessionId: "session-1",
+      tabId: "tab-2",
+    };
+    expect(browserSessionsServerFrameSchema.safeParse(opened).success).toBe(
+      true,
+    );
+  });
+
   it("requires only the authorizing epicId on the open request", () => {
     expect(
       browserSessionsOpenRequestSchema.safeParse({
@@ -191,7 +200,6 @@ describe("browser.sessions@1.0 epic-scoped open + tab-shaped session info", () =
         originTier: "dev",
         status: "ready",
         title: "App",
-        createdAt: 10,
         lastActivityAt: 20,
       }),
     ).toBe(false);

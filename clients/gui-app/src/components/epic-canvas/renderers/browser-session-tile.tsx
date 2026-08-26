@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { ElectronTabSurface } from "./agent-browser-tile";
-import { BrowserPeekTile } from "./browser-peek-tile";
+import { BrowserPeekTile, type BrowserPeekNode } from "./browser-peek-tile";
 import { BrowserSessionsHostProvider } from "./browser-sessions-provider";
 import { useBrowserSessionsContext } from "./browser-sessions-context";
 import { useCloseCanvasTileWithNestedFocus } from "./use-close-canvas-tile-with-nested-focus";
@@ -11,10 +11,7 @@ import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
 } from "@/lib/browser-view/electron-tabs";
-import type {
-  BrowserPeekTileRef,
-  BrowserSessionTileRef,
-} from "@/stores/epics/canvas/types";
+import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 interface BrowserSessionTileProps {
   readonly node: BrowserSessionTileRef;
@@ -47,13 +44,10 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
   }
 
   if (props.session.runtime.kind !== "electron") {
-    const peek: BrowserPeekTileRef = {
+    const peek: BrowserPeekNode = {
       id: props.node.id,
       instanceId: props.node.instanceId,
-      type: "browser-peek",
-      name: props.tab.title ?? props.node.name,
       hostId: props.node.hostId,
-      chatId: props.session.createdBy.chatId,
       sessionId: props.node.sessionId,
       tabId: props.node.tabId,
       initialUrl: props.tab.url,
@@ -81,10 +75,10 @@ function BrowserSessionTileBody(props: BrowserSessionTileBodyProps) {
     id: props.node.id,
     sessionId: props.node.sessionId,
     instanceId: props.node.instanceId,
-    name: props.tab.title ?? props.node.name,
+    name: props.tab.title ?? "Browser",
     hostId: props.node.hostId,
     url: props.tab.url,
-    viewportPreset: "responsive",
+    viewportPreset: props.node.viewportPreset,
   };
   return (
     <ElectronTabSurface

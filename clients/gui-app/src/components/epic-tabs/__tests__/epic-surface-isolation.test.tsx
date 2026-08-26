@@ -41,11 +41,13 @@ vi.mock(
     const { BrowserSessionsContext } =
       await import("@/components/epic-canvas/renderers/browser-sessions-context");
     const state: BrowserSessionsState = {
+      hostId: "host-test",
       lifecycle: "connecting",
       inventoryReady: false,
       items: [],
       errorMessage: null,
       retry: () => undefined,
+      openTab: () => Promise.reject(new Error("not used")),
       closeTab: () => Promise.reject(new Error("not used")),
     };
     return {

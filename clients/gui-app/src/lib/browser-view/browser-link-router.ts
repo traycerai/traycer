@@ -1,13 +1,17 @@
 import { use, useCallback } from "react";
+import { toast } from "sonner";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   routeBrowserLink,
+  openBrowserSessionTileFromPage,
   type BrowserLinkClickEvent,
   type BrowserLinkKind,
   type BrowserLinkOpenResult,
+  type BrowserLinkSource,
 } from "@/lib/browser-view/browser-link-routing-core";
 import { BrowserLinkRoutingContext } from "@/lib/browser-view/browser-link-routing-context";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
 
 export function useBrowserLinkRouter(): (
   kind: BrowserLinkKind,
@@ -25,6 +29,32 @@ export function useBrowserLinkRouterForRunnerHost(
   event: BrowserLinkClickEvent | null,
 ) => BrowserLinkOpenResult {
   const context = use(BrowserLinkRoutingContext);
+  const sessions = useMaybeBrowserSessionsContext();
+  const openInApp = useCallback(
+    (source: BrowserLinkSource, url: string): boolean => {
+      if (
+        sessions === null ||
+        sessions.lifecycle !== "live" ||
+        sessions.hostId !== source.hostId
+      ) {
+        return false;
+      }
+      void sessions
+        .openTab(null, url)
+        .then((opened) => {
+          openBrowserSessionTileFromPage({
+            ...source,
+            ...opened,
+            url,
+          });
+        })
+        .catch(() => {
+          toast.error("Couldn't open the browser tab.");
+        });
+      return true;
+    },
+    [sessions],
+  );
   return useCallback(
     (kind, url, event) =>
       routeBrowserLink({
@@ -33,8 +63,9 @@ export function useBrowserLinkRouterForRunnerHost(
         kind,
         url,
         event,
+        openInApp,
       }),
-    [context?.source, runnerHost],
+    [context?.source, openInApp, runnerHost],
   );
 }
 

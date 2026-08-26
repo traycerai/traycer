@@ -1,8 +1,10 @@
 import {
   useCallback,
   useEffect,
-  useRef,
+  useEffectEvent,
+  useMemo,
   useState,
+  useSyncExternalStore,
   type Dispatch,
   type SetStateAction,
   type ReactNode,
@@ -19,9 +21,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -30,19 +30,9 @@ import {
   authenticatedOwnerIdentityKey,
 } from "@/hooks/host/use-host-stream-client-for";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
-import {
-  collectNewAgentTabsFromSessionFrame,
-  decideAgentTabDisposition,
-  forgetSeenAgentTabsForSession,
-  isEpicSurfaceVisible,
-  isManualPipActive,
-  openAgentTabInPip,
-  placeAgentElectronTile,
-  rememberElectronTabCreate,
-  surfaceAgentTabsFromSessionFrame,
-  trackAgentTabSurfaced,
-} from "@/lib/browser-view/agent-tab-surfacing";
+import { surfaceAgentTab } from "@/lib/browser-view/agent-tab-surfacing";
 import {
   createElectronTabs,
   type ElectronTabs,
@@ -54,10 +44,10 @@ import {
   applyPipHostLifecycle,
 } from "@/lib/browser-view/pip-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   BrowserSessionsContext,
   type BrowserSessionsLifecycle,
+  type OpenBrowserTabResult,
   type BrowserSessionsState,
 } from "./browser-sessions-context";
 
@@ -66,13 +56,46 @@ type PendingCloseRequest = {
   readonly reject: (error: Error) => void;
 };
 
-interface BrowserSessionsRenderState {
-  readonly client: IHostStreamClient<HostStreamRpcRegistry> | null;
-  readonly items: readonly BrowserSessionInfo[];
-  readonly lifecycle: BrowserSessionsLifecycle;
-  readonly inventoryReady: boolean;
-  readonly errorMessage: string | null;
+type PendingOpenRequest = {
+  readonly resolve: (result: OpenBrowserTabResult) => void;
+  readonly reject: (error: Error) => void;
+};
+
+interface BrowserSessionsOwner {
+  readonly hostId: string;
+  readonly identityKey: string;
 }
+
+interface BrowserSessionsActionChannel {
+  readonly owner: BrowserSessionsOwner;
+  lifecycle: BrowserSessionsLifecycle;
+  readonly sendClientFrame: (
+    frame: BrowserSessionsClientFrame,
+    binaryPayload: Uint8Array | null,
+  ) => void;
+}
+
+interface BrowserSessionsCoordinatorRuntime {
+  readonly browserView: BrowserViewBridge | null;
+  readonly openTransport: (hostId: string) => DurableStreamTransport;
+}
+
+interface BrowserSessionsCoordinator {
+  readonly owner: BrowserSessionsOwner;
+  state: BrowserSessionsState;
+  upsertConsumer: (
+    consumerId: symbol,
+    runtime: BrowserSessionsCoordinatorRuntime,
+  ) => void;
+  release: (consumerId: symbol) => number;
+  dispose: () => void;
+}
+
+const browserSessionsCoordinators = new Map<
+  string,
+  BrowserSessionsCoordinator
+>();
+const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
 
 function browserSessionsOwnerIdentityKey(
   hostClient: HostClient<HostRpcRegistry> | null,
@@ -141,93 +164,273 @@ function useBrowserSessions(
     hostEntry,
   );
   const openTransport = useDurableStreamTransportFactory();
-  // Keep an already-owned transport through a restart's transient non-dialable
-  // directory state; its endpoint listener will redial when the new URL lands.
-  const [readyOwner, setReadyOwner] = useState<{
-    readonly hostId: string;
-    readonly identityKey: string;
-  } | null>(null);
-  if (hostId === null || ownerIdentityKey === null) {
-    if (readyOwner !== null) {
-      setReadyOwner(null);
-    }
-  } else if (
-    transportReady &&
-    (readyOwner?.hostId !== hostId ||
-      readyOwner.identityKey !== ownerIdentityKey)
-  ) {
-    setReadyOwner({ hostId, identityKey: ownerIdentityKey });
+  const owner = useMemo<BrowserSessionsOwner | null>(
+    () =>
+      hostId === null || ownerIdentityKey === null
+        ? null
+        : { hostId, identityKey: ownerIdentityKey },
+    [hostId, ownerIdentityKey],
+  );
+  const ownerCoordinatorKey =
+    owner === null ? null : browserSessionsCoordinatorKey(epicId, owner);
+  const coordinatorKey =
+    ownerCoordinatorKey !== null &&
+    (transportReady || browserSessionsCoordinators.has(ownerCoordinatorKey))
+      ? ownerCoordinatorKey
+      : null;
+  const [consumerId] = useState(() => Symbol("browser-sessions-consumer"));
+  const acquireCoordinator = useEffectEvent(
+    (key: string, selectedOwner: BrowserSessionsOwner): (() => void) =>
+      acquireBrowserSessionsCoordinator({
+        key,
+        consumerId,
+        epicId,
+        owner: selectedOwner,
+        runtime: { browserView, openTransport },
+        createIfMissing: transportReady,
+      }),
+  );
+
+  useEffect(() => {
+    if (coordinatorKey === null || owner === null) return;
+    return acquireCoordinator(coordinatorKey, owner);
+  }, [consumerId, coordinatorKey, epicId, owner]);
+
+  useEffect(() => {
+    if (coordinatorKey === null) return;
+    browserSessionsCoordinators
+      .get(coordinatorKey)
+      ?.upsertConsumer(consumerId, { browserView, openTransport });
+  }, [browserView, consumerId, coordinatorKey, openTransport]);
+
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      subscribeToBrowserSessionsCoordinator(coordinatorKey, listener),
+    [coordinatorKey],
+  );
+  const getSnapshot = useCallback(
+    () =>
+      coordinatorKey === null
+        ? null
+        : (browserSessionsCoordinators.get(coordinatorKey)?.state ?? null),
+    [coordinatorKey],
+  );
+  const state = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const unavailableState = useMemo(
+    () => unavailableBrowserSessionsState(hostId),
+    [hostId],
+  );
+  return state ?? unavailableState;
+}
+
+function browserSessionsCoordinatorKey(
+  epicId: string,
+  owner: BrowserSessionsOwner,
+): string {
+  return JSON.stringify([epicId, owner.hostId, owner.identityKey]);
+}
+
+function acquireBrowserSessionsCoordinator(args: {
+  readonly key: string;
+  readonly consumerId: symbol;
+  readonly epicId: string;
+  readonly owner: BrowserSessionsOwner;
+  readonly runtime: BrowserSessionsCoordinatorRuntime;
+  readonly createIfMissing: boolean;
+}): () => void {
+  let coordinator = browserSessionsCoordinators.get(args.key);
+  if (coordinator === undefined) {
+    if (!args.createIfMissing) return () => undefined;
+    coordinator = createBrowserSessionsCoordinator(args);
+    browserSessionsCoordinators.set(args.key, coordinator);
+  } else {
+    coordinator.upsertConsumer(args.consumerId, args.runtime);
   }
-  const sessionRef = useRef<{
-    sendClientFrame: (
-      frame: BrowserSessionsClientFrame,
-      binaryPayload: Uint8Array | null,
-    ) => void;
-  } | null>(null);
-  const pendingClosesRef = useRef<Map<string, PendingCloseRequest>>(new Map());
-  const [streamState, setStreamState] = useState<BrowserSessionsRenderState>(
-    () => ({
-      client: null,
+  notifyBrowserSessionsCoordinator(args.key);
+
+  const acquired = coordinator;
+  return () => {
+    if (browserSessionsCoordinators.get(args.key) !== acquired) return;
+    if (acquired.release(args.consumerId) !== 0) return;
+    browserSessionsCoordinators.delete(args.key);
+    acquired.dispose();
+    notifyBrowserSessionsCoordinator(args.key);
+  };
+}
+
+function subscribeToBrowserSessionsCoordinator(
+  key: string | null,
+  listener: () => void,
+): () => void {
+  if (key === null) return () => undefined;
+  let listeners = browserSessionsCoordinatorListeners.get(key);
+  if (listeners === undefined) {
+    listeners = new Set();
+    browserSessionsCoordinatorListeners.set(key, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    const current = browserSessionsCoordinatorListeners.get(key);
+    if (current === undefined) return;
+    current.delete(listener);
+    if (current.size === 0) browserSessionsCoordinatorListeners.delete(key);
+  };
+}
+
+function notifyBrowserSessionsCoordinator(key: string): void {
+  browserSessionsCoordinatorListeners
+    .get(key)
+    ?.forEach((listener) => listener());
+}
+
+function unavailableBrowserSessionsState(
+  hostId: string | null,
+): BrowserSessionsState {
+  const unavailable = (): Promise<never> =>
+    Promise.reject(new Error("Browser sessions stream is not ready."));
+  return {
+    hostId,
+    lifecycle: "connecting",
+    inventoryReady: false,
+    items: [],
+    errorMessage: null,
+    retry: () => undefined,
+    openTab: unavailable,
+    closeTab: unavailable,
+  };
+}
+
+function createBrowserSessionsCoordinator(args: {
+  readonly key: string;
+  readonly consumerId: symbol;
+  readonly epicId: string;
+  readonly owner: BrowserSessionsOwner;
+  readonly runtime: BrowserSessionsCoordinatorRuntime;
+}): BrowserSessionsCoordinator {
+  const pendingCloses = new Map<string, PendingCloseRequest>();
+  const pendingOpens = new Map<string, PendingOpenRequest>();
+  const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
+    [args.consumerId, args.runtime],
+  ]);
+  let activeConsumerId: symbol | null = args.consumerId;
+  let runtime = args.runtime;
+  let actionChannel: BrowserSessionsActionChannel | null = null;
+  let stopCurrentStream = (): void => undefined;
+  let disposed = false;
+  const publish = (state: BrowserSessionsState): void => {
+    if (disposed) return;
+    coordinator.state = state;
+    notifyBrowserSessionsCoordinator(args.key);
+  };
+
+  const patchState = (
+    patch: Partial<
+      Pick<
+        BrowserSessionsState,
+        "errorMessage" | "inventoryReady" | "items" | "lifecycle"
+      >
+    >,
+  ): void => {
+    publish({ ...coordinator.state, ...patch });
+  };
+
+  const activeChannel = (): BrowserSessionsActionChannel | null => {
+    const channel = actionChannel;
+    return channel !== null &&
+      channel.lifecycle === "live" &&
+      channel.owner === args.owner
+      ? channel
+      : null;
+  };
+
+  const closeTab = (sessionId: string, tabId: string): Promise<void> => {
+    const channel = activeChannel();
+    if (channel === null) {
+      return Promise.reject(new Error("Browser sessions stream is not ready."));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise<void>((resolve, reject) => {
+      pendingCloses.set(requestId, { resolve, reject });
+      try {
+        channel.sendClientFrame(
+          {
+            kind: "closeTab",
+            hasBinaryPayload: false,
+            requestId,
+            sessionId,
+            tabId,
+          },
+          null,
+        );
+      } catch (error) {
+        pendingCloses.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  const openTab = (
+    sessionId: string | null,
+    url: string,
+  ): Promise<OpenBrowserTabResult> => {
+    const channel = activeChannel();
+    if (channel === null) {
+      return Promise.reject(new Error("Browser sessions stream is not ready."));
+    }
+    const requestId = crypto.randomUUID();
+    return new Promise<OpenBrowserTabResult>((resolve, reject) => {
+      pendingOpens.set(requestId, { resolve, reject });
+      try {
+        channel.sendClientFrame(
+          {
+            kind: "openTab",
+            hasBinaryPayload: false,
+            requestId,
+            sessionId,
+            url,
+          },
+          null,
+        );
+      } catch (error) {
+        pendingOpens.delete(requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  const start = (): void => {
+    patchState({
       items: [],
       lifecycle: "connecting",
       inventoryReady: false,
       errorMessage: null,
-    }),
-  );
-  const [retryGeneration, setRetryGeneration] = useState(0);
-  const lifecycleRef = useRef(streamState.lifecycle);
-
-  useEffect(() => {
-    if (hostId === null || readyOwner?.hostId !== hostId) {
-      sessionRef.current = null;
-      return;
-    }
-    const pendingCloses = pendingClosesRef.current;
-    const transport = openTransport(hostId);
-    const client = transport.wsStreamClient;
+    });
+    const transport = runtime.openTransport(args.owner.hostId);
     const stream = (() => {
       try {
-        return client.subscribe("browser.sessions", { epicId });
+        return transport.wsStreamClient.subscribe("browser.sessions", {
+          epicId: args.epicId,
+        });
       } catch (cause) {
         transport.close();
         throw cause;
       }
     })();
-    sessionRef.current = stream;
-    // Keep one coordinator across this durable subscription's reconnects so
-    // native guests can be reused while each connection gets fresh routing.
+    const channel: BrowserSessionsActionChannel = {
+      owner: args.owner,
+      lifecycle: "connecting",
+      sendClientFrame: (frame, binaryPayload) => {
+        stream.sendClientFrame(frame, binaryPayload);
+      },
+    };
+    actionChannel = channel;
+    const browserView = runtime.browserView;
     const electronTabs = createElectronTabs({
-      hostId,
+      hostId: args.owner.hostId,
       native: browserView,
       sendFrame: (frame) => {
+        if (actionChannel !== channel) return;
         stream.sendClientFrame(frame, null);
-      },
-      present: (frame) => {
-        if (frame.reason !== "agent-open") return;
-        const disposition = decideAgentTabDisposition({
-          mode: useSettingsStore.getState().agentTabSurfacingMode,
-          epicVisible: isEpicSurfaceVisible(epicId),
-          manualPipActive: isManualPipActive(epicId),
-        });
-        trackAgentTabSurfaced(disposition, "electron-create");
-        if (disposition.action === "tile") {
-          placeAgentElectronTile({
-            epicId,
-            hostId,
-            sessionId: frame.sessionId,
-            tabId: frame.tabId,
-            url: frame.requestedUrl,
-          });
-          return;
-        }
-        if (disposition.action === "float") {
-          openAgentTabInPip({
-            epicId,
-            hostId,
-            sessionId: frame.sessionId,
-            tabId: frame.tabId,
-          });
-        }
       },
     });
     let electronLifecycleReadySentForConnection = false;
@@ -236,7 +439,7 @@ function useBrowserSessions(
     let connectionGeneration = 0;
     const sendLifecycleReadyIfReady = (): void => {
       if (
-        sessionRef.current !== stream ||
+        actionChannel !== channel ||
         browserView === null ||
         connectionStatus !== "open" ||
         !snapshotReadyForConnection ||
@@ -253,14 +456,18 @@ function useBrowserSessions(
         null,
       );
     };
+
     stream.onStatusChange((status, reason) => {
-      if (sessionRef.current !== stream) return;
+      if (actionChannel !== channel) return;
       const wasOpen = connectionStatus === "open";
       connectionStatus = status;
       const lifecycle = browserSessionsLifecycle(status, reason);
-      applyPipHostLifecycle(epicId, hostId, lifecycle);
-      lifecycleRef.current = lifecycle;
-      if (status !== "open") {
+      applyPipHostLifecycle(args.epicId, args.owner.hostId, lifecycle);
+      channel.lifecycle = lifecycle;
+      if (status === "open") {
+        electronTabs.connect();
+        sendLifecycleReadyIfReady();
+      } else {
         if (wasOpen) connectionGeneration += 1;
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
@@ -269,20 +476,20 @@ function useBrowserSessions(
           pendingCloses,
           new Error("Browser sessions stream closed."),
         );
-      } else {
-        electronTabs.connect();
-        sendLifecycleReadyIfReady();
+        rejectPendingRequests(
+          pendingOpens,
+          new Error("Browser sessions stream closed."),
+        );
       }
-      setStreamState((current) => ({
-        client,
-        items: current.client === client ? current.items : [],
+      patchState({
         lifecycle,
-        inventoryReady: status === "open" && current.inventoryReady,
+        inventoryReady: status === "open" && coordinator.state.inventoryReady,
         errorMessage: browserSessionsError(status, reason),
-      }));
+      });
     });
+
     stream.onServerFrame((envelope, binaryPayload) => {
-      if (sessionRef.current !== stream) return;
+      if (actionChannel !== channel) return;
       if (binaryPayload !== null) {
         appLogger.error(
           "[browser] rejected binary browser.sessions frame",
@@ -306,32 +513,27 @@ function useBrowserSessions(
       const frameGeneration = connectionGeneration;
       handleBrowserSessionsFrame({
         frame: parsed.data,
-        epicId,
-        hostId,
+        epicId: args.epicId,
+        hostId: args.owner.hostId,
         setItems: (value) => {
-          setStreamState((current) => {
-            const currentItems = current.client === client ? current.items : [];
-            const nextItems =
-              typeof value === "function" ? value(currentItems) : value;
-            return {
-              client,
-              items: nextItems,
-              lifecycle:
-                current.client === client ? current.lifecycle : "connecting",
-              inventoryReady:
-                parsed.data.kind === "snapshot" ||
-                (current.client === client && current.inventoryReady),
-              errorMessage:
-                current.client === client ? current.errorMessage : null,
-            };
+          const nextItems =
+            typeof value === "function"
+              ? value(coordinator.state.items)
+              : value;
+          patchState({
+            items: nextItems,
+            inventoryReady:
+              parsed.data.kind === "snapshot" ||
+              coordinator.state.inventoryReady,
           });
         },
         pendingCloses,
+        pendingOpens,
         browserView,
         electronTabs,
         sendClientFrame: (frame) => {
           if (
-            sessionRef.current !== stream ||
+            actionChannel !== channel ||
             connectionStatus !== "open" ||
             connectionGeneration !== frameGeneration
           ) {
@@ -353,10 +555,9 @@ function useBrowserSessions(
         sendLifecycleReadyIfReady();
       }
     });
-    return () => {
-      if (sessionRef.current === stream) {
-        sessionRef.current = null;
-      }
+
+    stopCurrentStream = () => {
+      if (actionChannel === channel) actionChannel = null;
       electronTabs.dispose();
       stream.close();
       transport.close();
@@ -364,60 +565,65 @@ function useBrowserSessions(
         pendingCloses,
         new Error("Browser sessions stream closed."),
       );
+      rejectPendingRequests(
+        pendingOpens,
+        new Error("Browser sessions stream closed."),
+      );
     };
-  }, [browserView, epicId, hostId, openTransport, readyOwner, retryGeneration]);
-
-  const retry = useCallback(() => {
-    setRetryGeneration((current) => current + 1);
-  }, []);
-
-  const closeTab = useCallback(
-    (sessionId: string, tabId: string): Promise<void> => {
-      const session = sessionRef.current;
-      if (session === null || lifecycleRef.current !== "live") {
-        return Promise.reject(
-          new Error("Browser sessions stream is not ready."),
-        );
-      }
-      const pendingCloses = pendingClosesRef.current;
-      const requestId = crypto.randomUUID();
-      return new Promise<void>((resolve, reject) => {
-        pendingCloses.set(requestId, { resolve, reject });
-        try {
-          session.sendClientFrame(
-            {
-              kind: "closeTab",
-              hasBinaryPayload: false,
-              requestId,
-              sessionId,
-              tabId,
-            },
-            null,
-          );
-        } catch (error) {
-          pendingCloses.delete(requestId);
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-      });
-    },
-    [],
-  );
-
-  const stateMatchesOwner =
-    readyOwner?.hostId === hostId && streamState.client !== null;
-  const lifecycle = stateMatchesOwner ? streamState.lifecycle : "connecting";
-  useEffect(() => {
-    lifecycleRef.current = lifecycle;
-  }, [lifecycle]);
-
-  return {
-    lifecycle,
-    inventoryReady: stateMatchesOwner && streamState.inventoryReady,
-    items: stateMatchesOwner ? streamState.items : [],
-    errorMessage: stateMatchesOwner ? streamState.errorMessage : null,
-    retry,
-    closeTab,
   };
+
+  const restart = (): void => {
+    if (disposed) return;
+    stopCurrentStream();
+    stopCurrentStream = (): void => undefined;
+    start();
+  };
+
+  const coordinator: BrowserSessionsCoordinator = {
+    owner: args.owner,
+    state: {
+      hostId: args.owner.hostId,
+      lifecycle: "connecting",
+      inventoryReady: false,
+      items: [],
+      errorMessage: null,
+      retry: restart,
+      openTab,
+      closeTab,
+    },
+    upsertConsumer: (consumerId, nextRuntime) => {
+      runtimes.set(consumerId, nextRuntime);
+      if (activeConsumerId !== consumerId) return;
+      const browserViewChanged =
+        runtime.browserView !== nextRuntime.browserView;
+      runtime = nextRuntime;
+      if (browserViewChanged) restart();
+    },
+    release: (consumerId) => {
+      runtimes.delete(consumerId);
+      if (activeConsumerId !== consumerId) return runtimes.size;
+      const next = runtimes.entries().next().value;
+      if (next === undefined) {
+        activeConsumerId = null;
+        return 0;
+      }
+      const [nextConsumerId, nextRuntime] = next;
+      activeConsumerId = nextConsumerId;
+      const browserViewChanged =
+        runtime.browserView !== nextRuntime.browserView;
+      runtime = nextRuntime;
+      if (browserViewChanged) restart();
+      return runtimes.size;
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      stopCurrentStream();
+      stopCurrentStream = (): void => undefined;
+    },
+  };
+  start();
+  return coordinator;
 }
 
 function handleCloseAck(args: {
@@ -441,10 +647,19 @@ function handleBrowserSessionsFrame(args: {
   readonly hostId: string;
   readonly setItems: Dispatch<SetStateAction<readonly BrowserSessionInfo[]>>;
   readonly pendingCloses: Map<string, PendingCloseRequest>;
+  readonly pendingOpens: Map<string, PendingOpenRequest>;
   readonly browserView: BrowserViewBridge | null;
   readonly electronTabs: ElectronTabs;
   readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
 }): void {
+  if (args.frame.kind === "openTabResult") {
+    const pending = args.pendingOpens.get(args.frame.requestId);
+    if (pending === undefined) return;
+    args.pendingOpens.delete(args.frame.requestId);
+    if (args.frame.result.ok) pending.resolve(args.frame.result);
+    else pending.reject(new Error(args.frame.result.reason));
+    return;
+  }
   if (args.frame.kind === "caption") {
     applyPipCaption({
       epicId: args.epicId,
@@ -458,8 +673,14 @@ function handleBrowserSessionsFrame(args: {
   if (args.frame.kind === "burstStarted" || args.frame.kind === "burstEnded") {
     return;
   }
-  if (args.frame.kind === "createElectronTab") {
-    rememberElectronTabCreate(args.frame.sessionId, args.frame.tabId);
+  if (args.frame.kind === "agentTabOpened") {
+    surfaceAgentTab({
+      epicId: args.epicId,
+      hostId: args.hostId,
+      sessionId: args.frame.sessionId,
+      tabId: args.frame.tabId,
+    });
+    return;
   }
   if (args.electronTabs.handleFrame(args.frame)) return;
   if (
@@ -541,34 +762,21 @@ function handleBrowserSessionLifecycleFrame(args: {
   readonly setItems: Dispatch<SetStateAction<readonly BrowserSessionInfo[]>>;
 }): boolean {
   if (args.frame.kind === "snapshot") {
-    for (const session of args.frame.sessions) {
-      // Seed-only: a snapshot replays the full inventory (initial load,
-      // reconnect, renderer reload) and must not re-surface old tabs.
-      collectNewAgentTabsFromSessionFrame(session);
-    }
     args.setItems(args.frame.sessions);
     return true;
   }
   if (args.frame.kind === "sessionCreated") {
     const session = args.frame.session;
     args.setItems((current) => upsertSession(current, session));
-    // A session's inaugural tab stays quiet by design ("tabs only"); this
-    // seeds the seen-tab set so later openTab additions are recognized.
-    collectNewAgentTabsFromSessionFrame(session);
     return true;
   }
   if (args.frame.kind === "sessionUpdated") {
     const session = args.frame.session;
     args.setItems((current) => upsertSession(current, session));
-    // Diff against the last seen tabs and apply the agent-tab-surfacing
-    // preference to genuinely new agent-created tabs (headless sessions
-    // never emit createElectronTab frames).
-    surfaceAgentTabsFromSessionFrame(session);
     return true;
   }
   if (args.frame.kind === "sessionClosed") {
     const sessionId = args.frame.sessionId;
-    forgetSeenAgentTabsForSession(sessionId);
     args.setItems((current) =>
       current.filter((session) => session.sessionId !== sessionId),
     );

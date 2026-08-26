@@ -23,10 +23,7 @@ export class BrowserDebugTelemetry {
   private readonly networkEntriesById = new Map<string, NetworkEntryRecord>();
   private nextConsoleId = 1;
 
-  constructor(
-    private readonly webContentsId: number,
-    private readonly onChange: () => void,
-  ) {}
+  constructor(private readonly webContentsId: number) {}
 
   handleEvent(
     method: string,
@@ -66,12 +63,6 @@ export class BrowserDebugTelemetry {
       return true;
     }
     return false;
-  }
-
-  clear(): void {
-    this.consoleEntries.splice(0);
-    this.networkEntriesById.clear();
-    this.onChange();
   }
 
   snapshot(): BrowserViewDebugSnapshotData {
@@ -169,7 +160,6 @@ export class BrowserDebugTelemetry {
       },
     });
     trimNetworkEntries(this.networkEntriesById);
-    this.onChange();
   }
 
   private recordResponseReceived(
@@ -189,7 +179,6 @@ export class BrowserDebugTelemetry {
         booleanValue(response.fromPrefetchCache) ||
         booleanValue(response.fromServiceWorker),
     };
-    this.onChange();
   }
 
   private recordLoadingFinished(
@@ -207,7 +196,6 @@ export class BrowserDebugTelemetry {
         failureText: null,
       },
     );
-    this.onChange();
   }
 
   private recordLoadingFailed(
@@ -227,7 +215,6 @@ export class BrowserDebugTelemetry {
         ),
       },
     );
-    this.onChange();
   }
 
   private recordRequestServedFromCache(
@@ -237,7 +224,6 @@ export class BrowserDebugTelemetry {
     const record = this.findNetworkRecord(params, sessionId);
     if (record === null) return;
     record.entry = { ...record.entry, fromCache: true };
-    this.onChange();
   }
 
   private findNetworkRecord(
@@ -259,7 +245,6 @@ export class BrowserDebugTelemetry {
         this.consoleEntries.length - MAX_CONSOLE_ENTRIES,
       );
     }
-    this.onChange();
   }
 
   private nextConsoleEntryId(prefix: string): string {

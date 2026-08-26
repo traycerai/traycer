@@ -167,7 +167,7 @@ function createBrowserTileFindAdapter(args: {
 
   return {
     tileInstanceId: args.tileKey.tileInstanceId,
-    tileKind: "browser",
+    tileKind: "browser-session",
     replace: null,
     getSnapshot: () => snapshot,
     subscribe: (listener) => {

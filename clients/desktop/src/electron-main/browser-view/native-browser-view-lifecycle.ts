@@ -4,11 +4,7 @@ type ActivationState =
   | { readonly kind: "provisioning" }
   | { readonly kind: "failed" }
   | { readonly kind: "provisioned"; seedScriptId: string | null }
-  | {
-      readonly kind: "accepted";
-      seedScriptId: string | null;
-      readonly promise: Promise<void>;
-    };
+  | { readonly kind: "accepted"; seedScriptId: string | null };
 
 type HandoffState =
   | { readonly kind: "available" }
@@ -55,20 +51,16 @@ export class NativeBrowserViewLifecycle {
     this.provisioning.reject(error);
   }
 
-  accept(activate: () => Promise<void>): Promise<void> {
-    if (this.activation.kind === "accepted") return this.activation.promise;
+  accept(): boolean {
+    if (this.activation.kind === "accepted") return false;
     if (this.activation.kind !== "provisioned") {
-      return Promise.reject(
-        new Error("Electron browser tab is not provisioned."),
-      );
+      throw new Error("Electron browser tab is not provisioned.");
     }
-    const promise = activate();
     this.activation = {
       kind: "accepted",
       seedScriptId: this.activation.seedScriptId,
-      promise,
     };
-    return promise;
+    return true;
   }
 
   takeSeedScriptId(): string | null {

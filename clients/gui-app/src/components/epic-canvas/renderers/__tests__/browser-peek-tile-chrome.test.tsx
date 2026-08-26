@@ -7,12 +7,14 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import {
+  BrowserPeekTile,
+  type BrowserPeekNode,
+} from "@/components/epic-canvas/renderers/browser-peek-tile";
 import {
   FakeStreamClient,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
-import type { BrowserPeekTileRef } from "@/stores/epics/canvas/types";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -48,17 +50,20 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
 
-const PEEK_NODE: BrowserPeekTileRef = {
+const PEEK_NODE: BrowserPeekNode = {
   id: "browser-peek-headless-1",
   instanceId: "peek-instance-1",
-  type: "browser-peek",
-  name: "Peek app.local",
   hostId: "host-test",
-  chatId: "chat-1",
   sessionId: "headless-1",
   tabId: "headless-tab-1",
   initialUrl: "http://localhost:3000",
 };
+const PEEK_OWNER_ID = [
+  PEEK_NODE.hostId,
+  PEEK_NODE.sessionId,
+  PEEK_NODE.tabId,
+  PEEK_NODE.instanceId,
+].join("\u001f");
 
 const URL_A = "https://example.com/a";
 const URL_B = "https://example.com/b";
@@ -136,17 +141,22 @@ function armPeekTile(stream: FakeStreamSession): void {
   });
 }
 
+function clearScreencastOwner(): void {
+  const store = useScreencastArmedStore.getState();
+  if (store.ownerId !== null) store.release(store.ownerId);
+}
+
 describe("BrowserPeekTile toolbar chrome", () => {
   beforeEach(() => {
     hookState.visible = true;
     hookState.streamClient = new FakeStreamClient(true);
     toast.mockClear();
-    useScreencastArmedStore.getState().setArmed(false);
+    clearScreencastOwner();
   });
 
   afterEach(() => {
     cleanup();
-    useScreencastArmedStore.getState().setArmed(false);
+    clearScreencastOwner();
     vi.restoreAllMocks();
   });
 
@@ -398,13 +408,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     fireEvent.focus(addressInput());
     fireEvent.blur(addressInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
     expect(screen.queryByText("Controlling")).toBeNull();
   });
 });

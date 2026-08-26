@@ -3,11 +3,15 @@ import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
+import {
+  BrowserSessionsContext,
+  type BrowserSessionsState,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
 import { createSingleTileCanvas } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
-  isBrowserTileRef,
+  isBrowserSessionTileRef,
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -43,6 +47,9 @@ const xtermMocks = vi.hoisted(() => ({
   customKeyHandlers: [] as Array<(event: KeyboardEvent) => boolean>,
   webLinksHandlers: [] as LinkActivate[],
   openExternalLink: vi.fn(() => Promise.resolve()),
+  openTab: vi.fn<BrowserSessionsState["openTab"]>(() =>
+    Promise.resolve({ sessionId: "session-terminal", tabId: "tab-terminal" }),
+  ),
 }));
 
 // Platform-dependent keyboard behavior (plain Home/End scroll history on macOS
@@ -206,31 +213,44 @@ function renderHostWithBrowserRouting(): void {
     },
   });
   render(
-    <BrowserLinkRoutingProvider
-      source={{
-        viewTabId: VIEW_TAB_ID,
-        paneId: pane.id,
+    <BrowserSessionsContext.Provider
+      value={{
         hostId: SOURCE_TILE.hostId,
+        lifecycle: "live",
+        inventoryReady: true,
+        items: [],
+        errorMessage: null,
+        retry: () => undefined,
+        openTab: xtermMocks.openTab,
+        closeTab: () => Promise.resolve(),
       }}
     >
-      <TerminalXtermHost
-        hostId={SOURCE_TILE.hostId}
-        sessionId="test-session"
-        tileKind="terminal"
-        instanceId="test-instance"
-        effectiveCols={80}
-        effectiveRows={24}
-        onUserInput={vi.fn()}
-        onContainerResize={vi.fn()}
-        onWriterReady={vi.fn()}
-        onTerminalReady={null}
-        shouldFocusOnActivePane={false}
-        registerImperativeFocus
-        findTargetId={null}
-        keepAlive={false}
-        chrome="padded"
-      />
-    </BrowserLinkRoutingProvider>,
+      <BrowserLinkRoutingProvider
+        source={{
+          viewTabId: VIEW_TAB_ID,
+          paneId: pane.id,
+          hostId: SOURCE_TILE.hostId,
+        }}
+      >
+        <TerminalXtermHost
+          hostId={SOURCE_TILE.hostId}
+          sessionId="test-session"
+          tileKind="terminal"
+          instanceId="test-instance"
+          effectiveCols={80}
+          effectiveRows={24}
+          onUserInput={vi.fn()}
+          onContainerResize={vi.fn()}
+          onWriterReady={vi.fn()}
+          onTerminalReady={null}
+          shouldFocusOnActivePane={false}
+          registerImperativeFocus
+          findTargetId={null}
+          keepAlive={false}
+          chrome="padded"
+        />
+      </BrowserLinkRoutingProvider>
+    </BrowserSessionsContext.Provider>,
   );
 }
 
@@ -243,6 +263,7 @@ describe("<TerminalXtermHost /> link handling", () => {
     xtermMocks.customKeyHandlers.length = 0;
     xtermMocks.webLinksHandlers.length = 0;
     xtermMocks.openExternalLink.mockClear();
+    xtermMocks.openTab.mockClear();
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
       inAppBrowserBetaEnabled: false,
@@ -296,7 +317,7 @@ describe("<TerminalXtermHost /> link handling", () => {
     );
   });
 
-  it("routes plain-text URLs into a browser tile when the beta is enabled", async () => {
+  it("opens plain-text URLs through the host and places its session pointer", async () => {
     useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
     renderHostWithBrowserRouting();
 
@@ -309,13 +330,26 @@ describe("<TerminalXtermHost /> link handling", () => {
       "http://localhost:5173/plain",
     );
 
-    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    expect(xtermMocks.openTab).toHaveBeenCalledWith(
+      null,
+      "http://localhost:5173/plain",
+    );
     expect(xtermMocks.openExternalLink).not.toHaveBeenCalled();
-    expect(
-      Object.values(canvas?.tilesByInstanceId ?? {}).filter(
-        (tile) => tile !== undefined && isBrowserTileRef(tile),
-      ),
-    ).toMatchObject([{ url: "http://localhost:5173/plain" }]);
+    await waitFor(() => {
+      const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+      expect(
+        Object.values(canvas?.tilesByInstanceId ?? {}).filter(
+          (tile) => tile !== undefined && isBrowserSessionTileRef(tile),
+        ),
+      ).toMatchObject([
+        {
+          type: "browser-session",
+          hostId: SOURCE_TILE.hostId,
+          sessionId: "session-terminal",
+          tabId: "tab-terminal",
+        },
+      ]);
+    });
     expect(useSettingsStore.getState().browserDevOrigins).toEqual([
       "http://localhost:5173",
     ]);

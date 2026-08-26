@@ -132,6 +132,7 @@ vi.mock("@dnd-kit/core", () => ({
 }));
 
 const closeTab = vi.fn<(sessionId: string, tabId: string) => Promise<void>>();
+const openTab = vi.fn<BrowserSessionsState["openTab"]>();
 const navigateNested = vi.fn(
   (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
 );
@@ -140,15 +141,24 @@ function forwardCloseTab(sessionId: string, tabId: string): Promise<void> {
   return closeTab(sessionId, tabId);
 }
 
+function forwardOpenTab(
+  sessionId: string | null,
+  url: string,
+): Promise<{ sessionId: string; tabId: string }> {
+  return openTab(sessionId, url);
+}
+
 const sessionsState = vi.hoisted<{
   value: BrowserSessionsState;
 }>(() => ({
   value: {
+    hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
     items: [],
     errorMessage: null,
     retry: vi.fn(),
+    openTab: forwardOpenTab,
     closeTab: forwardCloseTab,
   },
 }));
@@ -191,13 +201,11 @@ function tab(
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
-    Pick<BrowserSessionInfo, "sessionId" | "name" | "profile" | "tabs">,
+    Pick<BrowserSessionInfo, "sessionId" | "profile" | "tabs">,
 ): BrowserSessionInfo {
   return {
     epicId: "epic-1",
     hostId: "host-1",
-    createdBy: { chatId: "chat-driver", agentRunId: "run-1" },
-    createdAt: 1,
     lastActivityAt: 2,
     ...overrides,
     runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
@@ -218,7 +226,6 @@ function replaceSessions(items: readonly BrowserSessionInfo[]): void {
 function identitySession(tabInfo: BrowserTabInfo): BrowserSessionInfo {
   return session({
     sessionId: "sess-identity",
-    name: "Main",
     profile: "primary",
     tabs: [tabInfo],
   });
@@ -262,6 +269,11 @@ describe("BrowsersPanelBody", () => {
     browserHostOptionsState.retryLists.mockClear();
     closeTab.mockReset();
     closeTab.mockResolvedValue(undefined);
+    openTab.mockReset();
+    openTab.mockResolvedValue({
+      sessionId: "sess-created",
+      tabId: "tab-created",
+    });
     vi.mocked(toast.error).mockClear();
     navigateNested.mockClear();
     usePanelHeaderSearchStore.setState(
@@ -274,12 +286,12 @@ describe("BrowsersPanelBody", () => {
     );
     seedCanvasTab();
     sessionsState.value = {
+      hostId: "host-1",
       lifecycle: "live",
       inventoryReady: true,
       items: [
         session({
           sessionId: "sess-primary",
-          name: "Main",
           profile: "primary",
           tabs: [
             tab({
@@ -300,7 +312,6 @@ describe("BrowsersPanelBody", () => {
         }),
         session({
           sessionId: "sess-dormant",
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -313,7 +324,6 @@ describe("BrowsersPanelBody", () => {
         }),
         session({
           sessionId: "sess-iso",
-          name: "Agent: checkout",
           profile: "isolated",
           tabs: [
             tab({
@@ -326,6 +336,7 @@ describe("BrowsersPanelBody", () => {
       ],
       errorMessage: null,
       retry: vi.fn(),
+      openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
     };
   });
@@ -391,7 +402,6 @@ describe("BrowsersPanelBody", () => {
     replaceSessions([
       session({
         sessionId: "sess-new",
-        name: "New browser",
         profile: "primary",
         tabs: [
           tab({
@@ -467,7 +477,6 @@ describe("BrowsersPanelBody", () => {
       items: [3000, 5173].map((port) =>
         session({
           sessionId: `sess-localhost-${port}`,
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -508,7 +517,6 @@ describe("BrowsersPanelBody", () => {
       items: tabIds.map((tabId, index) =>
         session({
           sessionId: `sess-fallback-${index}`,
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -541,7 +549,6 @@ describe("BrowsersPanelBody", () => {
       items: tabIds.map((tabId, index) =>
         session({
           sessionId: `sess-duplicate-${index}`,
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -578,7 +585,6 @@ describe("BrowsersPanelBody", () => {
       items: [
         session({
           sessionId: "sess-unique-title",
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -609,7 +615,6 @@ describe("BrowsersPanelBody", () => {
       items: titles.map((title, index) =>
         session({
           sessionId: `sess-near-${index}`,
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -657,13 +662,11 @@ describe("BrowsersPanelBody", () => {
       items: [
         session({
           sessionId: "sess-empty-tabs",
-          name: "Empty",
           profile: "primary",
           tabs: [],
         }),
         session({
           sessionId: "sess-invalid-url",
-          name: "Agent browser",
           profile: "primary",
           tabs: [
             tab({
@@ -768,7 +771,6 @@ describe("BrowsersPanelBody", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Live page/i }));
     const pointer = makeBrowserSessionTileRef({
-      name: "Live page",
       hostId: "host-1",
       sessionId: "sess-primary",
       tabId: "tab-live",
@@ -788,7 +790,6 @@ describe("BrowsersPanelBody", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Live page/i }));
 
     const expected = makeBrowserSessionTileRef({
-      name: "Live page",
       hostId: "host-1",
       sessionId: "sess-primary",
       tabId: "tab-live",
@@ -809,7 +810,6 @@ describe("BrowsersPanelBody", () => {
 
   it("row click focuses an existing pointer tile instead of opening a duplicate", () => {
     const existing = makeBrowserSessionTileRef({
-      name: "Live page",
       hostId: "host-1",
       sessionId: "sess-primary",
       tabId: "tab-live",
@@ -1034,7 +1034,6 @@ describe("BrowsersPanelBody", () => {
     render(wrapper(<BrowsersPanelBody epicId="epic-1" tabId="view-tab-1" />));
     fireEvent.click(screen.getByRole("button", { name: /^Live page/i }));
     const expected = makeBrowserSessionTileRef({
-      name: "Live page",
       hostId: "host-1",
       sessionId: "sess-primary",
       tabId: "tab-live",
@@ -1206,7 +1205,6 @@ describe("BrowsersPanelBody", () => {
     replaceSessions([
       session({
         sessionId: "sess-failed",
-        name: "Main",
         profile: "primary",
         tabs: [
           tab({
@@ -1238,6 +1236,11 @@ describe("BrowsersPanelBody", () => {
 describe("BrowsersPanelActions", () => {
   beforeEach(() => {
     navigateNested.mockClear();
+    openTab.mockReset();
+    openTab.mockResolvedValue({
+      sessionId: "sess-created",
+      tabId: "tab-created",
+    });
     browserHostPinState.selection = null;
     browserHostPinState.setSelection.mockClear();
     browserHostOptionsState.hosts = [
@@ -1257,11 +1260,13 @@ describe("BrowsersPanelActions", () => {
       true,
     );
     sessionsState.value = {
+      hostId: "host-1",
       lifecycle: "live",
       inventoryReady: true,
       items: [],
       errorMessage: null,
       retry: vi.fn(),
+      openTab: forwardOpenTab,
       closeTab: forwardCloseTab,
     };
   });
@@ -1271,39 +1276,49 @@ describe("BrowsersPanelActions", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("opens a new browser tile via the header Add browser action", () => {
+  it("opens a new browser through the host and places its session pointer", async () => {
     render(
       wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
 
-    expect(navigateNested).toHaveBeenCalledWith(
-      "epic-1",
-      "view-tab-1",
-      expect.any(Function),
-    );
-    const tilesByInstanceId =
-      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
-        ?.tilesByInstanceId ?? {};
-    const opened = Object.values(tilesByInstanceId).find(
-      (tile) => tile !== undefined && tile.type === "browser",
-    );
-    expect(opened).toBeTruthy();
-  });
-
-  it("opens a new browser on the panel's filtered host", () => {
-    browserHostPinState.selection = "host-2";
-    render(
-      wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
-
+    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(navigateNested).toHaveBeenCalledWith(
+        "epic-1",
+        "view-tab-1",
+        expect.any(Function),
+      );
+    });
     const opened = Object.values(
       useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
         ?.tilesByInstanceId ?? {},
-    ).find((tile) => tile !== undefined && tile.type === "browser");
+    ).find((tile) => tile !== undefined && tile.type === "browser-session");
+    expect(opened).toMatchObject({
+      hostId: "host-1",
+      sessionId: "sess-created",
+      tabId: "tab-created",
+    });
+  });
+
+  it("opens a new browser on the panel's filtered host", async () => {
+    browserHostPinState.selection = "host-2";
+    sessionsState.value = { ...sessionsState.value, hostId: "host-2" };
+    render(
+      wrapper(<BrowsersPanelActions epicId="epic-1" tabId="view-tab-1" />),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add browser" }));
+
+    expect(openTab).toHaveBeenCalledWith(null, "about:blank");
+    await waitFor(() => {
+      expect(navigateNested).toHaveBeenCalledOnce();
+    });
+    const opened = Object.values(
+      useEpicCanvasStore.getState().canvasByTabId["view-tab-1"]
+        ?.tilesByInstanceId ?? {},
+    ).find((tile) => tile !== undefined && tile.type === "browser-session");
     expect(opened).toMatchObject({ hostId: "host-2" });
   });
 

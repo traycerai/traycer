@@ -89,19 +89,6 @@ export interface BrowserElementContextAttachment extends BrowserContextAttachmen
   readonly element: BrowserViewElementCapture;
 }
 
-/**
- * Ticket 22 fixup: `title` and `screenshot` were traced and found dead -
- * `browserContextAttachmentToWire` only ever selects
- * `kind`/`origin`/`pageUrl`/`composerText`/`tileInstanceId` off any
- * attachment payload, and no other production code reads `payload.title`
- * or `payload.screenshot.*` for this kind (only test assertions did, which
- * is what made the dead fields look load-bearing). Carrying `screenshot`
- * meant retaining a captured base64 image in composer draft state for a
- * consumer that never reads it - a real memory cost for nothing. If a
- * future UI surface needs the title or a screenshot preview for this kind,
- * add it back deliberately with a real reader, not as leftover capture
- * plumbing.
- */
 export interface BrowserDebugContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-debug-context";
   readonly dataLevel: "screenshot" | "debug-errors" | "debug-snapshot";
@@ -368,13 +355,6 @@ function networkComposerText(
     .join("\n");
 }
 
-/**
- * Ticket 29 (A2): no `Page:` line (volatile state, belongs in the
- * observation not a static block) and no `Image: <name>` line - siblings of
- * ticket 22's `debugContextComposerText` fix that were not swept at the
- * time. See that function's doc comment for why: the name never had an
- * image attached beside it in this attachment's own wire shape.
- */
 function screenshotComposerText(capture: BrowserViewCapturePageResult): string {
   return [
     "Browser screenshot",
@@ -383,15 +363,6 @@ function screenshotComposerText(capture: BrowserViewCapturePageResult): string {
   ].join("\n");
 }
 
-/**
- * Ticket 22: no `Page:`/`Title:` lines - that's volatile state the
- * `<browser_tile>` wrapper and `composerText` used to duplicate, and it goes
- * stale the moment the user navigates (F4); `snapshot()`'s envelope is the
- * single source of truth now. No `Screenshot: <name>` line either - that
- * name never had an image attached beside it (the wire schema for this
- * attachment carries no image bytes), which is exactly the filename-with-
- * no-picture pattern F4/F-vision flagged as inviting false trust.
- */
 function debugContextComposerText(input: {
   readonly dataLevel: "screenshot" | "debug-errors" | "debug-snapshot";
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
@@ -458,11 +429,6 @@ function originFromUrl(url: string): string {
   }
 }
 
-/**
- * Managed browser identity is read from the BrowserSessionTileRef itself.
- * Native surface bindings never become a second identity directory. Ordinary
- * user-owned browser tiles retain their canvas instance id on this legacy wire.
- */
 export function browserContextAttachmentToWire(
   payload: BrowserContextAttachmentPayload,
 ): BrowserContextAttachmentWire {
@@ -478,7 +444,8 @@ export function browserContextAttachmentToWire(
 function browserContextTabId(tile: BrowserViewTileKey): string {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tile.viewTabId];
   const source = canvas?.tilesByInstanceId[tile.tileInstanceId];
-  return source !== undefined && isBrowserSessionTileRef(source)
-    ? source.tabId
-    : tile.tileInstanceId;
+  if (source === undefined || !isBrowserSessionTileRef(source)) {
+    throw new Error("Browser context source is no longer available.");
+  }
+  return source.tabId;
 }

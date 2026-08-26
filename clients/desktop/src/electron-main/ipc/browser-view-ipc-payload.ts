@@ -22,10 +22,6 @@ import type {
   BrowserViewFindStop,
   BrowserViewOverlayOcclusion,
   BrowserViewOverlayRelease,
-  BrowserViewStorageStateApply,
-  BrowserViewStorageStateCapture,
-  BrowserViewTileUpsert,
-  BrowserViewViewportPresetChange,
 } from "../../ipc-contracts/browser-view-types";
 import type { PipCaptureStartInput } from "../../ipc-contracts/browser-view-types";
 
@@ -71,17 +67,8 @@ const electronTabControlActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("openDevTools") }),
 ]);
 
-const tileUpsertSchema: z.ZodType<BrowserViewTileUpsert> = tileKeySchema.extend(
-  {
-    url: z.string(),
-    visible: z.boolean(),
-    viewportPreset: viewportPresetSchema,
-  },
-);
 const boundsUpdateSchema: z.ZodType<BrowserViewBoundsUpdate> =
   tileKeySchema.extend({ bounds: boundsSchema });
-const viewportPresetChangeSchema: z.ZodType<BrowserViewViewportPresetChange> =
-  tileKeySchema.extend({ viewportPreset: viewportPresetSchema });
 const annotationTargetChatLabelSchema: z.ZodType<BrowserAnnotationSetTargetChatLabelInput> =
   tileKeySchema.extend({
     targets: z.preprocess(
@@ -124,15 +111,6 @@ const overlayPaintAckSchema = z.object({ overlayId: z.string() });
 const labsStateUpdateSchema: z.ZodType<BrowserLabsStateUpdate> = z.object({
   inAppBrowserBetaEnabled: z.boolean(),
 });
-const storageStateApplySchema: z.ZodType<BrowserViewStorageStateApply> =
-  z.object({
-    storageState: browserStorageStateSchema,
-    sessionId: z.string().nullable(),
-    tabId: z.string().nullable(),
-    purpose: z.enum(["primary-profile-seed", "sync-back"]),
-  });
-const storageStateCaptureSchema: z.ZodType<BrowserViewStorageStateCapture> =
-  tileKeySchema.extend({ origin: z.string() });
 const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
   nativeTabKeySchema.extend({
     requestedUrl: nonEmptyStringSchema,
@@ -142,7 +120,6 @@ const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
   nativeTabCapabilitySchema.extend({
     bindingId: nonEmptyStringSchema,
     surface: tileKeySchema,
-    visible: z.boolean(),
   });
 const detachSurfaceSchema: z.ZodType<BrowserViewDetachSurface> =
   nativeTabCapabilitySchema.extend({ bindingId: nonEmptyStringSchema });
@@ -179,11 +156,7 @@ export const browserViewIpcPayload = {
   overlayPaintAck: overlayPaintAckSchema,
   overlayRelease: overlayReleaseSchema,
   pipCaptureStart: pipCaptureStartSchema,
-  storageStateApply: storageStateApplySchema,
-  storageStateCapture: storageStateCaptureSchema,
   tileKey: tileKeySchema,
-  tileUpsert: tileUpsertSchema,
-  viewportPresetChange: viewportPresetChangeSchema,
 } as const;
 
 const reservedChordTokensSchema = z.object({

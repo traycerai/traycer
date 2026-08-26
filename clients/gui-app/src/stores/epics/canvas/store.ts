@@ -86,7 +86,6 @@ import {
   splitPaneEmpty,
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
-  updateBrowserTileDocument,
   updateBrowserTileViewportPreset,
   updateCommGraphTileView,
   updateGitDiffTileView,
@@ -106,11 +105,11 @@ import {
   resolveActivePaneTab,
 } from "@/stores/epics/canvas/tile-tree";
 import {
+  epicCanvasTileFallbackName,
   isUnsupportedEpicTerminalRef,
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
   type EdgeDropPosition,
-  type BrowserTileRef,
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type CommGraphTileViewState,
@@ -543,11 +542,6 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: GitDiffTileViewState,
-  ) => void;
-  updateBrowserTileDocumentInTab: (
-    tabId: string,
-    tileInstanceId: string,
-    document: Pick<BrowserTileRef, "name" | "url">,
   ) => void;
   updateBrowserTileViewportPresetInTab: (
     tabId: string,
@@ -1677,7 +1671,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           const siblingNames = epicTabNames(state.tabsById, epicId);
           const tabName =
             sourceTab === null
-              ? node.name
+              ? epicCanvasTileFallbackName(node)
               : nextCopyName(sourceTab.name, siblingNames);
           const tab: EpicViewTab = {
             tabId,
@@ -2120,14 +2114,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateSnapshotDiffTileView(canvas, tileId, view),
-            ),
-          );
-        },
-
-        updateBrowserTileDocumentInTab: (tabId, tileInstanceId, document) => {
-          set((state) =>
-            updateTabCanvas(state, tabId, (canvas) =>
-              updateBrowserTileDocument(canvas, tileInstanceId, document),
             ),
           );
         },

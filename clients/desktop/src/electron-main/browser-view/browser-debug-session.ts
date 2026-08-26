@@ -23,7 +23,6 @@ const PIP_CAPTURE_INTERVAL_MS = 200;
 
 interface BrowserDebugSessionOptions {
   readonly webContents: BrowserDebugWebContents;
-  readonly onSnapshotChange: () => void;
   readonly onDetached: (reason: string) => void;
 }
 
@@ -75,7 +74,6 @@ interface ResolvedTargetRoute {
 
 export class BrowserDebugSession {
   private readonly webContents: BrowserDebugWebContents;
-  private readonly onSnapshotChange: () => void;
   private readonly onDetached: (reason: string) => void;
   private readonly telemetry: BrowserDebugTelemetry;
   private readonly childSessionByTargetId = new Map<string, ChildSession>();
@@ -107,12 +105,8 @@ export class BrowserDebugSession {
 
   constructor(options: BrowserDebugSessionOptions) {
     this.webContents = options.webContents;
-    this.onSnapshotChange = options.onSnapshotChange;
     this.onDetached = options.onDetached;
-    this.telemetry = new BrowserDebugTelemetry(
-      options.webContents.id,
-      options.onSnapshotChange,
-    );
+    this.telemetry = new BrowserDebugTelemetry(options.webContents.id);
   }
 
   isAttached(): boolean {
@@ -267,7 +261,6 @@ export class BrowserDebugSession {
           throw new Error("Browser debug session ended while enabling");
         }
         this.enabled = true;
-        this.onSnapshotChange();
       })
       .catch((err: unknown) => {
         if (this.enablePromise !== enablePromise) throw err;
@@ -323,10 +316,6 @@ export class BrowserDebugSession {
 
   isPipCapturing(): boolean {
     return this.pipCapture !== null;
-  }
-
-  clear(): void {
-    this.telemetry.clear();
   }
 
   snapshot(): BrowserViewDebugSnapshotData {

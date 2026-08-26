@@ -146,9 +146,6 @@ function session(
     epicId: "epic-1",
     hostId: "host-1",
     profile: "primary",
-    name: "Agent browser",
-    createdBy: { chatId: "chat-1", agentRunId: null },
-    createdAt: 1,
     lastActivityAt: 2,
     ...overrides,
     runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
@@ -159,11 +156,13 @@ function sessionsState(
   items: ReadonlyArray<BrowserSessionInfo>,
 ): BrowserSessionsState {
   return {
+    hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
     items,
     errorMessage: null,
     retry: vi.fn(),
+    openTab: vi.fn(() => Promise.reject(new Error("not used"))),
     closeTab: vi.fn(() => Promise.resolve()),
   };
 }

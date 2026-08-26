@@ -7,13 +7,15 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
+import {
+  BrowserPeekTile,
+  type BrowserPeekNode,
+} from "@/components/epic-canvas/renderers/browser-peek-tile";
 import {
   FakeStreamClient,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
 import { isMac } from "@/lib/keybindings/platform";
-import type { BrowserPeekTileRef } from "@/stores/epics/canvas/types";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const hookState = vi.hoisted(() => ({
@@ -43,17 +45,20 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
 
-const PEEK_NODE: BrowserPeekTileRef = {
+const PEEK_NODE: BrowserPeekNode = {
   id: "browser-peek-headless-1",
   instanceId: "peek-instance-1",
-  type: "browser-peek",
-  name: "Peek app.local",
   hostId: "host-test",
-  chatId: "chat-1",
   sessionId: "headless-1",
   tabId: "headless-tab-1",
   initialUrl: "http://localhost:3000",
 };
+const PEEK_OWNER_ID = [
+  PEEK_NODE.hostId,
+  PEEK_NODE.sessionId,
+  PEEK_NODE.tabId,
+  PEEK_NODE.instanceId,
+].join("\u001f");
 
 const PASTE_TEXT = "pasted from clipboard";
 
@@ -147,16 +152,21 @@ function armPeekTile(stream: FakeStreamSession): void {
   });
 }
 
+function clearScreencastOwner(): void {
+  const store = useScreencastArmedStore.getState();
+  if (store.ownerId !== null) store.release(store.ownerId);
+}
+
 describe("BrowserPeekTile shortcuts and paste", () => {
   beforeEach(() => {
     hookState.visible = true;
     hookState.streamClient = new FakeStreamClient(true);
-    useScreencastArmedStore.getState().setArmed(false);
+    clearScreencastOwner();
   });
 
   afterEach(() => {
     cleanup();
-    useScreencastArmedStore.getState().setArmed(false);
+    clearScreencastOwner();
     vi.restoreAllMocks();
   });
 
@@ -224,7 +234,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     expect(document.activeElement).toBe(addressInput());
     expect(document.activeElement).not.toBe(imeInput());
     expect(screen.getByText("Controlling")).not.toBeNull();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
     expect(keyboardFramesFor(stream, "l", "KeyL")).toEqual([]);
   });
 
@@ -284,7 +294,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     act(() => {
       stream.emit(
@@ -299,7 +309,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
   it("clears the armed flag when the tile is hidden", async () => {
@@ -307,13 +317,13 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     hookState.visible = false;
     view.rerender(<BrowserPeekTile epicId="epic-1" node={PEEK_NODE} />);
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
   it("clears the armed flag when Release control is clicked", async () => {
@@ -321,12 +331,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     fireEvent.click(screen.getByRole("button", { name: "Release control" }));
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
   it("clears the armed flag on Escape-free blur out of the tile", async () => {
@@ -334,12 +344,12 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     fireEvent.blur(imeInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
   });
 
   it("does not preventDefault the V keydown of a paste chord", async () => {
@@ -419,7 +429,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     act(() => {
       stream.emit(
@@ -433,7 +443,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
     expect(screen.queryByText("Controlling")).toBeNull();
   });
 
@@ -442,19 +452,19 @@ describe("BrowserPeekTile shortcuts and paste", () => {
     const stream = liveStream();
     armPeekTile(stream);
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     act(() => {
       stream.emit({ kind: "complete", hasBinaryPayload: false }, null);
     });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().armed).toBe(false);
+    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
     expect(screen.queryByText("Controlling")).toBeNull();
   });
 
   it("does not let an unarmed sibling tile clear another tile's armed flag", async () => {
-    const sibling: BrowserPeekTileRef = {
+    const sibling: BrowserPeekNode = {
       ...PEEK_NODE,
       instanceId: "peek-instance-2",
       tabId: "headless-tab-2",
@@ -483,7 +493,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
       );
     });
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     view.rerender(
       <div>
@@ -492,7 +502,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
       </div>,
     );
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
 
     view.rerender(
       <div>
@@ -500,7 +510,7 @@ describe("BrowserPeekTile shortcuts and paste", () => {
       </div>,
     );
     await flushMacrotask();
-    expect(useScreencastArmedStore.getState().armed).toBe(true);
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
     expect(screen.getByText("Controlling")).not.toBeNull();
   });
 });

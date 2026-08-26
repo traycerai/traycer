@@ -22,8 +22,6 @@ export interface BrowserViewManagerDebug {
     readonly emptyFrames: number;
     readonly encodeFailures: number;
   };
-  /** Key ids evicted by the hidden-guest LRU since startup (BT-403). */
-  readonly evictedKeyIds: () => readonly string[];
 }
 
 const DEBUG_KEY = "__traycerBrowserViewManagerDebug";
@@ -35,8 +33,7 @@ function isBrowserViewManagerDebug(
   return (
     "boundsByKeyId" in value &&
     "occludedKeyIds" in value &&
-    "frameCacheStats" in value &&
-    "evictedKeyIds" in value
+    "frameCacheStats" in value
   );
 }
 

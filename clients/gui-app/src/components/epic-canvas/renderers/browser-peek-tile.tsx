@@ -27,7 +27,6 @@ import type {
 import type { BrowserViewTileKey } from "@traycer-clients/shared/platform/browser-view";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
 import {
   BrowserTileToolbar,
@@ -62,7 +61,6 @@ import { hasPlatformModKey } from "@/lib/keybindings/chord";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { cn } from "@/lib/utils";
 import { wheelDeltaToPixels } from "@/lib/wheel-delta-to-pixels";
-import type { BrowserPeekTileRef } from "@/stores/epics/canvas/types";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const DEFAULT_MAX_WIDTH = 1280;
@@ -175,17 +173,25 @@ type BrowserPeekDialog = Extract<
   { readonly kind: "dialogOpened" }
 > & { readonly armEpoch: number };
 
+export interface BrowserPeekNode {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly initialUrl: string;
+}
+
 export interface BrowserPeekTileProps {
   readonly epicId: string;
-  readonly node: BrowserPeekTileRef;
+  readonly node: BrowserPeekNode;
   readonly viewTabId?: string;
   readonly paneId?: string;
 }
 
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const { epicId, node } = props;
-  const tabHostId = useTabHostId();
-  const hostEntry = useHostDirectoryEntry(tabHostId);
+  const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
   const visible = useTileBodyVisible();
@@ -204,7 +210,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     node.instanceId,
   );
   useRegisterVisibleBrowserTile({
-    hostId: tabHostId,
+    hostId: node.hostId,
     sessionId: node.sessionId,
     tabId: node.tabId,
     visible,
@@ -294,17 +300,21 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const armedEpoch = armedState?.client === client ? armedState.epoch : null;
   const presentedArmedEpoch = visible ? armedEpoch : null;
   const dialog = dialogForClient(dialogState, client);
+  const inputOwnerId =
+    presentedArmedEpoch === null
+      ? null
+      : [node.hostId, node.sessionId, node.tabId, node.instanceId].join(
+          "\u001f",
+        );
 
-  // Only an actually-armed, visible tile participates. An unarmed
-  // sibling must never write false and clobber another tile's flag.
   useLayoutEffect(() => {
-    if (presentedArmedEpoch === null) return;
-    const setArmed = useScreencastArmedStore.getState().setArmed;
-    setArmed(true);
+    if (inputOwnerId === null) return;
+    const store = useScreencastArmedStore.getState();
+    store.claim(inputOwnerId);
     return () => {
-      setArmed(false);
+      useScreencastArmedStore.getState().release(inputOwnerId);
     };
-  }, [presentedArmedEpoch]);
+  }, [inputOwnerId]);
 
   const setLifecycle = useCallback(
     (value: SetStateAction<PeekLifecycle>) => {
@@ -371,6 +381,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     });
     sessionRef.current = session;
     session.onStatusChange((status, reason) => {
+      if (sessionRef.current !== session) return;
       if (status !== "open") {
         presentedSequenceRef.current = null;
         clearLocalArmRef.current(false);
@@ -390,6 +401,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       handleStreamStatus(status, reason, setLifecycle, setDetails);
     });
     session.onServerFrame((envelope, binaryPayload) => {
+      if (sessionRef.current !== session) return;
       const parsed = browserScreencastServerFrameSchema.safeParse(envelope);
       if (!parsed.success) return;
       if (
@@ -1098,7 +1110,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           convert: () => {
             convertBrowserTabToPip({
               epicId,
-              hostId: tabHostId,
+              hostId: node.hostId,
               sessionId: node.sessionId,
               tabId: node.tabId,
               origin: "manual",

@@ -38,13 +38,11 @@ type ElectronTabSurfaceBinding = Omit<
   BrowserViewAttachSurface,
   keyof BrowserViewNativeTabCapability
 >;
-type ElectronTabSurfaceUpdate = Omit<ElectronTabSurfaceBinding, "bindingId">;
 
 interface ElectronTabsOptions {
   readonly hostId: string;
   readonly native: BrowserViewBridge | null;
   readonly sendFrame: (frame: BrowserSessionsClientFrame) => void;
-  readonly present: (frame: CreateElectronTabFrame) => void;
 }
 
 export interface ElectronTabBinding extends BrowserViewNativeTabCapability {
@@ -87,8 +85,12 @@ interface ElectronTabBirth {
   accepted: ElectronTabAcceptedFrame | null;
   cancelled: boolean;
   activated: boolean;
-  presented: boolean;
-  readonly surfaceVisibilityByBindingId: Map<string, boolean>;
+  published: boolean;
+  activeSurface: {
+    readonly token: symbol;
+    readonly input: BrowserViewAttachSurface;
+  } | null;
+  surfaceMutation: Promise<void>;
   lastStatus: BrowserViewNativeTabStatusChange | null;
 }
 
@@ -100,7 +102,6 @@ export interface ElectronTabs {
 }
 
 export interface ElectronTabSurfaceLease {
-  update(input: ElectronTabSurfaceUpdate): Promise<void>;
   detach(): Promise<void>;
 }
 
@@ -316,16 +317,16 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       });
   };
 
-  const presentAcceptedBirth = (birth: ElectronTabBirth): void => {
+  const publishAcceptedBirth = (birth: ElectronTabBirth): void => {
     const provisioned = birth.provisioned;
     if (
-      birth.presented ||
+      birth.published ||
       provisioned === null ||
       birth.accepted?.registrationId !== provisioned.registrationId
     ) {
       return;
     }
-    birth.presented = true;
+    birth.published = true;
     const create = birth.create;
     const key = nativeTabKey(options.hostId, create.sessionId, create.tabId);
     directory.set(key, {
@@ -354,15 +355,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       },
     });
     notifyDirectoryListeners();
-    try {
-      options.present(create);
-    } catch (cause: unknown) {
-      appLogger.warn("[browser] electron tab presentation failed", {
-        cause: cause instanceof Error ? cause.message : String(cause),
-        sessionId: create.sessionId,
-        tabId: create.tabId,
-      });
-    }
   };
 
   const acceptCreate = (frame: CreateElectronTabFrame): Promise<void> => {
@@ -457,7 +449,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           } as const;
           options.sendFrame(settlement);
           activateAcceptedBirth(birth);
-          presentAcceptedBirth(birth);
+          publishAcceptedBirth(birth);
         })
         .catch((cause: unknown) => {
           if (birth.cancelled || !isCurrentConnection(generation)) return;
@@ -473,8 +465,9 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       accepted: null,
       cancelled: false,
       activated: false,
-      presented: false,
-      surfaceVisibilityByBindingId: new Map(),
+      published: false,
+      activeSurface: null,
+      surfaceMutation: Promise.resolve(),
       lastStatus: null,
     };
     birthByRequestId.set(frame.requestId, birth);
@@ -513,42 +506,51 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     ) {
       throw new Error("Electron tab is not accepted.");
     }
-    await birth.native.attachSurface(input);
-    birth.surfaceVisibilityByBindingId.set(input.bindingId, input.visible);
-    if (birth.lastStatus !== null) {
-      sendCurrentTabState(birth, birth.lastStatus);
-    }
+    const token = Symbol(input.bindingId);
+    const attach = birth.surfaceMutation.then(async () => {
+      if (!connected || birth.cancelled) {
+        throw new Error("Electron tab is not accepted.");
+      }
+      const previous = birth.activeSurface;
+      birth.activeSurface = null;
+      if (previous !== null) {
+        await birth.native.detachSurface({
+          hostId: previous.input.hostId,
+          sessionId: previous.input.sessionId,
+          tabId: previous.input.tabId,
+          registrationId: previous.input.registrationId,
+          bindingId: previous.input.bindingId,
+        });
+      }
+      await birth.native.attachSurface(input);
+      birth.activeSurface = { token, input };
+      if (birth.lastStatus !== null) {
+        sendCurrentTabState(birth, birth.lastStatus);
+      }
+    });
+    birth.surfaceMutation = attach.catch(() => undefined);
+    await attach;
     let detached = false;
     return {
-      update: async (update) => {
-        if (detached) throw new Error("Electron tab surface is detached.");
-        await birth.native.attachSurface({
-          ...update,
-          hostId: input.hostId,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          registrationId: input.registrationId,
-          bindingId: input.bindingId,
-        });
-        birth.surfaceVisibilityByBindingId.set(input.bindingId, update.visible);
-        if (birth.lastStatus !== null) {
-          sendCurrentTabState(birth, birth.lastStatus);
-        }
-      },
       detach: async () => {
         if (detached) return;
         detached = true;
-        birth.surfaceVisibilityByBindingId.delete(input.bindingId);
-        if (birth.lastStatus !== null) {
-          sendCurrentTabState(birth, birth.lastStatus);
-        }
-        await birth.native.detachSurface({
-          hostId: input.hostId,
-          sessionId: input.sessionId,
-          tabId: input.tabId,
-          registrationId: input.registrationId,
-          bindingId: input.bindingId,
+        const detach = birth.surfaceMutation.then(async () => {
+          if (birth.activeSurface?.token !== token) return;
+          birth.activeSurface = null;
+          if (birth.lastStatus !== null) {
+            sendCurrentTabState(birth, birth.lastStatus);
+          }
+          await birth.native.detachSurface({
+            hostId: input.hostId,
+            sessionId: input.sessionId,
+            tabId: input.tabId,
+            registrationId: input.registrationId,
+            bindingId: input.bindingId,
+          });
         });
+        birth.surfaceMutation = detach.catch(() => undefined);
+        await detach;
       },
     };
   };
@@ -637,7 +639,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     if (birth.lastStatus !== null) {
       sendCurrentTabState(birth, birth.lastStatus);
     }
-    presentAcceptedBirth(birth);
+    publishAcceptedBirth(birth);
   };
 
   return {
@@ -768,7 +770,7 @@ function sendTabState(
     url: change.url,
     title: change.title,
     status: electronTabStateStatus(change.status),
-    viewed: [...birth.surfaceVisibilityByBindingId.values()].some(Boolean),
+    viewed: birth.activeSurface !== null,
   });
 }
 

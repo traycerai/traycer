@@ -52,25 +52,13 @@ export type BrowserSessionClosedReason = z.infer<
   typeof browserSessionClosedReasonSchema
 >;
 
-/**
- * Shared-browser-runtime ticket 01. The identity boundary a session's tabs
- * share: `"primary"` is the one shared, signed-in profile per host;
- * `"isolated"` is a private context that never inherits the host's primary
- * identity. Profile kind controls credential sharing only; both kinds retain
- * their logical session and tab identity across runtime suspension/restart.
- */
+/** Profile controls credential sharing, not logical session identity. */
 export const browserSessionProfileKindSchema = z.enum(["primary", "isolated"]);
 export type BrowserSessionProfileKind = z.infer<
   typeof browserSessionProfileKindSchema
 >;
 
-/**
- * Shared-browser-runtime ticket 01. One attributed driver of a tab -
- * `requestId` names a single in-flight action, `agentRunId` is `null` for a
- * user-driven action. The concurrency model (settled decision 7) is
- * last-writer-wins with no locks; this list is purely attribution, built by
- * reference-counting action start/finish, not a queue or a lock.
- */
+/** Attribution for one in-flight tab action; this grants no lock or lease. */
 const browserTabDriverSchema = z
   .object({
     chatId: z.string(),
@@ -80,11 +68,7 @@ const browserTabDriverSchema = z
   .strict();
 export type BrowserTabDriver = z.infer<typeof browserTabDriverSchema>;
 
-/**
- * Shared-browser-runtime ticket 01. One page within a session, addressed by
- * a durable, host-minted `tabId` - never a Chromium target id. A session can
- * own multiple tabs, and each tab keeps its identity across runtime restarts.
- */
+/** One page, addressed by a durable host-minted id rather than a CDP id. */
 const browserTabInfoSchema = z
   .object({
     tabId: z.string(),
@@ -100,34 +84,13 @@ const browserTabInfoSchema = z
   .strict();
 export type BrowserTabInfo = z.infer<typeof browserTabInfoSchema>;
 
-/**
- * Shared-browser-runtime ticket 01. Non-authorizing provenance: which chat
- * (and, if an agent, which run) created the session. `BrowserSessionInfo`'s
- * `epicId` is the authorizing scope now (settled decision 1); this field is
- * metadata only, kept for sidebar attribution ("Agent: checkout test").
- */
-export const browserSessionCreatedBySchema = z
-  .object({
-    chatId: z.string(),
-    agentRunId: z.string().nullable(),
-  })
-  .strict();
-
-/**
- * Shared-browser-runtime ticket 01 baseline. A session is an epic-scoped
- * group of tabs bound to one profile (the three-layer model's middle layer,
- * plan settled decision 5) - `url`/`title`/`status`/`originTier` moved onto
- * `BrowserTabInfo` since those describe a page, not the session grouping it.
- */
+/** An epic-scoped group of tabs sharing one browser profile. */
 const browserSessionInfoSchema = z
   .object({
     sessionId: z.string(),
     epicId: z.string(),
     hostId: z.string(),
     profile: browserSessionProfileKindSchema,
-    name: z.string(),
-    createdBy: browserSessionCreatedBySchema,
-    createdAt: z.number(),
     lastActivityAt: z.number(),
     runtime: z
       .object({
@@ -210,10 +173,35 @@ const browserSessionsCoreServerFrameSchemas = [
     reason: browserSessionClosedReasonSchema,
   }),
   z.object({
+    kind: z.literal("agentTabOpened"),
+    ...textFrameFields,
+    ...browserSessionReferenceFields,
+    tabId: z.string(),
+  }),
+  z.object({
     kind: z.literal("actionAck"),
     ...requestFrameFields,
     ok: z.boolean(),
     reason: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal("openTabResult"),
+    ...requestFrameFields,
+    result: z.discriminatedUnion("ok", [
+      z
+        .object({
+          ok: z.literal(true),
+          sessionId: z.string(),
+          tabId: z.string(),
+        })
+        .strict(),
+      z
+        .object({
+          ok: z.literal(false),
+          reason: z.string(),
+        })
+        .strict(),
+    ]),
   }),
   z.object({
     kind: z.literal("pong"),
@@ -573,9 +561,7 @@ export const browserSessionsServerFrameSchema = z.discriminatedUnion("kind", [
     ...requestFrameFields,
   }),
   z.object({
-    // Agent-browser PiP tickets 01 and 06. Stream-only: never persisted
-    // and never replayed on subscribe. `caption` is one frame per
-    // (cell, tab) when the cell's first action lands on that tab.
+    // Stream-only action burst; never persisted or replayed.
     kind: z.literal("burstStarted"),
     ...textFrameFields,
     sessionId: z.string(),
@@ -605,6 +591,12 @@ export type BrowserSessionsServerFrame = z.infer<
 >;
 
 const browserSessionsCoreClientFrameSchemas = [
+  z.object({
+    kind: z.literal("openTab"),
+    ...requestFrameFields,
+    sessionId: z.string().nullable(),
+    url: z.string(),
+  }),
   z.object({
     // Tab-scoped close for the browser sidebar; closing the final tab also
     // closes its session.
@@ -678,24 +670,9 @@ export const browserSessionsClientFrameSchema = z.discriminatedUnion("kind", [
     reason: z.string().nullable(),
   }),
   z.object({
-    // Desktop pushes this once, just before a durable Electron tab dies, for
-    // ANY teardown reason - there is no signal distinguishing
-    // "the whole GUI quit" from "one subscriber detached" (see ticket 10's
-    // artifact), so the real trigger is "the native incarnation is going
-    // away", which `closeEntry`'s three call sites and a renderer crash all
-    // are.
-    //
-    // Durable identity is carried directly. `registrationId` prevents a late
-    // teardown from an old native guest from handing off a replacement guest
-    // that already owns the same `tabId`.
-    //
-    // `null` means desktop could not safely capture state for this teardown.
-    //
-    // Ticket 02 (multi-tab handoff): `siblingTabs` carries the session's
-    // OTHER live tabs (same session, everything but the triggering tab)
-    // captured best-effort at the same moment, so one frame hands off the
-    // whole session atomically instead of racing one frame per tab against
-    // the runtime flip. Empty for a single-tab session.
+    // Captures one exact native incarnation before teardown. Sibling state is
+    // grouped into the same frame so the host can hand off the session once.
+    // Null storage means desktop could not safely capture it.
     kind: z.literal("electronTabHandoff"),
     ...requestFrameFields,
     sessionId: z.string(),
@@ -718,15 +695,7 @@ export type BrowserSessionsClientFrame = z.infer<
   typeof browserSessionsClientFrameSchema
 >;
 
-/**
- * Shared-browser-runtime ticket 01: baseline rewrite. `browser.sessions` had
- * never shipped, so its prior minor history (@1.0 through @1.4, tracked as
- * separate frozen contracts) is collapsed into one fresh `@1.0` carrying
- * every frame kind this file defines - no projection machinery and no
- * frozen-minor exports to preserve, since nothing has shipped for them to
- * stay compatible with. Agent-browser PiP ticket 01 extends that same 1.0
- * in place (`burstStarted` / `burstEnded` / `caption`).
- */
+/** Unreleased browser stream baseline. */
 export const browserSessionsV1 = defineStreamRpcContract({
   method: "browser.sessions",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -745,13 +714,7 @@ export type BrowserScreencastViewerRole = z.infer<
   typeof browserScreencastViewerRoleSchema
 >;
 
-/**
- * Epic-authorized and tab-addressed: a session can carry more than one tab
- * (settled decision 5), so screencast names both the epic boundary and the
- * page it mirrors.
- *
- * `role` explicitly distinguishes the full tile from the PiP projection.
- */
+/** Epic-authorized, tab-addressed screencast subscription. */
 export const browserScreencastOpenRequestSchema = z
   .object({
     epicId: z.string(),

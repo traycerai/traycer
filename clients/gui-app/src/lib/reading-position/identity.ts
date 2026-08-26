@@ -61,10 +61,7 @@ function liveIdentity(
  * refuse one.
  */
 type NonDurableTileType =
-  | "browser"
-  | "browser-peek"
   | "browser-session"
-  | "agent-browser"
   | "terminal"
   | "terminal-agent"
   | "managed-command-output"

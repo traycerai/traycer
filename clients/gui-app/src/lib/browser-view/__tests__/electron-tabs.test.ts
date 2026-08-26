@@ -154,20 +154,18 @@ describe("ElectronTabs", () => {
     activeElectronTabs.clear();
   });
 
-  it("settles native birth before readiness and presents only after acceptance", async () => {
+  it("settles native birth before readiness and publishes its binding after acceptance", async () => {
     const ready = deferred<BrowserViewNativeTabCapability>();
     const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(
       () => ready.promise,
     );
     const native = nativeWith(ensureTab, null);
     const sent: BrowserSessionsClientFrame[] = [];
-    const present = vi.fn();
     const tabs = trackElectronTabs(
       createElectronTabs({
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present,
       }),
     );
 
@@ -181,7 +179,6 @@ describe("ElectronTabs", () => {
       seedStorageState: null,
     });
     expect(sent).toEqual([]);
-    expect(present).not.toHaveBeenCalled();
 
     ready.resolve({
       hostId: "host-1",
@@ -201,8 +198,6 @@ describe("ElectronTabs", () => {
         registrationId: "registration-1",
       },
     ]);
-    expect(present).not.toHaveBeenCalled();
-
     tabs.handleFrame({
       kind: "electronTabAccepted",
       hasBinaryPayload: false,
@@ -212,52 +207,12 @@ describe("ElectronTabs", () => {
       registrationId: "registration-1",
     });
 
-    expect(present).toHaveBeenCalledExactlyOnceWith(CREATE);
     expect(native.acceptTab).toHaveBeenCalledExactlyOnceWith({
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
       registrationId: "registration-1",
     });
-  });
-
-  it("keeps an accepted native birth settled when presentation throws", async () => {
-    const ready = deferred<BrowserViewNativeTabCapability>();
-    const sent: BrowserSessionsClientFrame[] = [];
-    const tabs = trackElectronTabs(
-      createElectronTabs({
-        hostId: "host-1",
-        native: nativeWith(() => ready.promise, null),
-        sendFrame: (frame) => sent.push(frame),
-        present: () => {
-          throw new Error("presentation failed");
-        },
-      }),
-    );
-
-    expect(tabs.handleFrame(CREATE)).toBe(true);
-    expect(
-      tabs.handleFrame({
-        kind: "electronTabAccepted",
-        hasBinaryPayload: false,
-        requestId: "request-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "registration-1",
-      }),
-    ).toBe(true);
-    ready.resolve({
-      hostId: "host-1",
-      sessionId: "session-1",
-      tabId: "tab-1",
-      registrationId: "registration-1",
-    });
-
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]?.kind).toBe("electronTabProvisioned");
-    expect(
-      readElectronTabBinding("session-1", "tab-1", "host-1"),
-    ).toMatchObject({ registrationId: "registration-1" });
   });
 
   it("ignores a duplicate create without creating or settling twice", async () => {
@@ -270,7 +225,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: nativeWith(ensureTab, null),
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
 
@@ -291,7 +245,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: nativeWith(ensureTab, null),
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -332,7 +285,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -376,7 +328,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -398,7 +349,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -427,7 +377,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -454,7 +403,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     expect(tabs.handleFrame(CREATE)).toBe(true);
@@ -489,7 +437,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
 
@@ -536,7 +483,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: nativeWith(() => ready.promise, null),
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     expect(tabs.handleFrame(CREATE)).toBe(true);
@@ -555,7 +501,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -571,7 +516,6 @@ describe("ElectronTabs", () => {
         tileInstanceId: "tile-1",
         pageSessionId: "page-1",
       },
-      visible: true,
     } as const;
 
     expect(readElectronTabBinding("session-1", "tab-1", "host-1")).toBeNull();
@@ -589,26 +533,122 @@ describe("ElectronTabs", () => {
     const lease = await binding.bindSurface({
       bindingId: surface.bindingId,
       surface: surface.surface,
-      visible: surface.visible,
-    });
-    await lease.update({
-      surface: surface.surface,
-      visible: false,
     });
     await lease.detach();
     await lease.detach();
 
     expect(native.attachSurface).toHaveBeenNthCalledWith(1, surface);
-    expect(native.attachSurface).toHaveBeenNthCalledWith(2, {
-      ...surface,
-      visible: false,
-    });
+    expect(native.attachSurface).toHaveBeenCalledOnce();
     expect(native.detachSurface).toHaveBeenCalledExactlyOnceWith({
       hostId: "host-1",
       sessionId: "session-1",
       tabId: "tab-1",
       registrationId: "registration-1",
       bindingId: "binding-1",
+    });
+  });
+
+  it("keeps the replacement surface active when the stale lease detaches", async () => {
+    const statusHandler = {
+      emit: null as ((change: BrowserViewNativeTabStatusChange) => void) | null,
+    };
+    const native = nativeWith(
+      () => provisionedTab("registration-1"),
+      (handler) => {
+        statusHandler.emit = handler;
+        return { dispose: () => undefined };
+      },
+    );
+    const sent: BrowserSessionsClientFrame[] = [];
+    const tabs = trackElectronTabs(
+      createElectronTabs({
+        hostId: "host-1",
+        native,
+        sendFrame: (frame) => sent.push(frame),
+      }),
+    );
+    await receiveCreate(tabs, CREATE);
+    tabs.handleFrame({
+      kind: "electronTabAccepted",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    });
+    if (statusHandler.emit === null) throw new Error("status listener missing");
+    statusHandler.emit({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      url: "https://example.com/",
+      title: "Example",
+      status: "ready",
+      reason: null,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100,
+    });
+
+    const binding = readElectronTabBinding("session-1", "tab-1", "host-1");
+    if (binding === null) throw new Error("accepted binding missing");
+    const surface = (bindingId: string, paneId: string) => ({
+      bindingId,
+      surface: {
+        viewTabId: "view-1",
+        paneId,
+        tileInstanceId: `tile-${paneId}`,
+        pageSessionId: `page-${paneId}`,
+      },
+    });
+    const first = surface("binding-a", "pane-a");
+    const second = surface("binding-b", "pane-b");
+    const leaseA = await binding.bindSurface(first);
+    const leaseB = await binding.bindSurface(second);
+
+    expect(native.attachSurface).toHaveBeenNthCalledWith(1, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      ...first,
+    });
+    expect(native.attachSurface).toHaveBeenNthCalledWith(2, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      ...second,
+    });
+    expect(native.detachSurface).toHaveBeenCalledExactlyOnceWith({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      bindingId: "binding-a",
+    });
+
+    await leaseA.detach();
+    expect(native.detachSurface).toHaveBeenCalledTimes(1);
+    expect(sent.at(-1)).toMatchObject({
+      kind: "electronTabState",
+      tabId: "tab-1",
+      viewed: true,
+    });
+
+    await leaseB.detach();
+    expect(native.detachSurface).toHaveBeenNthCalledWith(2, {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      bindingId: "binding-b",
+    });
+    expect(sent.at(-1)).toMatchObject({
+      kind: "electronTabState",
+      tabId: "tab-1",
+      viewed: false,
     });
   });
 
@@ -619,7 +659,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -662,7 +701,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: () => {},
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -703,7 +741,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -752,7 +789,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
 
@@ -807,7 +843,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -865,7 +900,6 @@ describe("ElectronTabs", () => {
         hostId: "host-1",
         native: native,
         sendFrame: (frame) => sent.push(frame),
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);
@@ -943,7 +977,6 @@ describe("ElectronTabs", () => {
         tileInstanceId: "tile-1",
         pageSessionId: "page-1",
       },
-      visible: true,
     });
     sent.length = 0;
 
@@ -1005,7 +1038,6 @@ describe("ElectronTabs", () => {
           }
           sent.push(frame);
         },
-        present: () => {},
       }),
     );
     await receiveCreate(tabs, CREATE);

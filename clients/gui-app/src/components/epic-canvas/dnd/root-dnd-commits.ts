@@ -38,7 +38,6 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
   makeOpenableNodeRef,
-  type AgentBrowserTileRef,
   type BrowserSessionTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
@@ -144,7 +143,6 @@ export function sourceToTileRef(
   | GitDiffTileRef
   | ManagedCommandOutputTileRef
   | BrowserSessionTileRef
-  | AgentBrowserTileRef
   | null {
   if (source.kind === SIDEBAR_NODE_DND_TYPE) {
     const handle = getOpenEpicRegistry().peek(source.epicId);
@@ -439,8 +437,7 @@ function placeResolvedCanvasTile(
       | EpicNodeRef
       | GitDiffTileRef
       | ManagedCommandOutputTileRef
-      | BrowserSessionTileRef
-      | AgentBrowserTileRef;
+      | BrowserSessionTileRef;
     readonly target: EpicCanvasDropTargetData;
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },

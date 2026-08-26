@@ -25,16 +25,15 @@ import type {
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
-  BrowserTileRef,
+  BrowserSessionTileRef,
   GitDiffTileRef,
   GitDiffTileViewState,
   PrDiffTileViewState,
   TilesByInstanceId,
 } from "./types";
 import {
-  isAgentBrowserTileRef,
   isBlankTileRef,
-  isBrowserTileRef,
+  isBrowserSessionTileRef,
   isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
@@ -62,7 +61,6 @@ import {
   replacePane,
 } from "./tile-tree";
 import { createEmptyCanvas } from "./canvas-state";
-import { cloneBrowserTileForNewPageSession } from "./tile-schema/browser-tile";
 import { makeBlankTileRef } from "./tile-schema/blank-tile";
 
 // ---------------------------------------------------------------------------
@@ -440,9 +438,6 @@ function cloneTileForCanvasDuplicate(
   ref: EpicCanvasTileRef,
   instanceId: string,
 ): EpicCanvasTileRef {
-  if (isBrowserTileRef(ref)) {
-    return cloneBrowserTileForNewPageSession(ref, instanceId);
-  }
   return { ...ref, instanceId };
 }
 
@@ -1451,6 +1446,7 @@ export function renameArtifact(
     state,
     (ref) => ref.id === artifactId,
     (ref) => {
+      if (isBrowserSessionTileRef(ref)) return ref;
       if (ref.type !== "terminal") {
         return ref.name === name ? ref : { ...ref, name };
       }
@@ -1481,36 +1477,13 @@ export function renameArtifact(
   );
 }
 
-export function updateBrowserTileDocument(
-  state: EpicCanvasState,
-  tileInstanceId: string,
-  document: Pick<BrowserTileRef, "name" | "url">,
-): EpicCanvasState {
-  const ref = state.tilesByInstanceId[tileInstanceId];
-  if (
-    ref === undefined ||
-    !isBrowserTileRef(ref) ||
-    (ref.url === document.url && ref.name === document.name)
-  ) {
-    return state;
-  }
-  return {
-    ...state,
-    tilesByInstanceId: {
-      ...state.tilesByInstanceId,
-      [tileInstanceId]: { ...ref, ...document },
-    },
-  };
-}
-
 export function updateBrowserTileViewportPreset(
   state: EpicCanvasState,
   tileInstanceId: string,
-  viewportPreset: BrowserTileRef["viewportPreset"],
+  viewportPreset: BrowserSessionTileRef["viewportPreset"],
 ): EpicCanvasState {
   const current = state.tilesByInstanceId[tileInstanceId];
-  if (current === undefined) return state;
-  if (!isBrowserTileRef(current) && !isAgentBrowserTileRef(current)) {
+  if (current === undefined || !isBrowserSessionTileRef(current)) {
     return state;
   }
   if (current.viewportPreset === viewportPreset) return state;

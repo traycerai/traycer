@@ -27,7 +27,7 @@ import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
 } from "@/lib/browser-view/electron-tabs";
-import { openFreshBrowserTileFromBrowserPage } from "@/lib/browser-view/browser-link-routing-core";
+import { openBrowserSessionTileFromPage } from "@/lib/browser-view/browser-link-routing-core";
 import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -114,13 +114,17 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       ),
     [props.paneId, props.node.instanceId, props.viewTabId],
   );
+  const bindSurface = props.binding.bindSurface;
+  const registrationId = props.binding.registrationId;
   const currentSurfaceAttachment = resolveCurrentSurfaceAttachment(
     surfaceAttachment,
     bindingId,
-    props.binding.registrationId,
+    registrationId,
   );
-  const surfaceReady = currentSurfaceAttachment?.status === "ready";
-  const surfaceError = currentSurfaceAttachment?.error ?? null;
+  const surfaceReady = visible && currentSurfaceAttachment?.status === "ready";
+  const surfaceError = visible
+    ? (currentSurfaceAttachment?.error ?? null)
+    : null;
 
   const { status: effectiveStatus, reason: effectiveStatusReason } =
     effectiveAgentTileStatus(
@@ -171,17 +175,46 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     if (browserView === null) return;
     const subscription = browserView.onOpenTileRequest((change) => {
       if (!isChangeForTile(change, tileKey)) return;
-      openFreshBrowserTileFromBrowserPage({
-        viewTabId: props.viewTabId,
-        paneId: props.paneId,
-        hostId: props.node.hostId,
-        url: change.url,
-      });
+      if (
+        browserSessions === null ||
+        browserSessions.lifecycle !== "live" ||
+        browserSessions.hostId !== props.node.hostId
+      ) {
+        toast.error("Browsers are not connected yet.");
+        return;
+      }
+      void browserSessions
+        .openTab(props.node.sessionId, change.url)
+        .then((opened) => {
+          openBrowserSessionTileFromPage({
+            viewTabId: props.viewTabId,
+            paneId: props.paneId,
+            hostId: props.node.hostId,
+            sessionId: opened.sessionId,
+            tabId: opened.tabId,
+            url: change.url,
+          });
+        })
+        .catch((cause: unknown) => {
+          toast.error(
+            cause instanceof Error
+              ? cause.message
+              : "Couldn't open the browser tab.",
+          );
+        });
     });
     return () => {
       subscription.dispose();
     };
-  }, [browserView, props.node.hostId, props.paneId, props.viewTabId, tileKey]);
+  }, [
+    browserSessions,
+    browserView,
+    props.node.hostId,
+    props.node.sessionId,
+    props.paneId,
+    props.viewTabId,
+    tileKey,
+  ]);
 
   const attachedBrowserView = surfaceReady ? browserView : null;
   useBrowserViewBoundsBridge({
@@ -199,7 +232,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     epicId: epicId ?? "",
     browserHostId: props.node.hostId,
     preferredChatId: annotationPreferredChatId,
-    fallbackChatId: annotationSession?.createdBy.chatId ?? null,
+    fallbackChatId: null,
   });
   const persistViewportPreset = useEpicCanvasStore(
     (state) => state.updateBrowserTileViewportPresetInTab,
@@ -233,13 +266,12 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     onAttemptedUrl: latchAttemptedUrl,
   });
   useEffect(() => {
+    if (!visible) return;
     let active = true;
-    void props.binding
-      .bindSurface({
-        bindingId,
-        surface: tileKey,
-        visible: false,
-      })
+    void bindSurface({
+      bindingId,
+      surface: tileKey,
+    })
       .then((lease) => {
         if (!active) {
           void lease.detach();
@@ -248,7 +280,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         surfaceLeaseRef.current = lease;
         setSurfaceAttachment({
           bindingId,
-          registrationId: props.binding.registrationId,
+          registrationId,
           status: "ready",
           error: null,
         });
@@ -257,7 +289,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         if (!active) return;
         setSurfaceAttachment({
           bindingId,
-          registrationId: props.binding.registrationId,
+          registrationId,
           status: "error",
           error:
             cause instanceof Error
@@ -271,28 +303,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
       surfaceLeaseRef.current = null;
       if (lease !== null) void lease.detach();
     };
-  }, [bindingId, props.binding, tileKey]);
-
-  useEffect(() => {
-    const lease = surfaceLeaseRef.current;
-    if (lease === null || !surfaceReady) return;
-    void lease
-      .update({
-        surface: tileKey,
-        visible,
-      })
-      .catch((cause: unknown) => {
-        setSurfaceAttachment({
-          bindingId,
-          registrationId: props.binding.registrationId,
-          status: "error",
-          error:
-            cause instanceof Error
-              ? cause.message
-              : "The native browser surface could not be updated.",
-        });
-      });
-  }, [bindingId, props.binding.registrationId, surfaceReady, tileKey, visible]);
+  }, [bindSurface, bindingId, registrationId, tileKey, visible]);
 
   return (
     <div
@@ -361,7 +372,7 @@ function resolveCurrentSurfaceAttachment(
   bindingId: string,
   registrationId: string,
 ): SurfaceAttachmentState | null {
-  if (attachment?.bindingId !== bindingId) return null;
+  if (attachment === null || attachment.bindingId !== bindingId) return null;
   if (attachment.registrationId !== registrationId) return null;
   return attachment;
 }
