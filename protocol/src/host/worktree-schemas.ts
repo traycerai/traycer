@@ -866,11 +866,10 @@ export type WorktreeDeleteRequest = z.infer<typeof worktreeDeleteRequestSchema>;
  * always refuses on busy. A 1.0 client talking to a 1.1 host is upgraded
  * with `stopOwners: false`.
  */
-export const worktreeDeleteRequestSchemaV11 = worktreeDeleteRequestSchema.extend(
-  {
+export const worktreeDeleteRequestSchemaV11 =
+  worktreeDeleteRequestSchema.extend({
     stopOwners: z.boolean().default(false),
-  },
-);
+  });
 export type WorktreeDeleteRequestV11 = z.infer<
   typeof worktreeDeleteRequestSchemaV11
 >;
