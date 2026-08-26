@@ -15,6 +15,7 @@ import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
+import { ComposerMobileToolbar } from "@/components/home/mobile/composer-mobile-toolbar";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { TerminalLaunchPanel } from "@/components/home/composer/terminal-launch-panel";
@@ -51,6 +52,13 @@ export interface ComposerBodyProps {
    * banner through a separate portal and never uses this slot).
    */
   readonly topBanner: ReactNode | null;
+  /**
+   * Which toolbar this surface wants. `"collapsed"` is the phone-width row,
+   * which moves the secondary controls into a single options sheet. The
+   * calling surface decides, so `ComposerBody` itself stays viewport-agnostic;
+   * only the landing composer asks for `"collapsed"`, and only below `md`.
+   */
+  readonly toolbarLayout: "full" | "collapsed";
   readonly stashControl: ReactNode;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
@@ -103,6 +111,7 @@ export function ComposerBody({
   workspaceDisabledHint,
   header,
   topBanner,
+  toolbarLayout,
   stashControl,
   attachmentsStrip,
   workspaceControls,
@@ -122,6 +131,26 @@ export function ComposerBody({
   const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
+  // Every prop both toolbars take, identical for either layout - only the
+  // desktop-only permission note below differs. Shared so the two branches
+  // cannot drift apart silently; the moment they need different values, stop
+  // spreading and pass them explicitly again.
+  const sharedToolbarProps = {
+    store: toolbarStore,
+    onAttachImages: paste.attachImageFiles,
+    canSubmit,
+    attachmentPending,
+    onSubmit,
+    activeTurnStatus: null,
+    stopDisabled: true,
+    onStopTurn: null,
+    composerDisabledHint: workspaceDisabledHint,
+    dictation: dictationControl,
+    dictationPreparing,
+    settingsLocked: isSubmitting,
+    createProfileHostId: hostId,
+    runTargetHostId: hostId,
+  } as const;
 
   return (
     <div className="flex flex-col gap-3">
@@ -180,23 +209,14 @@ export function ComposerBody({
         toolbar={
           <div className={hiddenInTerminal}>
             <SurfaceActivityProvider active={composerMode === "chat"}>
-              <ComposerToolbar
-                store={toolbarStore}
-                onAttachImages={paste.attachImageFiles}
-                showNextTurnPermissionNote={false}
-                canSubmit={canSubmit}
-                attachmentPending={attachmentPending}
-                onSubmit={onSubmit}
-                activeTurnStatus={null}
-                stopDisabled
-                onStopTurn={null}
-                composerDisabledHint={workspaceDisabledHint}
-                dictation={dictationControl}
-                dictationPreparing={dictationPreparing}
-                settingsLocked={isSubmitting}
-                createProfileHostId={hostId}
-                runTargetHostId={hostId}
-              />
+              {toolbarLayout === "collapsed" ? (
+                <ComposerMobileToolbar {...sharedToolbarProps} />
+              ) : (
+                <ComposerToolbar
+                  {...sharedToolbarProps}
+                  showNextTurnPermissionNote={false}
+                />
+              )}
             </SurfaceActivityProvider>
           </div>
         }

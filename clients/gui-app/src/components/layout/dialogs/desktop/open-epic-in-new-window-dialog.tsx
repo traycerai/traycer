@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -17,7 +17,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { cn } from "@/lib/utils";
+import { RefreshIcon } from "@/components/refresh-icon";
 import type { OpenEpicInNewWindowDialogProps } from "./types";
 
 const OPEN_EPIC_REFRESH_TIMEOUT_MS = 10_000;
@@ -66,9 +66,7 @@ export function OpenEpicInNewWindowDialog(
               disabled={refresh.refreshing || hostId === null}
               onClick={refresh.trigger}
             >
-              <RefreshCw
-                className={cn("size-4", refresh.refreshing && "animate-spin")}
-              />
+              <RefreshIcon refreshing={refresh.refreshing} />
             </Button>
           </div>
           <OpenEpicPickerBody

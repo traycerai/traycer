@@ -3,6 +3,8 @@ export * from "./contracts";
 export * from "./subscribe";
 export * from "./agent-runtime";
 export * from "./agent-runtime-accumulator";
+export * from "./chat-frame-compat";
+export * from "./interview-settlement";
 export * from "./interview-tools";
 export * from "./model-slug-resolution";
 export * from "./task-todo-tools";

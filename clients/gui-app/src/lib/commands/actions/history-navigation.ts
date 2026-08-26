@@ -43,22 +43,30 @@ export interface HistoryNavRouter {
 }
 
 /**
- * Step back to the nearest ELIGIBLE entry in the current router's persistent
- * history - closed-Task entries in between are skipped over, not landed on
- * (see `findEligibleOffset`). No-op when the history carries no controller
- * brand (browser/web build), so the feature is wholly inert outside
- * Electron, AND no-op when no eligible entry exists in this direction: an
- * offset-less `go` would still notify → `router.load()` re-runs the current
- * route for nothing. That no-op also keeps every input path (keyboard,
- * mouse, palette) from firing that same-route load.
+ * Step back to the previous entry in the current router's history.
+ *
+ * TWO BACKENDS, chosen by what the history can answer rather than by which
+ * shell is asking. A history carrying the controller brand owns its entry list,
+ * so the step can be semantic: closed-Task entries in between are skipped over
+ * rather than landed on (see `findEligibleOffset`), the landing entry's tile is
+ * restored first, and a step with no eligible entry is refused outright,
+ * because an offset-less `go` would still notify → `router.load()` re-runs the
+ * current route for nothing.
+ *
+ * A plain history exposes no entries and no index, so none of that is knowable
+ * and none of it is attempted: the step is handed straight to the history, which
+ * either moves or does nothing. That is the whole fallback, and it is enough
+ * because the surfaces it serves are top-level ones - the entries a phone
+ * accumulates are tab activations, and the eligibility rules exist for tiles
+ * nested inside a Task.
  */
 export function goBack(router: HistoryNavRouter): void {
   navigateHistory(router, -1);
 }
 
 /**
- * Step forward to the nearest eligible entry. See `goBack` - same
- * skip-closed-Task and boundary no-op behavior, opposite direction.
+ * Step forward to the next entry. See `goBack` - same two backends, opposite
+ * direction.
  */
 export function goForward(router: HistoryNavRouter): void {
   navigateHistory(router, 1);
@@ -67,6 +75,7 @@ export function goForward(router: HistoryNavRouter): void {
 function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   const controller = getHistoryController(router.history);
   if (controller === null) {
+    stepPlainHistory(router.history, direction);
     return;
   }
   const entries = controller.getEntries();
@@ -80,6 +89,38 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
   reopenClosedTilePreview(entries[index + offset]);
   router.history.go(offset);
   trackHistoryNavigationUsed(direction === -1 ? "back" : "forward");
+}
+
+/**
+ * The step a history with no controller brand can make.
+ *
+ * `canGoBack` is the one navigability question such a history answers - it
+ * reads the index the router stamps into each entry's state - and it is asked
+ * because a back at the first entry is not merely a no-op: under a WebView it
+ * is a step out of the session's own stack.
+ *
+ * Forward has no counterpart to ask. The history exposes no length ahead of the
+ * cursor, so "is there anything to go forward to" is UNKNOWABLE here, and the
+ * step is issued unconditionally: the browser moves if there is somewhere to
+ * move and does nothing if there is not. Guessing in either direction would be
+ * worse than attempting - refusing would make forward permanently dead, and
+ * reporting it as available would light up a control that leads nowhere.
+ *
+ * Analytics follows the same asymmetry. A back is counted only once it is
+ * actually issued; a forward counts the attempt, because nothing here can tell
+ * an attempt that moved from one that did not.
+ */
+function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
+  if (direction === -1) {
+    if (!history.canGoBack()) {
+      return;
+    }
+    history.back();
+    trackHistoryNavigationUsed("back");
+    return;
+  }
+  history.forward();
+  trackHistoryNavigationUsed("forward");
 }
 
 /**

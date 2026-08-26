@@ -129,7 +129,11 @@ export function ChatAccumulatedChangesPanel(
                 open ? null : "-rotate-90",
               )}
             />
-            <span className="shrink-0 text-ui-xs font-medium text-foreground/85">
+            {/* The one shrinkable item in the row. Every sibling is a fixed
+                chip (chevron, +/− counts, the action buttons), so if this
+                label could not give up width, a narrow viewport would push
+                the counts out of the trigger's box and under the buttons. */}
+            <span className="min-w-0 truncate text-ui-xs font-medium text-foreground/85">
               {changes.length}{" "}
               {changes.length === 1 ? "file changed" : "files changed"}
             </span>
@@ -367,7 +371,7 @@ function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
         sideOffset={undefined}
         align={undefined}
       >
-        <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <Button
             type="button"
             variant="ghost"

@@ -38,10 +38,7 @@ function withAlpha(color: string, alpha: number): string {
   const formatted = formatRgb({ ...parsed, alpha });
   return formatted.length > 0 ? formatted : color;
 }
-function buildTerminalTheme(
-  resolvedTheme: "light" | "dark",
-  doc: Document,
-): ITheme {
+function buildTerminalTheme(doc: Document): ITheme {
   const foreground = resolveCssColor(doc, "--canvas-foreground", "#000000");
   const background = resolveCssColor(doc, "--canvas", "#ffffff");
   const primary = resolveCssColor(doc, "--primary", "#3b82f6");
@@ -61,7 +58,12 @@ function buildTerminalTheme(
     normals[name] = resolveCssColor(doc, `--term-ansi-${name}`, foreground);
   }
 
-  const brightDelta = resolvedTheme === "dark" ? 0.08 : -0.08;
+  // Brights always synthesize *lighter*, in light mode too. "Bright" is an
+  // absolute lightness promise, not an emphasis direction: a dark-assuming TUI
+  // paints bright-white on ANSI black, and a darker-shifted bright-white in a
+  // light palette lands on black itself (see the light-palette invariant in
+  // terminal-themes.css).
+  const brightDelta = 0.08;
   const brights = {} as Record<AnsiName, string>;
   for (const name of ANSI_NAMES) {
     const raw = readCssVar(doc, `--term-ansi-bright-${name}`);
@@ -112,12 +114,13 @@ function buildTerminalTheme(
 export function useTerminalTheme(): ITheme {
   const { resolvedTheme, themePreset } = useResolvedTheme();
   return useMemo(() => {
-    // `themePreset` is part of the memo's cache identity but its values
-    // flow in through the CSS cascade (`[data-theme="X"]` selectors that
-    // `getComputedStyle` resolves below) rather than appearing in the
-    // closure body. Reference it here so `react-hooks/exhaustive-deps`
-    // can verify the deps array is complete.
+    // `resolvedTheme` and `themePreset` are part of the memo's cache identity
+    // but their values flow in through the CSS cascade (the `.dark` and
+    // `[data-theme="X"]` selectors that `getComputedStyle` resolves below)
+    // rather than appearing in the closure body. Reference them here so
+    // `react-hooks/exhaustive-deps` can verify the deps array is complete.
+    resolvedTheme;
     themePreset;
-    return buildTerminalTheme(resolvedTheme, document);
+    return buildTerminalTheme(document);
   }, [resolvedTheme, themePreset]);
 }

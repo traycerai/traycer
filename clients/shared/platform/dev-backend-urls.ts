@@ -29,6 +29,33 @@ const ALLOWED_DEV_BACKEND_HOSTS: ReadonlySet<string> = new Set([
   "127.0.0.1",
 ]);
 
+/**
+ * Explicit opt-in that widens the host restriction from loopback to
+ * RFC 1918 private IPv4 — the physical-device dev lane, where the phone must
+ * reach the Mac's services over the LAN and "loopback" would mean the phone
+ * itself. Kept behind its own variable rather than folded into the URL
+ * validation so the default posture (a stray env var can only point a dev
+ * build at the local machine) survives untouched: reaching beyond loopback
+ * takes two deliberate variables, and even then only to a private address.
+ */
+export const DEV_ALLOW_LAN_BACKEND_ENV = "TRAYCER_DEV_ALLOW_LAN_BACKEND";
+
+const PRIVATE_IPV4_PATTERN =
+  /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/;
+
+function isAllowedDevBackendHost(
+  hostname: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (ALLOWED_DEV_BACKEND_HOSTS.has(hostname)) {
+    return true;
+  }
+  return (
+    env[DEV_ALLOW_LAN_BACKEND_ENV] === "1" &&
+    PRIVATE_IPV4_PATTERN.test(hostname)
+  );
+}
+
 // Resolve one backend base URL: the baked literal unless this is a dev
 // build AND the env var carries a valid loopback origin. Malformed values
 // throw (loudly, at module init) rather than silently falling back - a
@@ -52,8 +79,10 @@ export function devBackendUrlFromEnv(
   if (url.protocol !== "http:") {
     throw new Error(`${envVar} must use http`);
   }
-  if (!ALLOWED_DEV_BACKEND_HOSTS.has(url.hostname)) {
-    throw new Error(`${envVar} must use a loopback host`);
+  if (!isAllowedDevBackendHost(url.hostname, env)) {
+    throw new Error(
+      `${envVar} must use a loopback host (or a private LAN IPv4 with ${DEV_ALLOW_LAN_BACKEND_ENV}=1)`,
+    );
   }
   if (url.port.length === 0) {
     throw new Error(`${envVar} must include a port`);

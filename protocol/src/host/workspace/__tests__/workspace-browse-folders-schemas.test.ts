@@ -3,7 +3,9 @@ import {
   workspaceBrowseFolderEntrySchema,
   workspaceBrowseFoldersRequestSchema,
   workspaceBrowseFoldersResponseSchema,
+  workspaceBrowseFoldersResponseSchemaV11,
 } from "../unary-schemas";
+import { workspaceBrowseFoldersUpgradeV10ToV11 } from "../../registry";
 
 /**
  * `workspace.browseFolders` carries HOST-native absolute paths in both
@@ -79,5 +81,42 @@ describe("workspace.browseFolders absolute-path contract", () => {
     expect(workspaceBrowseFoldersResponseSchema.parse(response)).toEqual(
       response,
     );
+  });
+
+  it("carries normalized hidden metadata in v1.1", () => {
+    const response = {
+      directoryPath: "C:\\Users\\alice",
+      parentPath: "C:\\Users",
+      entries: [
+        {
+          path: "C:\\Users\\alice\\AppData",
+          name: "AppData",
+          hidden: true,
+        },
+      ],
+    };
+    expect(workspaceBrowseFoldersResponseSchemaV11.parse(response)).toEqual(
+      response,
+    );
+  });
+
+  it("upgrades v1.0 dot folders without inventing Windows attributes", () => {
+    expect(
+      workspaceBrowseFoldersUpgradeV10ToV11.upgradeResponse({
+        directoryPath: "/home/alice",
+        parentPath: "/home",
+        entries: [
+          { path: "/home/alice/.config", name: ".config" },
+          { path: "/home/alice/code", name: "code" },
+        ],
+      }),
+    ).toEqual({
+      directoryPath: "/home/alice",
+      parentPath: "/home",
+      entries: [
+        { path: "/home/alice/.config", name: ".config", hidden: true },
+        { path: "/home/alice/code", name: "code", hidden: false },
+      ],
+    });
   });
 });

@@ -7,6 +7,7 @@ import {
 import { queryClient } from "@/lib/query-client";
 import { getAppHostClientSnapshot } from "@/lib/host/runtime";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import { isMobileApp } from "@/lib/mobile-app";
 import { RoutePendingScreen } from "@/components/loading/route-pending-screen";
 import { RouteErrorComponent } from "@/components/errors/route-error-component";
 import { warmRouteChunks } from "@/lib/warm-route-chunks";
@@ -155,6 +156,23 @@ function createAppHistory(
   // work natively, and reload survives via the browser. A shell-injected
   // `initialRoute` still overrides via memory history below.
   if (!isElectronContext()) {
+    // The installed mobile app owns its back stack, because it is the one
+    // non-Electron shell whose ONLY history affordance is in-app: the phone has
+    // no URL bar, no back button, and no room in its header for the desktop's
+    // arrows - the edge swipe is the whole of back and forward there. TanStack's
+    // own history would leave that gesture reading a stack nothing in this app
+    // fills, which is a gesture that recognizes perfectly and then navigates
+    // nowhere.
+    //
+    // `windowId` is deliberately `null`, which is what makes the stack
+    // SESSION-scoped: both halves of the persistence layer no-op on a null
+    // window, so nothing is read at boot and nothing is written. A phone's
+    // process outlives every navigation the user makes inside one sitting, so
+    // the in-memory stack already survives everything a resume can do to it; a
+    // stack restored across a COLD launch would instead hand the first swipe
+    // after opening the app a surface from yesterday, which reads as the app
+    // going somewhere the user never was.
+    if (isMobileApp()) return createPersistentMemoryHistory(initialRoute, null);
     if (initialRoute === null) return undefined;
     return createMemoryHistory({
       initialEntries: [normalizeInitialRoute(initialRoute)],

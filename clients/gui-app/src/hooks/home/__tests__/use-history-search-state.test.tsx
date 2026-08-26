@@ -5,7 +5,10 @@ import {
   useRouteHistorySearchState,
 } from "@/hooks/home/use-history-search-state";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import {
+  DEFAULT_HISTORY_SEARCH,
+  type HistorySearchState,
+} from "@/lib/history-search";
 
 interface NavigateArgs {
   readonly to: string;
@@ -63,7 +66,7 @@ describe("history search state hooks", () => {
     );
   });
 
-  it("route surfaces (/epics) navigate the URL and leave the store untouched", () => {
+  it("route surfaces (/epics) navigate the URL; the store follows route state, not the patch", () => {
     const { result } = renderHook(() =>
       useRouteHistorySearchState(DEFAULT_HISTORY_SEARCH),
     );
@@ -75,9 +78,37 @@ describe("history search state hooks", () => {
     expect(routerState.navigate).toHaveBeenCalledTimes(1);
     const navigateArgs = routerState.navigate.mock.calls[0][0];
     expect(navigateArgs.search({})).toMatchObject({ historyQuery: "api" });
+    // The patch itself never writes the store - the mirror rides the route
+    // state, which this mocked router never re-delivers.
     expect(useHistorySearchStore.getState().search).toEqual(
       DEFAULT_HISTORY_SEARCH,
     );
+  });
+
+  it("route surfaces mirror the route state into the store (memory adoption)", () => {
+    const routeSearch: HistorySearchState = {
+      ...DEFAULT_HISTORY_SEARCH,
+      query: "deep-linked",
+      ownershipScopes: ["mine"],
+    };
+    const { rerender } = renderHook(
+      (props: { search: HistorySearchState }) =>
+        useRouteHistorySearchState(props.search),
+      { initialProps: { search: routeSearch } },
+    );
+
+    expect(useHistorySearchStore.getState().search).toMatchObject({
+      query: "deep-linked",
+      ownershipScopes: ["mine"],
+    });
+
+    const nextRouteSearch = { ...DEFAULT_HISTORY_SEARCH, query: "narrowed" };
+    rerender({ search: nextRouteSearch });
+
+    expect(useHistorySearchStore.getState().search).toMatchObject({
+      query: "narrowed",
+      ownershipScopes: [],
+    });
   });
 
   it("route surfaces do not subscribe to ambient history store changes", () => {

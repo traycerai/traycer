@@ -153,6 +153,7 @@ function bodyProps(overrides: BodyPropsOverrides) {
     meta: overrides.meta ?? null,
     nextStepActions: null,
     forkAction: null,
+    interviewDeliveryRetry: null,
   };
 }
 

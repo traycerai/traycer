@@ -1,0 +1,10 @@
+/*
+ * Mobile renderer Tailwind entrypoint. The shared GUI is consumed as source,
+ * so Tailwind must scan both workspaces or its responsive utility classes are
+ * absent from the native bundle.
+ */
+@import "../../../gui-app/src/index.css";
+@import "./mobile.css";
+
+@source "../../../gui-app/src";
+@source ".";

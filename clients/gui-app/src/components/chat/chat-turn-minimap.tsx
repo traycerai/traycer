@@ -2,6 +2,7 @@ import type { LegendListRef } from "@legendapp/list/react";
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,8 +16,10 @@ import {
   resolveChatTurnMinimapHeightStyle,
   resolveChatTurnMinimapHitStripWidth,
   resolveChatTurnMinimapTopStyle,
+  shouldRunChatTurnMinimapRail,
 } from "@/components/chat/chat-turn-minimap-logic";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import { useRegisterTileMinimap } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import {
   MinimapListCard,
   type MinimapListEntry,
@@ -27,11 +30,13 @@ import {
   resolveMinimapVisibleItemCapacity,
   resolveMinimapWindow,
 } from "@/components/minimap/minimap-track-geometry";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   useSettingsStore,
-  type MinimapSide,
+  type MinimapPlacement,
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
@@ -42,7 +47,8 @@ export interface ChatTurnMinimapProps {
   readonly bottomInset: number;
   readonly inViewRefreshRef: RefObject<() => void>;
   readonly onSelect: (messageId: string) => void;
-  readonly side: MinimapSide;
+  /** `hide` keeps the turn model published for the tile bar, rail and all. */
+  readonly side: MinimapPlacement;
 }
 
 interface ChatTurnMinimapItem extends MinimapListEntry {
@@ -93,8 +99,20 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     topOffsetAdjustmentRef,
     viewportRef,
   } = props;
+  // A streaming reply replaces `messages` per token, so this array is new per
+  // token even when the turns are not. What is keyed on its identity must
+  // survive that: the tile bar's notify compares the outline it publishes
+  // (`useRegisterTileMinimap`), and the rail's geometry effect below reads
+  // `refreshCurrent` through a ref instead of depending on it.
   const items = useMemo(() => deriveChatTurnMinimapItems(messages), [messages]);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
+  const coarsePointer = useCoarsePointer();
+  const mobileViewport = useIsMobileViewport();
+  const railActive = shouldRunChatTurnMinimapRail({
+    coarsePointer,
+    mobileViewport,
+    side,
+  });
   const [currentIndex, setCurrentIndex] = useState(0);
   const [cursorIndex, setCursorIndex] = useState(0);
   const [hitStripWidth, setHitStripWidth] = useState<number | null>(null);
@@ -135,9 +153,20 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     return () => cancelAnimationFrame(frame);
   }, [refreshCurrent]);
 
+  // Read through a ref so the observer below is not torn down and rebuilt
+  // whenever the callback's identity moves.
+  const refreshCurrentRef = useRef(refreshCurrent);
+  useLayoutEffect(() => {
+    refreshCurrentRef.current = refreshCurrent;
+  }, [refreshCurrent]);
+
+  // Only the rail consumes this geometry, so it runs only where the rail
+  // paints: `getBoundingClientRect` on the transcript container forces a
+  // layout of the virtualized rows inside it, and on a phone that buys
+  // nothing.
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (viewport === null) return;
+    if (!railActive || viewport === null) return;
     const measure = (): void => {
       const viewportRect = viewport.getBoundingClientRect();
       const width = resolveChatTurnMinimapHitStripWidth({
@@ -154,7 +183,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         setOpen(false);
         hitStripRef.current?.blur();
       }
-      refreshCurrent();
+      refreshCurrentRef.current();
     };
     const frame = requestAnimationFrame(measure);
     const observer = new ResizeObserver(measure);
@@ -163,12 +192,32 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [bottomInset, refreshCurrent, uiFontSize, viewportRef]);
+  }, [bottomInset, railActive, uiFontSize, viewportRef]);
 
   const visible = items.length > 0;
+  // Subsumed by `railActive`; kept as its own condition so the early return
+  // below narrows the placement the rail renders with.
+  const railHidden = side === "hide";
   const isInert = hitStripWidth === null || hitStripWidth <= 0;
   const resolvedCurrentIndex = clampIndex(currentIndex, items.length);
   const resolvedCursorIndex = clampIndex(cursorIndex, items.length);
+
+  const selectByIndex = useCallback(
+    (index: number): void => {
+      if (index < 0 || index >= items.length) return;
+      onSelect(items[index].messageId);
+    },
+    [items, onSelect],
+  );
+
+  // Published even when the rail is hidden or inert: the phone tile bar's
+  // button is an explicit affordance and is the only way in on a touch device.
+  useRegisterTileMinimap({
+    title: "Messages",
+    items,
+    currentIndex: resolvedCurrentIndex,
+    onSelect: selectByIndex,
+  });
 
   useEffect(() => {
     const region = regionRef.current;
@@ -252,7 +301,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     ],
   );
 
-  if (!visible || isInert) return null;
+  if (railHidden || !railActive || !visible || isInert) return null;
 
   const window = resolveMinimapWindow({
     currentIndex: resolvedCurrentIndex,

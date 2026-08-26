@@ -22,8 +22,10 @@ import {
 } from "@/components/epic-canvas/surface-host/tile-surface-membership";
 import {
   getTileSurfaceEnvironment,
+  isTileSurfacePresented,
   publishTileSurfaceEnvironment,
   resetTileSurfaceEnvironmentRegistryForTesting,
+  retractTileSurfacePresentation,
   subscribeTileSurfaceEnvironment,
   type ReadyTileSurfaceEnvironment,
 } from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
@@ -226,6 +228,126 @@ describe("tile surface environment registry", () => {
     });
     publishTileSurfaceEnvironment(second);
     expect(getTileSurfaceEnvironment("chat-1")).toBe(second);
+  });
+
+  it("retracting presentation lowers tabSelected without clearing the record or re-creating its services", () => {
+    seedMember("chat-1", "tab-1");
+    const published = environment({});
+    publishTileSurfaceEnvironment(published);
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      true,
+    );
+
+    let notifications = 0;
+    const unsubscribe = subscribeTileSurfaceEnvironment("chat-1", () => {
+      notifications += 1;
+    });
+
+    retractTileSurfacePresentation(
+      "chat-1",
+      published.services.geometryAnchorElement,
+    );
+
+    const after = getTileSurfaceEnvironment("chat-1");
+    if (after === null) throw new Error("expected the record to be retained");
+    expect(isTileSurfacePresented(after)).toBe(false);
+    expect(notifications).toBe(1);
+    // The continuity guarantee is untouched: same identity, same placement,
+    // and the SAME services object (by reference) the source slot published.
+    expect(after.identity).toBe(published.identity);
+    expect(after.placement).toBe(published.placement);
+    expect(after.services).toBe(published.services);
+    expect(after.presentation).toBe(published.presentation);
+    // A fresh object, so a `useSyncExternalStore` reader actually re-renders
+    // rather than bailing out on an identity-equal snapshot.
+    expect(after).not.toBe(published);
+    unsubscribe();
+  });
+
+  it("a slot can only retract its OWN publish: an anchor the record no longer carries is a no-op", () => {
+    seedMember("chat-1", "tab-1");
+    const sourceAnchor = document.createElement("div");
+    publishTileSurfaceEnvironment(
+      environment({
+        services: {
+          openEpicHandle:
+            {} as ReadyTileSurfaceEnvironment["services"]["openEpicHandle"],
+          geometryAnchorElement: sourceAnchor,
+          panePortalContainer: null,
+          isPaneFocusedNow: () => false,
+        },
+      }),
+    );
+    // The destination slot publishes for the same instance BEFORE the source
+    // slot tears down - the cross-commit transfer ordering. The source's
+    // teardown must not conceal the live record.
+    const destination = environment({});
+    publishTileSurfaceEnvironment(destination);
+
+    let notifications = 0;
+    const unsubscribe = subscribeTileSurfaceEnvironment("chat-1", () => {
+      notifications += 1;
+    });
+
+    retractTileSurfacePresentation("chat-1", sourceAnchor);
+
+    expect(getTileSurfaceEnvironment("chat-1")).toBe(destination);
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      true,
+    );
+    expect(notifications).toBe(0);
+    unsubscribe();
+  });
+
+  it("the source-first transfer gap is bounded by the destination publish, not by a frame", async () => {
+    seedMember("chat-1", "tab-1");
+    const source = environment({});
+    publishTileSurfaceEnvironment(source);
+
+    // Source tears down before any destination has published - the accepted
+    // gap. The record is RETAINED (still non-null, still a member) but stops
+    // claiming the rect.
+    retractTileSurfacePresentation(
+      "chat-1",
+      source.services.geometryAnchorElement,
+    );
+    expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      false,
+    );
+
+    // Elapsed time does not end the gap: nothing in the registry schedules or
+    // bounds the recovery. Only the destination's own publish does - which is
+    // why the bound is "until the destination publishes", not "one frame".
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      false,
+    );
+
+    publishTileSurfaceEnvironment(environment({}));
+    expect(isTileSurfacePresented(getTileSurfaceEnvironment("chat-1"))).toBe(
+      true,
+    );
+  });
+
+  it("retracting an already-unpresented or unknown record notifies nobody", () => {
+    seedMember("chat-1", "tab-1");
+    const published = environment({});
+    publishTileSurfaceEnvironment(published);
+    const anchor = published.services.geometryAnchorElement;
+    retractTileSurfacePresentation("chat-1", anchor);
+
+    let notifications = 0;
+    const unsubscribe = subscribeTileSurfaceEnvironment("chat-1", () => {
+      notifications += 1;
+    });
+
+    retractTileSurfacePresentation("chat-1", anchor);
+    retractTileSurfacePresentation("never-a-member", anchor);
+
+    expect(notifications).toBe(0);
+    unsubscribe();
   });
 
   it("removes the record and notifies only on membership loss, never mid-transfer", () => {

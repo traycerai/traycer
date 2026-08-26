@@ -12,7 +12,14 @@ import {
 } from "react";
 import type Fuse from "fuse.js";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { ChevronDown, Search, TriangleAlert, X } from "lucide-react";
+import {
+  ChevronDown,
+  GitBranch,
+  GitCommitHorizontal,
+  Search,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import type {
   GitChangedFile,
   GitChangedFileV11,
@@ -40,10 +47,10 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
+import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { cn } from "@/lib/utils";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { FileList } from "./file-list";
 import { RepoStateBanner } from "./repo-state-banner";
 import { DiffLoadingSkeleton } from "./diff-loading-skeleton";
@@ -159,15 +166,24 @@ function moduleSectionCollapseKey(
 function parentReferenceLabel(module: GitModuleGroup): string | null {
   const reference = module.parentReference;
   if (reference === null) return null;
-  if (reference.status === "differs") return "pinned commit out of date";
-  if (reference.status === "conflicted") return "reference conflict";
-  if (reference.status === "unavailable") return "details unavailable";
-  return "working tree dirty";
+  if (reference.status === "differs") {
+    return "Checkout differs from parent reference";
+  }
+  if (reference.status === "conflicted") return "Submodule reference conflict";
+  if (reference.status === "unavailable") {
+    return "Submodule details unavailable";
+  }
+  return "Submodule working tree has changes";
 }
 
 function moduleHeaderPath(module: GitModuleGroup): string | null {
-  if (module.repoRoot !== null) return module.repoRoot;
-  return module.parentPath;
+  return module.repoRoot;
+}
+
+function moduleHeadLabel(module: GitModuleGroup): string {
+  if (module.headKind === "branch") return "Branch";
+  if (module.headKind === "reference") return "Reference";
+  return "Checkout";
 }
 
 interface ModuleHeaderPreviewRow {
@@ -184,24 +200,38 @@ function moduleHeaderPreviewRows(args: {
   const { module, countLabel, parentLabel } = args;
   const path = moduleHeaderPath(module);
   return [
-    path === null ? null : { key: "path", label: "Path", value: path },
+    path === null
+      ? null
+      : { key: "path", label: "Repository location", value: path },
     module.parentPath === null
       ? null
       : {
           key: "parent-path",
-          label: "Parent path",
+          label: "Location in workspace",
           value: module.parentPath,
         },
-    { key: "head", label: "Head", value: module.headLabel },
-    { key: "changed-files", label: "Changed files", value: countLabel },
+    {
+      key: "head",
+      label: moduleHeadLabel(module),
+      value: module.headLabel,
+    },
+    {
+      key: "changed-files",
+      label: "Working tree changes",
+      value: countLabel,
+    },
     parentLabel === null
       ? null
-      : { key: "parent-status", label: "Status", value: parentLabel },
+      : {
+          key: "parent-status",
+          label: "Parent reference",
+          value: parentLabel,
+        },
     module.parentReference?.summary === undefined
       ? null
       : {
           key: "details",
-          label: "Details",
+          label: "Commits",
           value: module.parentReference.summary,
         },
     module.unavailable && module.parentReference?.status !== "unavailable"
@@ -319,14 +349,14 @@ function ModuleHeaderPreviewContent(props: {
         {props.module.kind === "submodule" ? "Submodule" : "Workspace module"}:{" "}
         {props.module.label}
       </p>
-      <dl className="mt-1.5 flex min-w-0 flex-col gap-1 text-ui-xs">
+      <dl className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-ui-xs">
         {rows.map((row) => (
-          <div key={row.key} className="flex min-w-0 items-baseline gap-1">
-            <dt className="shrink-0 font-medium text-popover-foreground/85">
+          <div key={row.key} className="contents">
+            <dt className="font-medium text-popover-foreground/85">
               {row.label}:{" "}
             </dt>
             <dd
-              className="m-0 min-w-0 truncate text-muted-foreground"
+              className="m-0 min-w-0 break-words text-muted-foreground"
               data-testid={`git-module-header-preview-${row.key}`}
             >
               {row.value}
@@ -980,7 +1010,7 @@ function GitModuleGroupView(props: {
       {props.expanded ? (
         <div
           className={cn(
-            "bg-background/55",
+            "ml-3 bg-foreground/[0.03]",
             expandedFileBody && "overflow-visible",
           )}
           style={gitSectionStickyStyle(sectionStickyTop)}
@@ -1022,7 +1052,6 @@ function GitModuleHeader(props: {
     module.files.length === 1 ? "file" : "files"
   }`;
   const showCount = !props.expanded || module.files.length === 0;
-  const path = moduleHeaderPath(module);
   const showStatusIcon = moduleHeaderStatusVisible(
     parentReferenceStatus,
     module.unavailable,
@@ -1074,17 +1103,20 @@ function GitModuleHeader(props: {
         />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate text-ui-sm font-semibold text-foreground/90">
+            <span className="min-w-0 flex-1 truncate text-ui-sm font-semibold text-foreground/90">
               {module.label}
             </span>
-            {path === null ? null : (
-              <StartTruncatedText className="ml-auto hidden min-w-0 max-w-[45%] shrink text-ui-xs text-muted-foreground @min-[20rem]:block">
-                {path}
-              </StartTruncatedText>
-            )}
+            {module.kind === "submodule" ? (
+              <span
+                className="shrink-0 rounded-sm bg-foreground/6 px-1.5 py-0.5 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
+                data-testid={`git-module-kind-${moduleIdentifier(module)}`}
+              >
+                Submodule
+              </span>
+            ) : null}
             {showCount ? (
               <span
-                className="shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
+                className="ml-auto shrink-0 rounded bg-muted/40 px-1.5 py-0.5 text-ui-xs tabular-nums text-muted-foreground"
                 data-testid={`git-module-count-${moduleIdentifier(module)}`}
               >
                 {countLabel}
@@ -1099,12 +1131,17 @@ function GitModuleHeader(props: {
             )}
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-            {module.kind === "submodule" ? (
-              <span className="shrink-0 rounded-sm border border-border/60 bg-muted/30 px-1.5 py-0.5 font-medium">
-                submodule
-              </span>
-            ) : null}
-            <span className="min-w-0 truncate">{module.headLabel}</span>
+            <Badge
+              variant="outline"
+              className="min-w-0 max-w-full shrink rounded-full px-1.5 font-normal text-muted-foreground"
+            >
+              {module.headKind === "branch" ? (
+                <GitBranch data-icon="inline-start" aria-hidden />
+              ) : (
+                <GitCommitHorizontal data-icon="inline-start" aria-hidden />
+              )}
+              <span className="truncate">{module.headLabel}</span>
+            </Badge>
             {showStatusIcon ? (
               <span
                 className={parentReferenceStatusClassName(
@@ -1113,7 +1150,20 @@ function GitModuleHeader(props: {
                 )}
                 data-testid={`git-module-parent-reference-${moduleIdentifier(module)}`}
               >
-                <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                {parentReferenceStatus === "differs" ? (
+                  <>
+                    <GitCommitHorizontal
+                      className="size-3 shrink-0"
+                      aria-hidden
+                    />
+                    <span className="truncate">Differs from parent</span>
+                  </>
+                ) : (
+                  <>
+                    <TriangleAlert className="size-3 shrink-0" aria-hidden />
+                    <span className="truncate">{parentLabel}</span>
+                  </>
+                )}
               </span>
             ) : null}
           </span>
@@ -1128,11 +1178,9 @@ function parentReferenceStatusClassName(
   unavailable: boolean,
 ): string {
   return cn(
-    "flex min-w-0 items-center gap-1",
-    (unavailable ||
-      status === "differs" ||
-      status === "conflicted" ||
-      status === "unavailable") &&
+    "ml-auto flex min-w-0 shrink items-center gap-1",
+    status === "differs" && "font-medium text-muted-foreground",
+    (unavailable || status === "conflicted" || status === "unavailable") &&
       "font-medium text-warning",
   );
 }

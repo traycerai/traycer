@@ -22,6 +22,7 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -266,32 +267,13 @@ vi.mock("@/components/epic-canvas/add-node-options", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-filter-menu", () => ({
-  ChatFilterMenu: (props: { readonly onCollapseAll: () => void }) => (
-    <>
-      <button type="button">Chat filter</button>
-      <button
-        type="button"
-        data-testid="epic-sidebar-collapse-all-chats"
-        onClick={props.onCollapseAll}
-      >
-        Collapse all agents
-      </button>
-    </>
-  ),
+  ChatFilterMenu: () => <button type="button">Chat filter</button>,
   ArtifactFilterMenu: (props: {
-    readonly onCollapseAll: () => void;
     readonly onMarkAllRead: () => void;
     readonly markAllReadDisabled: boolean;
   }) => (
     <>
       <button type="button">Artifact filter</button>
-      <button
-        type="button"
-        data-testid="epic-sidebar-collapse-all-artifacts"
-        onClick={props.onCollapseAll}
-      >
-        Collapse all artifacts
-      </button>
       <button
         type="button"
         disabled={props.markAllReadDisabled}
@@ -1052,6 +1034,10 @@ describe("epic sidebar selection mode", () => {
     useNewConversationModalStore.getState().resetForTests();
     useNewConversationModalOpenStore.getState().close();
     useAppDialogStore.getState().closeDialog();
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {
@@ -1815,6 +1801,7 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByRole("button", { name: "Add agent" }).matches(":disabled"),
     ).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
   });
 
   it("keeps collapsed artifact header entry points available", () => {
@@ -1838,6 +1825,40 @@ describe("epic sidebar selection mode", () => {
     expect(
       screen.getByRole("button", { name: "Add artifact" }).matches(":disabled"),
     ).toBe(false);
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
+  });
+
+  it("keeps the Agents overflow actions available during search", () => {
+    seedChatTree();
+    usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "agent");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByRole("button", { name: "More agent actions" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Search agents" }),
+    ).toBeNull();
+  });
+
+  it("keeps the Artifacts overflow actions available during search", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch(TAB_ID, "artifacts", "spec");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen.getByRole("button", { name: "More artifact actions" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Search artifacts" }),
+    ).toBeNull();
   });
 
   it("hides artifact selection when there are no artifacts to select", () => {

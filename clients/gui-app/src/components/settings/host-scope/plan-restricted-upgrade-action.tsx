@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
@@ -38,9 +38,7 @@ export function PlanRestrictedUpgradeAction(): ReactNode {
       size="sm"
       disabled={openExternalLink.isPending}
       onClick={() => {
-        openExternalLink.mutate(
-          resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
-        );
+        openExternalLink.mutate(resolvePlatformBaseUrl(runnerHost.signInUrl));
       }}
       data-testid="host-scope-plan-upgrade"
     >

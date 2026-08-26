@@ -4663,6 +4663,99 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 });
 
+describe("WsStreamClient readiness", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function readinessClient(): {
+    readonly client: WsStreamClient<typeof hostStreamRpcRegistry>;
+    readonly sockets: { url: string; socket: StubStreamWebSocket }[];
+  } {
+    const { factory, sockets } = makeFactory();
+    return {
+      client: makeClient({
+        factory,
+        authToken: "token-abc",
+        pingIntervalMs: 25_000,
+        pongTimeoutMs: 50_000,
+        initialBackoffMs: 10,
+        maxBackoffMs: 1_000,
+      }),
+      sockets,
+    };
+  }
+
+  it("reports ready while it owns no sessions at all", () => {
+    const { client } = readinessClient();
+
+    // Vacuously ready ON PURPOSE. This client is not one connection - it owns
+    // N independent per-method sockets - so "ready" can only mean "nothing I
+    // own is down". A client that has not subscribed to anything is not
+    // evidence of an outage, and answering `false` here would make every
+    // client flip to not-ready the moment its last stream is legitimately
+    // unsubscribed. Do not "fix" this to false-when-empty.
+    expect(client.isReady()).toBe(true);
+
+    client.close("test-teardown");
+  });
+
+  it("is not ready while an owned session is still dialing, and is once it opens", async () => {
+    const { client, sockets } = readinessClient();
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    // The socket exists but has not opened: this session is `connecting`, so
+    // the client owns something that is not carrying traffic.
+    expect(client.isReady()).toBe(false);
+
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
+
+    expect(client.isReady()).toBe(true);
+
+    session.close();
+    client.close("test-teardown");
+  });
+
+  it("is not ready once an owned session loses its socket", async () => {
+    const { client, sockets } = readinessClient();
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+    await flush();
+    const stub = sockets[0].socket;
+    stub.fireOpen();
+    stub.fireText(
+      streamOpenAck(buildStreamManifest(hostStreamRpcRegistry), undefined),
+    );
+    expect(client.isReady()).toBe(true);
+
+    // The drop puts the session into its reconnect loop. The client still
+    // owns it, and it is not carrying traffic.
+    stub.fireClose(1006, "abnormal-closure", false);
+
+    expect(client.isReady()).toBe(false);
+
+    session.close();
+    client.close("test-teardown");
+  });
+
+  it("is never ready once closed", () => {
+    const { client } = readinessClient();
+
+    client.close("test-teardown");
+
+    expect(client.isReady()).toBe(false);
+  });
+});
+
 describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
   // Fake timers are installed BEFORE the client exists: the heartbeat interval
   // is armed at subscribe time, and an interval created under real timers is

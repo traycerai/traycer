@@ -71,6 +71,19 @@ export class AuthTokenStore {
     return this.enqueue(() => this.tokenStore.delete());
   }
 
+  /**
+   * Compare-and-delete for undoing a superseded sign-in's write: destroys the
+   * stored pair ONLY if it still holds exactly `expectedToken`. Forwarded as
+   * ONE backing-store operation — the comparison and the delete are atomic at
+   * the store's own authority (main's file lock), so a sibling window's
+   * `signIn` can never be interleaved between them, and joining this
+   * renderer's chain additionally orders it against our own mutations.
+   * Resolves with what happened; a store fault rejects.
+   */
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept"> {
+    return this.enqueue(() => this.tokenStore.deleteIfToken(expectedToken));
+  }
+
   /** Owned-watcher change subscription (source lands in §4). */
   subscribe(listener: (change: TokenStoreChange) => void): Disposable {
     return this.tokenStore.subscribe(listener);

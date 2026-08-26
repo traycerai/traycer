@@ -6,6 +6,7 @@ import { HoverCard as HoverCardPrimitive } from "radix-ui";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
 import { cn } from "@/lib/utils";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
 // Match the tooltip's 500ms hover-in; give a small grace on the way out so the
 // pointer can travel from the trigger into the card to reach its actions
@@ -52,11 +53,18 @@ function HoverCardContent({
   className,
   align = "start",
   sideOffset = 4,
+  collisionPadding,
   ...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Content>) {
   // Concealed region (see `portal-concealment-context`): un-present with the
   // region — the anchor is display:none and cannot deliver the close events.
   const concealed = usePortalConcealed();
+  // Read above the early return so hook order does not depend on concealment.
+  // The insets are the DEFAULT collision padding; a caller may replace it (see
+  // `safe-area-collision-padding.ts` and `dropdown-menu.tsx`). The card's width
+  // comes from its callers, so the cap matters here more than on the primitives
+  // that size themselves.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
   if (concealed) return null;
   return (
     <HoverCardPrimitive.Portal>
@@ -64,9 +72,13 @@ function HoverCardContent({
         data-slot="hover-card-content"
         align={align}
         sideOffset={sideOffset}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
           "z-50 origin-(--radix-hover-card-content-transform-origin) outline-hidden duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           HOVER_PREVIEW_SURFACE_CLASS,
+          // Last of the primitive-owned classes, so the shared surface class
+          // can never displace the cap while a caller's `max-w-*` still can.
+          "max-w-safe-dvw",
           className,
         )}
         {...props}

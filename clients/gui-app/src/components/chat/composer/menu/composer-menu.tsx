@@ -23,6 +23,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import {
   mentionProviderRegistry,
   type MentionFlowStep,
@@ -181,6 +182,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  const isMobile = useIsMobileViewport();
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
     () =>
@@ -388,13 +390,21 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   return (
     <>
       {createPortal(menu, document.body)}
-      <MentionPreviewPanel
-        panelRef={previewPanelRef}
-        listRef={listRef}
-        activeIndex={activeIndex}
-        preview={activePreview}
-        disabledReason={activeDisabledReason}
-      />
+      {/* Pointer-and-keyboard chrome only. The panel is a SIDE surface - it
+          anchors beside the active row and its fit gate asks "does a side
+          have room?", a question a phone answers no for every row, because
+          the menu already spans the width. Whatever the gate concludes from
+          a phone's measurements, there is no placement that does not cover
+          the list, so the panel simply does not exist below `md`. */}
+      {isMobile ? null : (
+        <MentionPreviewPanel
+          panelRef={previewPanelRef}
+          listRef={listRef}
+          activeIndex={activeIndex}
+          preview={activePreview}
+          disabledReason={activeDisabledReason}
+        />
+      )}
     </>
   );
 }

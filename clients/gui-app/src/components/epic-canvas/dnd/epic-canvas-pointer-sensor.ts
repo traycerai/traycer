@@ -97,6 +97,15 @@ const activators: Activators<PointerSensorOptions> = [
       if (!nativeEvent.isPrimary || nativeEvent.button !== 0) {
         return false;
       }
+      // A touch press is a scroll until proven otherwise, and nothing proves
+      // otherwise: the sensor activates on 5px of movement, which is the start
+      // of every flick. `useDragSourceDisabled` already keeps these listeners
+      // off a touch-primary device, but a HYBRID one - a fine-primary laptop
+      // with a touchscreen - reports `(pointer: coarse)` false and still has a
+      // finger on the glass. Vetoing per GESTURE rather than per device is what
+      // covers it: the same machine's mouse and pen still drag, because their
+      // press cannot be mistaken for a scroll.
+      if (nativeEvent.pointerType === "touch") return false;
       if (isPierreHostData(context.active.data.current)) {
         const host = getPierreDragHost(String(context.active.id));
         if (host === null) return false;

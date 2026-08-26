@@ -219,21 +219,34 @@ describe("<SelectedRepoChanges /> module section state", () => {
       name: /traycer-internal\s*2 files\s*development/,
     });
     const submoduleHeader = screen.getByRole("button", {
-      name: /traycer\s*submodule\s*2 files\s*main\s*pinned commit out of date/,
+      name: /traycer\s*submodule\s*2 files\s*main\s*Checkout differs from parent reference/,
     });
     expect(rootHeader.getAttribute("aria-expanded")).toBe("true");
     expect(submoduleHeader.getAttribute("aria-expanded")).toBe("true");
     const previewText = await expectModuleHeaderPreview(
       submoduleHeader,
-      "Path: /repo/traycer",
+      "Repository location: /repo/traycer",
     );
-    expect(previewText).toContain("Status: pinned commit out of date");
+    expect(previewText).toContain("Location in workspace: traycer");
+    expect(previewText).toContain("Branch: main");
+    expect(previewText).toContain(
+      "Parent reference: Checkout differs from parent reference",
+    );
     expect(rootHeader.className).toContain("bg-background");
     expect(rootHeader.className).toContain("hover:bg-muted");
     expect(rootHeader.className).toContain("z-40");
     expect(rootHeader.className).not.toContain("hover:bg-muted/25");
-    expect(rootHeader.querySelector(".lucide-git-branch")).toBeNull();
-    expect(submoduleHeader.querySelector(".lucide-git-branch")).toBeNull();
+    expect(rootHeader.textContent).toContain("development");
+    expect(submoduleHeader.textContent).toContain("main");
+    const submoduleKind = within(submoduleHeader).getByTestId(
+      "git-module-kind-traycer",
+    );
+    const submoduleName = within(submoduleHeader).getByText("traycer");
+    expect(submoduleKind.className).toContain("shrink-0");
+    expect(submoduleName.className).toContain("flex-1");
+    expect(submoduleName.className).toContain("truncate");
+    expect(rootHeader.querySelector('[data-slot="badge"]')).not.toBeNull();
+    expect(submoduleHeader.querySelector('[data-slot="badge"]')).not.toBeNull();
 
     const stagedSections = screen.getAllByRole("button", {
       name: "Staged section, 1 file",

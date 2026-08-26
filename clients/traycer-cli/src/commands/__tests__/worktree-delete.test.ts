@@ -53,6 +53,7 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
       isClosed: () => false,
       notifyBearerRotated: () => undefined,
       reconnectAll: () => undefined,
+      isReady: () => true,
       getMethodSupport: () => hoisted.state.methodSupport,
     };
   }),

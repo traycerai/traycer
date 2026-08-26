@@ -294,18 +294,6 @@ afterEach(() => {
 });
 
 describe("goBack / goForward", () => {
-  it("no-op when the history carries no controller brand (browser/web)", () => {
-    const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
-    const goSpy = vi.spyOn(history, "go");
-    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
-
-    goBack({ history });
-    goForward({ history });
-
-    expect(goSpy).not.toHaveBeenCalled();
-    expect(trackSpy).not.toHaveBeenCalled();
-  });
-
   it("calls go(-1) on the PASSED router's history when a controller reports canGoBack", () => {
     // index 1 of 2 entries → canGoBack() is true.
     const history = seedPersistentHistory(
@@ -413,6 +401,91 @@ describe("goBack / goForward", () => {
     goForward({ history });
 
     expect(goSpy).not.toHaveBeenCalled();
+  });
+
+  // The branded path steps by a computed OFFSET, because it is the only one
+  // that knows which entries are worth landing on. Pinned as its own case
+  // because the plain path below reaches for `back`/`forward` instead, and a
+  // fallback that leaked into the branded path would skip the eligibility scan
+  // entirely while still looking like it navigated.
+  it("never reaches for back/forward when a controller is present", () => {
+    const history = seedPersistentHistory(
+      ["/settings/general", "/draft/d1"],
+      1,
+    );
+    vi.spyOn(history, "go").mockImplementation(() => {});
+    const backSpy = vi.spyOn(history, "back");
+    const forwardSpy = vi.spyOn(history, "forward");
+
+    goBack({ history });
+    goForward({ history });
+
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(forwardSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The fallback for a history with no controller brand - the mobile shell,
+ * whose Capacitor bundle is not the Electron renderer and so gets a plain
+ * browser history. The entries it accumulates are top-level surface
+ * activations, which is why a plain step is enough: the eligibility rules the
+ * branded path applies are about tiles nested inside a Task.
+ */
+describe("goBack / goForward — plain history fallback", () => {
+  it("steps a plain history back rather than standing down", () => {
+    // Two entries, cursor on the second → `canGoBack()` is true.
+    const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+    const backSpy = vi.spyOn(history, "back");
+    const goSpy = vi.spyOn(history, "go");
+
+    goBack({ history });
+
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    // `go` is the branded path's instrument, and it carries an offset this
+    // backend has no way to compute.
+    expect(goSpy).not.toHaveBeenCalled();
+  });
+
+  // A back at the first entry is not merely a step that goes nowhere: under a
+  // WebView it is a step out of the session's own stack.
+  it("refuses a back at the first entry of a fresh session", () => {
+    const history = createMemoryHistory({ initialEntries: ["/"] });
+    const backSpy = vi.spyOn(history, "back");
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+
+    goBack({ history });
+
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  // Forward is attempted unconditionally because a plain history cannot say
+  // whether anything is ahead of the cursor. The history moves if there is
+  // somewhere to move; here there is not, and it is a silent no-op.
+  it("attempts a forward even at the last entry", () => {
+    const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+    const forwardSpy = vi.spyOn(history, "forward");
+
+    goForward({ history });
+
+    expect(forwardSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks a plain back off the navigation call stack", () => {
+    vi.useFakeTimers();
+    const history = createMemoryHistory({ initialEntries: ["/a", "/b"] });
+    vi.spyOn(history, "back").mockImplementation(() => {});
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+
+    goBack({ history });
+
+    expect(trackSpy).not.toHaveBeenCalled();
+    vi.runAllTimers();
+    expect(trackSpy).toHaveBeenCalledWith(
+      AnalyticsEvent.HistoryNavigationUsed,
+      { direction: "back" },
+    );
   });
 });
 

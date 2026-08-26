@@ -5,6 +5,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
 import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
 import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
@@ -308,7 +309,9 @@ function OwnerMetadataRefreshFooter(props: {
             />
           ) : null}
           Refresh
-          <Kbd className="ml-0.5 font-mono">R</Kbd>
+          <ShortcutHint>
+            <Kbd className="ml-0.5 font-mono">R</Kbd>
+          </ShortcutHint>
         </Button>
       </span>
     </span>
