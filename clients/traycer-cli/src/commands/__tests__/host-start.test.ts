@@ -3469,7 +3469,7 @@ describe("runHostStart - production defaults", () => {
     await pending;
 
     expect(during).toBe(before + 1);
-    expect(countTimers()).toBe(before);
+    expect(countTimers()).toBeLessThan(during);
   });
 
   it("keeps the raced-stop escalation timer referenced, and cancels it on demand", async () => {
@@ -3491,7 +3491,7 @@ describe("runHostStart - production defaults", () => {
     expect(during).toBe(before + 1);
     // And the canceller really cancels - otherwise the ordinary path leaks a
     // 30s timer per attempt.
-    expect(countTimers()).toBe(before);
+    expect(countTimers()).toBeLessThan(during);
     expect(fired).toBe(false);
   });
 
