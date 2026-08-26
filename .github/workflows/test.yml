@@ -22,10 +22,9 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
     # The GUI suite deliberately runs isolated two-worker forks: disabling
-    # isolation makes tests leak state. All eight deterministic Vitest shards
-    # run as parallel matrix jobs. The earlier hybrid (two eighth-shards plus
-    # three quarter-shards) left the quarter jobs at 7–8 minutes while the
-    # eighths finished in 3–4; uniform eighths keep the critical path balanced.
+    # isolation makes tests leak state. Twelve deterministic Vitest shards run
+    # as parallel matrix jobs; the measured eight-shard bodies still reached
+    # 4m39, so the smaller units keep the full hosted path below five minutes.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -41,38 +40,54 @@ jobs:
             cache_key: "@traycer/protocol"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app)"
-            test_args: "-- --shard=1/8"
-            cache_key: "traycer-clients-gui-app-1-of-8"
+            test_args: "-- --shard=1/12"
+            cache_key: "traycer-clients-gui-app-1-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2 of 8)"
-            test_args: "-- --shard=2/8"
-            cache_key: "traycer-clients-gui-app-2-of-8"
+            test_args: "-- --shard=2/12"
+            cache_key: "traycer-clients-gui-app-2-of-12"
           # Keep the three historical required-check names while narrowing
           # their work from quarter-shards to eighth-shards.
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2)"
-            test_args: "-- --shard=3/8"
-            cache_key: "traycer-clients-gui-app-3-of-8"
+            test_args: "-- --shard=3/12"
+            cache_key: "traycer-clients-gui-app-3-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 4 of 8)"
-            test_args: "-- --shard=4/8"
-            cache_key: "traycer-clients-gui-app-4-of-8"
+            test_args: "-- --shard=4/12"
+            cache_key: "traycer-clients-gui-app-4-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 3)"
-            test_args: "-- --shard=5/8"
-            cache_key: "traycer-clients-gui-app-5-of-8"
+            test_args: "-- --shard=5/12"
+            cache_key: "traycer-clients-gui-app-5-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 6 of 8)"
-            test_args: "-- --shard=6/8"
-            cache_key: "traycer-clients-gui-app-6-of-8"
+            test_args: "-- --shard=6/12"
+            cache_key: "traycer-clients-gui-app-6-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 4)"
-            test_args: "-- --shard=7/8"
-            cache_key: "traycer-clients-gui-app-7-of-8"
+            test_args: "-- --shard=7/12"
+            cache_key: "traycer-clients-gui-app-7-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 8 of 8)"
-            test_args: "-- --shard=8/8"
-            cache_key: "traycer-clients-gui-app-8-of-8"
+            test_args: "-- --shard=8/12"
+            cache_key: "traycer-clients-gui-app-8-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 9 of 12)"
+            test_args: "-- --shard=9/12"
+            cache_key: "traycer-clients-gui-app-9-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 10 of 12)"
+            test_args: "-- --shard=10/12"
+            cache_key: "traycer-clients-gui-app-10-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 11 of 12)"
+            test_args: "-- --shard=11/12"
+            cache_key: "traycer-clients-gui-app-11-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 12 of 12)"
+            test_args: "-- --shard=12/12"
+            cache_key: "traycer-clients-gui-app-12-of-12"
           - project: "@traycer-clients/desktop"
             name: "test (@traycer-clients/desktop)"
             test_args: ""
@@ -218,7 +233,8 @@ jobs:
         with:
           node-version: "24"
       # Do not restore Bun's global cache on Windows. The hosted measurement
-      # took 3m27 to unpack it while an uncached frozen install took 32s.
+      # took 3m27 to unpack plus 32s to install; the following clean run's
+      # uncached frozen install took 3m51, eight seconds less overall.
       - run: bun install --frozen-lockfile
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
