@@ -115,7 +115,10 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
         }}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
-        <div className="relative flex max-h-[90vh] min-h-0 w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
+        {/* min-h-24 reserves room for the absolutely positioned action bar,
+            so no image aspect ratio can collapse the wrapper and clip the
+            actions under overflow-hidden. */}
+        <div className="relative flex max-h-[90vh] min-h-24 w-full items-center justify-center overflow-hidden rounded-lg bg-foreground/3">
           {props.mediaType === "image/svg+xml" ? (
             <div className="h-[min(88vh,52rem)] w-full">
               <Suspense
