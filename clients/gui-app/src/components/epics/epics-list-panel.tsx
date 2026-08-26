@@ -98,6 +98,18 @@ import {
   type HistoryFacets,
   type HistoryFetchResult,
 } from "@/hooks/home/use-history-query";
+import { historyListEmptyState } from "@/lib/workspace/history-item-matches-project";
+import { claimEpicOnActiveProfile } from "@/lib/workspace/claim-epic-on-active-profile";
+import {
+  historyItemProjectBadge,
+  workspaceHintFromHistoryItem,
+} from "@/lib/workspace/header-tab-matches-project";
+import {
+  selectActiveProjectProfile,
+  selectProjectProfilesBucket,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
+import { PROJECT_PROFILE_COLOR_DOT } from "@/components/layout/header/project-profile-colors";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
   useAmbientHistorySearchState,
@@ -278,6 +290,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    projectFilterActive,
+    preProjectFilterCount,
     refetch,
     fetchNextPage,
     hasNextPage,
@@ -616,6 +630,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             hasActiveFilters={hasActiveFilters}
             chatHostFilterUnsupported={chatHostFilterUnsupported}
+            projectFilterActive={projectFilterActive}
+            preProjectFilterCount={preProjectFilterCount}
+            hostId={hostId}
             items={items}
             onRetry={handleRetry}
             selectionMode={selectionMode}
@@ -1055,6 +1072,9 @@ function HistoryListBody(props: HistoryListBodyProps): ReactNode {
         isFetching={props.isFetching}
         hasActiveFilters={props.hasActiveFilters}
         chatHostFilterUnsupported={props.chatHostFilterUnsupported}
+        projectFilterActive={props.projectFilterActive}
+        preProjectFilterCount={props.preProjectFilterCount}
+        hostId={props.hostId}
         items={props.items}
         onRetry={props.onRetry}
         selectionMode={props.selectionMode}
@@ -1087,6 +1107,9 @@ interface EpicsListBodyProps {
   readonly isFetching: boolean;
   readonly hasActiveFilters: boolean;
   readonly chatHostFilterUnsupported: boolean;
+  readonly projectFilterActive: boolean;
+  readonly preProjectFilterCount: number;
+  readonly hostId: string | null;
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
@@ -1121,6 +1144,9 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetching,
     hasActiveFilters,
     chatHostFilterUnsupported,
+    projectFilterActive,
+    preProjectFilterCount,
+    hostId,
     items,
     onRetry,
     selectionMode,
@@ -1155,11 +1181,37 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
+  const emptyState = historyListEmptyState({
+    visibleCount: items.length,
+    preProjectFilterCount,
+    hasActiveFilters,
+    projectFilterActive,
+  });
   if (items.length === 0 && !hasActiveFilters) {
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
     return <EpicsListEmpty />;
   }
   if (items.length === 0 && hasActiveFilters && isFetching) {
     return <EpicsListFilteringLoading />;
+  }
+  if (items.length === 0) {
+    // Active filters, no in-flight refetch: the list is genuinely empty for
+    // this filter set.
+    if (emptyState === "hidden-by-active-project") {
+      return <EpicsListProjectHiddenEmpty />;
+    }
+    return (
+      <div
+        className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+        data-testid="epics-list-filtered-empty"
+      >
+        <p className="font-medium text-foreground">
+          No tasks match these filters.
+        </p>
+      </div>
+    );
   }
   return (
     <>
@@ -1188,6 +1240,8 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
               isOpen={openEpicIds.has(item.epicId)}
               onRowKeyDown={onRowKeyDown}
+              hostId={hostId}
+              projectFilterActive={projectFilterActive}
             />
           ))}
         </ul>
@@ -1200,6 +1254,23 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         onLoadMore={onLoadMore}
       />
     </>
+  );
+}
+
+/**
+ * A project profile hid every visible row while chats still exist outside
+ * the project. Say where they went - "No tasks yet" here reads as data loss.
+ */
+function EpicsListProjectHiddenEmpty() {
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
+      data-testid="epics-list-project-empty"
+    >
+      <p className="font-medium text-foreground">
+        Older chats are under All projects.
+      </p>
+    </div>
   );
 }
 
@@ -1221,6 +1292,8 @@ interface EpicsListRowProps {
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly isOpen: boolean;
+  readonly hostId: string | null;
+  readonly projectFilterActive: boolean;
   /** Arrow-key traversal, bound to whichever control covers the whole card. */
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
@@ -1297,7 +1370,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     worktrees,
     isOpen,
     onRowKeyDown,
+    hostId,
+    projectFilterActive,
   } = props;
+  const projectBadge = useHistoryRowProjectBadge(hostId, item);
   const isPhase = item.taskType === "phase";
   const rowSweep = useHistoryRowSweep({
     item,
@@ -1372,8 +1448,19 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     [],
   );
   const openEpic = useCallback(() => {
+    if (!isPhase) {
+      useEpicCanvasStore
+        .getState()
+        .stampEpicWorkspaceHint(
+          item.epicId,
+          workspaceHintFromHistoryItem(item),
+        );
+    }
     openHistoryItem(item);
-  }, [item, openHistoryItem]);
+    if (projectFilterActive) {
+      claimEpicOnActiveProfile(hostId, item.epicId);
+    }
+  }, [hostId, isPhase, item, openHistoryItem, projectFilterActive]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
@@ -1506,6 +1593,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           "updated ..." label squeezes the title to nothing at phone width. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
+          <HistoryRowProjectLabel badge={projectBadge} />
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
             <input
@@ -1634,6 +1722,47 @@ function HistoryPinControl(props: {
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function useHistoryRowProjectBadge(
+  hostId: string | null,
+  item: Pick<HistoryItem, "epicId" | "worktreePaths" | "linkedWorkspaces">,
+) {
+  return useProjectProfilesStore(
+    useShallow((state) =>
+      historyItemProjectBadge(
+        selectActiveProjectProfile(state, hostId),
+        selectProjectProfilesBucket(state, hostId).profiles,
+        item,
+      ),
+    ),
+  );
+}
+
+function HistoryRowProjectLabel(props: {
+  readonly badge: {
+    readonly color: keyof typeof PROJECT_PROFILE_COLOR_DOT;
+    readonly name: string;
+  } | null;
+}): ReactNode {
+  if (props.badge === null) return null;
+  return (
+    <span
+      data-testid="epics-list-row-project"
+      className="flex shrink-0 items-center gap-1.5 text-muted-foreground"
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "size-2 rounded-full",
+          PROJECT_PROFILE_COLOR_DOT[props.badge.color],
+        )}
+      />
+      <span className="max-w-[8rem] truncate text-ui-xs font-medium">
+        {props.badge.name}
+      </span>
+    </span>
   );
 }
 

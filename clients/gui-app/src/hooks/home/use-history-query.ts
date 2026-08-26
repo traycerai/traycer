@@ -33,6 +33,12 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
+import { filterHistoryItemsForProject } from "@/lib/workspace/history-item-matches-project";
+import {
+  selectActiveProjectProfile,
+  selectProjectProfilesBucket,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useCallback, useMemo, useState } from "react";
 
@@ -62,6 +68,10 @@ export interface UseHistoryQueryResult {
   isFetching: boolean;
   error: Error | null;
   hostId: string | null;
+  /** True while a project profile filters the visible list. */
+  projectFilterActive: boolean;
+  /** Loaded rows BEFORE the project filter (search filters still applied). */
+  preProjectFilterCount: number;
   refetch: () => Promise<unknown>;
   fetchNextPage: () => void;
   hasNextPage: boolean;
@@ -171,6 +181,16 @@ export function useHistoryQuery(
     () => withHistoryItemWorktreeMetadata(allBaseItems, worktreesByEpicId),
     [allBaseItems, worktreesByEpicId],
   );
+  const activeProfile = useProjectProfilesStore((state) =>
+    selectActiveProjectProfile(state, hostId),
+  );
+  const projectProfiles = useProjectProfilesStore(
+    (state) => selectProjectProfilesBucket(state, hostId).profiles,
+  );
+  const projectItems = useMemo(
+    () => filterHistoryItemsForProject(allItems, activeProfile, projectProfiles),
+    [activeProfile, allItems, projectProfiles],
+  );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
     if (tasksQuery.data === undefined) {
@@ -183,9 +203,9 @@ export function useHistoryQuery(
     // When id-fetched extras joined the settled list they arrive appended out
     // of order, so that path re-sorts the union client-side instead.
     const items = shouldProjectLocally
-      ? projectHistoryItems(allItems, params.search)
+      ? projectHistoryItems(projectItems, params.search)
       : settledHistoryItems(
-          allItems,
+          projectItems,
           contextExtrasCount,
           params.search.sort,
           debouncedQuery,
@@ -247,6 +267,7 @@ export function useHistoryQuery(
     debouncedQuery,
     isQueryDebouncing,
     params.search,
+    projectItems,
     shouldProjectLocally,
     tasksQuery.data,
     tasksQuery.isPlaceholderData,
@@ -268,6 +289,8 @@ export function useHistoryQuery(
       (isPullRequestNumberQuery ? activityIndex.error : null) ??
       taskContexts.error,
     hostId,
+    projectFilterActive: activeProfile !== null,
+    preProjectFilterCount: allItems.length,
     refetch,
     fetchNextPage,
     // Pagination follows the plain cloud query; id-fetched local matches are

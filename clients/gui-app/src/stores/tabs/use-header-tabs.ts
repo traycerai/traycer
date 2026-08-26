@@ -21,6 +21,13 @@ import {
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import { activeHostIdOrNull } from "@/lib/host/runtime";
+import { scopeHeaderTabsToActiveProject } from "@/hooks/workspace/use-project-scoped-header-strip";
+import {
+  selectActiveProjectProfile,
+  useProjectProfilesStore,
+} from "@/stores/workspace/project-profiles-store";
 
 /**
  * Revision over "which host serves which open epic".
@@ -85,6 +92,10 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
   );
   const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
+  const hostId = useAddressableHostId();
+  const activeProfileId = useProjectProfilesStore(
+    (state) => selectActiveProjectProfile(state, hostId)?.id ?? null,
+  );
 
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((t) => [t.tabId, t])),
@@ -98,19 +109,24 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
 
   return useMemo<ReadonlyArray<HeaderTab>>(
     () =>
-      stripOrder.flatMap<HeaderTab>((ref) =>
-        resolveRef(ref, {
-          epicTabsById,
-          draftTabsById,
-          systemTabs,
-          structuralLockRevision,
-          epicSessionHostRevision: epicSessionHostRevisionValue,
-        }),
+      scopeHeaderTabsToActiveProject(
+        stripOrder.flatMap<HeaderTab>((ref) =>
+          resolveRef(ref, {
+            epicTabsById,
+            draftTabsById,
+            systemTabs,
+            structuralLockRevision,
+            epicSessionHostRevision: epicSessionHostRevisionValue,
+          }),
+        ),
+        hostId,
       ),
     [
+      activeProfileId,
       draftTabsById,
       epicSessionHostRevisionValue,
       epicTabsById,
+      hostId,
       stripOrder,
       structuralLockRevision,
       systemTabs,
@@ -486,13 +502,16 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
   const draftTabsById = new Map<string, LandingDraftTab>(
     draftTabs.map((t) => [t.id, t]),
   );
-  return stripOrder.flatMap((ref) =>
-    resolveRef(ref, {
-      epicTabsById,
-      draftTabsById,
-      systemTabs,
-      structuralLockRevision: getTabStructuralLockRevision(),
-      epicSessionHostRevision: getEpicSessionHostRevision(),
-    }),
+  return scopeHeaderTabsToActiveProject(
+    stripOrder.flatMap((ref) =>
+      resolveRef(ref, {
+        epicTabsById,
+        draftTabsById,
+        systemTabs,
+        structuralLockRevision: getTabStructuralLockRevision(),
+        epicSessionHostRevision: getEpicSessionHostRevision(),
+      }),
+    ),
+    activeHostIdOrNull(),
   );
 }

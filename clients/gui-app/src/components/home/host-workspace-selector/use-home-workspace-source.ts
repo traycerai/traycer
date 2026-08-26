@@ -4,11 +4,16 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import { selectEffectiveWorkspaceFoldersBucket } from "@/lib/workspace/effective-workspace-folders";
 import {
-  selectWorkspaceFoldersBucket,
+  activeProfileOwnsPickerEdits,
+  syncActiveProfileFolders,
+} from "@/lib/workspace/sync-active-profile-folders";
+import { useProjectProfilesStore } from "@/stores/workspace/project-profiles-store";
+import {
   useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
 } from "@/stores/workspace/workspace-folders-store";
-import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   mergeLandingDraftWorkspaceFolders,
@@ -112,15 +117,16 @@ export function useHomeWorkspaceSource(
   const setGlobalPrimaryFolder = useWorkspaceFoldersStore(
     (state) => state.setPrimaryFolder,
   );
-  const globalPrimaryPath = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).primaryPath,
+  const foldersByHost = useWorkspaceFoldersStore((state) => state.byHost);
+  const profilesByHost = useProjectProfilesStore((state) => state.byHost);
+  const effectiveBucket = selectEffectiveWorkspaceFoldersBucket(
+    { byHost: foldersByHost },
+    { byHost: profilesByHost },
+    hostId,
   );
-  const globalFolders = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).folders,
-  );
-  const globalFolderInfoByPath = useWorkspaceFoldersStore(
-    (state) => selectWorkspaceFoldersBucket(state, hostId).folderInfoByPath,
-  );
+  const globalPrimaryPath = effectiveBucket.primaryPath;
+  const globalFolders = effectiveBucket.folders;
+  const globalFolderInfoByPath = effectiveBucket.folderInfoByPath;
   const {
     addDraftResolvedFolders,
     removeDraftFolder,
@@ -212,6 +218,12 @@ export function useHomeWorkspaceSource(
         }
         if (!usingSeededWorkspace) {
           const evicted = addGlobalResolvedFolders(hostId, folders);
+          syncActiveProfileFolders({
+            hostId,
+            addPaths: folders.map((folder) => folder.path),
+            removePath: null,
+            primaryPath: null,
+          });
           if (activeDraftId === null) {
             for (const path of evicted) unstageStoreEntry(stagingKey, path);
           }
@@ -250,7 +262,16 @@ export function useHomeWorkspaceSource(
           removeModalFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            removeGlobalFolder(hostId, folderPath);
+            if (activeProfileOwnsPickerEdits(hostId)) {
+              syncActiveProfileFolders({
+                hostId,
+                addPaths: [],
+                removePath: folderPath,
+                primaryPath: null,
+              });
+            } else {
+              removeGlobalFolder(hostId, folderPath);
+            }
           }
           if (activeDraftId !== null) {
             removeDraftFolder(activeDraftId, folderPath);
@@ -299,7 +320,16 @@ export function useHomeWorkspaceSource(
           setModalPrimaryFolder(modalEpicId, modalSeedWorkspace, folderPath);
         } else {
           if (!usingSeededWorkspace) {
-            setGlobalPrimaryFolder(hostId, folderPath);
+            if (activeProfileOwnsPickerEdits(hostId)) {
+              syncActiveProfileFolders({
+                hostId,
+                addPaths: [],
+                removePath: null,
+                primaryPath: folderPath,
+              });
+            } else {
+              setGlobalPrimaryFolder(hostId, folderPath);
+            }
           }
           if (activeDraftId !== null) {
             setDraftWorkspacePrimary(activeDraftId, folderPath);
