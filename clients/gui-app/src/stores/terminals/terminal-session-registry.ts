@@ -137,7 +137,13 @@ export class TerminalSessionRegistry {
     const existing = this.entries.get(instanceId);
     if (existing !== undefined) {
       this.cancelLinger(existing);
+      const wasLeaseFree = existing.leases === 0;
       existing.leases += 1;
+      // Lease-free keep-warm / linger was tagged `cache`. A tile looking
+      // again is presentation; intent is open-frame-only so this reopens.
+      if (wasLeaseFree) {
+        existing.handle.store.getState().setViewer("presentation");
+      }
       return existing.handle;
     }
     const handle = factory();
@@ -259,6 +265,16 @@ export class TerminalSessionRegistry {
     if (entry.leases <= 0) return;
     entry.leases -= 1;
     if (entry.leases > 0) return;
+    // Attachment intent follows lease state, not session kind: a lease-free
+    // running terminal-agent (indefinite keep-warm) or lingering plain
+    // terminal must not claim attention. `terminal.subscribe@1.6` carries
+    // viewer only on the open frame, so this reopens as `cache`.
+    if (
+      shouldKeepLeaseFree(entry.handle) ||
+      shouldLingerLeaseFree(entry.handle)
+    ) {
+      entry.handle.store.getState().setViewer("cache");
+    }
     if (shouldKeepLeaseFree(entry.handle)) return;
     if (shouldLingerLeaseFree(entry.handle)) {
       this.parkLingering(entry);

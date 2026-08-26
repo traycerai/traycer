@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   TerminalSubscribeClientFrame,
   TerminalSubscribeServerFrame,
+  TerminalSubscribeViewer,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
@@ -133,8 +134,8 @@ function createHarness() {
     rows: 24,
     reattachMode: "fresh",
     kind: "terminal",
-    streamClientFactory: (_sessionId, _cols, _rows, nextCallbacks) => {
-      callbacks = nextCallbacks;
+    streamClientFactory: (streamArgs) => {
+      callbacks = streamArgs.callbacks;
       return { sendAction, close };
     },
   });
@@ -910,6 +911,128 @@ describe("createTerminalSessionStore", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe("viewer intent (terminal.subscribe@1.6)", () => {
+    it("subscribes as presentation by default", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("reopens the stream on viewer change without mapping the old close to lost", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            sendAction: () => undefined,
+            close: () => {
+              // Production TerminalStreamClient.close() reports closed.
+              streamArgs.callbacks.onConnectionStatus("closed", {
+                kind: "caller",
+              });
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("open", null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "presentation",
+      });
+
+      handle.store.getState().setViewer("cache");
+
+      expect(viewers).toEqual(["presentation", "cache"]);
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "cache",
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation", "cache", "presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("does not reopen when setViewer is given the current intent", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation"]);
+      handle.dispose();
+    });
+
+    it("does not attach a new stream when the session is already dead", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return { sendAction: () => undefined, close: () => undefined };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("closed", { kind: "caller" });
+      expect(handle.store.getState().status).toBe("lost");
+
+      handle.store.getState().setViewer("cache");
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("cache");
+      handle.dispose();
     });
   });
 });

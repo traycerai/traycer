@@ -249,9 +249,14 @@ describe("useTerminalSessionHandle owner identity (R-1)", () => {
       expect(result.current).not.toBe(firstHandle);
     });
 
-    expect(tracked.records()).toHaveLength(2);
+    // Effect cleanup releases the lease first (keep-warm retags cache and
+    // reopens subscribe — a new transport), then the remounted effect sees
+    // the owner-identity mismatch, force-releases, and acquires a fresh
+    // presentation stream.
+    expect(tracked.records()).toHaveLength(3);
     expect(tracked.records()[0].closeCount).toBe(1);
-    expect(tracked.records()[1].closeCount).toBe(0);
+    expect(tracked.records()[1].closeCount).toBe(1);
+    expect(tracked.records()[2].closeCount).toBe(0);
   });
 });
 

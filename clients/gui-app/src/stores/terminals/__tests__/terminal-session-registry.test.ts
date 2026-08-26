@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
+import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   createTerminalSessionStore,
@@ -17,9 +18,11 @@ function createHandle(kind: TerminalSessionKind): {
   readonly handle: TerminalSessionStoreHandle;
   readonly closeCount: () => number;
   readonly callbacks: () => TerminalStreamCallbacks;
+  readonly viewers: () => readonly TerminalSubscribeViewer[];
 } {
   let closeCount = 0;
   let callbacks: TerminalStreamCallbacks | null = null;
+  const viewers: TerminalSubscribeViewer[] = [];
   const handle = createTerminalSessionStore({
     scope: { kind: "epic", epicId: "epic-1" },
     sessionId: "terminal-1",
@@ -27,8 +30,9 @@ function createHandle(kind: TerminalSessionKind): {
     rows: 24,
     reattachMode: "fresh",
     kind,
-    streamClientFactory: (_sessionId, _cols, _rows, nextCallbacks) => {
-      callbacks = nextCallbacks;
+    streamClientFactory: (streamArgs) => {
+      callbacks = streamArgs.callbacks;
+      viewers.push(streamArgs.viewer);
       return {
         sendAction: () => undefined,
         close: () => {
@@ -44,6 +48,7 @@ function createHandle(kind: TerminalSessionKind): {
       if (callbacks === null) throw new Error("Expected callbacks");
       return callbacks;
     },
+    viewers: () => viewers,
   };
 }
 
@@ -63,16 +68,18 @@ describe("TerminalSessionRegistry", () => {
     registry.acquire("terminal-1", () => owned.handle, HOST_ID);
     registry.release("terminal-1", owned.handle);
 
-    // Still a live registry member for the linger window: the stream stays
-    // open and the xterm follower keeps its engine.
-    expect(owned.closeCount()).toBe(0);
+    // Still a live registry member for the linger window: subscribe was
+    // reopened as cache (the presentation stream closed) and the xterm
+    // follower keeps its engine.
+    expect(owned.closeCount()).toBe(1);
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
     expect(registry.get("terminal-1")).toBe(owned.handle);
 
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS - 1);
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(1);
 
     vi.advanceTimersByTime(1);
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
   });
 
@@ -91,9 +98,10 @@ describe("TerminalSessionRegistry", () => {
       HOST_ID,
     );
     expect(reacquired).toBe(owned.handle);
+    expect(owned.viewers()).toEqual(["presentation", "cache", "presentation"]);
 
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS * 2);
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBe(owned.handle);
   });
 
@@ -111,12 +119,12 @@ describe("TerminalSessionRegistry", () => {
       exitCode: 0,
     });
 
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
 
     // The cancelled linger timer must not double-dispose or resurrect.
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
   });
 
   it("disposes an exited plain terminal without lingering when its last lease is released", () => {
@@ -171,7 +179,7 @@ describe("TerminalSessionRegistry", () => {
 
     owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
 
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
 
     const fresh = createHandle("terminal");
@@ -201,10 +209,10 @@ describe("TerminalSessionRegistry", () => {
       registry.release(`terminal-${index}`, entry.handle);
     });
 
-    expect(owned[0].closeCount()).toBe(1);
+    expect(owned[0].closeCount()).toBe(2);
     expect(registry.get("terminal-0")).toBeNull();
     owned.slice(1).forEach((entry, index) => {
-      expect(entry.closeCount()).toBe(0);
+      expect(entry.closeCount()).toBe(1);
       expect(registry.get(`terminal-${index + 1}`)).toBe(entry.handle);
     });
   });
@@ -224,11 +232,11 @@ describe("TerminalSessionRegistry", () => {
     });
 
     // The warm agent neither counts toward the cap (all plains retained) nor
-    // gets evicted by it.
-    expect(agent.closeCount()).toBe(0);
+    // gets evicted by it. Each release reopens the subscribe as cache.
+    expect(agent.closeCount()).toBe(1);
     expect(registry.get("agent-1")).toBe(agent.handle);
     owned.forEach((entry) => {
-      expect(entry.closeCount()).toBe(0);
+      expect(entry.closeCount()).toBe(1);
     });
   });
 
@@ -240,11 +248,11 @@ describe("TerminalSessionRegistry", () => {
     registry.release("terminal-1", owned.handle);
     registry.forceRelease("terminal-1");
 
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
 
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
   });
 
   it("keeps a lease-free terminal-agent warm until the host session exits", () => {
@@ -254,7 +262,8 @@ describe("TerminalSessionRegistry", () => {
     registry.acquire("terminal-1", () => owned.handle, HOST_ID);
     registry.release("terminal-1", owned.handle);
 
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(1);
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
     expect(registry.get("terminal-1")).toBe(owned.handle);
 
     owned.callbacks().onExit({
@@ -264,7 +273,7 @@ describe("TerminalSessionRegistry", () => {
       exitCode: 0,
     });
 
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
   });
 
@@ -322,9 +331,11 @@ describe("TerminalSessionRegistry", () => {
     expect(registry.rekeyLeaseFreeEntry("tab-1", "tab-2")).toBe(true);
     expect(registry.get("tab-1")).toBeNull();
     expect(registry.get("tab-2")).toBe(owned.handle);
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(1);
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
 
-    // The reopened tile's acquire revives the SAME handle - no new stream.
+    // The reopened tile's acquire revives the SAME handle; subscribe
+    // reopens as presentation (open-frame-only viewer intent).
     const reacquired = registry.acquire(
       "tab-2",
       () => {
@@ -333,6 +344,7 @@ describe("TerminalSessionRegistry", () => {
       HOST_ID,
     );
     expect(reacquired).toBe(owned.handle);
+    expect(owned.viewers()).toEqual(["presentation", "cache", "presentation"]);
   });
 
   it("does not adopt a session another live tab still holds (split view)", () => {
@@ -369,7 +381,7 @@ describe("TerminalSessionRegistry", () => {
       exitCode: 0,
     });
 
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("tab-2")).toBeNull();
   });
 
@@ -384,7 +396,7 @@ describe("TerminalSessionRegistry", () => {
     // Adoption whose acquire never lands must not leave the plain terminal
     // warm forever - the linger clock re-arms under the new id.
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("tab-2")).toBeNull();
   });
 
@@ -407,7 +419,7 @@ describe("TerminalSessionRegistry", () => {
         "inst-b",
       ),
     ).toBe("inst-a");
-    expect(owned.closeCount()).toBe(0);
+    expect(owned.closeCount()).toBe(1);
     expect(registry.get("inst-a")).toBe(owned.handle);
   });
 
@@ -430,12 +442,12 @@ describe("TerminalSessionRegistry", () => {
     });
 
     expect(owned.handle.store.getState().status).toBe("reaped");
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
 
     // Confirmed dead must not resurrect on the linger timer either.
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
   });
 
   it("evicts a lease-free terminal-agent the moment it is confirmed reaped, unlike a merely lost one", () => {
@@ -460,7 +472,7 @@ describe("TerminalSessionRegistry", () => {
     // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test
     // above), a confirmed-reaped one is a dead end: keeping it warm would
     // shadow the fresh create-then-acquire bootstrap once the tile revives.
-    expect(owned.closeCount()).toBe(1);
+    expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
     // A reopened tab must never adopt the dead entry - there is nothing left
     // to adopt once the confirmed-reaped eviction above has run.
@@ -470,6 +482,16 @@ describe("TerminalSessionRegistry", () => {
         "tab-2",
       ),
     ).toBeNull();
+
+    const fresh = createHandle("terminal-agent");
+    const reacquired = registry.acquire(
+      "tab-2",
+      () => fresh.handle,
+      HOST_ID,
+    );
+    expect(reacquired).toBe(fresh.handle);
+    expect(fresh.viewers()).toEqual(["presentation"]);
+    expect(fresh.handle.store.getState().status).toBe("creating");
   });
 
   it("ignores a stale release from a replaced consumer A - B's fresh entry is untouched", () => {
@@ -505,7 +527,7 @@ describe("TerminalSessionRegistry", () => {
     // its lease count was never touched by A's stale call.
     registry.release("terminal-1", ownedB.handle);
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    expect(ownedB.closeCount()).toBe(1);
+    expect(ownedB.closeCount()).toBe(2);
   });
 
   it("keeps the explicit hostless path from matching a host-owned same-id entry", () => {
@@ -530,5 +552,65 @@ describe("TerminalSessionRegistry", () => {
         "inst-new",
       ),
     ).toBe("inst-host");
+  });
+
+  it("tags subscribe viewer from lease state: presentation while leased, cache when keep-warm, presentation on reacquire", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal-agent");
+
+    registry.acquire("tab-1", () => owned.handle, HOST_ID);
+    expect(owned.viewers()).toEqual(["presentation"]);
+    expect(owned.handle.store.getState().viewer).toBe("presentation");
+
+    // StrictMode / split: a second lease on the same instance must not
+    // reopen. Intent stays presentation for as long as anyone is looking.
+    registry.acquire(
+      "tab-1",
+      () => {
+        throw new Error("must reuse the live handle");
+      },
+      HOST_ID,
+    );
+    expect(owned.viewers()).toEqual(["presentation"]);
+    registry.release("tab-1", owned.handle);
+    expect(owned.viewers()).toEqual(["presentation"]);
+    expect(owned.handle.store.getState().viewer).toBe("presentation");
+
+    registry.release("tab-1", owned.handle);
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
+    expect(owned.handle.store.getState().viewer).toBe("cache");
+    expect(registry.get("tab-1")).toBe(owned.handle);
+
+    const reacquired = registry.acquire(
+      "tab-1",
+      () => {
+        throw new Error("must reuse the keep-warm handle");
+      },
+      HOST_ID,
+    );
+    expect(reacquired).toBe(owned.handle);
+    expect(owned.viewers()).toEqual(["presentation", "cache", "presentation"]);
+    expect(owned.handle.store.getState().viewer).toBe("presentation");
+  });
+
+  it("tags a lingering plain terminal cache on release and presentation on reacquire", () => {
+    const registry = new TerminalSessionRegistry();
+    const owned = createHandle("terminal");
+
+    registry.acquire("tab-1", () => owned.handle, HOST_ID);
+    expect(owned.viewers()).toEqual(["presentation"]);
+    registry.release("tab-1", owned.handle);
+    expect(owned.viewers()).toEqual(["presentation", "cache"]);
+    expect(owned.handle.store.getState().viewer).toBe("cache");
+
+    registry.acquire(
+      "tab-1",
+      () => {
+        throw new Error("must reuse the lingering handle");
+      },
+      HOST_ID,
+    );
+    expect(owned.viewers()).toEqual(["presentation", "cache", "presentation"]);
+    expect(owned.handle.store.getState().viewer).toBe("presentation");
   });
 });

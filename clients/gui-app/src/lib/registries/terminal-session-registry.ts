@@ -180,14 +180,9 @@ export function useTerminalSessionHandle(
       }
     }
 
-    const factory: TerminalStreamClientFactory = (
-      sessionId,
-      cols,
-      rows,
-      callbacks,
-    ) => {
+    const factory: TerminalStreamClientFactory = (streamArgs) => {
       if (streamClientFactoryOverride !== null) {
-        return streamClientFactoryOverride(sessionId, cols, rows, callbacks);
+        return streamClientFactoryOverride(streamArgs);
       }
       // The session OWNS this transport (built here, torn down by `close()`), so
       // it survives tile unmount for warm terminal-agent sessions instead of
@@ -201,10 +196,11 @@ export function useTerminalSessionHandle(
         (ws) =>
           new TerminalStreamClient({
             wsStreamClient: ws,
-            sessionId,
-            cols,
-            rows,
-            callbacks,
+            sessionId: streamArgs.sessionId,
+            cols: streamArgs.cols,
+            rows: streamArgs.rows,
+            viewer: streamArgs.viewer,
+            callbacks: streamArgs.callbacks,
           }),
       );
       return {
