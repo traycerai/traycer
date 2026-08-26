@@ -403,7 +403,7 @@ describe("<RemoteFolderPickerDialog />", () => {
       target: { value: "/Users/tester/code/" },
     });
     expect(requestedPaths.at(-1)).toBe("/Users/tester/code");
-    // Empty folder: only the ".." row remains (matching T3's layout).
+    // Empty folder: only the ".." row remains.
     expect(rowNames()).toEqual([]);
     expect(screen.getByTestId("remote-folder-picker-up-row")).toBeTruthy();
   });

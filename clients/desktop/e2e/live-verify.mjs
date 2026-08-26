@@ -268,10 +268,10 @@ try {
     t2ev,
   );
 
-  // ---------- T3 guest never saw the reserved chord ----------
+  // ---------- guest never saw the reserved chord ----------
   const keys1 = await guest.eval(`window.__e2eKeys`);
   report(
-    "T3",
+    "guest-reserved-chord",
     "guest received NO ctrl/meta+k (preventDefault before page)",
     !keys1.some(
       (k) => String(k.key).toLowerCase() === "k" && (k.ctrl || k.meta),

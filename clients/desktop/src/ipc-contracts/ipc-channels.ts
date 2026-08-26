@@ -141,7 +141,7 @@ export const RunnerHostInvoke = {
   supportDiscardFrozenEvidence: "runnerHost:support:evidence:discard",
   supportReadFrozenLogTail: "runnerHost:support:evidence:log:tail",
   supportSaveDiagnosticBundle: "runnerHost:support:diagnosticBundle:save",
-  // Per-install report ledger (T3.5). Read-only surface for the dialog's
+  // Per-install report ledger. Read-only surface for the dialog's
   // "Nth time on this install" strip; sightings write via freezeEvidence,
   // filed reports write on delivered submit - neither is renderer-writable.
   supportGetFingerprintOccurrence:
