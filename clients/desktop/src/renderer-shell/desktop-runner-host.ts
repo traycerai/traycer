@@ -68,6 +68,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  FileSaveResult,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -276,7 +277,8 @@ export interface DesktopFileDropsBridge {
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<string | null>;
+  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
+  openSavedFile(path: string): Promise<void>;
 }
 
 /**

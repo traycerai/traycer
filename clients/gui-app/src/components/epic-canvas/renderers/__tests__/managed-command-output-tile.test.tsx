@@ -519,7 +519,7 @@ describe("managed-command output window", () => {
     expect(screen.getByRole("button", { name: "Close tab" })).toBeTruthy();
   });
 
-  it("keeps its chrome off the log's flow, and reserves a lane for it", () => {
+  it("keeps its chrome off the log's flow, and clears it from above", () => {
     const stub = installOutputStub();
     renderTile();
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
@@ -539,11 +539,12 @@ describe("managed-command output window", () => {
     expect(
       screen.getByTestId(`managed-command-delete-${COMMAND.id}`),
     ).toBeTruthy();
-    // And the log holds a lane clear on the right, or the cluster would sit on
-    // the tail of whichever line scrolled under it - permanently. Fluid and
-    // capped: a fixed lane would take a third of a narrow pane away from the
-    // log, and on a wide one it must never grow past what the cluster needs.
-    expect(view.getAttribute("class")).toContain("pr-[min(30%,12rem)]");
+    // Clearance is vertical, not a reserved lane: every line gets the full
+    // width of the pane, and the log begins below the cluster so nothing sits
+    // under it at rest. What scrolls up passes behind the scrim instead.
+    expect(view.getAttribute("class")).not.toContain("pr-[min(30%,12rem)]");
+    expect(view.getAttribute("class")).toContain("pt-9.5");
+    expect(screen.getByTestId("managed-command-output-scrim")).not.toBeNull();
   });
 
   it("follows new output until the human scrolls up, then offers a way back", () => {

@@ -24,6 +24,8 @@ import {
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
+  guiHarnessOptionSchemaV71,
+  listGuiHarnessesResponseSchemaV71,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -46,6 +48,7 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV71,
   providersSetEnabledRequestSchemaV10,
   providersSetEnabledRequestSchemaV21,
   providersSetEnabledRequestSchemaV22,
@@ -72,8 +75,13 @@ interface HarnessOptionOverrides {
   readonly enablementMode?: GuiHarnessOption["enablementMode"];
 }
 
+// Built through the FROZEN 7.1 row rather than the live one: 7.1 is pinned to
+// the v7.0 id set (a released 7.0 forbids any minor of major 7 from growing the
+// enum), so the live row is strictly wider than anything this line serializes.
+// Parsing through the live shape here would let a post-7.0 id reach a v7 bridge
+// in a test and nowhere else.
 function harnessOption(id: string, overrides: HarnessOptionOverrides) {
-  return guiHarnessOptionSchema.parse({
+  return guiHarnessOptionSchemaV71.parse({
     id,
     label: id,
     available: true,
@@ -147,7 +155,7 @@ describe("agent.gui.listHarnesses@7.1 (auth-aware enablement row fields)", () =>
   ] as const)(
     "the 7.1 -> %s downgrade strips authStatus/enablementMode while preserving decodable rows",
     (_label, downgrade, responseSchema, rowSchema) => {
-      const v71Response = guiHarnessOptionSchema
+      const v71Response = guiHarnessOptionSchemaV71
         .array()
         .parse([
           harnessOption("claude", {
@@ -168,15 +176,17 @@ describe("agent.gui.listHarnesses@7.1 (auth-aware enablement row fields)", () =>
   );
 
   it("the 7.1 -> v1.0 downgrade strips both fields and every post-v1.0 harness", () => {
-    const result = agentGuiListHarnessesDowngradeV7ToV1.downgradeResponse({
-      harnesses: [
-        harnessOption("claude", {
-          authStatus: "unauthenticated",
-          enablementMode: "off",
-        }),
-        harnessOption("grok", {}),
-      ],
-    });
+    const result = agentGuiListHarnessesDowngradeV7ToV1.downgradeResponse(
+      listGuiHarnessesResponseSchemaV71.parse({
+        harnesses: [
+          harnessOption("claude", {
+            authStatus: "unauthenticated",
+            enablementMode: "off",
+          }),
+          harnessOption("grok", {}),
+        ],
+      }),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.harnesses.map((h) => h.id)).toEqual(["claude"]);
@@ -277,7 +287,10 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
   ] as const)(
     "the 7.1 -> %s downgrade strips enablementMode/enablementSource while preserving decodable rows",
     (_label, downgrade, responseSchema) => {
-      const liveResponse = providersListResponseSchema.parse({
+      // Parsed through the FROZEN 7.1 response, not the live one: 7.1 is
+      // pinned to the v7.0 provider id set, so the live shape is strictly
+      // wider than anything this line serializes.
+      const v71Response = providersListResponseSchemaV71.parse({
         providers: [
           providerState("claude-code", {
             enablementMode: "on",
@@ -286,7 +299,7 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
         ],
         native: null,
       });
-      const result = downgrade.downgradeResponse(liveResponse);
+      const result = downgrade.downgradeResponse(v71Response);
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.providers[0]).not.toHaveProperty("enablementMode");
@@ -318,7 +331,7 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
     "the 7.1 -> v1.0 downgrade strips both fields and PRESERVES the row",
     () => {
       const result = providersListDowngradeV7ToV1.downgradeResponse(
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV71.parse({
           providers: [
             providerState("claude-code", {
               enablementMode: "off",
@@ -346,7 +359,7 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
 
   it("the 7.1 -> v1.0 downgrade PRESERVES a row carrying no enablement fields, dropping only the post-v1.0 provider (unaffected baseline)", () => {
     const result = providersListDowngradeV7ToV1.downgradeResponse(
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV71.parse({
         providers: [providerState("claude-code", {}), providerState("grok", {})],
         native: null,
       }),

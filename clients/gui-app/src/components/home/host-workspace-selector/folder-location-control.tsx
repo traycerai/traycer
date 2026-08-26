@@ -29,6 +29,7 @@ import {
   worktreeImportRows,
   type UnifiedPickerWorktreeRow,
 } from "@/components/home/worktree/worktree-unified-picker-model";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { cn } from "@/lib/utils";
 import {
@@ -258,7 +259,8 @@ function FolderLocationMenu(props: {
  * list is always height-capped to ~5 rows and scrolls beyond that; a search bar
  * appears once the worktrees exceed {@link EXISTING_WORKTREE_SEARCH_THRESHOLD}.
  * Mounted only while the submenu is open, so the query resets per open and the
- * search autofocuses. `onKeyDown` stops typed characters from reaching the
+ * search autofocuses on a pointer that can type without covering the list.
+ * `onKeyDown` stops typed characters from reaching the
  * menu's typeahead, bridges vertical arrows into the filtered menu items, and
  * lets Escape reach Radix's dismissal handler.
  */
@@ -283,8 +285,15 @@ function ExistingWorktreeList(props: {
   // it a bounded number of times when the menu reclaims it (the non-modal menu
   // above means nothing keeps trapping it afterwards), so the search ends up
   // focused without fighting a deliberate later focus change.
+  //
+  // None of that applies to a touch pointer, where focusing the search raises a
+  // software keyboard over the rows and the reclaim-on-blur loop would then
+  // fight the very tap that dismissed it. There is no hover-open on touch
+  // either, so the whole recovery has nothing to recover from: focus stays on
+  // the submenu trigger the tap put it on.
+  const coarsePointer = useCoarsePointer();
   useEffect(() => {
-    if (!showSearch) return;
+    if (!showSearch || coarsePointer) return;
     const input = inputRef.current;
     if (input === null) return;
     let reclaims = 0;
@@ -303,7 +312,7 @@ function ExistingWorktreeList(props: {
       window.cancelAnimationFrame(frame);
       input.removeEventListener("blur", handleBlur);
     };
-  }, [showSearch]);
+  }, [coarsePointer, showSearch]);
 
   const needle = query.trim().toLowerCase();
   const filtered =

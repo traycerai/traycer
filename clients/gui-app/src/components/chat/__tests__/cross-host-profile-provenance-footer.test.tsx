@@ -39,6 +39,7 @@ const OTHER_HOST = "host-2";
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",

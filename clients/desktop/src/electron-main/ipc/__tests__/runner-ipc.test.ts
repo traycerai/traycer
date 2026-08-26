@@ -123,6 +123,7 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: vi.fn(() => Promise.resolve()),
+    openPath: vi.fn(() => Promise.resolve("")),
   },
   dialog: {
     showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
@@ -831,6 +832,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.fileDropCopyTemporary,
         RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
+        RunnerHostInvoke.fileOpenSaved,
         RunnerHostInvoke.clipboardWriteImage,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
@@ -1007,7 +1009,7 @@ describe("RunnerIpcBridge", () => {
         type: "image/png",
         bytes: new Uint8Array([1, 2, 3]).buffer,
       }),
-    ).resolves.toBe("diagram.png");
+    ).resolves.toEqual({ name: "diagram.png", path: target });
     expect(showSaveDialog).toHaveBeenCalledWith({
       defaultPath: "mermaid-diagram.png",
       filters: [{ name: "PNG image", extensions: ["png"] }],
@@ -1046,6 +1048,63 @@ describe("RunnerIpcBridge", () => {
         bytes: new Uint8Array([1, 2, 3]).buffer,
       }),
     ).resolves.toBeNull();
+    bridge.dispose();
+  });
+
+  it("opens only files the native save dialog wrote, and surfaces OS open failures", async () => {
+    const mod = await import("../register-runner-ipc");
+    const electron = await import("electron");
+    const dir = await mkdtemp(join(tmpdir(), "traycer-file-open-"));
+    const target = join(dir, "usage.png");
+    vi.mocked(electron.dialog.showSaveDialog).mockResolvedValue({
+      canceled: false,
+      filePath: target,
+    });
+    const openPath = vi.mocked(electron.shell.openPath);
+    openPath.mockClear();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const save = ipcMainState.handlers.get(RunnerHostInvoke.fileSave);
+    const open = ipcMainState.handlers.get(RunnerHostInvoke.fileOpenSaved);
+    if (save === undefined || open === undefined) {
+      throw new Error("file save/open handlers missing");
+    }
+
+    // A path nothing saved is refused without touching the OS - the
+    // renderer cannot turn this channel into "open any file".
+    await expect(open(bareEvent(), target)).rejects.toThrow(
+      "path was not saved by this session",
+    );
+    await expect(open(bareEvent(), 42)).rejects.toThrow(
+      "path was not saved by this session",
+    );
+    expect(openPath).not.toHaveBeenCalled();
+
+    await save(bareEvent(), {
+      name: "usage.png",
+      type: "image/png",
+      bytes: new Uint8Array([9]).buffer,
+    });
+    await expect(open(bareEvent(), target)).resolves.toBeUndefined();
+    expect(openPath).toHaveBeenCalledWith(target);
+
+    // `shell.openPath` reports failure as a non-empty string, not a throw.
+    openPath.mockResolvedValueOnce("No application knows how to open it");
+    await expect(open(bareEvent(), target)).rejects.toThrow(
+      "No application knows how to open it",
+    );
+
+    await rm(dir, { recursive: true, force: true });
     bridge.dispose();
   });
 

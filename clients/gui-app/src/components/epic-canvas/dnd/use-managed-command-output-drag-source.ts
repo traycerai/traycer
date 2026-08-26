@@ -10,6 +10,7 @@ import {
   getPaneScopedDndId,
   type EpicCanvasManagedCommandOutputDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { makeManagedCommandOutputTileRef } from "@/stores/epics/canvas/tile-schema/managed-command-output-tile";
 
 /**
@@ -62,7 +63,10 @@ export function useManagedCommandOutputDragSource(args: {
       tile: makeManagedCommandOutputTileRef({ commandId, hostId }),
     };
   }, [enabled, epicId, viewTabId, hostId, commandId]);
-  const isDraggable = dragData !== undefined;
+  // Folded into `isDraggable` for the same reason as the artifact source: the
+  // caller's grab chrome must disappear with the gesture, not outlive it.
+  const dragDisabled = useDragSourceDisabled();
+  const isDraggable = dragData !== undefined && !dragDisabled;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     // Pane-scoped like the menu and Background rows, so one root registry does
     // not collide across retained epic panes; the occurrence key keeps the

@@ -33,6 +33,7 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 function claudeStateWithoutProfile(): ProviderCliState {
   const ambient: ProviderProfile = {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",

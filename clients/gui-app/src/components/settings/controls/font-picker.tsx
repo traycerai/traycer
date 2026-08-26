@@ -13,6 +13,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,8 @@ export function FontPicker(props: FontPickerProps) {
   const [dialogContainer, setDialogContainer] = useState<HTMLElement | null>(
     null,
   );
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
 
   const trimmedQuery = query.trim();
   const needle = trimmedQuery.toLowerCase();
@@ -128,6 +131,8 @@ export function FontPicker(props: FontPickerProps) {
           collisionBoundary={dialogContainer ?? undefined}
           collisionPadding={8}
           className="w-[min(85vw,18rem)] overflow-hidden p-0"
+          ref={contentRef}
+          onOpenAutoFocus={coarseOpenAutoFocus}
         >
           <Command shouldFilter={false}>
             <CommandInput

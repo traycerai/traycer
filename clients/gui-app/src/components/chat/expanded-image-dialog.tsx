@@ -4,6 +4,7 @@ import { ImageOff } from "lucide-react";
 import { isClipboardImageMediaType } from "@traycer-clients/shared/images/clipboard-image-media";
 
 import { DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 
@@ -111,16 +112,19 @@ function ExpandedImageActionBar(props: {
   readonly alt: string;
   readonly suggestedName: string | null;
 }): ReactNode {
+  const openSaved = useOpenSavedFile();
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
     mutationFn: (action) =>
-      performImageAction(
+      performImageAction({
         action,
-        props.src,
-        props.mediaType,
-        props.suggestedName ??
+        src: props.src,
+        mediaType: props.mediaType,
+        suggestedName:
+          props.suggestedName ??
           imageFileName(props.alt, props.src, props.mediaType),
-      ),
+        openSaved: openSaved.mutate,
+      }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),
   });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { WorktreeBusyHolder } from "./worktree-busy-holders";
 
 declare const validatedMethodVersionRegistryBrand: unique symbol;
 declare const validatedVersionedRpcRegistryBrand: unique symbol;
@@ -82,6 +83,12 @@ export function isRpcErrorCode(value: string): value is RpcErrorCode {
 export type RpcErrorDetails = {
   code: RpcErrorCode;
   message: string;
+  /**
+   * Typed `WORKTREE_BUSY` holder inventory. Optional: omitted on every other
+   * code, and omitted by hosts that predate the holders minor. See
+   * `worktreeBusyHolderSchema`.
+   */
+  holders?: readonly WorktreeBusyHolder[];
 };
 
 export type RpcContract<

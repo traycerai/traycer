@@ -1,4 +1,5 @@
 import { PopoverContent } from "@/components/ui/popover";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
 import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
@@ -56,6 +57,7 @@ interface HarnessModelPickerPanelProps {
   readonly activeProfileId: string | null;
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   /** The browsed provider's CLI state, for the ambient-auth line shown when
    *  the provider has under 2 profiles (the profile dropdown owns identity
    *  above that). `null` when `providers.list` hasn't resolved it. */
@@ -114,6 +116,8 @@ interface HarnessModelPickerPanelProps {
 }
 
 export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
   const {
     trimmedQuery,
     hasQuery,
@@ -132,6 +136,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     activeProfileId,
     activeProfileIdByHarnessId,
     activeProviderProfiles,
+    profileEnablementPending,
     activeProviderState,
     lockedHarnessId,
     degradedHarnessIds,
@@ -195,6 +200,11 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
       onCloseAutoFocus={(event) => {
         if (focusActiveComposer()) event.preventDefault();
       }}
+      ref={contentRef}
+      // The search field is the first tabbable descendant, so Radix's own
+      // open-autofocus takes it whether or not the panel's search effect runs.
+      // Both halves have to move together or the gate is a no-op.
+      onOpenAutoFocus={coarseOpenAutoFocus}
       onKeyDown={onKeyDown}
       onEscapeKeyDown={(event) => {
         if (trimmedQuery.length === 0) return;
@@ -263,6 +273,7 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
                 createProfileDisabled={createProfileDisabled}
                 createProfileDisabledReason={createProfileDisabledReason}
                 shortcutHintForIndex={pickerProfileShortcutHintForIndex}
+                profileEnablementPending={profileEnablementPending}
                 contentContainer={profileDropdownContainer}
                 inputRef={inputRef}
                 runTargetHostId={runTargetHostId}

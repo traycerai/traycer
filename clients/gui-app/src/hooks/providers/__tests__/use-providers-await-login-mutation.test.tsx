@@ -72,6 +72,32 @@ function v21Echo(
   };
 }
 
+function legacyV21Profile(): ProviderMutationCliStateV21["profiles"][number] {
+  return {
+    profileId: "managed-1",
+    kind: "managed",
+    authType: "oauth",
+    label: "Work",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: "work@example.test",
+      tier: "Pro",
+      accountUuid: null,
+    },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
 function seededProvidersList(): ProvidersListResponse {
   return {
     native: null,
@@ -149,9 +175,25 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       "providers.list",
       { native: null },
     );
-    queryClient.setQueryData(listKey, seededProvidersList());
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        profiles: [
+          {
+            ...legacyV21Profile(),
+            enabled: false,
+            launchCommand: {
+              command: "copilot --profile work",
+              shell: "posix" as const,
+            },
+          },
+        ],
+      })),
+    });
     mocks.requestWithResponseTimeout.mockResolvedValue({
-      state: v21Echo({}),
+      state: v21Echo({ profiles: [legacyV21Profile()] }),
       existingProfileId: null,
       codeRejected: false,
     });
@@ -167,6 +209,11 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       (p: ProviderListEntry) => p.providerId === "copilot",
     );
     expect(copilot?.loginCapability?.terminalLogin).toEqual({});
+    expect(copilot?.profiles[0]?.enabled).toBe(false);
+    expect(copilot?.profiles[0]?.launchCommand).toEqual({
+      command: "copilot --profile work",
+      shell: "posix",
+    });
     // The missing direction: `terminalLogin` staying `{}` is also what a
     // no-op merge (one that dropped the WHOLE echo, not just its
     // `loginCapability`) would produce, since the seeded cache already has

@@ -255,6 +255,7 @@ const HTML_LOOKING_EMAIL = '<img src=x onerror="alert(1)">@example.com';
 function hostileProfile(label: string, email: string): ProviderProfile {
   return {
     profileId: "hostile-uuid",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,
@@ -277,6 +278,7 @@ function hostileProfile(label: string, email: string): ProviderProfile {
 function ambientProfile(): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",

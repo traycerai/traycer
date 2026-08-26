@@ -7,6 +7,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
@@ -38,6 +39,7 @@ const UntrustedSvgLightbox = lazy(() =>
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
   const contentRef = useRef<HTMLDivElement>(null);
+  const openSaved = useOpenSavedFile();
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
@@ -48,7 +50,13 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
     mutationFn: (action) =>
-      performImageAction(action, props.src, props.mediaType, suggestedName),
+      performImageAction({
+        action,
+        src: props.src,
+        mediaType: props.mediaType,
+        suggestedName,
+        openSaved: openSaved.mutate,
+      }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),
   });

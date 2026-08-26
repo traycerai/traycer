@@ -102,7 +102,7 @@ function SwitcherArtifactRow(props: {
   const onSelect = useCallback(() => {
     const type = record.type;
     if (!isOpenableEpicNodeKind(type)) return;
-    activate(record.id, () =>
+    activate(() =>
       makeOpenableNodeRef({
         id: record.id,
         instanceId: uuidv4(),
@@ -121,6 +121,8 @@ function SwitcherArtifactRow(props: {
     <SwitcherListRow
       icon={<SwitcherArtifactIcon type={record.type} status={record.status} />}
       label={record.name}
+      secondaryLabel={null}
+      badge={null}
       active={isActive}
       onSelect={onSelect}
       selectTestId={`switcher-artifact-row-${record.id}`}

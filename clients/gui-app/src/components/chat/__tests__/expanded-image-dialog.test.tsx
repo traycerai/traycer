@@ -8,10 +8,11 @@ import {
   type ExpandedImageState,
 } from "@/components/chat/expanded-image-dialog";
 import { Dialog } from "@/components/ui/dialog";
+import type { SavedFile } from "@/lib/files/save-blob-to-disk";
 
 const saveBlobToDiskMock = vi.hoisted(() =>
-  vi.fn<(blob: Blob, suggestedName: string) => Promise<string | null>>(() =>
-    Promise.resolve("generated.png"),
+  vi.fn<(blob: Blob, suggestedName: string) => Promise<SavedFile | null>>(() =>
+    Promise.resolve({ name: "generated.png", path: null }),
   ),
 );
 const copyImageMock = vi.hoisted(() =>
@@ -21,6 +22,8 @@ const copyImageMock = vi.hoisted(() =>
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: (blob: Blob, suggestedName: string) =>
     saveBlobToDiskMock(blob, suggestedName),
+  canOpenSavedFile: () => false,
+  openSavedFile: () => Promise.resolve(),
 }));
 
 vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
@@ -67,7 +70,7 @@ function renderOpenDialog(image: ExpandedImageState): void {
 
 beforeEach(() => {
   saveBlobToDiskMock.mockReset();
-  saveBlobToDiskMock.mockResolvedValue("generated.png");
+  saveBlobToDiskMock.mockResolvedValue({ name: "generated.png", path: null });
   copyImageMock.mockReset();
   copyImageMock.mockResolvedValue(undefined);
   vi.stubGlobal(

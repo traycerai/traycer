@@ -1,5 +1,7 @@
 ext {
-    minSdkVersion = 24
+    // 26 (Android 8.0) is the floor @capacitor/barcode-scanner's native
+    // library (ionbarcode-android) declares; 24 fails the manifest merge.
+    minSdkVersion = 26
     compileSdkVersion = 36
     targetSdkVersion = 36
     androidxActivityVersion = '1.11.0'

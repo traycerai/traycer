@@ -145,6 +145,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // useResolvedSeededProfileId still hits useHostQuery directly (not the
 // providers-list-query wrapper). Mirror the same provider list so a managed
 // seed is not tombstoned to ambient mid-test.
@@ -644,6 +652,7 @@ function emptyWorkspaceSeed(): ForkWorkspaceSeed {
 function ambientProfile(label: string): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label,
@@ -666,6 +675,7 @@ function ambientProfile(label: string): ProviderProfile {
 function managedProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,

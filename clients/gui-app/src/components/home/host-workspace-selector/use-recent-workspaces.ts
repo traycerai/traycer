@@ -8,6 +8,7 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useWorkspaceListRecentWorkspaces } from "@/hooks/workspace/use-workspace-list-recent-workspaces-query";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
 import { useWorkspaceFolderActionsForClient } from "@/hooks/workspace/use-workspace-folder-actions";
+import { workspaceMappingQueryPredicate } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
@@ -149,13 +150,18 @@ export function useRecentWorkspaces(args: {
       onMutate: () => ({
         hostId: args.client?.getActiveHostId() ?? null,
       }),
-      onSuccess: async (_result, _variables, context) => {
-        await queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            context.hostId,
-            "workspace.resolvePathsByRepoIdentifiers",
-          ),
-        });
+      onSuccess: async (result, _variables, context) => {
+        if (result.repoIdentifiers.length === 0) return;
+        const queryKey = hostQueryKeys.methodScope(
+          context.hostId,
+          "workspace.resolvePathsByRepoIdentifiers",
+        );
+        const predicate = workspaceMappingQueryPredicate(
+          queryKey.length,
+          result.repoIdentifiers,
+        );
+        await queryClient.cancelQueries({ queryKey, predicate });
+        await queryClient.invalidateQueries({ queryKey, predicate });
       },
       // Reactivation errors are rendered on the row with recovery actions.
     },

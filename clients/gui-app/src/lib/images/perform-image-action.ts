@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 
 export type ImageAction = "copy" | "download";
@@ -20,20 +21,21 @@ async function fetchImageBlob(
   return new Blob([blob], { type: mediaType });
 }
 
-export async function performImageAction(
-  action: ImageAction,
-  src: string,
-  mediaType: string | null,
-  suggestedName: string,
-): Promise<void> {
-  const blob = await fetchImageBlob(src, mediaType);
-  if (action === "copy") {
+export async function performImageAction(params: {
+  readonly action: ImageAction;
+  readonly src: string;
+  readonly mediaType: string | null;
+  readonly suggestedName: string;
+  readonly openSaved: (saved: SavedFile) => void;
+}): Promise<void> {
+  const blob = await fetchImageBlob(params.src, params.mediaType);
+  if (params.action === "copy") {
     await copyImageBlobToClipboard(blob);
     toast.success("Image copied");
     return;
   }
-  const saved = await saveBlobToDisk(blob, suggestedName);
-  if (saved !== null) toast.success(`Saved ${saved}`);
+  const saved = await saveBlobToDisk(blob, params.suggestedName);
+  if (saved !== null) toastSavedFile(saved, params.openSaved);
 }
 
 export function imageFileName(

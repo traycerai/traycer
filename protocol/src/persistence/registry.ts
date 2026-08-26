@@ -1,5 +1,7 @@
 import {
   defineRecordContract,
+  defineRecordDowngradePath,
+  defineRecordUpgradePath,
   defineVersionedRecordRegistry,
   type RecordValue,
 } from "@traycer/protocol/framework/index";
@@ -8,7 +10,10 @@ import {
   chatShardRecordSchema,
 } from "@traycer/protocol/persistence/_internal/chat-sync-schemas";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
-import { epicSchema } from "@traycer/protocol/persistence/_internal/epic-schemas";
+import {
+  epicSchema,
+  epicSchemaPreReasonix,
+} from "@traycer/protocol/persistence/_internal/epic-schemas";
 import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room-metadata-schemas";
 
 /**
@@ -43,7 +48,42 @@ import { roomMetadataSchema } from "@traycer/protocol/persistence/_internal/room
 export const epicRecordV200 = defineRecordContract({
   name: "epic",
   schemaVersion: { major: 2, minor: 0 } as const,
+  schema: epicSchemaPreReasonix,
+});
+
+export const epicRecordV300 = defineRecordContract({
+  name: "epic",
+  schemaVersion: { major: 3, minor: 0 } as const,
   schema: epicSchema,
+});
+
+const epicUpgradeV200ToV300 = defineRecordUpgradePath<
+  typeof epicRecordV200,
+  typeof epicRecordV300
+>({
+  from: epicRecordV200.schemaVersion,
+  to: epicRecordV300.schemaVersion,
+  upgradeRecord: (record) => epicRecordV300.schema.parse(record),
+});
+
+const epicDowngradeV300ToV200 = defineRecordDowngradePath<
+  typeof epicRecordV300,
+  typeof epicRecordV200
+>({
+  from: epicRecordV300.schemaVersion,
+  to: epicRecordV200.schemaVersion,
+  downgradeRecord: (record) => {
+    const parsed = epicRecordV200.schema.safeParse(record);
+    if (parsed.success) return { ok: true as const, value: parsed.data };
+    return {
+      ok: false as const,
+      error: {
+        code: "DOWNGRADE_UNSUPPORTED" as const,
+        message:
+          "Epic contains Reasonix harness state that the 2.0 record contract cannot represent",
+      },
+    };
+  },
 });
 
 export const roomMetadataRecordV100 = defineRecordContract({
@@ -78,6 +118,16 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
         0: { contract: epicRecordV200, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRecordV300,
+          upgradeFromPreviousVersion: epicUpgradeV200ToV300,
+        },
+      },
+      downgradePathsFromLatest: { 2: epicDowngradeV300ToV200 },
     },
   },
   "room-metadata": {
