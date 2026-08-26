@@ -211,8 +211,9 @@ function buildFakeBridge(
       readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
-        return input.name;
+        return { name: input.name, path: `/tmp/saved/${input.name}` };
       },
+      openSavedFile: async () => undefined,
     },
     menu: {
       platform: "darwin",

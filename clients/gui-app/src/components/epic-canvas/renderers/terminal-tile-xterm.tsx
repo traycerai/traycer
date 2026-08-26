@@ -296,6 +296,14 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     letterSpacing: 0,
     lineHeight: 1,
     theme,
+    // The host never answers OSC 10/11 background queries (the terminal is
+    // viewed from multiple clients whose themes can disagree, so there is no
+    // single true answer), which means a TUI probing for light/dark can guess
+    // wrong and paint its opposite-mode palette - e.g. bright-white text on
+    // ANSI black in a light terminal. Have xterm nudge any foreground toward
+    // WCAG AA against its cell background so a wrong guess degrades to a
+    // mismatched-but-readable theme instead of invisible text.
+    minimumContrastRatio: 4.5,
     // Programs emit arbitrary/binary bytes; xterm's VT parser logs (and
     // recovers from) every malformed sequence. Under a high-rate binary stream
     // that flood of `console.error`s is itself the bottleneck - in Electron each

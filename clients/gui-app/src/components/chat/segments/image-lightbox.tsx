@@ -10,7 +10,9 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
+import { saveBlobToDisk, type SavedFile } from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { imageMutationKeys } from "@/lib/query-keys";
@@ -37,6 +39,7 @@ const UntrustedSvgLightbox = lazy(() =>
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const openExternalLink = useRunnerOpenExternalLink();
+  const openSaved = useOpenSavedFile();
   const alt = props.alt.length > 0 ? props.alt : "Image";
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
@@ -47,7 +50,13 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
     mutationFn: (action) =>
-      performImageAction(action, props.src, props.mediaType, suggestedName),
+      performImageAction({
+        action,
+        src: props.src,
+        mediaType: props.mediaType,
+        suggestedName,
+        openSaved: openSaved.mutate,
+      }),
     onError: (error, action) =>
       toastFromRunnerError(error, `Failed to ${action} image`),
   });
@@ -207,20 +216,21 @@ async function fetchImageBlob(
   return new Blob([blob], { type: mediaType });
 }
 
-async function performImageAction(
-  action: ImageAction,
-  src: string,
-  mediaType: string | null,
-  suggestedName: string,
-): Promise<void> {
-  const blob = await fetchImageBlob(src, mediaType);
-  if (action === "copy") {
+async function performImageAction(params: {
+  readonly action: ImageAction;
+  readonly src: string;
+  readonly mediaType: string | null;
+  readonly suggestedName: string;
+  readonly openSaved: (saved: SavedFile) => void;
+}): Promise<void> {
+  const blob = await fetchImageBlob(params.src, params.mediaType);
+  if (params.action === "copy") {
     await copyImageBlobToClipboard(blob);
     toast.success("Image copied");
     return;
   }
-  const saved = await saveBlobToDisk(blob, suggestedName);
-  if (saved !== null) toast.success(`Saved ${saved}`);
+  const saved = await saveBlobToDisk(blob, params.suggestedName);
+  if (saved !== null) toastSavedFile(saved, params.openSaved);
 }
 
 function imageFileName(

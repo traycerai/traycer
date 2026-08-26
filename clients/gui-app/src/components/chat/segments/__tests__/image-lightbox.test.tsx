@@ -17,9 +17,12 @@ import { sanitizeUntrustedSvg } from "@/lib/images/untrusted-svg";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 
 const saveBlobToDiskMock = vi.hoisted(() =>
-  vi.fn<(blob: Blob, suggestedName: string) => Promise<string | null>>(() =>
-    Promise.resolve("generated.png"),
-  ),
+  vi.fn<
+    (
+      blob: Blob,
+      suggestedName: string,
+    ) => Promise<{ name: string; path: string | null } | null>
+  >(() => Promise.resolve({ name: "generated.png", path: null })),
 );
 const copyImageMock = vi.hoisted(() =>
   vi.fn<(blob: Blob) => Promise<void>>(() => Promise.resolve()),
@@ -29,6 +32,9 @@ const trustedMarkupSpy = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/files/save-blob-to-disk", () => ({
   saveBlobToDisk: (blob: Blob, suggestedName: string) =>
     saveBlobToDiskMock(blob, suggestedName),
+  // Browser-runtime shape: no path comes back, so no "Open file" action.
+  canOpenSavedFile: () => false,
+  openSavedFile: vi.fn(),
 }));
 
 vi.mock("@/lib/images/copy-image-to-clipboard", () => ({
@@ -102,7 +108,7 @@ beforeEach(() => {
     traycerCli: undefined,
   });
   saveBlobToDiskMock.mockReset();
-  saveBlobToDiskMock.mockResolvedValue("generated.png");
+  saveBlobToDiskMock.mockResolvedValue({ name: "generated.png", path: null });
   copyImageMock.mockReset();
   copyImageMock.mockResolvedValue(undefined);
   trustedMarkupSpy.mockClear();

@@ -12,6 +12,16 @@
  * Full-palette presets override every slot using the canonical palette
  * published by the theme's authors. Presets that publish only 8 colors leave
  * `--term-ansi-bright-*` unset and let the build helper L-shift normals.
+ *
+ * Light-palette invariant: `bright-white` must stay legible on `black`. The
+ * host never answers OSC 10/11 background queries, so a TUI probing for
+ * light/dark can wrongly assume dark and paint bright-white-on-black (Codex's
+ * composer does exactly this); a light palette that maps bright-white onto a
+ * near-black renders that as an invisible solid bar. Where a theme's published
+ * light palette breaks this (they assume the emulator answers the query), the
+ * bright-white slot deliberately deviates from canonical. Fully inverted light
+ * palettes (gruvbox: black is light, bright-white is dark) are fine - the two
+ * slots still contrast with each other.
  */
 
 :root {
@@ -30,7 +40,7 @@
   --term-ansi-bright-blue: #1e40af;
   --term-ansi-bright-magenta: #6b21a8;
   --term-ansi-bright-cyan: #155e75;
-  --term-ansi-bright-white: #18181b;
+  --term-ansi-bright-white: #d4d4d8;
 }
 
 .dark {
@@ -90,7 +100,7 @@
   --term-ansi-bright-blue: #1864ab;
   --term-ansi-bright-magenta: #6741d9;
   --term-ansi-bright-cyan: #0b7285;
-  --term-ansi-bright-white: #1a2421;
+  --term-ansi-bright-white: #dee2e6;
 }
 
 .dark[data-theme="traycer-green"] {
@@ -129,7 +139,7 @@
   --term-ansi-bright-blue: #006bff;
   --term-ansi-bright-magenta: #a000f8;
   --term-ansi-bright-cyan: #00ac96;
-  --term-ansi-bright-white: #171717;
+  --term-ansi-bright-white: #ededed;
 }
 
 .dark[data-theme="amoled"] {
@@ -402,7 +412,7 @@
   --term-ansi-bright-blue: #73d8ff;
   --term-ansi-bright-magenta: #ffa3aa;
   --term-ansi-bright-cyan: #7ff1cb;
-  --term-ansi-bright-white: #1a1f29;
+  --term-ansi-bright-white: #c7c7c7;
 }
 
 .dark[data-theme="ayu"] {
@@ -441,7 +451,7 @@
   --term-ansi-bright-blue: #3a94c5;
   --term-ansi-bright-magenta: #df69ba;
   --term-ansi-bright-cyan: #35a77c;
-  --term-ansi-bright-white: #5c6a72;
+  --term-ansi-bright-white: #fdf6e3;
 }
 
 .dark[data-theme="everforest"] {
