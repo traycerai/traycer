@@ -217,13 +217,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+      # Do not restore Bun's global cache on Windows. The hosted measurement
+      # took 3m27 to unpack it while an uncached frozen install took 32s.
       - run: bun install --frozen-lockfile
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea
