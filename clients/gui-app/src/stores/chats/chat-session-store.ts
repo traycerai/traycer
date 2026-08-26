@@ -46,6 +46,7 @@ import {
   streamWindowMessage,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
+  type OrdinalRange,
   type TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import type {
@@ -783,6 +784,17 @@ export interface ChatSessionState {
    * the tile error state's retry affordance.
    */
   retry: () => void;
+  /**
+   * Which ordinals the transcript viewport is currently showing, from the
+   * timeline's viewability pass - the second obligation
+   * `planTranscriptHydration` folds in (the first is the tail). `null` means
+   * "no placed row is visible" (the pending tail, a concealed surface, the
+   * legacy line), which clears the viewport obligation rather than requesting
+   * anything. A no-op off the windowed line and once disposed; repeats of the
+   * same range are absorbed here, and an identical planned request is not
+   * re-sent while the one in flight is unanswered.
+   */
+  reportVisibleTranscriptRange: (range: OrdinalRange | null) => void;
   sendMessage: (
     content: JsonContent,
     sender: UserMessageSender,
@@ -2180,6 +2192,31 @@ export function createChatSessionStoreWithNotificationDependencies(
      */
     let windowedLine = false;
 
+    /**
+     * The ordinal range the transcript viewport is showing, as last reported
+     * by {@link ChatSessionState.reportVisibleTranscriptRange}. Fed into every
+     * hydration plan so scrolling into unhydrated history fetches what the
+     * reader is looking at. Survives a reconnect (it describes the viewport,
+     * not the connection), and the timeline re-reports on its next
+     * viewability pass anyway.
+     */
+    let visibleTranscriptRange: OrdinalRange | null = null;
+
+    /**
+     * The range request currently in flight, so a stream of identical
+     * viewport reports does not re-send the same ask while the host is
+     * answering it. Cleared when a range response arrives (whatever it held -
+     * a partial answer changes the next plan anyway), cleared on every
+     * windowed snapshot (a reconnect's request may have died with its
+     * connection, and the transcript epoch can survive one - without the
+     * clear, an identical re-plan would be suppressed forever), and
+     * superseded by any differently-planned request.
+     */
+    let inFlightHydrationRequest: {
+      epoch: number;
+      range: OrdinalRange;
+    } | null = null;
+
     /** Ask for whatever the window says is missing, if anything. */
     const requestPlannedHydration = (): void => {
       const client = streamClient;
@@ -2191,10 +2228,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         client.requestResnapshot();
         return;
       }
-      // Viewport-driven hydration arrives with placeholder rows; until then the
-      // only standing obligation is the tail.
-      const next = planTranscriptHydration(window, null);
+      const next = planTranscriptHydration(window, visibleTranscriptRange);
       if (next === null) return;
+      const inFlight = inFlightHydrationRequest;
+      if (
+        inFlight !== null &&
+        inFlight.epoch === window.epoch &&
+        inFlight.range.fromOrdinal === next.fromOrdinal &&
+        inFlight.range.toOrdinal === next.toOrdinal
+      ) {
+        return;
+      }
+      inFlightHydrationRequest = { epoch: window.epoch, range: next };
       client.requestTranscriptRange({
         requestId: uuidv4(),
         epoch: window.epoch,
@@ -2205,6 +2250,25 @@ export function createChatSessionStoreWithNotificationDependencies(
         // than a number this side has to keep in step.
         maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
       });
+    };
+
+    /** {@link ChatSessionState.reportVisibleTranscriptRange}'s implementation;
+     *  hoisted beside the planner it drives rather than defined inline in the
+     *  state object two thousand lines below. */
+    const applyVisibleTranscriptRange = (range: OrdinalRange | null): void => {
+      const unchanged =
+        (range === null && visibleTranscriptRange === null) ||
+        (range !== null &&
+          visibleTranscriptRange !== null &&
+          range.fromOrdinal === visibleTranscriptRange.fromOrdinal &&
+          range.toOrdinal === visibleTranscriptRange.toOrdinal);
+      visibleTranscriptRange = range;
+      // A `null` report only CLEARS the standing obligation - there is nothing
+      // to fetch for "no placed row visible". Off the windowed line the value
+      // is recorded (the line can be negotiated by a later reconnect) but no
+      // request could mean anything yet.
+      if (unchanged || range === null || !windowedLine || disposed) return;
+      requestPlannedHydration();
     };
 
     /**
@@ -2339,14 +2403,18 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
       // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
       //
-      // Unreachable until `chatSubscribeV18` is registered - negotiation
-      // declares this client's own canonical minor whenever the host's is
-      // newer, so a `1.8` host still settles on `1.7` here.
+      // Live: `chatSubscribeV18` is registered, so two `1.8`-capable peers
+      // negotiate onto this handler. Against an older peer negotiation still
+      // settles on that peer's minor and the legacy handlers above serve the
+      // session instead.
       onWindowedSnapshot: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
         windowedLine = true;
+        // See the field's own doc: a snapshot means a (re)connection settled,
+        // and any request the previous connection had in flight is gone.
+        inFlightHydrationRequest = null;
         // Before the fold, exactly as the legacy path flushes: a queued delta
         // applied after an authoritative snapshot would re-add a block the
         // snapshot already carries.
@@ -2392,6 +2460,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        inFlightHydrationRequest = null;
         const window = evictTranscriptWindowToBudget(
           applyRangeResponse(get().transcriptWindow, frame.range),
           TRANSCRIPT_WINDOW_MAX_BYTES,
@@ -3433,6 +3502,11 @@ export function createChatSessionStoreWithNotificationDependencies(
       liveTurnUsage: null,
       worktreeBinding: null,
       missingWorktreePaths: [],
+
+      reportVisibleTranscriptRange: (range) => {
+        if (disposed) return;
+        applyVisibleTranscriptRange(range);
+      },
 
       retry: () => {
         if (disposed) return;

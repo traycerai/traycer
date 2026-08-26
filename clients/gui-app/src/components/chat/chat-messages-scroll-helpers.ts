@@ -1,4 +1,5 @@
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 
 /**
  * Per-press step for the transcript's arrow-key scrolling. Chromium's own
@@ -20,12 +21,17 @@ export function acceptExhaustedPersistedRestoreFallback<T>(
   pendingMeasuredRestoreRef.current = null;
 }
 
-export function buildMessageIdToIndex(
-  messages: ReadonlyArray<ChatMessageModel>,
+/**
+ * Row key → LIST index, over the same array the list renders. On the windowed
+ * line placeholders occupy real indexes, so an index derived from `messages`
+ * would address the wrong row - every scroll/navigation index in this family
+ * must come from this map. A placeholder's key is its skeleton row id, so an
+ * unhydrated row is a perfectly good navigation target.
+ */
+export function buildRowKeyToIndex(
+  rows: ReadonlyArray<TranscriptListRow>,
 ): ReadonlyMap<string, number> {
-  return new Map(
-    messages.map((message, index) => [message.id, index] as const),
-  );
+  return new Map(rows.map((row, index) => [row.key, index] as const));
 }
 
 /**
@@ -41,11 +47,19 @@ export function buildMessageIdToIndex(
  * (not `chat-timeline.tsx`) so that component file keeps exporting only
  * components (Fast Refresh).
  */
-export function chatTimelineGetItemType(item: ChatMessageModel): string {
-  if (item.role === "user") {
-    return item.agentSenderInfo === null ? "user:human" : "user:a2a";
+export function chatTimelineGetItemType(item: TranscriptListRow): string {
+  // A placeholder gets its OWN item types, never a real row's. LegendList
+  // recycles measured sizes per item type, so sharing a type would let a
+  // placeholder's estimated height stand in for a measured one - and a
+  // hydrated row would inherit the estimate it was supposed to correct.
+  if (item.kind === "placeholder") {
+    return `placeholder:${item.entry === null ? "unknown" : item.entry.role}`;
   }
-  return item.role;
+  const model = item.model;
+  if (model.role === "user") {
+    return model.agentSenderInfo === null ? "user:human" : "user:a2a";
+  }
+  return model.role;
 }
 
 export interface ChatTimelineNavigationLocation {
@@ -208,6 +222,30 @@ export function chatViewportAnchorRowIndex(
 }
 
 /**
+ * The hydrated message nearest the anchor row, searching at-or-before first
+ * and then after. `selectActiveUserMessageId` reasons over message SEMANTICS
+ * (roles, A2A senders), which a placeholder cannot answer - so when the
+ * reading line sits inside unhydrated history, the nearest hydrated row is
+ * the honest stand-in for "which turn is the reader inside". Transient by
+ * construction: viewport-driven hydration is already fetching the rows the
+ * reader is looking at.
+ */
+function nearestHydratedMessageId(
+  rows: ReadonlyArray<TranscriptListRow>,
+  anchorRowIndex: number,
+): string | null {
+  for (let index = anchorRowIndex; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row !== undefined && row.kind === "hydrated") return row.model.id;
+  }
+  for (let index = anchorRowIndex + 1; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row.kind === "hydrated") return row.model.id;
+  }
+  return null;
+}
+
+/**
  * Resolves the active (human) user message for an unpinned viewport: finds
  * the transcript row nearest the reading line from list state, then maps it
  * to the owning rail entry. `null` when the list state cannot be measured
@@ -221,26 +259,34 @@ export function chatViewportAnchorRowIndex(
  * returns `null` in that case ONLY - any human row anywhere in `messages`
  * always resolves a candidate), which previously meant the ticket-5 anchor
  * never tracked a reading position at all for that transcript shape -
- * `viewportRowMessageId` (already resolved, any role) is the natural
- * role-agnostic fallback. `selectActiveUserMessageId` itself is untouched,
- * so the minimap rail and find-controller's own call to it stay strictly
- * human-only as before.
+ * the anchor row's own key (already resolved, any role, hydrated or not) is
+ * the natural role-agnostic fallback. `selectActiveUserMessageId` itself is
+ * untouched, so the minimap rail and find-controller's own call to it stay
+ * strictly human-only as before.
+ *
+ * Geometry comes from `rows` (the array the list actually renders - on the
+ * windowed line placeholders occupy real indexes); semantics come from
+ * `messages` (hydrated bodies only). An anchor row that is a placeholder is
+ * collapsed via {@link nearestHydratedMessageId} before the semantic pass.
  */
 export function viewportActiveUserMessageId(
   state: ChatViewportAnchorListState,
+  rows: ReadonlyArray<TranscriptListRow>,
   messages: ReadonlyArray<ChatMessageModel>,
 ): string | null {
   const rowIndex = chatViewportAnchorRowIndex(
     state,
-    messages.length,
+    rows.length,
     VIEWPORT_ACTIVE_ANCHOR_OFFSET_PX,
   );
-  const viewportRowMessageId =
-    rowIndex === null ? null : (messages[rowIndex]?.id ?? null);
-  if (viewportRowMessageId === null) return null;
+  if (rowIndex === null) return null;
+  const anchorRow = rows[rowIndex];
+  if (anchorRow === undefined) return null;
+  const semanticAnchorId = nearestHydratedMessageId(rows, rowIndex);
+  if (semanticAnchorId === null) return anchorRow.key;
   return (
-    selectActiveUserMessageId(messages, viewportRowMessageId, false) ??
-    viewportRowMessageId
+    selectActiveUserMessageId(messages, semanticAnchorId, false) ??
+    anchorRow.key
   );
 }
 
@@ -250,15 +296,17 @@ export function viewportActiveUserMessageId(
  * an assistant/tool/A2A row back to the preceding human query. Scroll
  * restoration needs the physical row the reader was inside so its saved
  * pixel offset remains local to that row, including for very tall replies.
+ * A placeholder is a fine answer here: its key is the real row id, so a
+ * position saved against it restores correctly once the row hydrates.
  */
-export function viewportAnchorMessageId(
+export function viewportAnchorRowKey(
   state: ChatViewportAnchorListState,
-  messages: ReadonlyArray<ChatMessageModel>,
+  rows: ReadonlyArray<TranscriptListRow>,
 ): string | null {
   const rowIndex = chatViewportAnchorRowIndex(
     state,
-    messages.length,
+    rows.length,
     VIEWPORT_ACTIVE_ANCHOR_OFFSET_PX,
   );
-  return rowIndex === null ? null : (messages[rowIndex]?.id ?? null);
+  return rowIndex === null ? null : (rows[rowIndex]?.key ?? null);
 }

@@ -33,14 +33,17 @@ import {
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { cn } from "@/lib/utils";
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
 import {
   useSettingsStore,
   type MinimapPlacement,
 } from "@/stores/settings/settings-store";
 
 export interface ChatTurnMinimapProps {
-  readonly messages: ReadonlyArray<ChatMessageModel>;
+  /** The array the list renders - the rail's `rowIndex` values feed
+   *  `positionAtIndex`, so they must live in LIST index space, which on the
+   *  windowed line includes placeholder rows. */
+  readonly rows: ReadonlyArray<TranscriptListRow>;
   readonly listRef: RefObject<LegendListRef | null>;
   readonly topOffsetAdjustmentRef: RefObject<number>;
   readonly viewportRef: RefObject<HTMLElement | null>;
@@ -57,28 +60,46 @@ interface ChatTurnMinimapItem extends MinimapListEntry {
   readonly rowIndex: number;
 }
 
-function isHumanUserMessage(message: ChatMessageModel): boolean {
-  return message.role === "user" && message.agentSenderInfo === null;
+/**
+ * Whether a row is a HUMAN-sent user turn - the only kind the rail lists.
+ * Answerable for unhydrated rows too: the skeleton carries `role`,
+ * `sentByAgent` and `preview` precisely so the minimap can list a turn whose
+ * body has not arrived (see `row-skeleton.ts`).
+ */
+function isHumanUserRow(row: TranscriptListRow): boolean {
+  if (row.kind === "hydrated") {
+    return row.model.role === "user" && row.model.agentSenderInfo === null;
+  }
+  return (
+    row.entry !== null &&
+    row.entry.role === "user" &&
+    row.entry.sentByAgent !== true
+  );
+}
+
+function chatTurnMinimapRowLabel(row: TranscriptListRow): string {
+  const text =
+    row.kind === "hydrated" ? row.model.content : (row.entry?.preview ?? "");
+  return compactChatTurnMinimapPreview(text) ?? "Untitled message";
 }
 
 function deriveChatTurnMinimapItems(
-  messages: ReadonlyArray<ChatMessageModel>,
+  rows: ReadonlyArray<TranscriptListRow>,
 ): ReadonlyArray<ChatTurnMinimapItem> {
   const humanRows: number[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    if (isHumanUserMessage(messages[index])) humanRows.push(index);
+  for (let index = 0; index < rows.length; index += 1) {
+    if (isHumanUserRow(rows[index])) humanRows.push(index);
   }
 
   return humanRows.map((rowIndex, index) => {
-    const message = messages[rowIndex];
+    const row = rows[rowIndex];
     return {
-      key: message.id,
-      label:
-        compactChatTurnMinimapPreview(message.content) ?? "Untitled message",
+      key: row.key,
+      label: chatTurnMinimapRowLabel(row),
       level: 1,
-      messageId: message.id,
+      messageId: row.key,
       rowIndex,
-      endRowIndex: (humanRows[index + 1] ?? messages.length) - 1,
+      endRowIndex: (humanRows[index + 1] ?? rows.length) - 1,
     };
   });
 }
@@ -93,18 +114,18 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     bottomInset,
     inViewRefreshRef,
     listRef,
-    messages,
+    rows,
     onSelect,
     side,
     topOffsetAdjustmentRef,
     viewportRef,
   } = props;
-  // A streaming reply replaces `messages` per token, so this array is new per
+  // A streaming reply replaces `rows` per token, so this array is new per
   // token even when the turns are not. What is keyed on its identity must
   // survive that: the tile bar's notify compares the outline it publishes
   // (`useRegisterTileMinimap`), and the rail's geometry effect below reads
   // `refreshCurrent` through a ref instead of depending on it.
-  const items = useMemo(() => deriveChatTurnMinimapItems(messages), [messages]);
+  const items = useMemo(() => deriveChatTurnMinimapItems(rows), [rows]);
   const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const coarsePointer = useCoarsePointer();
   const mobileViewport = useIsMobileViewport();

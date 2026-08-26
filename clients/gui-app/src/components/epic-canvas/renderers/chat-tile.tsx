@@ -94,6 +94,10 @@ import {
   type ChatSessionState,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import type {
+  OrdinalRange,
+  TranscriptWindow,
+} from "@/stores/chats/transcript-window";
 import {
   chatTranscriptEventRowId,
   chatTranscriptJumpKey,
@@ -833,6 +837,16 @@ function transcriptJumpCardKind(
 
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const view = useChatTileSessionViewModel(props);
+  // Viewport → hydration bridge: `ChatMessages` computes which ordinals the
+  // reader is looking at; the session store turns that into range requests.
+  // Keyed on the handle so a reconnected store keeps receiving reports.
+  const viewHandle = view.handle;
+  const onVisibleOrdinalRangeChange = useCallback(
+    (range: OrdinalRange | null): void => {
+      viewHandle.store.getState().reportVisibleTranscriptRange(range);
+    },
+    [viewHandle],
+  );
   const hostId = useTabHostId();
   // Chat image byte reads are scoped here, once per tile, rather than per
   // rendered image: resolving the routed client is a directory-query
@@ -1115,6 +1129,8 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 tabHostId={view.tabHostId}
                 workspaceRoots={view.linkResolutionRoots}
                 messages={view.messages}
+                transcriptWindow={view.transcriptWindow}
+                onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
                 baselineEpoch={view.transcriptBaselineEpoch}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
@@ -2530,6 +2546,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
+    // Same line discriminator as the revert-scope resolution above: on the
+    // legacy line the window is an inert empty value whose `rowCount` of 0
+    // would make the merge treat every rendered row as an unplaced tail row.
+    transcriptWindow: windowedTranscript ? state.transcriptWindow : null,
     surfaceVisible,
     surfaceFocused,
     getMessageActions: messageActionsFor,
@@ -2573,6 +2593,11 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /** The transcript index on the windowed line; `null` on the legacy line.
+   *  See `ChatMessagesProps.transcriptWindow`. */
+  readonly transcriptWindow: TranscriptWindow | null;
+  /** Viewport-driven hydration report; see `ChatMessagesProps`. */
+  readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
@@ -2658,6 +2683,8 @@ function ChatSessionMessagesSurface(
               epicId={props.epicId}
               hostId={props.tabHostId}
               messages={props.messages}
+              transcriptWindow={props.transcriptWindow}
+              onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
               baselineEpoch={props.baselineEpoch}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}

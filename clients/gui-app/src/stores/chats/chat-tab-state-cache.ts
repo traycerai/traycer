@@ -1,4 +1,3 @@
-import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { ChatTabPersistenceIdentity } from "@/stores/chats/chat-tab-persistence-key";
 import {
   deleteReadingPositionView,
@@ -57,17 +56,23 @@ export function peekSavedChatTabState(
   );
 }
 
+/**
+ * @param rowKeys The LIST's row keys in render order - `TranscriptListRow.key`
+ * values (which on the windowed line include unhydrated placeholder rows, so a
+ * saved anchor deep in cold history resolves without waiting for its body),
+ * or message ids on the legacy line where the two are the same sequence.
+ */
 export function restoreChatTabState(
   identity: ChatTabPersistenceIdentity,
-  messages: ReadonlyArray<ChatMessageModel>,
+  rowKeys: ReadonlyArray<string>,
 ): SavedChatTabScrollState {
   const saved = peekSavedChatTabState(identity);
   if (saved === null) return DEFAULT_CHAT_TAB_SCROLL_STATE;
   if (saved.anchorMessageId === null) return saved;
-  if (messages.some((message) => message.id === saved.anchorMessageId)) {
+  if (rowKeys.includes(saved.anchorMessageId)) {
     return saved;
   }
-  if (messages.length === 0 || saved.anchorIndex === null) {
+  if (rowKeys.length === 0 || saved.anchorIndex === null) {
     return {
       mode: saved.mode,
       anchorMessageId: null,
@@ -77,11 +82,11 @@ export function restoreChatTabState(
   }
   const clampedIndex = Math.min(
     Math.max(Math.trunc(saved.anchorIndex), 0),
-    messages.length - 1,
+    rowKeys.length - 1,
   );
   return {
     mode: saved.mode,
-    anchorMessageId: messages[clampedIndex].id,
+    anchorMessageId: rowKeys[clampedIndex],
     anchorIndex: clampedIndex,
     offset: 0,
   };

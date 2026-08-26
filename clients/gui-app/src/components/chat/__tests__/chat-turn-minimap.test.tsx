@@ -16,6 +16,7 @@ import {
   useTileMinimapStore,
   type TileMinimapAdapter,
 } from "@/stores/tile-minimap";
+import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
   DEFAULT_UI_FONT_SIZE,
@@ -100,7 +101,7 @@ function renderMinimap(
         scroll: options.scroll ?? 1050,
         scrollLength: 160,
       })}
-      messages={messages}
+      rows={transcriptListRows({ window: null, rendered: messages })}
       onSelect={onSelect}
       side={options.side ?? "right"}
       topOffsetAdjustmentRef={{ current: 0 }}
@@ -127,7 +128,7 @@ function renderRegisteredMinimap(input: {
         bottomInset={0}
         inViewRefreshRef={{ current: () => undefined }}
         listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
-        messages={messages}
+        rows={transcriptListRows({ window: null, rendered: messages })}
         onSelect={onSelect}
         side={input.side}
         topOffsetAdjustmentRef={{ current: 0 }}
@@ -337,7 +338,10 @@ describe("ChatTurnMinimap publication under a hidden rail", () => {
           bottomInset={0}
           inViewRefreshRef={{ current: () => undefined }}
           listRef={makeListRef({ scroll: 0, scrollLength: 160 })}
-          messages={makeTranscript(3)}
+          rows={transcriptListRows({
+            window: null,
+            rendered: makeTranscript(3),
+          })}
           onSelect={onSelect}
           side="hide"
           topOffsetAdjustmentRef={{ current: 0 }}

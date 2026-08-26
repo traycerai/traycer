@@ -148,11 +148,11 @@ export interface ChatStreamCallbacks {
   // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
   //
   // REQUIRED, not optional, and that is the point. These fire only on a
-  // negotiated windowed line, which no released peer has yet - so a consumer
-  // that omitted them would compile today and, the day `chatSubscribeV18` is
-  // registered, silently drop every hydration response and render a chat that
-  // never fills in. A required member turns that into a compile error at the
-  // one moment it can still be cheap to fix.
+  // negotiated windowed line - so while `chatSubscribeV18` sat unregistered, a
+  // consumer that omitted them would have compiled fine and then, the day the
+  // line went live (it now is), silently dropped every hydration response and
+  // rendered a chat that never fills in. A required member turns that into a
+  // compile error at the one moment it is still cheap to fix.
 
   /**
    * The BOUNDED snapshot. A different shape from `onSnapshot`'s, not a variant

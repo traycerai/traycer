@@ -56,7 +56,7 @@ interface ChatFindControllerArgs {
   readonly backgroundToolBlockIds: ReadonlySet<string>;
   /** Latest promotion set, read lazily by the adapter's getRows supplier. */
   readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
-  readonly messageIndexByIdRef: RefObject<ReadonlyMap<string, number>>;
+  readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
   readonly getScroller: () => HTMLElement | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
   /** Manual-navigation cancel (decision #21: find performs it first). */
@@ -89,7 +89,7 @@ export function useChatFindController(
     messagesRef,
     backgroundToolBlockIds,
     backgroundToolBlockIdsRef,
-    messageIndexByIdRef,
+    rowIndexByKeyRef,
     getScroller,
     scrollToLocation,
     cancelManualNavigation,
@@ -170,7 +170,7 @@ export function useChatFindController(
       );
       const location = chatTimelineLocationForMessage(
         messageId,
-        messageIndexByIdRef.current,
+        rowIndexByKeyRef.current,
         false,
       );
       if (location === null) return;
@@ -178,7 +178,7 @@ export function useChatFindController(
     },
     [
       cancelManualNavigation,
-      messageIndexByIdRef,
+      rowIndexByKeyRef,
       messagesRef,
       scrollToLocation,
       setScrolledActiveUserMessageIdIfChanged,

@@ -43,6 +43,16 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * yet (`TranscriptWindow.liveMessages`) all render without owning an ordinal.
  * They go after every ordinal, which is also where they belong
  * chronologically - an unplaced record is the newest thing the client has.
+ *
+ * ## A hydrated row the renderer withheld is OMITTED, not placeholder'd
+ *
+ * `rendered` is post-filter: the pinned-todo pass drops an assistant row whose
+ * only segments were lifted into the todo dock (`buildPinnedTodoRenderState`
+ * returns `null` for it). For such a row the span proves the client HOLDS the
+ * body - the model is missing because a renderer policy removed it, which is
+ * the same removal the legacy line expresses by the row simply not being in
+ * the list. Emitting a placeholder instead would draw a permanent skeleton
+ * shimmer at an ordinal the reader is meant to see nothing at.
  */
 
 export type TranscriptListRow =
@@ -103,6 +113,7 @@ export function transcriptListRows(input: {
 
   const modelsById = new Map(rendered.map((model) => [model.id, model]));
   const modelByOrdinal = new Map<number, ChatMessageModel>();
+  const suppressedOrdinals = new Set<number>();
   const placedRowIds = new Set<string>();
   for (const span of window.spans) {
     span.rowIds.forEach((rowId, offset) => {
@@ -113,7 +124,13 @@ export function transcriptListRows(input: {
       // reports the disagreement.
       if (ordinal >= window.rowCount) return;
       const model = modelsById.get(rowId);
-      if (model === undefined) return;
+      if (model === undefined) {
+        // The span proves the body is HELD; its absence from `rendered` means
+        // a renderer policy withheld the row (see the module doc). Emit
+        // nothing at this ordinal.
+        suppressedOrdinals.add(ordinal);
+        return;
+      }
       modelByOrdinal.set(ordinal, model);
       placedRowIds.add(rowId);
     });
@@ -126,6 +143,7 @@ export function transcriptListRows(input: {
       rows.push({ kind: "hydrated", key: model.id, ordinal, model });
       continue;
     }
+    if (suppressedOrdinals.has(ordinal)) continue;
     const entry = window.skeleton[ordinal] ?? null;
     rows.push({
       kind: "placeholder",
