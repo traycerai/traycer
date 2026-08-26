@@ -279,6 +279,11 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
     );
 
     await waitForSearchable(node);
+    // The precondition the rest of this test rests on: the tile opens at the
+    // tail following live output, so the jump-live button is absent. Without
+    // this, the assertion below proves only that the button is present, not
+    // that the search is what turned following off.
+    expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
     searchTile(node, "ab", false);
 
     await waitFor(() => {
@@ -317,6 +322,43 @@ describe("<ManagedCommandOutputTile /> tile find", () => {
           .getByTestId("managed-command-output-find-match-active")
           .getAttribute("data-start-col"),
       ).toBe("6");
+    });
+  });
+
+  it("keeps following live output when a rebase re-clamps the active match", async () => {
+    const stub = installOutputStub();
+    const node = renderTile();
+    openAtTail(
+      stub.emit,
+      [line("stdout", "alpha one"), line("stdout", "alpha two")],
+      true,
+    );
+
+    await waitForSearchable(node);
+    searchTile(node, "alpha", false);
+    await waitFor(() => {
+      expect(tileSnapshot(node).total).toBe(2);
+    });
+    expect(screen.getByTestId("managed-command-output-jump-live")).toBeTruthy();
+
+    // A replacement snapshot renumbers every line, so the seq holding the
+    // active match is gone and the adapter clamps to a different one. That is a
+    // re-scan, not a find command: it must not reveal, because the tile drops
+    // follow mode on reveal and the rebase has just restored it.
+    openAtTail(
+      stub.emit,
+      [line("stdout", "alpha three"), line("stdout", "alpha four")],
+      true,
+    );
+
+    await waitFor(() => {
+      expect(tileSnapshot(node).total).toBe(2);
+    });
+    expect(screen.queryByTestId("managed-command-output-jump-live")).toBeNull();
+    expect(tileSnapshot(node)).toMatchObject({
+      status: "ready",
+      current: 1,
+      exactHighlight: "painted",
     });
   });
 

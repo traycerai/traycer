@@ -320,12 +320,73 @@ describe("createManagedCommandOutputFindAdapter", () => {
       total: 2,
       activeUnitId: "tile-1:line-3",
     });
-    expect(revealMatch).toHaveBeenCalledTimes(1);
-    expect(revealMatch).toHaveBeenLastCalledWith({
-      seq: 3,
-      lineIndex: 1,
-      startCol: 0,
-      length: 5,
+    // Clamping is not a reveal. The tile drops follow mode whenever it is asked
+    // to reveal, so revealing here would take a reader who is tailing live
+    // output off the tail the moment their active match aged out of the window.
+    expect(revealMatch).not.toHaveBeenCalled();
+  });
+
+  it("clears the query and matches while staying searchable", () => {
+    const revealMatch = vi.fn();
+    const adapter = createManagedCommandOutputFindAdapter({
+      tileInstanceId: "tile-1",
     });
+    adapter.updateEnvironment(
+      environment({ lines: [line(0, "alpha")], revealMatch }),
+    );
+    adapter.search({ requestId: 1, query: "alpha", matchCase: true });
+    expect(adapter.getSnapshot().total).toBe(1);
+
+    adapter.clear();
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      status: "idle",
+      query: "",
+      matchCase: true,
+      current: 0,
+      total: 0,
+      activeUnitId: null,
+      exactHighlight: "none",
+    });
+    expect(adapter.getSnapshot().capabilities.has("find")).toBe(true);
+    expect(adapter.getMatches()).toEqual([]);
+  });
+
+  it("stops notifying a listener that has unsubscribed", () => {
+    const adapter = createManagedCommandOutputFindAdapter({
+      tileInstanceId: "tile-1",
+    });
+    adapter.updateEnvironment(
+      environment({ lines: [line(0, "alpha")], revealMatch: vi.fn() }),
+    );
+    const listener = vi.fn();
+    const unsubscribe = adapter.subscribe(listener);
+
+    adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(listener).toHaveBeenCalled();
+
+    unsubscribe();
+    listener.mockClear();
+    adapter.search({ requestId: 2, query: "alpha", matchCase: true });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does not notify listeners when a re-scan changes nothing", () => {
+    const adapter = createManagedCommandOutputFindAdapter({
+      tileInstanceId: "tile-1",
+    });
+    const lines = [line(0, "alpha"), line(1, "beta")];
+    adapter.updateEnvironment(environment({ lines, revealMatch: vi.fn() }));
+    const listener = vi.fn();
+    adapter.subscribe(listener);
+
+    // The tile re-pushes the environment on every streamed line. With no query
+    // typed, the recomputed snapshot is identical, so the find store must not
+    // be written once per line of output.
+    adapter.updateEnvironment(environment({ lines, revealMatch: vi.fn() }));
+    adapter.updateEnvironment(environment({ lines, revealMatch: vi.fn() }));
+
+    expect(listener).not.toHaveBeenCalled();
   });
 });

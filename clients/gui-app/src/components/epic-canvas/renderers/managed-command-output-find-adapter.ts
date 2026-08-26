@@ -69,11 +69,21 @@ export function createManagedCommandOutputFindAdapter(args: {
     message: DEFAULT_UNAVAILABLE_MESSAGE,
   });
   let matches: readonly ManagedCommandOutputFindMatch[] = EMPTY_MATCHES;
+  let publishedMatches = matches;
   let activeIndex = 0;
   const listeners = new Set<() => void>();
 
+  // The find store subscribes to this adapter for as long as the tile is
+  // registered, open bar or not, and `updateEnvironment` re-runs on every
+  // streamed line. Publishing an identical snapshot each time would write that
+  // store once per line of output on the highest-volume surface in the app.
+  // Matches are compared by reference rather than deeply: a live query rebuilds
+  // the array on every scan, so only the empty-query case -- a tailing log with
+  // nothing typed, which is the common one -- actually skips.
   const publish = (next: TileFindStateSnapshot): void => {
+    if (publishedMatches === matches && snapshotsEqual(snapshot, next)) return;
     snapshot = next;
+    publishedMatches = matches;
     listeners.forEach((listener) => listener());
   };
 
@@ -132,12 +142,13 @@ export function createManagedCommandOutputFindAdapter(args: {
     });
     activeIndex = preservedActiveIndex(matches, previous);
     const activeMatch = matchAt(matches, activeIndex);
-    const previousIdentity = matchIdentity(previous);
-    const nextIdentity = matchIdentity(activeMatch);
-    if (
-      activeMatch !== null &&
-      (run.reveal || previousIdentity !== nextIdentity)
-    ) {
+    // Only a command the human gave reveals. A re-scan is not one, even when
+    // it lands on a different match: `updateEnvironment` runs on every append,
+    // prepend and rebase, and revealing there would scroll the tile and drop
+    // follow mode with nobody having asked. Someone tailing live output with a
+    // query still in the bar would silently stop following the moment the line
+    // holding their active match aged out of the window.
+    if (activeMatch !== null && run.reveal) {
       environment.revealMatch(activeMatch);
     }
     publish(
@@ -359,7 +370,25 @@ function matchAt(
   return nextMatches.at(index) ?? null;
 }
 
-function matchIdentity(match: ManagedCommandOutputFindMatch | null): string {
-  if (match === null) return "";
-  return `${String(match.seq)}:${String(match.startCol)}`;
+// Capabilities are the two module-level sets, so reference equality is the
+// right comparison for that field; everything else on the snapshot is a
+// primitive.
+function snapshotsEqual(
+  left: TileFindStateSnapshot,
+  right: TileFindStateSnapshot,
+): boolean {
+  return (
+    left.requestId === right.requestId &&
+    left.status === right.status &&
+    left.capabilities === right.capabilities &&
+    left.query === right.query &&
+    left.matchCase === right.matchCase &&
+    left.replaceText === right.replaceText &&
+    left.current === right.current &&
+    left.total === right.total &&
+    left.coverageMessage === right.coverageMessage &&
+    left.errorMessage === right.errorMessage &&
+    left.activeUnitId === right.activeUnitId &&
+    left.exactHighlight === right.exactHighlight
+  );
 }

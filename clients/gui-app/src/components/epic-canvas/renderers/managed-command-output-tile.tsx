@@ -91,7 +91,14 @@ const FOLLOW_SLACK_PX = 24;
 const LOAD_OLDER_THRESHOLD_PX = 48;
 const OUTPUT_VIRTUAL_OVERSCAN = 12;
 const OUTPUT_VIRTUAL_INITIAL_RECT = { width: 0, height: 600 } as const;
-const FIND_MATCH_STYLE = { backgroundColor: "#854d0e" } as const;
+// The terminal tiles' search decorations, so a hit looks the same on both
+// surfaces. Both set a foreground as well as a fill: a match keeps its row's
+// colour otherwise, and `text-destructive` on a stderr line over dark amber is
+// barely readable.
+const FIND_MATCH_STYLE = {
+  backgroundColor: "#854d0e",
+  color: "#fafaf9",
+} as const;
 const FIND_ACTIVE_MATCH_STYLE = {
   backgroundColor: "#facc15",
   color: "#1c1917",
@@ -411,7 +418,9 @@ function ManagedCommandOutputTileBody(props: {
   const revealMatch = useCallback(
     (match: ManagedCommandOutputFindMatch) => {
       // Follow pins the viewport to the tail; drop it before the jump or the
-      // next append immediately undoes the scroll-to-match.
+      // next append immediately undoes the scroll-to-match. Only ever reached
+      // for a find command the human gave -- the adapter does not reveal on a
+      // re-scan -- so this never takes a tailing reader off the live tail.
       setFollowMode(false);
       outputVirtualizerRef.current.scrollToIndex(match.lineIndex, {
         align: "center",
