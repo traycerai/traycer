@@ -43,7 +43,7 @@ vi.mock("@/providers/use-runner-host", () => ({
 }));
 
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
-  useBrowserSessionsContext: () => ({
+  useMaybeBrowserSessionsContext: () => ({
     hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
