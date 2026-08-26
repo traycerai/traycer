@@ -707,6 +707,7 @@ function createXtermEntry(
   const containerEl = document.createElement("div");
   containerEl.className = "h-full w-full overflow-hidden";
   containerEl.dataset.testid = "terminal-xterm-host";
+  containerEl.setAttribute("data-terminal-host", "");
 
   const term = new Terminal(initialOptions);
   // Measure cells with the Unicode 11 width tables, not xterm's Unicode 6
