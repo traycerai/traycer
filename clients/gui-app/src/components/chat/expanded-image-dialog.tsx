@@ -64,7 +64,9 @@ export function ExpandedImageDialogContent(props: {
         <img
           src={image.src}
           alt={props.alt}
-          className="block max-h-[min(88vh,52rem)] max-w-full object-contain"
+          // w-full expands small images to a usable preview and keeps the
+          // wrapper tall enough that the action bar is never clipped.
+          className="block max-h-[min(88vh,52rem)] w-full max-w-full object-contain"
           draggable={false}
         />
         <div className="absolute bottom-safe-bottom-gutter right-3">
