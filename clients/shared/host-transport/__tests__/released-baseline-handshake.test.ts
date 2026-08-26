@@ -477,7 +477,7 @@ describe.skipIf(baselines.length === 0)(
         if (open.kind === "open") {
           expect(open.manifest["synthetic.baselineFallback"]).toBeUndefined();
           expect(open.optionalManifest?.["synthetic.baselineFallback"]).toEqual(
-            { major: 1, minor: 0 },
+            { major: 1, minor: 0, supportedMajors: [1] },
           );
         }
 
@@ -550,7 +550,7 @@ describe.skipIf(baselines.length === 0)(
           ).toBeUndefined();
           expect(
             open.optionalManifest?.["synthetic.baselineUnsupported"],
-          ).toEqual({ major: 1, minor: 0 });
+          ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
         }
 
         // No optionalManifest on the old ack means the optional method is
