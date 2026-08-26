@@ -2,7 +2,10 @@ import { useRef } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger } from "@/components/ui/dialog";
-import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
+import {
+  ExpandedImageDialogContent,
+  type ExpandedImageState,
+} from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
@@ -49,6 +52,14 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
     sessionUrl === null && blob.status === "ready"
       ? blob.mediaType
       : atom.mimeType;
+  let expandedImage: ExpandedImageState;
+  if (src !== null) {
+    expandedImage = { status: "ready", src, mediaType };
+  } else if (blob.status === "unavailable") {
+    expandedImage = { status: "unavailable" };
+  } else {
+    expandedImage = { status: "loading" };
+  }
   return (
     <Dialog>
       <div
@@ -116,13 +127,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
       <ExpandedImageDialogContent
         title={label.title}
         alt={alt}
-        image={
-          src === null
-            ? blob.status === "unavailable"
-              ? { status: "unavailable" }
-              : { status: "loading" }
-            : { status: "ready", src, mediaType }
-        }
+        image={expandedImage}
         suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
