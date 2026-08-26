@@ -326,20 +326,15 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // digit-by-number flow. `matchDigitAction` only succeeds when a digit
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
-      if (digitMatch !== null) {
-        if (
-          shouldPassCtrlChordToFocusedTerminal(
-            event,
-            ACTION_META[digitMatch.actionId].terminalPolicy,
-          )
-        ) {
-          return;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        handleDigitMatch(digitMatch, digitSequenceRef, digitSequenceTimerRef);
+      if (
+        handleDigitKeyDown(
+          event,
+          digitMatch,
+          digitSequenceRef,
+          digitSequenceTimerRef,
+        )
+      )
         return;
-      }
 
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
 
@@ -613,6 +608,27 @@ function handleDigitMatch(
   }
 
   scheduleDigitSequenceCommit(sequenceRef, timerRef);
+  return true;
+}
+
+function handleDigitKeyDown(
+  event: KeyboardEvent,
+  match: DigitActionMatch | null,
+  sequenceRef: RefBox<DigitSequenceSession | null>,
+  timerRef: RefBox<number | null>,
+): boolean {
+  if (match === null) return false;
+  if (
+    shouldPassCtrlChordToFocusedTerminal(
+      event,
+      ACTION_META[match.actionId].terminalPolicy,
+    )
+  )
+    return true;
+
+  event.preventDefault();
+  event.stopPropagation();
+  handleDigitMatch(match, sequenceRef, timerRef);
   return true;
 }
 
