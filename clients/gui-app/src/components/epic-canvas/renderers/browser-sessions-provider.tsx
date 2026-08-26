@@ -195,7 +195,7 @@ function useBrowserSessions(
     })();
     sessionRef.current = stream;
     // Keep one coordinator across this durable subscription's reconnects so
-    // native settlements replay without exposing them to another host/epic.
+    // native guests can be reused while each connection gets fresh routing.
     const electronTabs = createElectronTabs({
       hostId,
       native: browserView,
@@ -231,40 +231,47 @@ function useBrowserSessions(
       },
     });
     let electronLifecycleReadySentForConnection = false;
-    let electronTabsReplayedForConnection = false;
-    let connectionOpen = false;
+    let snapshotReadyForConnection = false;
+    let connectionStatus: StreamConnectionStatus = "connecting";
     let connectionGeneration = 0;
+    const sendLifecycleReadyIfReady = (): void => {
+      if (
+        sessionRef.current !== stream ||
+        browserView === null ||
+        connectionStatus !== "open" ||
+        !snapshotReadyForConnection ||
+        electronLifecycleReadySentForConnection
+      ) {
+        return;
+      }
+      electronLifecycleReadySentForConnection = true;
+      stream.sendClientFrame(
+        {
+          kind: "electronTabLifecycleReady",
+          hasBinaryPayload: false,
+        },
+        null,
+      );
+    };
     stream.onStatusChange((status, reason) => {
       if (sessionRef.current !== stream) return;
+      const wasOpen = connectionStatus === "open";
+      connectionStatus = status;
       const lifecycle = browserSessionsLifecycle(status, reason);
       applyPipHostLifecycle(epicId, hostId, lifecycle);
       lifecycleRef.current = lifecycle;
       if (status !== "open") {
-        if (connectionOpen) connectionGeneration += 1;
-        connectionOpen = false;
+        if (wasOpen) connectionGeneration += 1;
         electronTabs.disconnect();
         electronLifecycleReadySentForConnection = false;
-        electronTabsReplayedForConnection = false;
+        snapshotReadyForConnection = false;
         rejectPendingRequests(
           pendingCloses,
           new Error("Browser sessions stream closed."),
         );
       } else {
-        connectionOpen = true;
-        if (!electronTabsReplayedForConnection) {
-          electronTabsReplayedForConnection = true;
-          electronTabs.replaySettlements();
-        }
-        if (browserView !== null && !electronLifecycleReadySentForConnection) {
-          electronLifecycleReadySentForConnection = true;
-          stream.sendClientFrame(
-            {
-              kind: "electronTabLifecycleReady",
-              hasBinaryPayload: false,
-            },
-            null,
-          );
-        }
+        electronTabs.connect();
+        sendLifecycleReadyIfReady();
       }
       setStreamState((current) => ({
         client,
@@ -325,7 +332,7 @@ function useBrowserSessions(
         sendClientFrame: (frame) => {
           if (
             sessionRef.current !== stream ||
-            !connectionOpen ||
+            connectionStatus !== "open" ||
             connectionGeneration !== frameGeneration
           ) {
             appLogger.warn(
@@ -337,6 +344,14 @@ function useBrowserSessions(
           stream.sendClientFrame(frame, null);
         },
       });
+      if (
+        parsed.data.kind === "snapshot" &&
+        (connectionStatus === "connecting" || connectionStatus === "open") &&
+        frameGeneration === connectionGeneration
+      ) {
+        snapshotReadyForConnection = true;
+        sendLifecycleReadyIfReady();
+      }
     });
     return () => {
       if (sessionRef.current === stream) {

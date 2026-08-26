@@ -69,6 +69,9 @@ export function registerBrowserViewIpc(
         bridge.windowRegistry.off("change", listener);
       };
     },
+    notifyHostWindowRendererReset: (windowId) => {
+      bridge.markRendererUnavailable(windowId);
+    },
     notifyStatus: (windowId, change) => {
       bridge.safeSendToWindow(
         windowId,

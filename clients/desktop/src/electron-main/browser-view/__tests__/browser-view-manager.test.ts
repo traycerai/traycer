@@ -604,6 +604,7 @@ interface Harness {
   readonly snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[];
   readonly annotationEvents: BrowserAnnotationSessionIpcEvent[];
   readonly annotationAttached: BrowserAnnotationAttachedIpcEvent[];
+  readonly rendererResetWindowIds: string[];
   readonly storageStateApplications: BrowserViewStorageStateApply[];
   readonly storageStateCaptures: Array<{ readonly origin: string }>;
   readonly primaryProfileCaptureSourceOrigins: string[][];
@@ -659,6 +660,7 @@ function createHarnessWithOptions(
   const snapshotInvalidations: BrowserViewSnapshotInvalidatedChange[] = [];
   const annotationEvents: BrowserAnnotationSessionIpcEvent[] = [];
   const annotationAttached: BrowserAnnotationAttachedIpcEvent[] = [];
+  const rendererResetWindowIds: string[] = [];
   const storageStateApplications: BrowserViewStorageStateApply[] = [];
   const storageStateCaptures: Array<{ readonly origin: string }> = [];
   const primaryProfileCaptureSourceOrigins: string[][] = [];
@@ -687,6 +689,9 @@ function createHarnessWithOptions(
       return () => {
         windowListeners.delete(listener);
       };
+    },
+    notifyHostWindowRendererReset: (windowId) => {
+      rendererResetWindowIds.push(windowId);
     },
     createPopupWindowOptions: () => ({ width: 900 }),
     createDevToolsWindow: () => {
@@ -815,6 +820,7 @@ function createHarnessWithOptions(
     snapshotInvalidations,
     annotationEvents,
     annotationAttached,
+    rendererResetWindowIds,
     storageStateApplications,
     storageStateCaptures,
     primaryProfileCaptureSourceOrigins,
@@ -3357,7 +3363,7 @@ describe("BrowserViewManager native tab lifecycle", () => {
     const firstView = harness.views[0];
     if (firstView === undefined) throw new Error("expected native guest");
 
-    const handoff = harness.manager.drainBrowserHandoffs();
+    const handoff = harness.manager.drainBrowserHandoffsForWindow("window-1");
     await flushCloseEntry();
     const firstRelease = harness.manager.releaseTab({
       hostId: input.hostId,
@@ -3410,18 +3416,56 @@ describe("BrowserViewManager native tab lifecycle", () => {
     });
     await harness.manager.acceptTab(provisioned);
 
-    await expect(harness.manager.drainBrowserHandoffs()).rejects.toThrow(
-      "Electron tab handoff could not be delivered",
-    );
+    await expect(
+      harness.manager.drainBrowserHandoffsForWindow("window-1"),
+    ).rejects.toThrow("Electron tab handoff could not be delivered");
     expect(harness.electronTabHandoffNotifications).toEqual([]);
 
     rendererAvailable = true;
 
     await expect(
-      harness.manager.drainBrowserHandoffs(),
+      harness.manager.drainBrowserHandoffsForWindow("window-1"),
     ).resolves.toBeUndefined();
     expect(harness.electronTabHandoffNotifications).toHaveLength(1);
     harness.manager.dispose();
+  });
+
+  it("hands off and closes only native sessions owned by the closing window", async () => {
+    const harness = createHarness();
+    const closing = await harness.manager.ensureTab("window-1", {
+      hostId: "host-1",
+      sessionId: "session-closing",
+      tabId: "tab-closing",
+      requestedUrl: "https://example.com/closing",
+      seedStorageState: null,
+    });
+    const remaining = await harness.manager.ensureTab("window-2", {
+      hostId: "host-1",
+      sessionId: "session-remaining",
+      tabId: "tab-remaining",
+      requestedUrl: "https://example.com/remaining",
+      seedStorageState: null,
+    });
+    await harness.manager.acceptTab(closing);
+    await harness.manager.acceptTab(remaining);
+
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(true);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
+
+    await harness.manager.drainBrowserHandoffsForWindow("window-1");
+    expect(harness.electronTabHandoffWindowIds).toEqual(["window-1"]);
+    expect(harness.electronTabHandoffNotifications[0]).toMatchObject({
+      sessionId: "session-closing",
+      tabId: "tab-closing",
+    });
+
+    await harness.manager.closeNativeSessionsForWindow("window-1");
+    expect(harness.views[0]?.webContents.closeCalls).toBe(1);
+    expect(harness.views[1]?.webContents.closeCalls).toBe(0);
+    expect(harness.manager.hasNativeTabsForWindow("window-1")).toBe(false);
+    expect(harness.manager.hasNativeTabsForWindow("window-2")).toBe(true);
+    harness.manager.dispose();
+    await flushCloseEntry();
   });
 
   it("hands off a detached native tab by exact identity and incarnation", async () => {
@@ -3647,6 +3691,7 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
     );
 
     expect(view.visible).toBe(false);
+    expect(harness.rendererResetWindowIds).toEqual(["window-1"]);
   });
 
   it("ignores same-document and non-main-frame navigations on the host window", () => {

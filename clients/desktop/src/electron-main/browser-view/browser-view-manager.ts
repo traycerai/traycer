@@ -176,6 +176,7 @@ interface BrowserViewManagerOptions {
     listener: (change: BrowserSessionCertificateErrorChange) => void,
   ) => () => void;
   readonly onWindowChange: (listener: () => void) => () => void;
+  readonly notifyHostWindowRendererReset: (windowId: string) => void;
   readonly notifyStatus: (
     windowId: string,
     change: BrowserViewStatusChange,
@@ -445,6 +446,7 @@ export class BrowserViewManager {
     windowId: string,
     change: BrowserViewElectronTabHandoffChange,
   ) => boolean;
+  private readonly notifyHostWindowRendererReset: (windowId: string) => void;
   private readonly notifyAnnotationEvent: (
     windowId: string,
     change: BrowserAnnotationSessionIpcEvent,
@@ -550,6 +552,7 @@ export class BrowserViewManager {
     this.notifySnapshotInvalidated = options.notifySnapshotInvalidated;
     this.notifyDebugSnapshot = options.notifyDebugSnapshot;
     this.notifyElectronTabHandoff = options.notifyElectronTabHandoff;
+    this.notifyHostWindowRendererReset = options.notifyHostWindowRendererReset;
     this.notifyAnnotationEvent = options.notifyAnnotationEvent;
     this.notifyAnnotationAttached = options.notifyAnnotationAttached;
     this.scheduleDebugSnapshot = options.scheduleDebugSnapshot;
@@ -903,15 +906,14 @@ export class BrowserViewManager {
     if (entry.identity.kind !== "native") {
       throw new Error("Cannot activate an unprovisioned browser guest.");
     }
+    const debugSession = this.ensureDebugSession(entry);
     try {
       await this.navigate(entry, entry.requestedUrl, true);
     } finally {
       const seedScriptId = entry.identity.lifecycle.takeSeedScriptId();
       if (seedScriptId !== null) {
         try {
-          await this.ensureDebugSession(entry).removeScriptBeforeNavigation(
-            seedScriptId,
-          );
+          await debugSession.removeScriptBeforeNavigation(seedScriptId);
         } catch (error) {
           log.warn("[browser-view] failed to remove native tab seed script", {
             error: describeLogError(error),
@@ -1661,16 +1663,52 @@ export class BrowserViewManager {
     }
   }
 
-  async drainBrowserHandoffs(): Promise<void> {
+  hasNativeTabsForWindow(windowId: string): boolean {
+    return Array.from(this.entries.guestValues()).some(
+      (entry) =>
+        entry.status !== "dead" &&
+        entry.identity.kind === "native" &&
+        entry.identity.lifecycleWindowId === windowId,
+    );
+  }
+
+  async drainBrowserHandoffsForWindow(windowId: string): Promise<void> {
     await Promise.all(
       Array.from(this.entries.guestValues())
         .filter(
           (entry) =>
             entry.status !== "dead" &&
             entry.identity.kind === "native" &&
+            entry.identity.lifecycleWindowId === windowId &&
             entry.identity.lifecycle.canHandoff,
         )
         .map((entry) => this.pushElectronTabHandoff(entry, "gui-quit")),
+    );
+  }
+
+  async closeNativeSessionsForWindow(windowId: string): Promise<void> {
+    const sessionKeys = new Set<string>();
+    for (const entry of this.entries.guestValues()) {
+      if (
+        entry.identity.kind === "native" &&
+        entry.identity.lifecycleWindowId === windowId
+      ) {
+        sessionKeys.add(
+          `${entry.identity.key.hostId}\u001f${entry.identity.key.sessionId}`,
+        );
+      }
+    }
+    if (sessionKeys.size === 0) return;
+    await Promise.all(
+      Array.from(this.entries.guestValues())
+        .filter(
+          (entry) =>
+            entry.identity.kind === "native" &&
+            sessionKeys.has(
+              `${entry.identity.key.hostId}\u001f${entry.identity.key.sessionId}`,
+            ),
+        )
+        .map((entry) => this.closeEntry(entry, null)),
     );
   }
 
@@ -2373,13 +2411,14 @@ export class BrowserViewManager {
 
   private ensureDebugSession(entry: BrowserViewEntry): BrowserDebugSession {
     if (entry.debugSession !== null) return entry.debugSession;
+    const webContents = entry.view.webContents;
     const session = new BrowserDebugSession({
-      webContents: entry.view.webContents,
+      webContents,
       onSnapshotChange: () => {
         this.queueDebugSnapshot(entry);
       },
       onDetached: (reason) => {
-        this.handleDebugSessionDetached(entry, reason);
+        this.handleDebugSessionDetached(entry, webContents.id, reason);
       },
     });
     entry.debugSession = session;
@@ -2401,11 +2440,12 @@ export class BrowserViewManager {
    */
   private handleDebugSessionDetached(
     entry: BrowserViewEntry,
+    webContentsId: number,
     reason: string,
   ): void {
     log.warn("[browser-view] debugger detached", {
       reason,
-      webContentsId: entry.view.webContents.id,
+      webContentsId,
     });
     this.endAnnotationSession(entry, "crash");
     if (this.pipCaptureEntry === entry) this.stopPipCapture();
@@ -2750,6 +2790,7 @@ export class BrowserViewManager {
     reason: "navigation" | "crash",
     detail: string | null,
   ): void {
+    this.notifyHostWindowRendererReset(windowId);
     let affectedCount = 0;
     for (const entry of this.entries.guestValues()) {
       if (

@@ -457,7 +457,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     ]);
   });
 
-  it("advertises one complete native capability after the stream opens", () => {
+  it("advertises native capability only after the stream snapshot", () => {
     installNativeBridge(new FakeBridge());
     renderProvider();
     const stream = hookState.streamClient?.sessions[0];
@@ -467,6 +467,36 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       stream.emitStatus("open");
     });
 
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+  });
+
+  it("accepts a snapshot that arrives before the live status", () => {
+    installNativeBridge(new FakeBridge());
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    expect(stream).toBeDefined();
+    if (stream === undefined) {
+      throw new Error("expected browser.sessions stream session");
+    }
+
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+
+    act(() => {
+      stream.emitStatus("open");
+    });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
   });
 
@@ -548,6 +578,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     expect(stream.sentFrames).toContainEqual(
       expect.objectContaining({ kind: "electronTabLifecycleReady" }),
     );
@@ -597,6 +634,13 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       params: { epicId: "epic-1" },
     });
     expect(stream.closed).toBe(false);
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
 
     cleanup();
@@ -817,9 +861,8 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
 
 /**
  * Ticket-08-lift: real transport drops client frames until the stream is
- * live (`open`). Synchronous post-subscribe readiness is therefore lost;
- * readiness must be emitted on the live transition (and again after
- * reconnect), idempotently per connection.
+ * live (`open`). Readiness therefore waits for the connection snapshot (and
+ * repeats after reconnect), idempotently per connection.
  */
 describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
   beforeEach(() => {
@@ -845,6 +888,10 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
       stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+      stream.emit(
         {
           kind: "createElectronTab",
           hasBinaryPayload: false,
@@ -868,6 +915,12 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
       stream.emitStatus("open");
     });
     expect(electronProvisionedFrames(stream.sentFrames)).toHaveLength(1);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     const reconnectKinds = stream.sentFrames
       .slice(framesBeforeReconnect)
       .map((frame) => frame.kind);
@@ -904,7 +957,14 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
       stream.emitStatus("open");
     });
     expect(screen.getByTestId("lifecycle").textContent).toBe("live");
-    // Desired behavior: re-publish readiness on the live transition.
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
 
     await expectCaptureServiced(stream, "req-fresh-primary-1");
@@ -929,6 +989,13 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
     act(() => {
       stream.emitStatus("open");
     });
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
     await expectCaptureServiced(stream, "req-primary-before-reconnect");
 
@@ -943,7 +1010,13 @@ describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
       stream.emitStatus("open");
     });
     expect(screen.getByTestId("lifecycle").textContent).toBe("live");
-    // Next live transition: exactly one additional readiness frame.
+    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
     expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
 
     await expectCaptureServiced(stream, "req-primary-after-reconnect");

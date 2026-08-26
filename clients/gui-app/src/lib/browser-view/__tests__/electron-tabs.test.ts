@@ -260,7 +260,7 @@ describe("ElectronTabs", () => {
     ).toMatchObject({ registrationId: "registration-1" });
   });
 
-  it("replays one cached settlement without creating the native tab again", async () => {
+  it("ignores a duplicate create without creating or settling twice", async () => {
     const ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>(() =>
       provisionedTab("registration-1"),
     );
@@ -278,10 +278,7 @@ describe("ElectronTabs", () => {
     await receiveCreate(tabs, { ...CREATE });
 
     expect(ensureTab).toHaveBeenCalledTimes(1);
-    expect(sent.map((frame) => frame.kind)).toEqual([
-      "electronTabProvisioned",
-      "electronTabProvisioned",
-    ]);
+    expect(sent.map((frame) => frame.kind)).toEqual(["electronTabProvisioned"]);
   });
 
   it("reauthorizes a retained native tab through an explicit restore birth", async () => {
@@ -394,6 +391,35 @@ describe("ElectronTabs", () => {
     });
   });
 
+  it("removes a disconnected binding without releasing the reusable native guest", async () => {
+    const native = nativeWith(() => provisionedTab("registration-1"), null);
+    const tabs = trackElectronTabs(
+      createElectronTabs({
+        hostId: "host-1",
+        native,
+        sendFrame: () => {},
+        present: () => {},
+      }),
+    );
+    await receiveCreate(tabs, CREATE);
+    tabs.handleFrame({
+      kind: "electronTabAccepted",
+      hasBinaryPayload: false,
+      requestId: "request-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    });
+
+    expect(
+      readElectronTabBinding("session-1", "tab-1", "host-1"),
+    ).not.toBeNull();
+    tabs.disconnect();
+
+    expect(readElectronTabBinding("session-1", "tab-1", "host-1")).toBeNull();
+    expect(native.releaseTab).not.toHaveBeenCalled();
+  });
+
   it("preserves an accepted native tab when its coordinator is disposed", async () => {
     const native = nativeWith(() => provisionedTab("registration-1"), null);
     const tabs = trackElectronTabs(
@@ -443,6 +469,63 @@ describe("ElectronTabs", () => {
 
     await vi.waitFor(() => expect(native.releaseTab).toHaveBeenCalledTimes(1));
     expect(sent).toEqual([]);
+  });
+
+  it("retires a pending birth before disconnect can block its replacement", async () => {
+    const first = deferred<BrowserViewNativeTabCapability>();
+    const ensureTab = vi
+      .fn<BrowserViewBridge["ensureTab"]>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-2",
+      });
+    const native = nativeWith(ensureTab, null);
+    const sent: BrowserSessionsClientFrame[] = [];
+    const tabs = trackElectronTabs(
+      createElectronTabs({
+        hostId: "host-1",
+        native,
+        sendFrame: (frame) => sent.push(frame),
+        present: () => {},
+      }),
+    );
+
+    expect(tabs.handleFrame(CREATE)).toBe(true);
+    tabs.disconnect();
+    tabs.connect();
+    expect(
+      tabs.handleFrame({
+        ...CREATE,
+        requestId: "request-restore",
+        reason: "restore",
+      }),
+    ).toBe(true);
+
+    first.resolve({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+    });
+    await vi.waitFor(() => {
+      expect(ensureTab).toHaveBeenCalledTimes(2);
+      expect(sent).toContainEqual(
+        expect.objectContaining({
+          kind: "electronTabProvisioned",
+          requestId: "request-restore",
+          registrationId: "registration-2",
+        }),
+      );
+      expect(native.releaseTab).toHaveBeenCalledExactlyOnceWith({
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+      });
+    });
   });
 
   it("does not report a late native rejection on a closed stream", async () => {
@@ -1084,7 +1167,7 @@ describe("ElectronTabs", () => {
       "stream disconnected before acknowledgement",
     );
 
-    tabs.replaySettlements();
+    tabs.connect();
     emitHandoff({
       hostId: "host-1",
       sessionId: "session-1",

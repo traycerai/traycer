@@ -804,22 +804,67 @@ export class RunnerIpcBridge {
   }
 
   async drainBrowserHandoffs(): Promise<void> {
+    const windowIds = this.windowRegistry
+      .records()
+      .map((record) => record.windowId)
+      .filter((windowId) => this.canHandoffBrowserTabsForWindow(windowId));
     await Promise.all(
-      this.browserViewManagers.map((manager) => manager.drainBrowserHandoffs()),
+      windowIds.flatMap((windowId) =>
+        this.browserViewManagers.map((manager) =>
+          manager.drainBrowserHandoffsForWindow(windowId),
+        ),
+      ),
     );
+    await this.requestBrowserHandoffDrain(windowIds);
+  }
+
+  canHandoffBrowserTabsForWindow(windowId: string): boolean {
+    return (
+      this.appLifecycleReadyWindowIds.has(windowId) &&
+      this.browserViewManagers.some((manager) =>
+        manager.hasNativeTabsForWindow(windowId),
+      )
+    );
+  }
+
+  async prepareBrowserWindowClose(windowId: string): Promise<void> {
+    if (!this.appLifecycleReadyWindowIds.has(windowId)) return;
+    const managers = this.browserViewManagers.filter((manager) =>
+      manager.hasNativeTabsForWindow(windowId),
+    );
+    if (managers.length === 0) return;
+    try {
+      await Promise.all(
+        managers.map((manager) =>
+          manager.drainBrowserHandoffsForWindow(windowId),
+        ),
+      );
+      await this.requestBrowserHandoffDrain([windowId]);
+    } finally {
+      await Promise.all(
+        managers.map((manager) =>
+          manager.closeNativeSessionsForWindow(windowId),
+        ),
+      );
+    }
+  }
+
+  private async requestBrowserHandoffDrain(
+    windowIds: readonly string[],
+  ): Promise<void> {
     await Promise.all(
-      this.windowRegistry.records().map(
-        (record) =>
+      windowIds.map(
+        (windowId) =>
           new Promise<void>((resolve, reject) => {
             const requestId = randomUUID();
             this.browserHandoffDrainWaiters.set(requestId, {
-              windowId: record.windowId,
+              windowId,
               resolve,
               reject,
             });
             if (
               this.safeSendToWindow(
-                record.windowId,
+                windowId,
                 RunnerHostEvent.drainBrowserHandoffs,
                 { requestId },
               )
@@ -829,7 +874,7 @@ export class RunnerIpcBridge {
             this.browserHandoffDrainWaiters.delete(requestId);
             reject(
               new Error(
-                `Browser handoff drain request could not be delivered to window ${record.windowId}`,
+                `Browser handoff drain request could not be delivered to window ${windowId}`,
               ),
             );
           }),
@@ -842,6 +887,21 @@ export class RunnerIpcBridge {
     if (waiter?.windowId !== windowId) return;
     this.browserHandoffDrainWaiters.delete(requestId);
     waiter.resolve();
+  }
+
+  markRendererUnavailable(windowId: string): void {
+    this.appLifecycleReadyWindowIds.delete(windowId);
+    this.rejectQuitDecisionWaitersForWindow(
+      windowId,
+      new Error("Renderer reset before resolving quit interception"),
+    );
+    this.settleFreshSnapshotWaitersAsStale(
+      (waiter) => waiter.windowId === windowId,
+    );
+    this.rejectBrowserHandoffDrainWaiters(
+      (waiter) => waiter.windowId === windowId,
+      new Error("Renderer reset before acknowledging browser handoff drain"),
+    );
   }
 
   /**

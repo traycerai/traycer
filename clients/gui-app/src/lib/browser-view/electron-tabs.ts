@@ -30,11 +30,10 @@ type CdpRequestFrame = Extract<
   BrowserSessionsServerFrame,
   { readonly kind: "cdpRequest" }
 >;
-type ElectronTabCreateSettlement = Extract<
-  BrowserSessionsClientFrame,
-  { readonly kind: "electronTabProvisioned" | "electronTabCreateFailed" }
+type ActionAckFrame = Extract<
+  BrowserSessionsServerFrame,
+  { readonly kind: "actionAck" }
 >;
-
 type ElectronTabSurfaceBinding = Omit<
   BrowserViewAttachSurface,
   keyof BrowserViewNativeTabCapability
@@ -86,6 +85,7 @@ interface ElectronTabBirth {
   readonly settled: Promise<void>;
   provisioned: BrowserViewNativeTabCapability | null;
   accepted: ElectronTabAcceptedFrame | null;
+  cancelled: boolean;
   activated: boolean;
   presented: boolean;
   readonly surfaceVisibilityByBindingId: Map<string, boolean>;
@@ -94,8 +94,8 @@ interface ElectronTabBirth {
 
 export interface ElectronTabs {
   handleFrame(frame: BrowserSessionsServerFrame): boolean;
+  connect(): void;
   disconnect(): void;
-  replaySettlements(): void;
   dispose(): void;
 }
 
@@ -115,7 +115,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
   let connectionGeneration = 0;
   const birthByRequestId = new Map<string, ElectronTabBirth>();
   const requestIdByTabKey = new Map<string, string>();
-  const settlementByRequestId = new Map<string, ElectronTabCreateSettlement>();
   const releaseByIncarnation = new Map<string, Promise<void>>();
   let disposeNativeSubscriptions: (() => void) | null = null;
 
@@ -143,14 +142,13 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
 
   async function releaseBirth(birth: ElectronTabBirth): Promise<void> {
     if (birth.provisioned === null) return;
+    const registrationId = birth.provisioned.registrationId;
     const tabKey = nativeTabKey(
       options.hostId,
       birth.create.sessionId,
       birth.create.tabId,
     );
-    const incarnationKey = [tabKey, birth.provisioned.registrationId].join(
-      "\u001f",
-    );
+    const incarnationKey = [tabKey, registrationId].join("\u001f");
     const existing = releaseByIncarnation.get(incarnationKey);
     if (existing !== undefined) return existing;
     const pending = birth.native
@@ -158,13 +156,17 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         hostId: options.hostId,
         sessionId: birth.create.sessionId,
         tabId: birth.create.tabId,
-        registrationId: birth.provisioned.registrationId,
+        registrationId,
       })
       .then(() => {
-        removeOwnedDirectoryEntry(tabKey, owner);
-        birthByRequestId.delete(birth.create.requestId);
-        requestIdByTabKey.delete(tabKey);
-        settlementByRequestId.delete(birth.create.requestId);
+        removeOwnedDirectoryEntry(tabKey, owner, registrationId);
+        if (birthByRequestId.get(birth.create.requestId) === birth) {
+          birthByRequestId.delete(birth.create.requestId);
+        }
+        if (requestIdByTabKey.get(tabKey) === birth.create.requestId) {
+          requestIdByTabKey.delete(tabKey);
+        }
+        releaseByIncarnation.delete(incarnationKey);
       })
       .catch((cause: unknown) => {
         releaseByIncarnation.delete(incarnationKey);
@@ -174,23 +176,36 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     return pending;
   }
 
-  function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
-    if (
-      birth.provisioned === null ||
-      birth.accepted?.registrationId === birth.provisioned.registrationId
-    ) {
-      return;
-    }
+  const retireBirth = (birth: ElectronTabBirth): void => {
+    birth.cancelled = true;
     const tabKey = nativeTabKey(
       options.hostId,
       birth.create.sessionId,
       birth.create.tabId,
     );
-    birthByRequestId.delete(birth.create.requestId);
+    if (birthByRequestId.get(birth.create.requestId) === birth) {
+      birthByRequestId.delete(birth.create.requestId);
+    }
     if (requestIdByTabKey.get(tabKey) === birth.create.requestId) {
       requestIdByTabKey.delete(tabKey);
     }
-    settlementByRequestId.delete(birth.create.requestId);
+    if (birth.provisioned !== null) {
+      removeOwnedDirectoryEntry(
+        tabKey,
+        owner,
+        birth.provisioned.registrationId,
+      );
+    }
+  };
+
+  function rollbackUnacceptedBirth(birth: ElectronTabBirth): void {
+    if (
+      birth.provisioned !== null &&
+      birth.accepted?.registrationId === birth.provisioned.registrationId
+    ) {
+      return;
+    }
+    retireBirth(birth);
     void releaseBirth(birth).catch(() => undefined);
   }
 
@@ -363,10 +378,6 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         );
         return Promise.resolve();
       }
-      const settlement = settlementByRequestId.get(frame.requestId);
-      if (settlement !== undefined && isCurrentConnection(generation)) {
-        options.sendFrame(settlement);
-      }
       return existing.settled;
     }
 
@@ -377,8 +388,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       existingRequestId !== frame.requestId
     ) {
       const previous = birthByRequestId.get(existingRequestId);
-      const previousSettlement = settlementByRequestId.get(existingRequestId);
-      if (!canReplaceElectronTabBirth(frame, previous, previousSettlement)) {
+      if (!canReplaceElectronTabBirth(frame, previous)) {
         sendCreateFailure(
           options,
           frame,
@@ -387,9 +397,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
         );
         return Promise.resolve();
       }
-      birthByRequestId.delete(existingRequestId);
-      settlementByRequestId.delete(existingRequestId);
-      requestIdByTabKey.delete(tabKey);
+      if (previous !== undefined) retireBirth(previous);
     }
 
     const native = options.native;
@@ -430,10 +438,12 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
               "identity_violation",
               identityMessage(frame),
             );
+            void birth.native.releaseTab(provisioned).catch(() => undefined);
+            retireBirth(birth);
             return;
           }
           birth.provisioned = provisioned;
-          if (!isCurrentConnection(generation)) {
+          if (birth.cancelled || !isCurrentConnection(generation)) {
             rollbackUnacceptedBirth(birth);
             return;
           }
@@ -445,23 +455,23 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
             tabId: frame.tabId,
             registrationId: provisioned.registrationId,
           } as const;
-          settlementByRequestId.set(frame.requestId, settlement);
           options.sendFrame(settlement);
           activateAcceptedBirth(birth);
           presentAcceptedBirth(birth);
         })
         .catch((cause: unknown) => {
-          if (!isCurrentConnection(generation)) return;
+          if (birth.cancelled || !isCurrentConnection(generation)) return;
           const failure = createFailureFrame(
             frame,
             "native_create_failed",
             cause instanceof Error ? cause.message : String(cause),
           );
-          settlementByRequestId.set(frame.requestId, failure);
           options.sendFrame(failure);
+          retireBirth(birth);
         }),
       provisioned: null,
       accepted: null,
+      cancelled: false,
       activated: false,
       presented: false,
       surfaceVisibilityByBindingId: new Map(),
@@ -495,8 +505,10 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     const birth =
       requestId === undefined ? undefined : birthByRequestId.get(requestId);
     if (
-      birth?.provisioned === null ||
-      birth?.provisioned === undefined ||
+      !connected ||
+      birth === undefined ||
+      birth.cancelled ||
+      birth.provisioned === null ||
       birth.accepted?.registrationId !== birth.provisioned.registrationId
     ) {
       throw new Error("Electron tab is not accepted.");
@@ -543,6 +555,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
 
   const handleCdpFrame = (frame: BrowserSessionsServerFrame): boolean => {
     if (frame.kind !== "cdpRequest") return false;
+    if (!connected || disposed) return true;
     const request = frame;
     const generation = connectionGeneration;
     const birth = findProvisionedBirthByTabId(
@@ -597,44 +610,58 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     }
   }
 
+  const handleActionAck = (frame: ActionAckFrame): boolean => {
+    const pending = pendingHandoffAcks.get(frame.requestId);
+    if (pending?.owner !== owner) return false;
+    pendingHandoffAcks.delete(frame.requestId);
+    if (frame.ok) pending.resolve();
+    else {
+      pending.reject(
+        new Error(frame.reason ?? "Electron tab handoff was rejected."),
+      );
+    }
+    return true;
+  };
+
+  const handleAccepted = (frame: ElectronTabAcceptedFrame): void => {
+    const birth = birthByRequestId.get(frame.requestId);
+    if (
+      birth === undefined ||
+      birth.create.sessionId !== frame.sessionId ||
+      birth.create.tabId !== frame.tabId
+    ) {
+      return;
+    }
+    birth.accepted = frame;
+    activateAcceptedBirth(birth);
+    if (birth.lastStatus !== null) {
+      sendCurrentTabState(birth, birth.lastStatus);
+    }
+    presentAcceptedBirth(birth);
+  };
+
   return {
     handleFrame: (frame) => {
-      if (frame.kind === "actionAck") {
-        const pending = pendingHandoffAcks.get(frame.requestId);
-        if (pending?.owner !== owner) return false;
-        pendingHandoffAcks.delete(frame.requestId);
-        if (frame.ok) pending.resolve();
-        else {
-          pending.reject(
-            new Error(frame.reason ?? "Electron tab handoff was rejected."),
-          );
-        }
-        return true;
+      switch (frame.kind) {
+        case "actionAck":
+          return handleActionAck(frame);
+        case "createElectronTab":
+          if (connected && !disposed) void acceptCreate(frame);
+          return true;
+        case "releaseElectronTab":
+          if (connected && !disposed) void release(frame);
+          return true;
+        case "electronTabAccepted":
+          if (connected && !disposed) handleAccepted(frame);
+          return true;
+        case "cdpRequest":
+          return handleCdpFrame(frame);
+        default:
+          return false;
       }
-      if (frame.kind === "createElectronTab") {
-        void acceptCreate(frame);
-        return true;
-      }
-      if (frame.kind === "releaseElectronTab") {
-        void release(frame);
-        return true;
-      }
-      if (frame.kind !== "electronTabAccepted") return handleCdpFrame(frame);
-      const birth = birthByRequestId.get(frame.requestId);
-      if (
-        birth === undefined ||
-        birth.create.sessionId !== frame.sessionId ||
-        birth.create.tabId !== frame.tabId
-      ) {
-        return true;
-      }
-      birth.accepted = frame;
-      activateAcceptedBirth(birth);
-      if (birth.lastStatus !== null) {
-        sendCurrentTabState(birth, birth.lastStatus);
-      }
-      presentAcceptedBirth(birth);
-      return true;
+    },
+    connect: () => {
+      if (!disposed) connected = true;
     },
     disconnect: () => {
       connected = false;
@@ -645,12 +672,7 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       for (const birth of birthByRequestId.values()) {
         rollbackUnacceptedBirth(birth);
       }
-    },
-    replaySettlements: () => {
-      connected = true;
-      for (const settlement of settlementByRequestId.values()) {
-        options.sendFrame(settlement);
-      }
+      removeOwnedDirectoryEntries(owner);
     },
     dispose: () => {
       disposed = true;
@@ -661,13 +683,10 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
       }
       disposeNativeSubscriptions?.();
       disposeNativeSubscriptions = null;
-      for (const [key, entry] of directory) {
-        if (entry.owner === owner) directory.delete(key);
-      }
+      removeOwnedDirectoryEntries(owner);
       rejectPendingHandoffs(
         "Electron tab handoff transport closed before acknowledgement.",
       );
-      notifyDirectoryListeners();
     },
   };
 }
@@ -703,10 +722,30 @@ function notifyDirectoryListeners(): void {
   for (const listener of directoryListeners) listener();
 }
 
-function removeOwnedDirectoryEntry(key: string, owner: symbol): void {
-  if (directory.get(key)?.owner !== owner) return;
+function removeOwnedDirectoryEntry(
+  key: string,
+  owner: symbol,
+  registrationId: string,
+): void {
+  const entry = directory.get(key);
+  if (
+    entry?.owner !== owner ||
+    entry.binding.registrationId !== registrationId
+  ) {
+    return;
+  }
   directory.delete(key);
   notifyDirectoryListeners();
+}
+
+function removeOwnedDirectoryEntries(owner: symbol): void {
+  let removed = false;
+  for (const [key, entry] of directory) {
+    if (entry.owner !== owner) continue;
+    directory.delete(key);
+    removed = true;
+  }
+  if (removed) notifyDirectoryListeners();
 }
 
 function sendTabState(
@@ -804,7 +843,11 @@ function findProvisionedBirthByTabId(
   tabId: string,
 ): ElectronTabBirth | null {
   for (const birth of births) {
-    if (birth.create.tabId === tabId && birth.provisioned !== null)
+    if (
+      !birth.cancelled &&
+      birth.create.tabId === tabId &&
+      birth.provisioned !== null
+    )
       return birth;
   }
   return null;
@@ -819,6 +862,7 @@ function findProvisionedBirth(
   for (const birth of births) {
     if (
       birth.provisioned !== null &&
+      !birth.cancelled &&
       birth.provisioned.hostId === hostId &&
       birth.create.sessionId === sessionId &&
       birth.create.tabId === tabId
@@ -847,16 +891,13 @@ function sameCreate(
 function canReplaceElectronTabBirth(
   frame: CreateElectronTabFrame,
   previous: ElectronTabBirth | undefined,
-  previousSettlement: ElectronTabCreateSettlement | undefined,
 ): boolean {
   if (frame.reason !== "restore") return false;
-  const retainedIncarnation =
-    previous?.provisioned !== null &&
-    previous?.provisioned !== undefined &&
-    previous.accepted?.registrationId === previous.provisioned.registrationId;
+  const provisioned = previous?.provisioned;
   return (
-    retainedIncarnation ||
-    previousSettlement?.kind === "electronTabCreateFailed"
+    provisioned !== null &&
+    provisioned !== undefined &&
+    previous?.accepted?.registrationId === provisioned.registrationId
   );
 }
 
