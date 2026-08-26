@@ -202,7 +202,9 @@ function rendererPinnedTodoTexts(input: RenderedMessagesInput): string[] {
   const { result } = renderHook(() =>
     useRenderedMessages(input, displayContext),
   );
-  const state = buildPinnedTodoRenderState(result.current);
+  const state = buildPinnedTodoRenderState(result.current, {
+    kind: "derive",
+  });
   return (state.todo?.items ?? []).map((item) => item.text);
 }
 

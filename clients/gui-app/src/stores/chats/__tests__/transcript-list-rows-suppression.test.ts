@@ -6,6 +6,7 @@ import type {
   TranscriptWindow,
 } from "@/stores/chats/transcript-window";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
+import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
 
 function model(id: string): ChatMessageModel {
   return {
@@ -67,14 +68,43 @@ function windowOf(
 }
 
 describe("transcriptListRows renderer-policy suppression", () => {
-  it("omits a span row withheld by the pinned-todo filter", () => {
+  it("omits a span row the pinned-todo renderer policy actually drops", () => {
+    // A real todo-only assistant row, run through the real renderer policy -
+    // rather than an empty `rendered: []` asserted by fiat, which would pass
+    // even if the policy stopped dropping anything.
+    const todoOnlyMessage: ChatMessageModel = {
+      ...model("r-1"),
+      segments: [
+        {
+          id: "r-1:todo",
+          kind: "todo",
+          items: [
+            {
+              id: "todo-item-1",
+              status: "pending",
+              text: "task",
+              priority: null,
+              activeForm: null,
+            },
+          ],
+        },
+      ],
+    };
+    const { messages: rendered } = buildPinnedTodoRenderState(
+      [todoOnlyMessage],
+      { kind: "derive" },
+    );
+    // Sanity: the policy really did drop the row (a completed assistant
+    // message left with no segments after the todo is stripped out).
+    expect(rendered).toEqual([]);
+
     const rows = transcriptListRows({
       window: windowOf(
         3,
         [span(1, ["r-1"])],
         [entry("r-0"), entry("r-1"), entry("r-2")],
       ),
-      rendered: [],
+      rendered,
     });
 
     expect(rows).toHaveLength(2);

@@ -44,6 +44,7 @@ import {
   isTailHydrated,
   planTranscriptHydration,
   streamWindowMessage,
+  touchTranscriptRange,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
   type OrdinalRange,
@@ -1864,8 +1865,21 @@ export function createChatSessionStoreWithNotificationDependencies(
      *
      * It takes a LEGACY-shaped snapshot; the windowed caller adapts. See
      * `applyWindowedSnapshotFrame` for what that adaptation is and is not.
+     *
+     * `extra` is merged into the fold's own `set`, so state that must land
+     * ATOMICALLY with the published transcript can. The windowed caller passes
+     * the new `transcriptWindow` (and its snapshot aux) through here rather
+     * than setting it in its own earlier `set`, because the row merge treats
+     * "span names a row `rendered` lacks" as deliberate renderer suppression -
+     * and a store state holding new spans beside old rendered models makes
+     * that judgement about a legitimate new row. The legacy caller passes
+     * either `null` or the windowed-state RESET (a downgrade is the same
+     * atomicity argument in reverse).
      */
-    const applyAuthoritativeSnapshot = (frame: ChatSnapshotFrame): void => {
+    const applyAuthoritativeSnapshot = (
+      frame: ChatSnapshotFrame,
+      extra: Partial<ChatSessionState> | null,
+    ): void => {
       if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
         return;
       }
@@ -2103,6 +2117,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           // (which the new snapshot just refreshed) until the next
           // live `usage.updated` arrives.
           liveTurnUsage: null,
+          // Last, on purpose: the caller's atomically-co-published state (see
+          // the function doc) wins over anything the fold computed.
+          ...extra,
         };
       });
       // A prompt handed back to the composer takes its staged worktree with
@@ -2186,9 +2203,15 @@ export function createChatSessionStoreWithNotificationDependencies(
      *
      * Set by the first windowed snapshot rather than read from the transport,
      * because it is the SHAPE of what arrived that the appliers below have to
-     * branch on, and that shape is what the frame proves. A session never
-     * changes lines mid-life - the negotiated minor is fixed for a connection,
-     * and a reconnect rebuilds this closure.
+     * branch on, and that shape is what the frame proves. The negotiated minor
+     * is fixed for a CONNECTION, not for this closure: `retry()` builds a new
+     * stream client inside the same store, and the new connection negotiates
+     * its own minor - a host rolled back below `1.8` between the two answers
+     * with a LEGACY snapshot. `onSnapshot` therefore resets this flag and
+     * drops the windowed state outright, because a skeleton and spans built
+     * under the old line describe a coordinate space no current peer serves,
+     * and merging a whole legacy transcript against them would omit and
+     * duplicate rows.
      */
     let windowedLine = false;
 
@@ -2268,6 +2291,14 @@ export function createChatSessionStoreWithNotificationDependencies(
       // is recorded (the line can be negotiated by a later reconnect) but no
       // request could mean anything yet.
       if (unchanged || range === null || !windowedLine || disposed) return;
+      // Warm the LRU for what the reader is looking at BEFORE planning. An
+      // already-hydrated visible span plans no fetch, so this report is the
+      // only event that ever re-touches it - without it, returning to old
+      // scrollback leaves it "coldest" for the next eviction even while it is
+      // on screen.
+      const window = get().transcriptWindow;
+      const touched = touchTranscriptRange(window, range);
+      if (touched !== window) set({ transcriptWindow: touched });
       requestPlannedHydration();
     };
 
@@ -2360,21 +2391,62 @@ export function createChatSessionStoreWithNotificationDependencies(
     /**
      * Runs the shared fold if the tail is in, or holds the frame until it is.
      * The one place the wait-for-tail rule is enforced.
+     *
+     * `aux` is the state that must land WITH the published transcript - the
+     * new window above all (see `applyAuthoritativeSnapshot`'s doc for why
+     * setting it in a separate earlier `set` mis-suppresses rows). When the
+     * fold runs, `aux` rides its atomic `set`; when the frame defers, `aux`
+     * is set now, alone - the deferral cases are a rebase (no spans, so
+     * nothing to mis-suppress) or a same-epoch snapshot whose retained spans
+     * already agree with the rendered models.
      */
     const applyOrDeferWindowedSnapshot = (
       frame: ChatWindowedSnapshotFrame,
       window: TranscriptWindow,
+      aux: Partial<ChatSessionState>,
     ): void => {
       if (!isTailHydrated(window)) {
+        set(aux);
         deferredWindowedSnapshot = frame;
         return;
       }
       deferredWindowedSnapshot = null;
-      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window));
+      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window), aux);
     };
 
     const callbacks: ChatStreamCallbacks = {
-      onSnapshot: applyAuthoritativeSnapshot,
+      onSnapshot: (frame) => {
+        if (!windowedLine) {
+          applyAuthoritativeSnapshot(frame, null);
+          return;
+        }
+        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+          return;
+        }
+        // A LEGACY snapshot on a session that had negotiated `1.8`: the
+        // reconnect renegotiated onto an older line (a host rolled back below
+        // `1.8`, or a fallback route to an older peer). The windowed state is
+        // not stale-but-usable, it is unaddressable - no current peer serves
+        // the epoch its ordinals live in, so stale placeholders could never
+        // hydrate - and left in place it would make the appliers treat this
+        // WHOLE transcript as a hydrated subset and merge it against a dead
+        // skeleton. Drop all of it, atomically with the snapshot's own
+        // publish (`extra` below), and fall back to the legacy shape the
+        // discriminator now reports.
+        windowedLine = false;
+        inFlightHydrationRequest = null;
+        deferredWindowedSnapshot = null;
+        applyAuthoritativeSnapshot(frame, {
+          transcriptWindow: emptyTranscriptWindow(),
+          transcriptDerived: null,
+          // The rest of the windowed line's aux state, back to its initial
+          // values: nothing reads either once `transcriptDerived` is null,
+          // but a LATER re-upgrade must start from the same blank state a
+          // fresh store does.
+          accumulatedFileChangeCount: 0,
+          accumulatedFileChangeSummaries: [],
+        });
+      },
       onWorktreeStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
@@ -2424,16 +2496,27 @@ export function createChatSessionStoreWithNotificationDependencies(
           rowCount: frame.snapshot.rowCount,
           tail: frame.snapshot.tail,
         });
-        set({
+        // The window and the snapshot's aux ride the fold's own `set` (or the
+        // deferral's single `set`) rather than being published here first - a
+        // beat of "new spans, old rendered models" reads to the row merge as
+        // renderer suppression of a real row.
+        applyOrDeferWindowedSnapshot(frame, window, {
           transcriptWindow: window,
           transcriptDerived: frame.snapshot.derived,
           accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
         });
-        applyOrDeferWindowedSnapshot(frame, window);
         requestPlannedHydration();
       },
       onSkeletonChunk: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        // `!windowedLine` covers the downgrade reset in `onSnapshot` above: a
+        // windowed frame straggling in after a legacy snapshot has replaced
+        // the transcript must not rebuild windowed state - or worse, republish
+        // `messages` from the emptied window over the legacy transcript.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
           return;
         }
         // Can DROP bodies, not just add entries: this is where a tail seated
@@ -2443,7 +2526,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         requestPlannedHydration();
       },
       onIndexChanged: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        // Same downgrade guard as `onSkeletonChunk`.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
           return;
         }
         const window = applyIndexChange(get().transcriptWindow, {
@@ -2457,23 +2545,33 @@ export function createChatSessionStoreWithNotificationDependencies(
         requestPlannedHydration();
       },
       onRange: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        // Same downgrade guard as `onSkeletonChunk`.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
           return;
         }
         inFlightHydrationRequest = null;
         const window = evictTranscriptWindowToBudget(
           applyRangeResponse(get().transcriptWindow, frame.range),
           TRANSCRIPT_WINDOW_MAX_BYTES,
+          // What the reader is looking at is never evicted - see the
+          // function's own doc for the oversized-row re-fetch loop this
+          // forecloses.
+          visibleTranscriptRange,
         );
         const deferred = deferredWindowedSnapshot;
         if (deferred === null) {
           publishWindowedTranscript(window);
         } else {
           // The tail this response was asked for may have arrived. The fold
-          // publishes `messages`/`events` itself, so it replaces - rather than
-          // follows - the steady-state publish above.
-          set({ transcriptWindow: window });
-          applyOrDeferWindowedSnapshot(deferred, window);
+          // publishes `messages`/`events` itself - with the window riding the
+          // same `set` - so it replaces the steady-state publish above.
+          applyOrDeferWindowedSnapshot(deferred, window, {
+            transcriptWindow: window,
+          });
         }
         requestPlannedHydration();
       },

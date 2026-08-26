@@ -18,9 +18,9 @@ import {
   holdsEveryRecordFrom,
   hydratedRecords,
   planTranscriptHydration,
-  selectHydratedRecords,
   settleWindowBytes,
   streamWindowMessage,
+  touchTranscriptRange,
   transcriptHydrationGaps,
   updateWindowMessage,
   TRANSCRIPT_WINDOW_MAX_BYTES,
@@ -593,6 +593,7 @@ describe("eviction", () => {
     const evicted = evictTranscriptWindowToBudget(
       window,
       window.hydratedBytes - 1,
+      null,
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([10, 28]);
   });
@@ -619,11 +620,11 @@ describe("eviction", () => {
         messages: [userMessage("warmer", 0)],
       }),
     );
-    const evicted = evictTranscriptWindowToBudget(window, 1);
+    const evicted = evictTranscriptWindowToBudget(window, 1, null);
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([18]);
   });
 
-  it("reading a span keeps it from being evicted under the reader", () => {
+  it("touching a span reorders eviction away from it", () => {
     let window = windowWithSkeleton(30);
     window = applyRangeResponse(
       window,
@@ -653,19 +654,92 @@ describe("eviction", () => {
       }),
     );
 
-    // The reader is looking at the OLDEST-loaded span. Reading it must reorder
-    // eviction, or scrolling up evicts exactly what is on screen.
-    const read = selectHydratedRecords(window, {
+    // The reader is looking at the OLDEST-loaded span. Touching it must
+    // reorder eviction, or scrolling up evicts exactly what is on screen.
+    const oldTouchedAt = window.spans.find(
+      (span) => span.fromOrdinal === 0,
+    )?.touchedAt;
+    const touched = touchTranscriptRange(window, {
       fromOrdinal: 0,
       toOrdinal: 2,
     });
-    expect(read.messages.map((message) => message.messageId)).toEqual(["old"]);
+    expect(
+      touched.spans.find((span) => span.fromOrdinal === 0)?.touchedAt,
+    ).toBeGreaterThan(oldTouchedAt ?? -1);
 
     const evicted = evictTranscriptWindowToBudget(
-      read.window,
-      read.window.hydratedBytes - 1,
+      touched,
+      touched.hydratedBytes - 1,
+      null,
     );
+    // The now-untouched span at 10 is the coldest, so it goes instead of 0.
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 28]);
+  });
+
+  it("touchTranscriptRange is identity-stable when nothing overlaps", () => {
+    let window = windowWithSkeleton(30);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10", "row-11"],
+        messages: [userMessage("mid", 10)],
+      }),
+    );
+
+    const touched = touchTranscriptRange(window, {
+      fromOrdinal: 20,
+      toOrdinal: 22,
+    });
+    expect(touched).toBe(window);
+  });
+});
+
+describe("eviction protects the visible span", () => {
+  it("never evicts a span overlapping visible, even when it alone exceeds the budget, and drops a cold non-overlapping span first", () => {
+    let window = windowWithSkeleton(30);
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-0", "row-1"],
+        messages: [userMessage("cold", 0)],
+      }),
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 10,
+        rowIds: ["row-10", "row-11"],
+        messages: [userMessage("visible", 10)],
+      }),
+    );
+    window = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 28,
+        rowIds: ["row-28", "row-29"],
+        messages: [userMessage("tail", 28)],
+      }),
+    );
+
+    // A budget of 1 byte: everything alone exceeds it. The visible span (10)
+    // must survive - the host's range read always serves the first requested
+    // row whatever it costs, so evicting the visible span here would only
+    // re-request it and evict it again, forever - while the cold span (0),
+    // which nothing is looking at, is fair game.
+    const evicted = evictTranscriptWindowToBudget(window, 1, {
+      fromOrdinal: 10,
+      toOrdinal: 12,
+    });
+    expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([10, 28]);
+    // The budget is SOFT against the protected spans: the result stays over
+    // budget rather than sacrificing them.
+    expect(evicted.hydratedBytes).toBeGreaterThan(1);
   });
 });
 
@@ -851,7 +925,7 @@ describe("the streaming row's byte charge", () => {
     // Under the STALE figure this window fits, so nothing would be dropped.
     expect(streamed.hydratedBytes).toBeLessThan(budget);
 
-    const evicted = evictTranscriptWindowToBudget(streamed, budget);
+    const evicted = evictTranscriptWindowToBudget(streamed, budget, null);
     // The tail is exempt, so the cold span is what has to go.
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([29]);
   });
@@ -866,6 +940,7 @@ describe("the streaming row's byte charge", () => {
     const evicted = evictTranscriptWindowToBudget(
       streamed,
       TRANSCRIPT_WINDOW_MAX_BYTES,
+      null,
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
     // Settled on the way through, so the next read costs nothing.

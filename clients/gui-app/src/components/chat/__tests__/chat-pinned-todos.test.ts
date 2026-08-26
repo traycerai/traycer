@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
+import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type {
   ChatMessage as ChatMessageModel,
   MessageSegment,
@@ -46,7 +47,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("todo-new");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["new"]);
@@ -55,7 +56,7 @@ describe("buildPinnedTodoRenderState", () => {
     it("ignores empty todo segments", () => {
       const state = buildPinnedTodoRenderState([
         makeAssistantMessage("turn-1", [todoSegment("todo-empty", [])], null),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo).toBeNull();
     });
@@ -83,7 +84,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("task-create-2:task-todo");
       expect(state.todo?.items).toMatchObject([
@@ -115,7 +116,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("todo-1");
       expect(state.todo?.items.map((item) => item.text)).toEqual([
@@ -142,7 +143,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("task-create-newer:task-todo");
       expect(state.todo?.items).toMatchObject([
@@ -171,7 +172,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("task-create-new:task-todo");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["New task"]);
@@ -200,7 +201,7 @@ describe("buildPinnedTodoRenderState", () => {
           ],
           null,
         ),
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("task-create-new:task-todo");
       expect(state.todo?.items.map((item) => item.text)).toEqual(["New task"]);
@@ -238,7 +239,7 @@ describe("buildPinnedTodoRenderState", () => {
         mixed,
         todoOnly,
         liveTodoOnly,
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("todo-live");
       expect(state.messages.map((message) => message.id)).toEqual([
@@ -259,7 +260,7 @@ describe("buildPinnedTodoRenderState", () => {
         makeAssistantMessage("plain", [textSegment("text-1")], null),
       ];
 
-      const state = buildPinnedTodoRenderState(messages);
+      const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
 
       expect(state.messages).toBe(messages);
       expect(state.todo).toBeNull();
@@ -274,7 +275,7 @@ describe("buildPinnedTodoRenderState", () => {
         ),
       ];
 
-      const state = buildPinnedTodoRenderState(messages);
+      const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
 
       expect(state.todo).toBeNull();
       expect(state.messages).toEqual([]);
@@ -294,7 +295,7 @@ describe("buildPinnedTodoRenderState", () => {
         ),
       ];
 
-      const state = buildPinnedTodoRenderState(messages);
+      const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
 
       expect(state.todo).toBeNull();
       expect(state.messages).toBe(messages);
@@ -318,7 +319,7 @@ describe("buildPinnedTodoRenderState", () => {
         ),
       ];
 
-      const state = buildPinnedTodoRenderState(messages);
+      const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
 
       expect(state.todo).not.toBeNull();
       expect(state.messages.map((message) => message.id)).toEqual([
@@ -342,11 +343,135 @@ describe("buildPinnedTodoRenderState", () => {
           null,
         ),
         grepOnly,
-      ]);
+      ], { kind: "derive" });
 
       expect(state.todo?.id).toBe("todo-1");
       expect(state.messages).toEqual([grepOnly]);
       expect(state.messages[0]).toBe(grepOnly);
+    });
+  });
+
+  describe("host authority (windowed line)", () => {
+    it("over completed rows only, returns the host todo verbatim and strips task-tool segments, even though the local fold would find nothing", () => {
+      // No semantic todo segment and no task-tool call in these messages, so
+      // `derivePinnedTodo` would answer `null` - the host's snapshot is the
+      // only reason a todo is pinned here.
+      const messages = [
+        makeAssistantMessage("assistant-1", [textSegment("text-1")], null),
+        makeAssistantMessage(
+          "assistant-2",
+          [toolSegment("task-update-1", "TaskUpdate", { taskId: "1" })],
+          null,
+        ),
+      ];
+      const hostTodo: PinnedTodoSnapshot = {
+        id: "host-todo-1",
+        items: [todoItem("host task", "in_progress")],
+      };
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: hostTodo,
+      });
+
+      expect(state.todo).toBe(hostTodo);
+      expect(state.messages.map((message) => message.id)).toEqual([
+        "assistant-1",
+      ]);
+      expect(
+        state.messages[0]?.segments.map((segment) => segment.kind),
+      ).toEqual(["text"]);
+    });
+
+    it("over completed rows only, keeps task-tool segments inline when the host reports no todo, but still strips semantic todo segments", () => {
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [
+            toolSegment("task-update-1", "TaskUpdate", { taskId: "1" }),
+            todoSegment("todo-1", [todoItem("pinned", "pending")]),
+          ],
+          null,
+        ),
+      ];
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: null,
+      });
+
+      expect(state.todo).toBeNull();
+      const segment = state.messages[0]?.segments[0];
+      expect(segment.kind).toBe("tool");
+      expect(segment.kind === "tool" ? segment.toolName : undefined).toBe(
+        "TaskUpdate",
+      );
+    });
+
+    it("a still-streaming row's own todo outranks the host's baseline", () => {
+      // The live row is delta-built and therefore strictly fresher than
+      // whatever the host's last snapshot emit folded - `runState` non-null
+      // marks it as still streaming, and the overlay's fold runs over ONLY
+      // those rows, ignoring the completed row entirely.
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [toolSegment("task-update-1", "TaskUpdate", { taskId: "1" })],
+          null,
+        ),
+        makeAssistantMessage(
+          "assistant-2",
+          [
+            toolSegment("task-create-live", "TaskCreate", {
+              subject: "Live task",
+            }),
+          ],
+          "running",
+        ),
+      ];
+      const hostTodo: PinnedTodoSnapshot = {
+        id: "host-todo-1",
+        items: [todoItem("host task", "in_progress")],
+      };
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: hostTodo,
+      });
+
+      expect(state.todo?.id).toBe("task-create-live:task-todo");
+      expect(state.todo?.items.map((item) => item.text)).toEqual([
+        "Live task",
+      ]);
+      // Both task-tool segments are stripped (a todo is pinned). The completed
+      // row (assistant-1) is left with no segments and is dropped entirely;
+      // the still-streaming row (assistant-2) is kept even though it too ends
+      // up empty, since only a COMPLETED empty assistant row is dropped.
+      expect(state.messages.map((message) => message.id)).toEqual([
+        "assistant-2",
+      ]);
+      expect(state.messages[0]?.segments).toEqual([]);
+    });
+
+    it("derive-mode behaves as before over the same input (control)", () => {
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [
+            toolSegment("task-update-1", "TaskUpdate", { taskId: "1" }),
+            todoSegment("todo-1", [todoItem("pinned", "pending")]),
+          ],
+          null,
+        ),
+      ];
+
+      const state = buildPinnedTodoRenderState(messages, { kind: "derive" });
+
+      expect(state.todo?.id).toBe("todo-1");
+      // Both segments are suppressed (the todo unconditionally, the task tool
+      // because a snapshot is now pinned), leaving the assistant row empty -
+      // and an empty completed assistant row is dropped entirely.
+      expect(state.messages).toEqual([]);
     });
   });
 });

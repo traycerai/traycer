@@ -1821,11 +1821,22 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     }
     return [...renderedMessages, activeInlineEdit.originalMessage];
   }, [activeInlineEdit, renderedMessages]);
-  // The rendered rows are the full history, so the pinned snapshot and the
-  // inline todo/task-tool stripping derive from the same walk.
+  // On the legacy line the rendered rows are the full history, so the pinned
+  // snapshot derives from the same walk that strips the inline segments. On
+  // the windowed line the rows are the HYDRATED SUBSET and the fold's answer
+  // comes from the host's whole-transcript copy instead - a todo created
+  // outside the hydrated spans would otherwise vanish from the dock. The
+  // discriminator is `transcriptDerived` itself (null exactly on the legacy
+  // line), the same rule `isWindowedTranscript` names.
   const pinnedTodoRenderState = useMemo(
-    () => buildPinnedTodoRenderState(displayedMessages),
-    [displayedMessages],
+    () =>
+      buildPinnedTodoRenderState(
+        displayedMessages,
+        state.transcriptDerived === null
+          ? { kind: "derive" }
+          : { kind: "host", todo: state.transcriptDerived.pinnedTodo },
+      ),
+    [displayedMessages, state.transcriptDerived],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -1944,9 +1955,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // composer selector below once per flush. The latest completed boundary ID
   // is stable across flushes (a streaming row is never forkable), so the
   // gesture handler hanging off this stays quiet while a turn streams.
+  //
+  // On the windowed line the scan cannot run here - `renderedMessages` is the
+  // hydrated subset, and the latest completed boundary is routinely outside
+  // it (scrolled cold, or evicted). The host derives it from the whole
+  // transcript and ships it on every snapshot; `null` from it is the real
+  // "no boundary yet", never "not hydrated".
   const latestForkBoundaryId = useMemo(
-    () => latestForkableAssistantMessageId(renderedMessages),
-    [renderedMessages],
+    () =>
+      state.transcriptDerived === null
+        ? latestForkableAssistantMessageId(renderedMessages)
+        : state.transcriptDerived.latestForkableAssistantMessageId,
+    [state.transcriptDerived, renderedMessages],
   );
   // The composer host picker's "switch host" gesture. Chats are host-bound for
   // life (clone-not-migrate), so switching means FORKING onto the picked

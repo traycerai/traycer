@@ -929,12 +929,10 @@ export function holdsEveryRecordFrom(
  * Every hydrated record, in transcript order, WITHOUT touching anything.
  *
  * What feeds `ChatSessionState.messages` / `.events`. Deliberately not
- * {@link selectHydratedRecords}: that one touches the spans it draws from for
- * eviction order, and this read covers the whole window — so using it here
- * would touch every span on every frame and flatten the LRU into no order at
- * all. Touching belongs to a VIEWPORT read, which arrives with placeholder
- * rows; until then eviction orders by hydration recency, which is wrong for
- * nothing that currently exists.
+ * {@link touchTranscriptRange}: that one advances the LRU for the spans a
+ * VIEWPORT is showing, and this read covers the whole window — so touching
+ * here would warm every span on every frame and flatten the LRU into no order
+ * at all.
  */
 export function hydratedRecords(window: TranscriptWindow): {
   readonly messages: readonly Message[];
@@ -958,37 +956,32 @@ export function hydratedRecords(window: TranscriptWindow): {
 }
 
 /**
- * The records the renderer folds, for one ordinal span.
+ * Advance `touchedAt` on every span overlapping `range`.
  *
- * Returns whatever is hydrated and says nothing about what is not - the
- * caller pairs this with {@link transcriptHydrationGaps} to draw placeholders
- * for the rest. Reading also TOUCHES the spans it drew from, which is what
- * keeps the region a reader is actually looking at from being evicted under
- * them.
+ * The read half of the LRU. The viewport report calls this for the region the
+ * reader is actually looking at, so a span the reader RETURNED to is warm
+ * even though no fetch was ever planned for it - already hydrated means no
+ * gap, no gap means no request, and without this call nothing else would ever
+ * re-touch it. The failure that leaves is concrete: a fast scroll puts
+ * several requests in flight, the reader settles back on an old span, and the
+ * late responses push the cache over budget - evicting the span under the
+ * reader as "coldest" while keeping scrollback they already left.
+ *
+ * Identity-stable when nothing overlaps, so a viewport resting on
+ * placeholders or the unplaced live tail does not churn the store.
  */
-export function selectHydratedRecords(
+export function touchTranscriptRange(
   window: TranscriptWindow,
   range: OrdinalRange,
-): {
-  readonly window: TranscriptWindow;
-  readonly messages: readonly Message[];
-  readonly events: readonly ChatEvent[];
-} {
+): TranscriptWindow {
+  const overlaps = (span: HydratedSpan): boolean =>
+    span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
+  if (!window.spans.some(overlaps)) return window;
   const clock = window.clock + 1;
-  const drawnFrom: HydratedSpan[] = [];
-  const spans = window.spans.map((span) => {
-    const overlaps =
-      span.fromOrdinal < range.toOrdinal && spanEnd(span) > range.fromOrdinal;
-    if (!overlaps) return span;
-    const touched: HydratedSpan = { ...span, touchedAt: clock };
-    drawnFrom.push(touched);
-    return touched;
-  });
-  return {
-    window: { ...window, spans, clock },
-    messages: dedupeMessages(drawnFrom.map((span) => span.messages)),
-    events: dedupeEvents(drawnFrom.map((span) => span.events)),
-  };
+  const spans = window.spans.map((span) =>
+    overlaps(span) ? { ...span, touchedAt: clock } : span,
+  );
+  return { ...window, spans, clock };
 }
 
 /**
@@ -1071,10 +1064,22 @@ export function planTranscriptHydration(
  * happens and where every snapshot re-seats content, so evicting it would
  * trade a bounded cache for an unbounded re-fetch loop - and it is the one
  * span whose absence is visible immediately.
+ *
+ * Spans overlapping `visible` are never evicted either, and the budget is
+ * SOFT against them - the loop stops when only protected spans remain, even
+ * over budget. That is not generosity; it is the same re-fetch-loop argument
+ * as the tail. The host's range read always serves the first requested row
+ * whatever it costs (see `read-range.ts`), so a single visible row larger
+ * than the whole budget is a legal response - evicted here as "over budget",
+ * its gap is still on screen, the planner re-requests it, and the client
+ * hydrates/evicts/re-fetches that row forever while it never renders once.
+ * Protecting what the reader is looking at bounds the overage by one
+ * viewport's spans and ends when they scroll away.
  */
 export function evictTranscriptWindowToBudget(
   input: TranscriptWindow,
   maxBytes: number,
+  visible: OrdinalRange | null,
 ): TranscriptWindow {
   // The one place the byte figure is READ, and therefore the one place it has
   // to be true. Settling FIRST rather than after the early return is the whole
@@ -1082,11 +1087,16 @@ export function evictTranscriptWindowToBudget(
   // read as under budget and evict nothing.
   const window = settleWindowBytes(input);
   if (window.hydratedBytes <= maxBytes) return window;
-  const protectedSpan = window.spans.find(
-    (span) => spanEnd(span) >= window.rowCount && window.rowCount > 0,
-  );
+  const isProtected = (span: HydratedSpan): boolean => {
+    if (spanEnd(span) >= window.rowCount && window.rowCount > 0) return true;
+    return (
+      visible !== null &&
+      span.fromOrdinal < visible.toOrdinal &&
+      spanEnd(span) > visible.fromOrdinal
+    );
+  };
   const evictable = window.spans
-    .filter((span) => span !== protectedSpan)
+    .filter((span) => !isProtected(span))
     .sort((left, right) => left.touchedAt - right.touchedAt);
   const dropped = new Set<HydratedSpan>();
   let bytes = window.hydratedBytes;

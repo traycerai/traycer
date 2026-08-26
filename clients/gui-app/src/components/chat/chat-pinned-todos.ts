@@ -20,6 +20,23 @@ interface PinnedTodoRenderState {
   readonly todo: PinnedTodoSnapshot | null;
 }
 
+/**
+ * Who answers "which todo is pinned".
+ *
+ * `derive` is the legacy line: the rows are the whole history, so the fold
+ * below can run over them. `host` is the windowed line: the fold is a
+ * stateful accumulator with a reset rule keyed on user rows, so run over the
+ * HYDRATED SUBSET it answers for whatever turns happen to be hydrated - a
+ * live todo created outside the tail would vanish from the dock, reappear
+ * while its span was hydrated, and vanish again on eviction. The host runs
+ * the same fold over the full transcript and ships the result on every
+ * snapshot (`ChatTranscriptDerived.pinnedTodo`); `todo: null` from it is the
+ * real answer "no live todo", never "unknown".
+ */
+export type PinnedTodoAuthority =
+  | { readonly kind: "derive" }
+  | { readonly kind: "host"; readonly todo: PinnedTodoSnapshot | null };
+
 type TodoSegmentModel = Extract<MessageSegment, { kind: "todo" }>;
 type ToolSegmentModel = Extract<MessageSegment, { kind: "tool" }>;
 
@@ -29,16 +46,22 @@ interface DerivedPinnedTodo {
 }
 
 /**
- * Derives the pinned todo snapshot from the rendered rows and strips the
- * inline todo/task-tool segments out of them (the pinned stack renders the
- * snapshot instead). The rows are the FULL chat history - LegendList windows
- * the mounted DOM, not the data - so a todo created in an old turn is always
- * in the walk.
+ * Resolves the pinned todo snapshot - from the rendered rows on the legacy
+ * line, from the host's whole-transcript fold on the windowed one (see
+ * {@link PinnedTodoAuthority}) - and strips the inline todo/task-tool
+ * segments out of the rows (the pinned stack renders the snapshot instead).
+ * The strip always runs over the rows this renderer HOLDS, whichever
+ * authority named the todo: a hydrated task-tool row is suppressed by the
+ * same rule either way.
  */
 export function buildPinnedTodoRenderState(
   messages: ReadonlyArray<ChatMessageModel>,
+  authority: PinnedTodoAuthority,
 ): PinnedTodoRenderState {
-  const derived = derivePinnedTodo(messages);
+  const derived: DerivedPinnedTodo =
+    authority.kind === "host"
+      ? hostAuthorityPinnedTodo(messages, authority.todo)
+      : derivePinnedTodo(messages);
   const filtered = messages
     .map((message) => {
       return filterTodoSegmentsFromMessage(message, derived.suppressTaskTools);
@@ -59,6 +82,39 @@ function filteredMessagesChanged(
     messages.length !== filtered.length ||
     filtered.some((message, index) => message !== messages[index])
   );
+}
+
+/**
+ * The windowed line's todo: the host's whole-transcript answer, OVERLAID by
+ * the live turn's own rows.
+ *
+ * The host baseline alone is not enough, because `derived` rides only
+ * snapshot emits and those fire at turn BOUNDARIES - turn start, turn end, a
+ * restore - never per tool call. Pinning to it verbatim would freeze the dock
+ * for the whole streaming turn, which is exactly when a reader watches it.
+ *
+ * The overlay is ordering-correct where a fold over all hydrated rows is not:
+ * a row still streaming (`runState !== null`) is built from deltas, so its
+ * segments are a SUPERSET of whatever persisted state the host's last emit
+ * folded - if the host's todo came from this turn, the live copy holds it
+ * too, and anything the live copy adds is strictly newer. A fold over all
+ * hydrated rows has no such order: an old span's todo would outrank a newer
+ * one the host found in an unhydrated region.
+ *
+ * The accumulator's user-row reset needs no seeding here: the live rows start
+ * the fold on an empty task state, which is what the reset would produce, and
+ * an update-only turn that yields no items falls back to the baseline rather
+ * than pinning a fragment.
+ */
+function hostAuthorityPinnedTodo(
+  messages: ReadonlyArray<ChatMessageModel>,
+  hostTodo: PinnedTodoSnapshot | null,
+): DerivedPinnedTodo {
+  const live = derivePinnedTodo(
+    messages.filter((message) => message.runState !== null),
+  );
+  const todo = live.todo ?? hostTodo;
+  return { todo, suppressTaskTools: todo !== null };
 }
 
 /**
