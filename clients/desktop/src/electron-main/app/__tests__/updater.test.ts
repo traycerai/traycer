@@ -538,7 +538,13 @@ describe("desktop app updater", () => {
     });
   });
 
-  it("treats 'no production release yet' as up-to-date (not an error) on a prerelease build", async () => {
+  it("surfaces a stable-feed 'no production release' 404 as a service error", async () => {
+    // The removed fallback (§"Compatibility recovery and dead paths"): this
+    // 404 used to be swallowed as "up to date" for any build whose version
+    // contained a `-`. A canonical RC build can no longer reach the stable
+    // feed at all - it derives `implicit-rc-line` and resolves through the
+    // namespaced selector - so the only builds that still see this error are
+    // ones for which a 404 from the release feed IS a service problem.
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
       const err = new Error(
@@ -551,6 +557,29 @@ describe("desktop app updater", () => {
 
     await updater.checkForUpdatesNow(false, "manual");
 
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Traycer couldn't reach the update service right now. Please try again in a little while.",
+    });
+  });
+
+  it("never queries the stable feed from a canonical RC build", async () => {
+    // The other half of the removal: the fallback is unreachable rather than
+    // merely unused. An RC build configures `allowPrerelease` from its mode, so
+    // every check resolves through the desktop-tag selector, and "nothing
+    // selectable" is a null feed (a genuine up-to-date) rather than a 404.
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    vi.stubGlobal("fetch", fetchRouter([], {}));
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
     expect(updater.getAppUpdateSnapshot()).toMatchObject({
       status: "up-to-date",
       errorMessage: null,
@@ -2021,7 +2050,7 @@ describe("compat recovery: RC probe", () => {
   });
 
   it("skips an RC that clears the floor but is not newer than the running build", async () => {
-    // The running build is `1.0.0-test` (see the electron mock). A sufficient
+    // The running build is `1.0.0` (see `STABLE_APP_VERSION`). A sufficient
     // RC that is OLDER by SemVer is a real shape - a release line predating an
     // epoch backport produces one - and this updater never sets
     // `allowDowngrade`, so electron-updater would report it as not available
@@ -2293,6 +2322,296 @@ describe("compat recovery: RC probe", () => {
   });
 });
 
+/**
+ * The three-mode channel model, exercised through the real selector.
+ *
+ * The mode derivation, the release-line vocabulary, and the
+ * persist-vs-transition split are table-tested as pure functions in
+ * `update-channel-mode.test.ts`; what these tests own is the wiring - that the
+ * derived mode actually reaches `allowPrerelease`, the namespaced selector, the
+ * channel-change choreography, and the recovery dialog.
+ */
+describe("implicit RC-line following", () => {
+  // Every release below carries the mac manifest + ZIP, so the only thing that
+  // decides selection is the channel mode's candidate filter.
+  function stubReleases(tags: readonly string[]): void {
+    const fixtures = tags.map((tag) =>
+      macReleaseFixture(tag, tag.includes("-rc.")),
+    );
+    const manifests: Record<string, string> = {};
+    for (const tag of tags) {
+      manifests[tag] = manifestYamlForTag(tag, macZipAssetName(tag));
+    }
+    vi.stubGlobal("fetch", fetchRouter(fixtures, manifests));
+  }
+
+  function selectedFeedUrl(autoUpdater: FakeAutoUpdater): unknown {
+    const calls = autoUpdater.setFeedURL.mock.calls;
+    return calls.length === 0 ? null : calls[calls.length - 1][0];
+  }
+
+  it("allows prereleases from the installed version alone, persisting nothing", async () => {
+    const { autoUpdater, preferences, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    // Implicit participation is derived, never written to disk: the next stable
+    // install must return to stable-only with no preference to undo.
+    expect(preferences.allowPrerelease).toBe(false);
+    // The snapshot reports what a check EFFECTIVELY does, which is what every
+    // consumer asks it. Explicit provenance would be a distinct field.
+    expect(updater.getAppUpdateSnapshot().allowPrerelease).toBe(true);
+  });
+
+  it("selects a later RC on its own line and ignores a newer one on another", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases([
+      "desktop-v2.1.0-rc.1",
+      "desktop-v2.0.0-rc.2",
+      "desktop-v2.0.0-rc.1",
+    ]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(selectedFeedUrl(autoUpdater)).toEqual({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
+    });
+  });
+
+  it("prefers the line's stable release over a later RC on the same line", async () => {
+    // The termination guarantee: once `2.0.0` exists it outranks every
+    // `2.0.0-rc.*`, so the follower lands on stable and the next launch is a
+    // stable build in stable-only mode.
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases([
+      "desktop-v2.1.0-rc.1",
+      "desktop-v2.0.0-rc.3",
+      "desktop-v2.0.0",
+    ]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(selectedFeedUrl(autoUpdater)).toEqual({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0/",
+    });
+  });
+
+  it("falls back to the highest usable later RC when the line's stable is unusable", async () => {
+    // "Prefer stable `X.Y.Z` IF USABLE, otherwise the highest later
+    // `X.Y.Z-rc.M`". Stable is still evaluated first (newest-first ordering),
+    // but a release whose manifest disagrees with its own tag is a publishing
+    // error the validate-and-skip loop rejects - and the fallback must be the
+    // NEWEST remaining same-line RC, not merely any of them.
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    vi.stubGlobal(
+      "fetch",
+      fetchRouter(
+        [
+          macReleaseFixture("desktop-v2.0.0", false),
+          macReleaseFixture("desktop-v2.0.0-rc.3", true),
+          macReleaseFixture("desktop-v2.0.0-rc.2", true),
+        ],
+        {
+          // Declares 2.0.1 under the desktop-v2.0.0 tag: rejected.
+          "desktop-v2.0.0": manifestYamlForTag(
+            "desktop-v2.0.1",
+            macZipAssetName("desktop-v2.0.0"),
+          ),
+          "desktop-v2.0.0-rc.3": manifestYamlForTag(
+            "desktop-v2.0.0-rc.3",
+            macZipAssetName("desktop-v2.0.0-rc.3"),
+          ),
+          "desktop-v2.0.0-rc.2": manifestYamlForTag(
+            "desktop-v2.0.0-rc.2",
+            macZipAssetName("desktop-v2.0.0-rc.2"),
+          ),
+        },
+      ),
+    );
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(selectedFeedUrl(autoUpdater)).toEqual({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.3/",
+    });
+  });
+
+  it("reports up-to-date rather than jumping lines when its own line has nothing newer", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases(["desktop-v2.1.0", "desktop-v2.1.0-rc.1", "desktop-v1.9.0"]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "up-to-date",
+      latestVersion: RC_APP_VERSION,
+      errorMessage: null,
+    });
+  });
+
+  it("does not re-select the installed RC or an older one on its line", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases(["desktop-v2.0.0-rc.1", "desktop-v2.0.0-rc.0"]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+    expect(updater.getAppUpdateSnapshot().status).toBe("up-to-date");
+  });
+
+  it("keeps the explicit opt-in broad: an RC build that opts in may cross lines", async () => {
+    const { autoUpdater, preferences, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases(["desktop-v2.1.0-rc.1", "desktop-v2.0.0-rc.2"]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    const change = await updater.setAllowPrereleaseUpdates(true);
+    await updater.checkForUpdatesNow(false, "manual");
+
+    // Implicit → explicit IS an effective mode change (the eligible candidate
+    // set genuinely widens), so the full transition choreography runs.
+    expect(change.outcome).toBe("changed");
+    expect(preferences.allowPrerelease).toBe(true);
+    expect(selectedFeedUrl(autoUpdater)).toEqual({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.1.0-rc.1/",
+    });
+  });
+
+  it("returns an RC build that opted out to its own line rather than to stable-only", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    stubReleases(["desktop-v2.1.0-rc.1", "desktop-v2.0.0-rc.2"]);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.setAllowPrereleaseUpdates(true);
+
+    const change = await updater.setAllowPrereleaseUpdates(false);
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(change.outcome).toBe("changed");
+    // Opting out of the broad preference does NOT put an RC build on the stable
+    // feed - implicit following is derived from the installed version and
+    // survives the opt-out.
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(selectedFeedUrl(autoUpdater)).toEqual({
+      provider: "generic",
+      url: "https://github.com/traycerai/traycer/releases/download/desktop-v2.0.0-rc.2/",
+    });
+  });
+
+  it("restores stable-only behavior once the line's stable build is what is installed", async () => {
+    // No preference was ever saved, so nothing has to be undone: installing
+    // `2.0.0` is by itself the exit from implicit following.
+    const { autoUpdater, preferences, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      "2.0.0",
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.allowPrerelease).toBe(false);
+    expect(preferences.allowPrerelease).toBe(false);
+    // Stable-only never runs the namespaced selector: no discovery walk at all.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a non-canonical prerelease build on the stable channel", async () => {
+    const { autoUpdater, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      "2.0.0-beta.1",
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "manual");
+
+    expect(autoUpdater.allowPrerelease).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("never offers or persists enable-rc while following a line implicitly", async () => {
+    // The dialog's offer would change no current discovery behavior AND would
+    // write a broad prerelease preference the user never asked for - one that
+    // outlives the RC install. A sufficient RC on another line is published
+    // here precisely so a probe, if one ran, would have something to offer.
+    const { autoUpdater, preferences, updater } = await loadUpdaterForVersion(
+      NOT_LINUX_GUIDANCE,
+      RC_APP_VERSION,
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    fetchMock.mockClear();
+    autoUpdater.setFeedURL.mockClear();
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+    expect(plan.rcCandidateVersion).toBeNull();
+    // Short-circuited before the probe: no listing walk, no manifest fetches.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(preferences.allowPrerelease).toBe(false);
+    expect(autoUpdater.setFeedURL).not.toHaveBeenCalled();
+  });
+
+  it("never offers enable-rc to an explicit opt-in either", async () => {
+    const { updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.setAllowPrereleaseUpdates(true);
+    fetchMock.mockClear();
+
+    const plan = await updater.resolveCompatRecovery({
+      minimumEpoch: 2,
+      hostAllowsRcRecovery: true,
+    });
+
+    expect(plan.route).toBe("manual");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 interface LinuxGuidanceTestConfig {
   readonly packageType: "deb" | "rpm" | null;
   readonly silentInstallSupported: boolean;
@@ -2314,6 +2633,24 @@ interface LoadedUpdater {
   readonly preferences: { allowPrerelease: boolean };
   readonly updater: UpdaterModule;
 }
+
+/**
+ * The app version every test that does not care about the channel model runs
+ * as, and it is deliberately a STABLE SemVer.
+ *
+ * The suite used to mock `1.0.0-test`. Under the three-mode model that string
+ * is not a canonical release candidate, so it still derives `stable-only` - but
+ * a fixture one character away from `1.0.0-rc.1` silently deciding whether 80
+ * tests run under implicit RC following is not a baseline anything should rest
+ * on. RC behavior is now opted into explicitly, per test, via
+ * {@link loadUpdaterForVersion}.
+ */
+const STABLE_APP_VERSION = "1.0.0";
+
+// The canonical RC build the implicit-following tests run as. Its release line
+// is `2.0.0`, so `2.0.0-rc.*` and `2.0.0` are the only implicitly selectable
+// candidates and `2.1.0-rc.*` is the near miss that must never be taken.
+const RC_APP_VERSION = "2.0.0-rc.1";
 
 // Lets a test park a `hydrateUpdatePreferences()` call and resolve it on
 // demand (finding 1's pre-init parking coverage). `resolve` is populated the
@@ -2344,14 +2681,39 @@ interface PersistPrereleaseControl {
 async function loadUpdater(
   linuxGuidance: LinuxGuidanceTestConfig,
 ): Promise<LoadedUpdater> {
-  return loadUpdaterWithControls(linuxGuidance, { kind: "immediate" }, null);
+  return loadUpdaterWithControls(
+    linuxGuidance,
+    { kind: "immediate" },
+    null,
+    STABLE_APP_VERSION,
+  );
+}
+
+// Loads the updater as a specific installed build, which is what selects the
+// channel mode: a canonical `X.Y.Z-rc.N` follows its own line, anything else
+// stays stable-only until an explicit opt-in.
+async function loadUpdaterForVersion(
+  linuxGuidance: LinuxGuidanceTestConfig,
+  appVersion: string,
+): Promise<LoadedUpdater> {
+  return loadUpdaterWithControls(
+    linuxGuidance,
+    { kind: "immediate" },
+    null,
+    appVersion,
+  );
 }
 
 async function loadUpdaterWithHydration(
   linuxGuidance: LinuxGuidanceTestConfig,
   hydration: HydrationBehavior,
 ): Promise<LoadedUpdater> {
-  return loadUpdaterWithControls(linuxGuidance, hydration, null);
+  return loadUpdaterWithControls(
+    linuxGuidance,
+    hydration,
+    null,
+    STABLE_APP_VERSION,
+  );
 }
 
 async function loadUpdaterWithPersistControl(
@@ -2362,6 +2724,7 @@ async function loadUpdaterWithPersistControl(
     linuxGuidance,
     { kind: "immediate" },
     persistControl,
+    STABLE_APP_VERSION,
   );
 }
 
@@ -2369,6 +2732,7 @@ async function loadUpdaterWithControls(
   linuxGuidance: LinuxGuidanceTestConfig,
   hydration: HydrationBehavior,
   persistControl: PersistPrereleaseControl | null,
+  appVersion: string,
 ): Promise<LoadedUpdater> {
   vi.resetModules();
   const autoUpdater = new FakeAutoUpdater();
@@ -2376,7 +2740,7 @@ async function loadUpdaterWithControls(
   const preferences = { allowPrerelease: false };
   vi.doMock("electron", () => ({
     app: {
-      getVersion: () => "1.0.0-test",
+      getVersion: () => appVersion,
     },
   }));
   vi.doMock("electron-updater", () => ({

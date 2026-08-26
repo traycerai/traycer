@@ -1,4 +1,6 @@
 import type {
+  InterviewErroredEvent,
+  InterviewResolvedEvent,
   RuntimeApprovalDecision,
   RuntimeEvent,
   RuntimePlanAction,
@@ -8,6 +10,7 @@ import type {
 import type {
   ApprovalDecision as PersistenceApprovalDecision,
   ContentBlock,
+  InterviewBlock,
   ParsedTaskTodoPersisted,
   PlanAction,
   PlanBlock,
@@ -18,6 +21,11 @@ import type {
   WorkflowActivityEntry,
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  applyInterviewSettlement,
+  isInterviewBlockSettled,
+  type InterviewSettlement,
+} from "@traycer/protocol/host/agent/gui/interview-settlement";
 import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
 import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
 import {
@@ -51,6 +59,108 @@ function replaceBlock(
   updated: ContentBlock,
 ): ContentBlock[] {
   return blocks.map((b) => (b.blockId === blockId ? updated : b));
+}
+
+/**
+ * The canonical-settlement fields of a brand-new interview block, at their
+ * "nothing has happened yet" values.
+ *
+ * Written once here so every construction site in this file starts from the
+ * same baseline - a missed field would type-check as an incomplete block only
+ * where the schema demands it, and would silently diverge in the shapes the
+ * reducer reads.
+ */
+function emptyInterviewBlockFacts(): Pick<
+  InterviewBlock,
+  | "answers"
+  | "error"
+  | "outcome"
+  | "draftAnswers"
+  | "settlement"
+  | "diagnostics"
+  | "delivery"
+  | "settlementExtensions"
+> {
+  return {
+    answers: [],
+    error: null,
+    outcome: null,
+    draftAnswers: [],
+    settlement: null,
+    diagnostics: [],
+    delivery: null,
+    settlementExtensions: {},
+  };
+}
+
+/**
+ * A replay-safe settlement id for a RUNTIME-originated settlement.
+ *
+ * ARCHITECTURAL CONSTRAINT, stated rather than papered over: the runtime
+ * interview events carry NO identity of their own.
+ * `InterviewResolvedEvent`/`InterviewErroredEvent` are `{ blockId, timestamp,
+ * parentBlockId, type }` plus their payload - there is no event id to key
+ * settlement on. So this derives one from everything that does identify the
+ * event, and the derivation has a known collision: two DISTINCT runtime events
+ * of the same kind, for the same block, in the same millisecond produce the
+ * same id, and the reducer reads the second as a replay of the first.
+ *
+ * That collision is contained rather than fixed, and deliberately not hidden
+ * behind a random id. A random id would make every replay - hydration,
+ * reconciliation, a reconnect re-delivering the same event - look like a NEW
+ * settlement, which is a permanent correctness bug traded for a
+ * same-millisecond edge case. The containment is the reducer's authority
+ * rules: a colliding second event cannot install its own answers over a
+ * canonical winner in any case (see `applyInterviewSettlement`'s payload
+ * gating), so the observable loss is limited to a distinct diagnostic code
+ * that lands in the same millisecond as its twin.
+ *
+ * The real fix is an id on the event itself, which is a change to the
+ * runtime-event contract (a new `chat.subscribe` minor and an adapter
+ * obligation), not something this function can invent. Until then, a
+ * host-originated settlement supplies its own durable id and never comes here
+ * - which is the path every user-visible settlement actually takes.
+ */
+function runtimeSettlementId(
+  event: InterviewResolvedEvent | InterviewErroredEvent,
+): string {
+  return `runtime:${event.type}:${event.blockId}:${event.timestamp}`;
+}
+
+function applyRuntimeInterviewSettlement(
+  blocks: ContentBlock[],
+  event: InterviewResolvedEvent | InterviewErroredEvent,
+  settlement: InterviewSettlement,
+): ContentBlock[] {
+  const existing = findBlockOfType(blocks, event.blockId, "interview");
+  // A settlement can arrive for a block this accumulator never saw requested
+  // (a resumed session, a detached interview whose request block was trimmed).
+  // Reducing against a synthetic empty block keeps that path on the same rules
+  // as every other, instead of a second hand-written block literal.
+  const base: InterviewBlock = existing ?? {
+    ...emptyInterviewBlockFacts(),
+    type: "interview",
+    blockId: event.blockId,
+    parentBlockId: event.parentBlockId,
+    status: "streaming",
+    timestamp: event.timestamp,
+    toolName: null,
+    title: null,
+    description: null,
+    questions: [],
+    metadata: null,
+  };
+
+  const { changed, patch } = applyInterviewSettlement(base, settlement);
+  const metadata = event.metadata ?? base.metadata;
+  if (existing !== undefined && !changed && metadata === existing.metadata) {
+    return blocks;
+  }
+
+  const updated: InterviewBlock = { ...base, ...patch, metadata };
+  return existing === undefined
+    ? [...blocks, updated]
+    : replaceBlock(blocks, event.blockId, updated);
 }
 
 /**
@@ -1290,6 +1400,42 @@ export function accumulateEvent(
     case "interview.requested": {
       const existing = findBlockOfType(blocks, event.blockId, "interview");
       if (existing) {
+        // A late or duplicate request never reopens a settled interview. Its
+        // answer or Skip may already have reached a provider, so re-arming the
+        // pending gate would ask the user to answer something the agent has
+        // already consumed. Only the explicit pending-fork transform may clear
+        // terminal facts (`clearInterviewSettlement`) and synthesize a fresh
+        // request. The predicate is the shared union rule, so this agrees with
+        // host hydration and notification reconciliation by construction.
+        if (isInterviewBlockSettled(existing)) {
+          // A settlement can be observed before its request (resume/replay or
+          // transport reordering), producing a terminal synthetic block with
+          // no framing. A late request must never REOPEN or rewrite that fact,
+          // but it is authoritative framing evidence. Fill only fields that
+          // are still absent, preserving terminal timestamp and every
+          // settlement-owned field byte-for-value.
+          const enriched = {
+            ...existing,
+            toolName: existing.toolName ?? event.toolName,
+            title: existing.title ?? nullableString(event.title),
+            description:
+              existing.description ?? nullableString(event.description),
+            questions:
+              existing.questions.length === 0 && event.questions.length > 0
+                ? [...event.questions]
+                : existing.questions,
+            metadata: existing.metadata ?? nullableMetadata(event.metadata),
+          };
+          const framingUnchanged =
+            enriched.toolName === existing.toolName &&
+            enriched.title === existing.title &&
+            enriched.description === existing.description &&
+            enriched.questions === existing.questions &&
+            enriched.metadata === existing.metadata;
+          return framingUnchanged
+            ? blocks
+            : replaceBlock(blocks, event.blockId, enriched);
+        }
         const updated = {
           ...existing,
           status: "streaming" as const,
@@ -1305,6 +1451,7 @@ export function accumulateEvent(
       return [
         ...blocks,
         {
+          ...emptyInterviewBlockFacts(),
           type: "interview",
           blockId: event.blockId,
           status: "streaming",
@@ -1313,78 +1460,57 @@ export function accumulateEvent(
           title: nullableString(event.title),
           description: nullableString(event.description),
           questions: [...event.questions],
-          answers: [],
-          error: null,
           metadata: nullableMetadata(event.metadata),
         },
       ];
     }
 
+    // Both settlement arms below route through the shared protocol reducer
+    // rather than switching on status/answers/error themselves. That is what
+    // makes an adapter's late cleanup, a duplicate resolution and a replayed
+    // event behave identically here and in the host - and it is where the
+    // OpenCode empty-second-resolution protection now lives (as the reducer's
+    // "non-empty beats empty" rule), rather than as a local special case.
     case "interview.resolved": {
-      const existing = findBlockOfType(blocks, event.blockId, "interview");
-      if (existing) {
-        const updated = {
-          ...existing,
-          status: "completed" as const,
-          // A resolution that carries no answers must not erase answers already
-          // recorded for this block. The OpenCode adapter resolves the card with
-          // the user's real answers, then the converter emits a SECOND
-          // `interview.resolved` whose answers are empty (OpenCode's question
-          // tool output is an unparseable English sentence). Keep the recorded
-          // answers so the card never regresses to "No answer".
-          answers:
-            event.answers.length > 0 ? [...event.answers] : existing.answers,
-          metadata: event.metadata ?? existing.metadata,
-          timestamp: event.timestamp,
-        };
-        return replaceBlock(blocks, event.blockId, updated);
-      }
-      return [
-        ...blocks,
-        {
-          type: "interview",
-          blockId: event.blockId,
-          status: "completed",
-          timestamp: event.timestamp,
-          toolName: null,
-          title: null,
-          description: null,
-          questions: [],
-          answers: [...event.answers],
-          error: null,
-          metadata: nullableMetadata(event.metadata),
-        },
-      ];
+      return applyRuntimeInterviewSettlement(blocks, event, {
+        settlementId: runtimeSettlementId(event),
+        outcome: "answered",
+        // Normalized at the boundary: an adapter can emit an answer with no
+        // `selection` key at all, and the reducer's `changed` detection reads
+        // an absent key as different from an explicit null.
+        answers: event.answers.map((answer) => ({
+          ...answer,
+          selection: answer.selection ?? null,
+        })),
+        draftAnswers: [],
+        reason: null,
+        source: "runtime",
+        diagnostic: null,
+        delivery: null,
+        timestamp: event.timestamp,
+      });
     }
 
     case "interview.errored": {
-      const existing = findBlockOfType(blocks, event.blockId, "interview");
-      if (existing) {
-        const updated = {
-          ...existing,
-          status: "errored" as const,
-          error: event.error,
-          metadata: event.metadata ?? existing.metadata,
-          timestamp: event.timestamp,
-        };
-        return replaceBlock(blocks, event.blockId, updated);
-      }
-      return [
-        ...blocks,
-        {
-          type: "interview",
-          blockId: event.blockId,
-          status: "errored",
-          timestamp: event.timestamp,
-          toolName: null,
-          title: null,
-          description: null,
-          questions: [],
-          answers: [],
-          error: event.error,
-          metadata: nullableMetadata(event.metadata),
+      return applyRuntimeInterviewSettlement(blocks, event, {
+        settlementId: runtimeSettlementId(event),
+        outcome: "failed",
+        answers: [],
+        draftAnswers: [],
+        reason: event.error,
+        source: "runtime",
+        // Content-free, id-deduplicated, and recorded SEPARATELY from the
+        // user-visible reason. When this settlement loses - an adapter
+        // reporting failure after an accepted Skip - the code is retained
+        // while `outcome`/`error` stay exactly what the user experienced.
+        diagnostic: {
+          diagnosticId: runtimeSettlementId(event),
+          code: "runtime.interview_errored",
+          source: "runtime",
         },
-      ];
+        delivery: null,
+        timestamp: event.timestamp,
+      });
     }
 
     case "file_change.started": {

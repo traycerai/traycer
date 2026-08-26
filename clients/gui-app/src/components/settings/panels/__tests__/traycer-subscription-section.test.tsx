@@ -37,6 +37,10 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     authnBaseUrl: "https://authn.traycer.ai",
+    // The platform origin is derived from `signInUrl`; without one this
+    // fixture would silently exercise the production fallback instead of the
+    // deployment it names.
+    signInUrl: "https://platform.traycer.ai/sign-in",
     openExternalLink: mocks.openExternalLink,
   }),
 }));

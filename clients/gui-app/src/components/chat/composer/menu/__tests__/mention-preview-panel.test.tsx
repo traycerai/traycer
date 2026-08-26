@@ -30,6 +30,11 @@ function makeListRef(activeRow: HTMLElement | null): {
 function makeActiveRow(): HTMLElement {
   const row = document.createElement("div");
   row.setAttribute("data-active", "true");
+  // jsdom computes no layout, so every rect is zero - and a zero rect reads
+  // as "no anchor" to the panel, which hides itself instead of positioning.
+  // Give the row a real rectangle so positioning runs as it would in a
+  // browser.
+  row.getBoundingClientRect = () => new DOMRect(40, 100, 200, 32);
   return row;
 }
 

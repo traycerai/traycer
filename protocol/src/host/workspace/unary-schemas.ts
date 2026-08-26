@@ -368,6 +368,15 @@ export type WorkspaceBrowseFolderEntry = z.infer<
   typeof workspaceBrowseFolderEntrySchema
 >;
 
+export const workspaceBrowseFolderEntrySchemaV11 =
+  workspaceBrowseFolderEntrySchema.extend({
+    /** Dot-hidden on POSIX/macOS, or carrying Windows' native Hidden attribute. */
+    hidden: z.boolean(),
+  });
+export type WorkspaceBrowseFolderEntryV11 = z.infer<
+  typeof workspaceBrowseFolderEntrySchemaV11
+>;
+
 /**
  * Pre-workspace folder browsing for the remote folder picker: unlike
  * `workspace.listDirectory` (scoped to an already-added workspace), this
@@ -401,6 +410,14 @@ export const workspaceBrowseFoldersResponseSchema = z.object({
 });
 export type WorkspaceBrowseFoldersResponse = z.infer<
   typeof workspaceBrowseFoldersResponseSchema
+>;
+
+export const workspaceBrowseFoldersResponseSchemaV11 =
+  workspaceBrowseFoldersResponseSchema.extend({
+    entries: z.array(workspaceBrowseFolderEntrySchemaV11),
+  });
+export type WorkspaceBrowseFoldersResponseV11 = z.infer<
+  typeof workspaceBrowseFoldersResponseSchemaV11
 >;
 
 export const workspaceReadFileRequestSchema = z.object({
@@ -499,7 +516,10 @@ export type WorkspacePathRejectionReason = z.infer<
  */
 export const workspaceValidatePathResponseSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), resolvedPath: z.string() }),
-  z.object({ ok: z.literal(false), reason: workspacePathRejectionReasonSchema }),
+  z.object({
+    ok: z.literal(false),
+    reason: workspacePathRejectionReasonSchema,
+  }),
 ]);
 export type WorkspaceValidatePathResponse = z.infer<
   typeof workspaceValidatePathResponseSchema
@@ -565,7 +585,7 @@ export const workspacePrepareFoldersResponseSchemaV11 = z.object({
   homeDir: z.string().nullable(),
   /** Set only for `operation: "validatePath" | "recordRecentWorkspace"`. */
   validation: workspaceValidatePathResponseSchema.nullable(),
-  /** Set only for `operation: "listRecentWorkspaces"`. */
+  /** Set for `operation: "listRecentWorkspaces"` and successful recent writes. */
   recentWorkspaces: z.array(workspaceRecentEntrySchema).nullable(),
 });
 export type WorkspacePrepareFoldersResponseV11 = z.infer<
@@ -598,6 +618,67 @@ export const workspacePrepareFoldersResponseSchemaV12 =
   });
 export type WorkspacePrepareFoldersResponseV12 = z.infer<
   typeof workspacePrepareFoldersResponseSchemaV12
+>;
+
+// v1.3 adds the one filesystem mutation the folder picker needs when its
+// final typed segment does not exist. The existing `path` field carries the
+// target; the response uses the ordinary prepared-folder fields so creation
+// and workspace preparation stay one host operation.
+export const workspacePrepareFoldersOperationSchemaV13 = z.enum([
+  ...workspacePrepareFoldersOperationSchemaV12.options,
+  "createAndPrepare",
+]);
+
+export const workspacePrepareFoldersRequestSchemaV13 =
+  workspacePrepareFoldersRequestSchemaV12
+    .extend({
+      operation: workspacePrepareFoldersOperationSchemaV13,
+    })
+    .superRefine((request, context) => {
+      if (request.operation !== "createAndPrepare") return;
+      if (request.path === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "createAndPrepare requires path",
+          path: ["path"],
+        });
+        return;
+      }
+      const absolutePath = absoluteHostPathSchema.safeParse(request.path);
+      if (!absolutePath.success) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "createAndPrepare requires an absolute host path",
+          path: ["path"],
+        });
+      }
+    });
+export type WorkspacePrepareFoldersRequestV13 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV13
+>;
+
+export const workspacePrepareFoldersResponseSchemaV13 =
+  workspacePrepareFoldersResponseSchemaV12.extend({
+    operation: workspacePrepareFoldersOperationSchemaV13,
+  });
+export type WorkspacePrepareFoldersResponseV13 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV13
+>;
+
+// v1.4 gives the existing `bumpRecency` field meaning on `prepare` and
+// `createAndPrepare`: true records every canonical prepared folder in one
+// host-side recents mutation. The shape is unchanged; the minor version gates
+// the new behavior so v1.3 hosts never silently ignore the request.
+export const workspacePrepareFoldersRequestSchemaV14 =
+  workspacePrepareFoldersRequestSchemaV13;
+export type WorkspacePrepareFoldersRequestV14 = z.infer<
+  typeof workspacePrepareFoldersRequestSchemaV14
+>;
+
+export const workspacePrepareFoldersResponseSchemaV14 =
+  workspacePrepareFoldersResponseSchemaV13;
+export type WorkspacePrepareFoldersResponseV14 = z.infer<
+  typeof workspacePrepareFoldersResponseSchemaV14
 >;
 
 /**

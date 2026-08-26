@@ -104,6 +104,13 @@ function buildFakeBridge(
         delete: async () => {
           stored = null;
         },
+        deleteIfToken: async (expectedToken: string) => {
+          if (stored === null || stored.token !== expectedToken) {
+            return "kept" as const;
+          }
+          stored = null;
+          return "deleted" as const;
+        },
         subscribe: () => ({ dispose: () => undefined }),
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
@@ -204,8 +211,9 @@ function buildFakeBridge(
       readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
-        return input.name;
+        return { name: input.name, path: `/tmp/saved/${input.name}` };
       },
+      openSavedFile: async () => undefined,
     },
     menu: {
       platform: "darwin",

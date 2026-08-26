@@ -39,10 +39,16 @@ interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly onBeforeOpen: (() => void) | undefined;
+  /**
+   * Fired synchronously right after a terminal is launched (before the popover
+   * closes). The desktop sidebar passes `null`; the mobile switcher sheet uses
+   * it to close itself so the new terminal lands as the visible tile.
+   */
+  readonly onLaunched: (() => void) | null;
 }
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
-  const { epicId, onBeforeOpen, tabId } = props;
+  const { epicId, onBeforeOpen, onLaunched, tabId } = props;
   const surfaceKey = useTabSurfaceKey("new-terminal", tabId);
   const isOpen = usePanelHeaderMenuOpen(tabId, "terminals", "create");
   const setMenuOpen = usePanelHeaderMenuStore((state) => state.setMenuOpen);
@@ -86,8 +92,16 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
         ),
       );
       setIsOpen(false);
+      if (onLaunched !== null) onLaunched();
     },
-    [navigateNested, prepareOpenTileInTabFocusTarget, epicId, tabId, setIsOpen],
+    [
+      navigateNested,
+      prepareOpenTileInTabFocusTarget,
+      epicId,
+      tabId,
+      setIsOpen,
+      onLaunched,
+    ],
   );
 
   return (
@@ -126,6 +140,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
           <NewTerminalPickerBody
             epicId={epicId}
             surfaceKey={surfaceKey}
+            autoFocusSearch
             onLaunch={handleLaunch}
           />
         ) : null}

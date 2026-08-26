@@ -14,6 +14,7 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
@@ -111,7 +112,14 @@ export function RootComponent() {
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}
         />
-        {isStandalone ? null : <SystemTabModalHost />}
+        {isStandalone ? null : (
+          <>
+            <SystemTabModalHost />
+            {/* Mobile-only full-screen notifications surface (renders null on
+                desktop, where the header bell + popover are used instead). */}
+            <NotificationsMobileSheet />
+          </>
+        )}
       </HostReadyGate>
     </>
   );
@@ -143,14 +151,26 @@ function RootSurface(props: {
 // `app-header.tsx`). The band itself drags; the menu strip inside opts out.
 const DRAG_STYLE = { WebkitAppRegion: "drag" } as CSSProperties;
 
-// Owns the viewport height for standalone surfaces, which size themselves
-// with h-full/min-h-full: on the Windows desktop shell a title-bar band takes
-// the top and the content gets the rest; elsewhere the band collapses and the
+// Owns the viewport for standalone surfaces, which size themselves with
+// h-full/min-h-full: on the Windows desktop shell a title-bar band takes the
+// top and the content gets the rest; elsewhere the band collapses and the
 // content keeps the full height.
+//
+// `fixed inset-0` is the app's ONE sanctioned full-bleed surface, and the only
+// thing that opts out of `#root`'s safe-area reservation. Sign-in and the tour
+// are edge-to-edge artwork, and artwork stopping below the status bar reads as
+// a mismatched band rather than as respect for the bar. Taking the viewport
+// directly is what reaches it: `fixed` resolves against the viewport and not
+// against `#root`'s padding box, so there is no reservation to cancel and no
+// second copy of the inset to keep in sync.
+//
+// The exception is the BACKGROUND only. Content on these surfaces still starts
+// below the bar, applied by each surface to its own content layer - artwork and
+// content are siblings there, so the shell cannot inset one without the other.
 function StandaloneShell(props: { readonly children: ReactNode }) {
   const menuBarActive = useWindowsMenuBarActive();
   return (
-    <div className="flex h-svh flex-col">
+    <div data-full-bleed-surface="" className="fixed inset-0 flex flex-col">
       {menuBarActive ? (
         <div
           className="relative z-20 flex h-10 shrink-0 items-center bg-canvas after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-border/90 after:content-['']"

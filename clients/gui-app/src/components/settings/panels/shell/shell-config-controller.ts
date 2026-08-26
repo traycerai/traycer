@@ -61,6 +61,18 @@ export interface ShellConfigController {
   /** Re-issue the failed reads. */
   readonly retryConfig: () => void;
   readonly shells: readonly ConfigDetectedShell[];
+  /**
+   * Re-run shell detection on the target machine. Freshness is otherwise
+   * per-panel-visit (`refetchOnMount: "always"`), and deliberately NOT
+   * focus-driven - this desktop shell's focus/online signals are unreliable
+   * around sleep/wake (see `createAppQueryClient`), detection spawns a
+   * `wsl.exe` probe on Windows, and window focus says nothing about a REMOTE
+   * host's state. The explicit control is what lets a user who just ran
+   * `wsl --install` verify the picker now agrees.
+   */
+  readonly refreshShells: () => void;
+  /** A `refreshShells` (or mount) fetch of the list is in flight. */
+  readonly shellsRefreshing: boolean;
   readonly overrides: readonly ConfigEnvEntry[];
   /** Any shell-config write is in flight. */
   readonly shellPending: boolean;

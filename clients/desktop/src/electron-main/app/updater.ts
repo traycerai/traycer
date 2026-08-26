@@ -32,6 +32,13 @@ import {
   type DesktopReleaseCandidate,
   type DesktopUpdateFeed,
 } from "./desktop-release-feed";
+import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
+import {
+  isSelectableCandidate,
+  modeAllowsPrerelease,
+  resolveUpdateChannelMode,
+  type DesktopUpdateChannelMode,
+} from "./update-channel-mode";
 import type {
   DesktopAppUpdateCheckIntent,
   DesktopAppUpdateChannelChange,
@@ -105,11 +112,6 @@ export interface AppUpdaterDeps {
 
 const AUTOMATIC_RESUME_CHECK_DEBOUNCE_MS = 30_000;
 const CURRENT_VERSION = app.getVersion();
-// A SemVer prerelease carries identifiers after `-` (before any `+` build
-// metadata), e.g. `1.0.0-rc.1`. When the stable channel is selected we use
-// this to treat "no GA release exists yet" as a non-error on RC builds rather
-// than logging/surfacing a failure.
-const IS_PRERELEASE_BUILD = CURRENT_VERSION.split("+")[0].includes("-");
 const PRIVATE_UPDATE_REPO = process.env.VITE_TRAYCER_DESKTOP_UPDATE_REPO ?? "";
 const PRIVATE_UPDATE_TOKEN =
   process.env.VITE_TRAYCER_DESKTOP_UPDATE_TOKEN ?? "";
@@ -173,6 +175,13 @@ let checkErrorEmitted = false;
 let downloadInProgress = false;
 let downloadIntent: DesktopAppUpdateCheckIntent | null = null;
 let lastResumeCheckAtMs = 0;
+// The channel mode the updater is CONFIGURED with right now: what
+// `autoUpdater.allowPrerelease` was derived from, and what the namespaced
+// selector is filtering candidates for. Set once at initialization and moved
+// only by a channel change that genuinely alters discovery behavior, so it can
+// be compared against a freshly requested mode to tell a real transition from a
+// preference write that changes nothing the updater does.
+let activeChannelMode: DesktopUpdateChannelMode = "stable-only";
 // Monotonic channel epoch, bumped by every `setAllowPrereleaseUpdates` call.
 // A channel change makes any discovery/candidate produced under a prior
 // generation stale: `checkForUpdatesNow` rejects a stale discovery before
@@ -322,14 +331,20 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
   // update" click, where a failure is guaranteed to surface visibly (see
   // `handleUpdaterError`'s `installingUpdate` branch).
   autoUpdater.autoInstallOnAppQuit = linuxPackageType === null;
-  // electron-updater auto-enables prereleases when the running build is an RC.
-  // Replace that implicit behaviour with the explicit, persisted app setting.
-  // The default remains stable-only; prerelease checks are routed through the
-  // desktop-tag selector in `resolveDesktopReleaseFeed` below so a sibling
-  // `host-v*` / `cli-v*` prerelease in the shared repository can never be
-  // mistaken for a desktop update.
+  // electron-updater auto-enables prereleases when the running build is an RC,
+  // and then selects the newest prerelease it can see - across release lines,
+  // and across the `host-v*` / `cli-v*` tags this repository also publishes.
+  // Both halves of that are wrong here, so the flag is replaced by a mode
+  // derived from the persisted preference and the installed version, and every
+  // prerelease check is routed through the desktop-tag selector in
+  // `resolveDesktopReleaseFeed` below, which receives that mode.
   await hydrateUpdatePreferences();
-  autoUpdater.allowPrerelease = prereleaseUpdatesEnabled();
+  activeChannelMode = effectiveChannelMode();
+  autoUpdater.allowPrerelease = modeAllowsPrerelease(activeChannelMode);
+  log.debug("[updater] resolved update channel mode", {
+    mode: activeChannelMode,
+    currentVersion: CURRENT_VERSION,
+  });
   emitSnapshot({ allowPrerelease: autoUpdater.allowPrerelease });
   // Skip feed configuration entirely when the private config is invalid: the
   // startup check below is refused by the same guard, so we must not leave a
@@ -456,12 +471,22 @@ async function configureAutoUpdater(deps: AppUpdaterDeps): Promise<void> {
     notifyUpdateWhenUnfocused("ready", info.version);
   });
   autoUpdater.on("error", (err) => {
-    if (handledNoStableReleaseForPrerelease(err)) {
-      return;
-    }
     log.error("[updater] error", err);
     handleUpdaterError(err);
   });
+}
+
+/**
+ * The mode a check would run under RIGHT NOW: the durable explicit preference
+ * plus the installed version.
+ *
+ * Read from the persisted preference rather than `autoUpdater.allowPrerelease`
+ * for the same reason `getAppUpdateSnapshot` reconciles: the flag is a derived
+ * effect that a half-applied or not-yet-initialized updater can lag behind,
+ * while the preference and the app version are always authoritative.
+ */
+function effectiveChannelMode(): DesktopUpdateChannelMode {
+  return resolveUpdateChannelMode(prereleaseUpdatesEnabled(), CURRENT_VERSION);
 }
 
 export async function checkForUpdatesNow(
@@ -581,8 +606,11 @@ export async function checkForUpdatesNow(
     });
   }
   try {
-    if (autoUpdater.allowPrerelease) {
-      const feed = await resolveDesktopReleaseFeed();
+    // THE MODE decides whether the namespaced selector runs, not the flag it
+    // derived: `allowPrerelease` is now an effect of the mode, and reading the
+    // effect back to re-decide the cause is how the two drift.
+    if (modeAllowsPrerelease(activeChannelMode)) {
+      const feed = await resolveDesktopReleaseFeed(activeChannelMode);
       // Discovery is async: if the channel changed while it ran, reject this
       // stale result before touching the feed or publishing any state - the
       // superseding channel's own check (queued below via `pendingRecheck`)
@@ -605,10 +633,8 @@ export async function checkForUpdatesNow(
     }
     await autoUpdater.checkForUpdates();
   } catch (err) {
-    if (!handledNoStableReleaseForPrerelease(err)) {
-      log.warn("[updater] check failed", err);
-      emitCheckErrorFromCatch(err, checkIntent ?? intent);
-    }
+    log.warn("[updater] check failed", err);
+    emitCheckErrorFromCatch(err, checkIntent ?? intent);
   } finally {
     checkInFlight = false;
     settleCheck?.();
@@ -665,15 +691,42 @@ async function performChannelChange(
   // feed/listener set (finding 1). The barrier always settles, so this never
   // hangs; the preference persistence below is independent of updater health.
   await updaterInitialized;
-  // Idempotent set (channel unchanged): change nothing - in particular do not
-  // open a new epoch or invalidate an in-flight download for a no-op toggle. Read
-  // inside the serialized section so it reflects any preceding queued change.
+  // The mode this request asks for. Read inside the serialized section so the
+  // persisted value it is compared against reflects any preceding queued change.
+  const requestedMode = resolveUpdateChannelMode(
+    allowPrerelease,
+    CURRENT_VERSION,
+  );
+  // Idempotent set (preference unchanged): change nothing - in particular do not
+  // open a new epoch or invalidate an in-flight download for a no-op toggle.
   if (prereleaseUpdatesEnabled() === allowPrerelease) {
     return {
       outcome: "unchanged",
-      snapshot: emitSnapshot({ allowPrerelease }),
+      snapshot: emitSnapshot({
+        allowPrerelease: modeAllowsPrerelease(activeChannelMode),
+      }),
     };
   }
+  // PAST HERE THE PREFERENCE MOVES, AND SO DOES THE EFFECTIVE MODE - always,
+  // and there is deliberately no third branch for "persisted moved, mode did
+  // not".
+  //
+  // Persisting intent and transitioning the channel are still two different
+  // things, and the code below keeps them ordered accordingly. They just cannot
+  // currently come apart: `resolveUpdateChannelMode(true, …)` is always
+  // `explicit-prerelease` and `resolveUpdateChannelMode(false, …)` never is, so
+  // a changed preference always crosses that boundary. A branch guarding the
+  // other case would be unreachable defensive code, and the cold review was
+  // right that shipping one - with a test that has to construct an impossible
+  // updater state to reach it - is worse than not having it.
+  //
+  // If the derivation ever gains a mode that BOTH preference values can select,
+  // this is the point that needs the split back: persist, re-emit, and return
+  // `unchanged` WITHOUT running any of the destructive choreography below (epoch
+  // bump, candidate invalidation, staged-artifact refusal/discard, feed
+  // replacement, quit-install disarm), none of which a change that selects no
+  // different candidate can justify.
+
   // A DOWNLOAD IN PROGRESS refuses on every platform, and this half of the
   // guard is not negotiable: `startUpdateDownload` calls
   // `autoUpdater.downloadUpdate()` with no `CancellationToken`, so there is no
@@ -729,8 +782,9 @@ async function performChannelChange(
   // generation will reject its result rather than restore the old feed, and any
   // candidate/download/ready state below is invalidated.
   channelGeneration += 1;
-  autoUpdater.allowPrerelease = allowPrerelease;
-  if (!allowPrerelease) {
+  activeChannelMode = requestedMode;
+  autoUpdater.allowPrerelease = modeAllowsPrerelease(activeChannelMode);
+  if (!autoUpdater.allowPrerelease) {
     configureStableGitHubUpdateFeed();
   }
 
@@ -746,7 +800,7 @@ async function performChannelChange(
   return {
     outcome: "changed",
     snapshot: emitSnapshot({
-      allowPrerelease,
+      allowPrerelease: autoUpdater.allowPrerelease,
       status: "idle",
       latestVersion: null,
       // Cleared WITH the version. These two describe one candidate, and a null
@@ -1000,18 +1054,23 @@ export async function resolveCompatRecovery(input: {
   if (downloadInProgress || currentSnapshot.status === "downloading") {
     return manualRecoveryPlan();
   }
-  // THE PERSISTED PREFERENCE, not `currentSnapshot.allowPrerelease`. Those two
-  // can disagree - `getAppUpdateSnapshot` exists precisely to reconcile them on
-  // every read - and reading the unreconciled field here inverts this guard:
-  // with a stale `false` beside a persisted `true`, the short-circuit does not
-  // fire, the probe runs against the feed the user is ALREADY on, and the
-  // dialog offers an opt-in they already have. `setAllowPrereleaseUpdates(true)`
-  // then answers `unchanged` - a button that reports success and changes
-  // nothing, which is exactly what this guard exists to prevent.
-  if (prereleaseUpdatesEnabled()) {
-    // Already following RC, so the feed checked above WAS the RC feed. There is
-    // no second line left to look on; this is the honest corner where the
-    // manual link is the remedy.
+  // THE EFFECTIVE MODE, not the persisted preference and not
+  // `currentSnapshot.allowPrerelease`.
+  //
+  // `explicit-prerelease` is the case this guard has always covered: the feed
+  // checked above WAS the prerelease feed, so there is no second line left to
+  // look on, and `setAllowPrereleaseUpdates(true)` would answer `unchanged` -
+  // a button that reports success and changes nothing.
+  //
+  // `implicit-rc-line` is the case the mode model adds, and it is worse than a
+  // no-op. An RC build already receives its own line's candidates, so the
+  // probe would offer an opt-in that changes no current discovery behavior
+  // while PERSISTING a broad prerelease preference the user never asked for -
+  // one that outlives the RC install and keeps them on prereleases after they
+  // reach stable. Implicit participation is derived and must never be written
+  // to disk, so the `enable-rc` route stays reserved for a stable-only app
+  // giving explicit consent.
+  if (effectiveChannelMode() !== "stable-only") {
     return manualRecoveryPlan();
   }
   const candidate = await probeRcRecoveryCandidate(input.minimumEpoch);
@@ -1169,7 +1228,7 @@ async function runRcRecoveryProbe(
         channelFile,
         request.url,
       );
-      const isRc = candidate.version.includes("-rc.");
+      const isRc = isCanonicalReleaseCandidate(candidate.version);
       const isNewer =
         compareHostVersions(candidate.version, CURRENT_VERSION) > 0;
       if (!isRc || !isNewer || epoch === null || epoch < minimumEpoch) {
@@ -1260,10 +1319,8 @@ export function startUpdateDownload(): DesktopAppUpdateSnapshot {
   void (async () => {
     await autoUpdater.downloadUpdate();
   })().catch((err: unknown) => {
-    if (!handledNoStableReleaseForPrerelease(err)) {
-      log.warn("[updater] download failed", err);
-      handleUpdaterError(err);
-    }
+    log.warn("[updater] download failed", err);
+    handleUpdaterError(err);
   });
   return currentSnapshot;
 }
@@ -1325,8 +1382,20 @@ export function isInstallingUpdate(): boolean {
   return installingUpdate;
 }
 
+/**
+ * `allowPrerelease` reports whether THE CURRENT CHECK effectively allows
+ * prereleases - the derived effect of the mode, not the saved preference.
+ *
+ * An RC build following its own line reports `true` while its persisted
+ * preference is `false`, and that is the honest answer to the question every
+ * consumer is actually asking ("could this updater hand me an RC?"). If product
+ * UI ever needs to distinguish "the user asked for prereleases" from "this
+ * build follows its own line", that is a DISTINCT field - overloading this one
+ * is how the recovery dialog came to offer an opt-in to a build that already
+ * had one.
+ */
 export function getAppUpdateSnapshot(): DesktopAppUpdateSnapshot {
-  const allowPrerelease = prereleaseUpdatesEnabled();
+  const allowPrerelease = modeAllowsPrerelease(effectiveChannelMode());
   return currentSnapshot.allowPrerelease === allowPrerelease
     ? currentSnapshot
     : { ...currentSnapshot, allowPrerelease };
@@ -1437,22 +1506,24 @@ function configureStableGitHubUpdateFeed(): void {
 }
 
 /**
- * Resolves the highest compatible desktop-tagged GitHub Release (stable or
- * `rc.N`) across pagination and builds the feed that points electron-updater at
- * that exact release. The repository also hosts host and CLI releases, so
+ * Resolves the compatible desktop-tagged GitHub Release this MODE selects
+ * across pagination, and builds the feed that points electron-updater at that
+ * exact release. The repository also hosts host and CLI releases, so
  * electron-updater's built-in `allowPrerelease` GitHub path is unsafe: it
  * selects the newest prerelease without respecting the `desktop-v` namespace.
- * Returns null when no compatible desktop release exists (genuine "up to
+ * Returns null when no selectable desktop release exists (genuine "up to
  * date"); throws on a discovery error (surfaced as a check failure).
  */
-async function resolveDesktopReleaseFeed(): Promise<DesktopUpdateFeed | null> {
+async function resolveDesktopReleaseFeed(
+  mode: DesktopUpdateChannelMode,
+): Promise<DesktopUpdateFeed | null> {
   const coordinate = resolveUpdateRepo();
   if (coordinate === null) {
     throw new Error(
       "Desktop update repository is not a valid owner/repo coordinate for the configured private update token",
     );
   }
-  const release = await findNewestDesktopRelease(coordinate);
+  const release = await findNewestDesktopRelease(coordinate, mode);
   if (release === null) return null;
   const token = PRIVATE_UPDATE_TOKEN.trim();
   log.debug("[updater] configured desktop release feed", {
@@ -1477,6 +1548,7 @@ function applyDesktopReleaseFeed(feed: DesktopUpdateFeed): void {
 
 async function findNewestDesktopRelease(
   coordinate: GitHubRepoCoordinate,
+  mode: DesktopUpdateChannelMode,
 ): Promise<DesktopReleaseCandidate | null> {
   const candidates = await collectDesktopReleaseCandidates(
     coordinate,
@@ -1489,9 +1561,29 @@ async function findNewestDesktopRelease(
   // newer release is skipped so an older applicable one is chosen instead of
   // committing the feed to a candidate that only fails once electron-updater
   // parses its manifest (cold-review finding 4).
-  const ordered = [...candidates].sort((a, b) =>
-    compareHostVersions(b.version, a.version),
-  );
+  //
+  // MODE FILTERS FIRST, and newest-first ordering is what gives the implicit
+  // line its stable priority for free: the comparator ranks stable `X.Y.Z`
+  // above every `X.Y.Z-rc.M`, so once the line's stable release is published it
+  // is simply the head of the ordered list. The eligibility filter is what
+  // keeps `X.Y+1.0-rc.1` out of that list entirely.
+  const ordered = [...candidates]
+    .filter((candidate) =>
+      isSelectableCandidate({
+        mode,
+        installedVersion: CURRENT_VERSION,
+        candidateVersion: candidate.version,
+        isStrictlyNewer:
+          compareHostVersions(candidate.version, CURRENT_VERSION) > 0,
+      }),
+    )
+    .sort((a, b) => compareHostVersions(b.version, a.version));
+  if (mode === "implicit-rc-line") {
+    log.debug("[updater] implicit RC-line candidates", {
+      currentVersion: CURRENT_VERSION,
+      candidates: ordered.map((candidate) => candidate.version),
+    });
+  }
   const token = PRIVATE_UPDATE_TOKEN.trim();
   const channelFile = platformChannelFile();
   const currentOsRelease = osRelease();
@@ -1787,57 +1879,23 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
   return currentSnapshot;
 }
 
-// Expected outcome for an RC build on the stable channel: we query
-// the stable `/releases/latest` feed, which 404s until the first GA release
-// exists (surfaced as ERR_UPDATER_LATEST_VERSION_NOT_FOUND). That is not a
-// failure for a prerelease, so we log it quietly and report "no update" instead
-// of error-logging and showing a service-unavailable message. Returns true when
-// it handled the error (callers must then treat it as non-fatal). The error
-// event fires before `checkForUpdatesAndNotify()` rejects, so both the `error`
-// listener and the check's `catch` call this; `checkErrorEmitted` makes the
-// second call a no-op.
-const NO_STABLE_RELEASE_ERROR_HINTS: readonly string[] = [
-  "err_updater_latest_version_not_found",
-  "please ensure a production release exists",
-  "no published versions",
-];
-
-function handledNoStableReleaseForPrerelease(error: unknown): boolean {
-  if (!IS_PRERELEASE_BUILD || autoUpdater.allowPrerelease) {
-    return false;
-  }
-  const rawMessage =
-    error instanceof Error && error.message.length > 0
-      ? error.message
-      : String(error);
-  if (!includesAny(rawMessage.toLowerCase(), NO_STABLE_RELEASE_ERROR_HINTS)) {
-    return false;
-  }
-  if (checkErrorEmitted) {
-    return true;
-  }
-  checkErrorEmitted = true;
-  log.debug(
-    "[updater] no production release to update to yet (prerelease build) - skipping",
-  );
-  if (currentSnapshot.status === "ready" || downloadInProgress) {
-    return true;
-  }
-  // A superseded-channel check reaching the "no stable release yet" outcome must
-  // not overwrite the current channel's snapshot with a stale up-to-date/idle;
-  // the queued re-check owns the authoritative result (finding 8).
-  if (isSupersededCheckGeneration()) {
-    return true;
-  }
-  const intent = checkIntent ?? "automatic";
-  emitSnapshot({
-    status: intent === "manual" ? "up-to-date" : "idle",
-    errorMessage: null,
-    lastCheckedAt: new Date().toISOString(),
-    lastCheckIntent: intent,
-  });
-  return true;
-}
+// REMOVED with the three-mode channel model: the "no production release exists
+// yet" fallback.
+//
+// It existed because an RC build used to check the STABLE `/releases/latest`
+// feed, which 404s until the line's first GA release is published, and
+// reporting that 404 as a service failure to every RC user was noise. Under the
+// mode model a canonical `X.Y.Z-rc.N` build is never on the stable feed - it
+// derives `implicit-rc-line`, configures `allowPrerelease: true`, and resolves
+// its candidate through the namespaced `desktop-v*` selector, which answers
+// "nothing selectable" by returning a null feed (a genuine up-to-date), not by
+// raising an updater error. The only builds still on the stable feed are stable
+// releases and non-canonical prereleases, and for both of those a 404 from the
+// release feed IS a service problem worth surfacing.
+//
+// Keeping the fallback would have meant keeping a second, contradictory
+// definition of "is this a prerelease" (`version.includes("-")`) alive purely
+// to suppress an error path that the supported builds can no longer reach.
 
 function handleUpdaterError(error: unknown): void {
   // An error after the user chose "Restart" (quitAndInstall) must NOT be

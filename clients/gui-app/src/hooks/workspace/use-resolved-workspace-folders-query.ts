@@ -1,6 +1,8 @@
 import { useMemo } from "react";
+import type { Query } from "@tanstack/react-query";
 import {
   formatRepoIdentifier,
+  taskRepoIdentifierSchema,
   type TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -24,6 +26,37 @@ export interface ResolvedWorkspaceFoldersQueryResult {
 export interface WorkspaceFoldersSource {
   readonly folders: ReadonlyArray<string>;
   readonly folderInfoByPath: Readonly<Record<string, WorkspaceFolderInfo>>;
+}
+
+export function workspaceMappingQueryPredicate(
+  paramsIndex: number,
+  changedRepoIdentifiers: readonly TaskRepoIdentifier[],
+): (query: Query) => boolean {
+  const changedRepos = new Set(
+    changedRepoIdentifiers.map(repoIdentifierLookupToken),
+  );
+  return (query) => {
+    const params = query.queryKey[paramsIndex];
+    if (
+      typeof params !== "object" ||
+      params === null ||
+      !("repoIdentifiers" in params) ||
+      !Array.isArray(params.repoIdentifiers)
+    ) {
+      return false;
+    }
+    return params.repoIdentifiers.some((candidate) => {
+      const parsed = taskRepoIdentifierSchema.safeParse(candidate);
+      return (
+        parsed.success &&
+        changedRepos.has(repoIdentifierLookupToken(parsed.data))
+      );
+    });
+  };
+}
+
+function repoIdentifierLookupToken(repo: TaskRepoIdentifier): string {
+  return formatRepoIdentifier(repo).toLowerCase();
 }
 
 /**

@@ -28,6 +28,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { DropLine } from "@/components/ui/drop-line";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import {
   Tooltip,
   TooltipContent,
@@ -50,6 +51,7 @@ import {
   type EpicCanvasArtifactTabDragData,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
@@ -399,7 +401,9 @@ function SplitGroupButton(props: SplitGroupButtonProps) {
         <span className="flex items-center gap-2">
           <span>{actionLabel}</span>
           {shortcut === null ? null : (
-            <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            <ShortcutHint>
+              <Kbd>{formatChordForDisplay(shortcut)}</Kbd>
+            </ShortcutHint>
           )}
         </span>
         <span className="text-background/70">
@@ -613,6 +617,7 @@ function TabItemBody(
     }),
     [epicId, groupId, isPreview, tab.instanceId, tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -620,6 +625,7 @@ function TabItemBody(
   } = useDraggable({
     id: getArtifactTabDragId(groupId, tab.instanceId),
     data: dragData,
+    disabled: dragDisabled,
   });
   const dropData = useMemo<EpicCanvasDropTargetData>(
     () => ({
@@ -1085,7 +1091,13 @@ function TabStripEndDropIndicator(props: { readonly visible: boolean }) {
   );
 }
 
-function TabIcon(props: {
+/**
+ * Live tile icon (chat progress spinner / harness brand / static kind glyph,
+ * with diff + blank fallbacks). Exported so the mobile current-tile bar
+ * (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon
+ * as the desktop tab strip instead of duplicating the dispatch.
+ */
+export function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;

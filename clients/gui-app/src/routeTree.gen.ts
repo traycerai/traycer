@@ -25,6 +25,7 @@ import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagn
 import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
 import { Route as SettingsHostRouteImport } from "./routes/settings.host";
 import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsLinkPhoneRouteImport } from "./routes/settings.link-phone";
 import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
 import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
 import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
@@ -113,6 +114,11 @@ const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   path: "/keybindings",
   getParentRoute: () => SettingsRoute,
 } as any);
+const SettingsLinkPhoneRoute = SettingsLinkPhoneRouteImport.update({
+  id: "/link-phone",
+  path: "/link-phone",
+  getParentRoute: () => SettingsRoute,
+} as any);
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: "/notifications",
   path: "/notifications",
@@ -164,6 +170,7 @@ export interface FileRoutesByFullPath {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -187,6 +194,7 @@ export interface FileRoutesByTo {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -213,6 +221,7 @@ export interface FileRoutesById {
   "/settings/general": typeof SettingsGeneralRoute;
   "/settings/host": typeof SettingsHostRoute;
   "/settings/keybindings": typeof SettingsKeybindingsRoute;
+  "/settings/link-phone": typeof SettingsLinkPhoneRoute;
   "/settings/notifications": typeof SettingsNotificationsRoute;
   "/settings/providers": typeof SettingsProvidersRoute;
   "/settings/service": typeof SettingsServiceRoute;
@@ -240,6 +249,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -263,6 +273,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | "/settings/general"
     | "/settings/host"
     | "/settings/keybindings"
+    | "/settings/link-phone"
     | "/settings/notifications"
     | "/settings/providers"
     | "/settings/service"
@@ -422,6 +434,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsKeybindingsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
+    "/settings/link-phone": {
+      id: "/settings/link-phone";
+      path: "/link-phone";
+      fullPath: "/settings/link-phone";
+      preLoaderRoute: typeof SettingsLinkPhoneRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
     "/settings/notifications": {
       id: "/settings/notifications";
       path: "/notifications";
@@ -495,6 +514,7 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute;
   SettingsHostRoute: typeof SettingsHostRoute;
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute;
+  SettingsLinkPhoneRoute: typeof SettingsLinkPhoneRoute;
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute;
   SettingsProvidersRoute: typeof SettingsProvidersRoute;
   SettingsServiceRoute: typeof SettingsServiceRoute;
@@ -513,6 +533,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsHostRoute: SettingsHostRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsLinkPhoneRoute: SettingsLinkPhoneRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsServiceRoute: SettingsServiceRoute,

@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { PanZoomSvgViewer } from "./pan-zoom-svg-viewer";
 
 export interface MermaidFullscreenDialogProps {
@@ -86,7 +87,11 @@ export function MermaidFullscreenDialog(props: MermaidFullscreenDialogProps) {
             <TooltipWrapper
               label={
                 <>
-                  Close <Kbd>Esc</Kbd>
+                  Close
+                  <ShortcutHint>
+                    {" "}
+                    <Kbd>Esc</Kbd>
+                  </ShortcutHint>
                 </>
               }
               side="top"

@@ -1,0 +1,39 @@
+/*
+ * Home-scoped touch-target enlargement, mirroring the settings pattern in
+ * settings-touch-targets.css.
+ *
+ * On coarse-pointer devices, the shadcn primitives used across the landing
+ * page (Button sm/icon 28-32px in the composer toolbar, epics-list chrome,
+ * and terminal panel header; SelectTrigger 28-32px) sit below the 44px
+ * touch-target guideline. These rules extend each control's *hit area* to
+ * >=44px via an invisible pseudo-element - visual size and layout are
+ * unchanged on every device, and the scope attribute (set by HomePage and
+ * by the system-tab modal host, whose portal renders the same epics-list
+ * chrome outside HomePage's subtree) keeps the rest of the app untouched.
+ *
+ * Vertical-only slop: flush horizontal neighbours exist (the composer
+ * toolbar's icon row, the epics-list chrome bar), and horizontal slop would
+ * let them capture each other's taps.
+ *
+ * The `position: relative` fallback must skip `.absolute` controls (the
+ * epics-row delete button, the terminal panel's reveal toggle): this file is
+ * unlayered CSS, so it would beat Tailwind's layered `absolute` utility
+ * regardless of specificity and yank those controls back into flow. An
+ * absolutely positioned control already anchors its ::after itself.
+ */
+@media (pointer: coarse) {
+  [data-home-touch-scope]
+    :is([data-slot="button"], [data-slot="select-trigger"]):not(.absolute) {
+    position: relative;
+  }
+
+  [data-home-touch-scope]
+    :is([data-slot="button"], [data-slot="select-trigger"])::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+  }
+}

@@ -26,6 +26,7 @@ describe("<HarnessModelTrigger />", () => {
         profileAccentDot={null}
         isLoading={false}
         disabled={false}
+        labelDisplay="responsive"
       />,
     );
 
@@ -52,6 +53,7 @@ describe("<HarnessModelTrigger />", () => {
         }}
         isLoading={false}
         disabled={false}
+        labelDisplay="responsive"
       />,
     );
 
@@ -81,6 +83,7 @@ describe("<HarnessModelTrigger />", () => {
         profileAccentDot={null}
         isLoading={false}
         disabled={false}
+        labelDisplay="responsive"
       />,
     );
 
@@ -88,5 +91,88 @@ describe("<HarnessModelTrigger />", () => {
       name: "GPT-5.5, Thinking High",
     });
     expect(trigger.textContent).not.toContain("Work");
+  });
+
+  // jsdom applies no CSS, so the container-query contract is asserted on the
+  // class itself: "responsive" opts the label into the narrow-collapse, and
+  // "always" (the phone toolbar, which has room) must not.
+  it("collapses the label in a narrow container only when responsive", () => {
+    render(
+      <HarnessModelTrigger
+        selection={SELECTION}
+        label="GPT-5.5"
+        reasoningLabel={null}
+        serviceTierLabel={null}
+        serviceTierActive={false}
+        profileLabel={null}
+        profileAccentDot={null}
+        isLoading={false}
+        disabled={false}
+        labelDisplay="responsive"
+      />,
+    );
+    expect(screen.getByText("GPT-5.5").className).toContain("@max-lg:hidden");
+  });
+
+  it("shows the model name at every width when labelDisplay is model-only", () => {
+    render(
+      <HarnessModelTrigger
+        selection={SELECTION}
+        label="GPT-5.5"
+        reasoningLabel="High"
+        serviceTierLabel={null}
+        serviceTierActive={false}
+        profileLabel={null}
+        profileAccentDot={null}
+        isLoading={false}
+        disabled={false}
+        labelDisplay="model-only"
+      />,
+    );
+    expect(screen.getByText("GPT-5.5").className).not.toContain(
+      "@max-lg:hidden",
+    );
+  });
+
+  it("drops the thinking-effort suffix in model-only, but still announces it", () => {
+    render(
+      <HarnessModelTrigger
+        selection={SELECTION}
+        label="GPT-5.5"
+        reasoningLabel="High"
+        serviceTierLabel={null}
+        serviceTierActive={false}
+        profileLabel={null}
+        profileAccentDot={null}
+        isLoading={false}
+        disabled={false}
+        labelDisplay="model-only"
+      />,
+    );
+
+    expect(screen.queryByText("High")).toBeNull();
+    // The value is still carried by the accessible name, so nothing is lost
+    // to assistive tech - only the visual suffix goes.
+    expect(
+      screen.getByRole("button", { name: "GPT-5.5, Thinking High" }),
+    ).toBeDefined();
+  });
+
+  it("keeps the thinking-effort suffix in the responsive (desktop) pill", () => {
+    render(
+      <HarnessModelTrigger
+        selection={SELECTION}
+        label="GPT-5.5"
+        reasoningLabel="High"
+        serviceTierLabel={null}
+        serviceTierActive={false}
+        profileLabel={null}
+        profileAccentDot={null}
+        isLoading={false}
+        disabled={false}
+        labelDisplay="responsive"
+      />,
+    );
+    expect(screen.getByText("High")).toBeDefined();
   });
 });

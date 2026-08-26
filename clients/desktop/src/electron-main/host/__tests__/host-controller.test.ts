@@ -2452,6 +2452,309 @@ describe("yank/apply ordering", () => {
     expect(downloads).toEqual(["host download --automatic"]);
   });
 
+  it("keeps revalidating a staged non-canonical prerelease after an opt-out", async () => {
+    // The listing question is "would this row be hidden by the default view",
+    // which covers every prerelease shape - NOT "is this a canonical RC",
+    // which is the narrower question implicit following asks. Narrowing this
+    // one would drop the staged row from the listing, read it as yanked, and
+    // purge a verified artifact.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0-beta.1", "1.8.0-beta.1");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.7.0", ["1.7.0", "1.8.0-beta.1"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({ data: {} });
+
+    await controller.stageLatest();
+
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+      "--include-pre-releases",
+    ]);
+  });
+
+  it("follows its own RC line with no saved preference", async () => {
+    // Implicit following: derived from the installed version, nothing
+    // persisted. The listing has to be widened for the line's own RCs to be
+    // visible at all, and `2.1.0-rc.1` - newer, but another line - is not a
+    // candidate at any distance.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.2", "2.1.0-rc.1"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "available",
+      "--json",
+      "--include-pre-releases",
+    ]);
+    expect(downloads).toEqual(["host download 2.0.0-rc.2"]);
+  });
+
+  it("pins the matching stable even while the registry `latest` still lags", async () => {
+    // The case `--automatic` cannot reach: `2.0.0` is published but `latest`
+    // still points at `1.9.0`, which is a DOWNGRADE for a 2.0.0-line RC.
+    // Resolve-then-pin is what makes the line's stable reachable, and taking it
+    // is also what ends implicit participation.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.2", "2.0.0"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual(["host download 2.0.0"]);
+  });
+
+  it("stages nothing when only another RC line has moved", async () => {
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.1.0-rc.1"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual([]);
+  });
+
+  it("does not escape an abandoned line through the --automatic stable path", async () => {
+    // The `2.0.0` line is abandoned and the work shipped as stable `2.1.0`,
+    // which `latest` now names. `--automatic` would take it - a jump to a line
+    // nobody put this host on - so the automatic path is closed while
+    // following. No candidate on the line means no download at all.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("2.1.0", ["1.9.0", "2.1.0"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual([]);
+    // `latest` is still reported verbatim - the pointer keeps its meaning, the
+    // follower just may not act on it.
+    expect((await controller.getStatus()).latestVersion).toBe("2.1.0");
+  });
+
+  it("does not refresh an off-line staged build through --automatic while following", async () => {
+    // A stage left behind by an earlier explicit opt-in. Its row is still in
+    // the widened listing, so it stays eligible to apply - but it must not
+    // cause a `--automatic` download that would stage another line's stable.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    writeStagedRecord("production", "2.1.0-rc.1", "2.1.0-rc.1");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("2.1.0", ["1.9.0", "2.1.0", "2.1.0-rc.1"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual([]);
+  });
+
+  it("leaves an unpinned legacy stage alone while following, without attempting a purge", async () => {
+    // A legacy (fingerprint-less) stage plus a line with nothing to replace it:
+    // the repair must not run `--automatic` (that would stage another line's
+    // build), and the reconcile must stop there rather than fall into the purge
+    // branch - which needs a fingerprint this stage has never had, and would
+    // warn about "registry invalidation" that did not happen, on every pass.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.stagedDir, { recursive: true });
+    writeFileSync(
+      layout.stagedRecordFile,
+      JSON.stringify({
+        stageId: null,
+        version: "2.0.0-rc.1",
+        runtimeVersion: "2.0.0-rc.1",
+      }),
+    );
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("2.1.0", ["2.0.0-rc.1", "2.1.0"]),
+    );
+    const cliCommands: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      cliCommands.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    // No download, no purge-stage - the bytes are left exactly as they were.
+    expect(cliCommands).toEqual([]);
+    expect(
+      vi
+        .mocked(runBundledTraycerCliJson)
+        .mock.calls.filter((call) => call[0].includes("purge-stage")),
+    ).toHaveLength(0);
+    expect(readFileSync(layout.stagedRecordFile, "utf8")).toContain(
+      "2.0.0-rc.1",
+    );
+    expect((await controller.getStatus()).updateReady).toBe(false);
+  });
+
+  it("still repairs an unpinned legacy stage from its own line when one exists", async () => {
+    // The control: the same legacy state, but the line has published its
+    // stable. The repair runs, pinned to that exact version rather than to
+    // `--automatic`.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    const layout = getHostFsLayout("production");
+    mkdirSync(layout.stagedDir, { recursive: true });
+    writeFileSync(
+      layout.stagedRecordFile,
+      JSON.stringify({
+        stageId: null,
+        version: "2.0.0-rc.1",
+        runtimeVersion: "2.0.0-rc.1",
+      }),
+    );
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.1", "2.0.0"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        downloads.push(opts.args.join(" "));
+        writeStagedRecord("production", "2.0.0", "2.0.0");
+      }
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual(["host download 2.0.0"]);
+  });
+
+  it("keeps taking a newer stable through --automatic on a stable host", async () => {
+    // The control for the two above: closing the automatic path is scoped to
+    // implicit following. A stable install with no opt-in is unaffected.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0",
+      runtimeVersion: "2.0.0",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("2.1.0", ["2.0.0", "2.1.0"]),
+    );
+    const downloads: string[] = [];
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) downloads.push(opts.args.join(" "));
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+
+    expect(downloads).toEqual(["host download --automatic"]);
+  });
+
+  it("drives updateReady from the verified stage alone, with no second registry probe", async () => {
+    // The landing banner reads `HostControllerStatus.updateReady` and nothing
+    // else - no React-side release lookup. Proving that here means: one
+    // `host available` call for the whole reconcile, and a canonical status
+    // that reports the pinned stage as ready straight afterwards.
+    vi.mocked(prereleaseUpdatesEnabled).mockReturnValue(false);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "2.0.0-rc.1",
+      runtimeVersion: "2.0.0-rc.1",
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.9.0", ["1.9.0", "2.0.0-rc.2", "2.0.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) {
+        writeStagedRecord("production", "2.0.0", "2.0.0");
+      }
+      return { data: {} };
+    });
+
+    await controller.stageLatest();
+    const status = await controller.getStatus();
+
+    expect(status).toMatchObject({
+      installedVersion: "2.0.0-rc.1",
+      stagedVersion: "2.0.0",
+      updateReady: true,
+    });
+    // `latestVersion` keeps reporting the manifest pointer verbatim - this
+    // flow pins around a lagging `latest`, it never redefines it.
+    expect(status.latestVersion).toBe("1.9.0");
+    expect(
+      vi
+        .mocked(runBundledTraycerCliJson)
+        .mock.calls.filter((call) => call[0].includes("available")),
+    ).toHaveLength(1);
+  });
+
   it("purges only the yanked stage fingerprint on the download lane, never a replacement promoted during the registry probe", async () => {
     const controller = newController("production");
     writeInstallRecord("production", {

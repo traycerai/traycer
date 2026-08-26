@@ -14,6 +14,7 @@ import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
 } from "@/stores/home/landing-terminal-store";
+import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import {
   handlePrimaryFocusIn,
@@ -45,6 +46,20 @@ const mocks = vi.hoisted(() => {
   const initialPlainAuthorityStatus = (): "legacy" | "capable" | "unknown" =>
     "legacy";
   let plainCollection: PlainTerminalCollection | undefined;
+  // Per-host authority overrides for tests that need a MIX of readiness across
+  // hosts in one render (e.g. "Close All" spanning a ready host and a not-ready
+  // one). A host absent from either map falls back to the two globals below, so
+  // every existing single-authority test is unaffected.
+  //
+  // Declared and annotated here rather than asserted on the literal below: the
+  // lint rule that bans `as` on an object literal auto-strips such a cast, and
+  // a bare `{}` then infers a type whose index access is an error type.
+  // `Partial<Record<…>>` also mirrors the production shape these stand in for
+  // (`LandingTerminalAuthorityEntries`) and is what makes the `??` well-typed.
+  const plainAuthorityStatusByHost: Partial<
+    Record<string, "legacy" | "capable" | "unknown">
+  > = {};
+  const plainCanMutateByHost: Partial<Record<string, boolean>> = {};
   return {
     // React reactive host (useAddressableHostId) vs client host (getActiveHostId).
     // Kept in lockstep for ordinary tests; the host-switch race test diverges them.
@@ -58,12 +73,15 @@ const mocks = vi.hoisted(() => {
     probeError: null,
     dataUpdatedAt: 1,
     primaryWorkspacePath: null as string | null,
+    isMobile: false,
     workspacePaths: [] as ReadonlyArray<string>,
     mutableWorkspacePaths: [] as string[],
     kill: vi.fn(),
     killAsync: vi.fn(() => Promise.resolve({ killed: true })),
     plainAuthorityStatus: initialPlainAuthorityStatus(),
     plainCanMutate: false,
+    plainAuthorityStatusByHost,
+    plainCanMutateByHost,
     plainCollection,
     plainCreateAsync: vi.fn(),
     plainEnsureAsync: vi.fn(),
@@ -201,6 +219,12 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-host-client-for", () => ({
   buildTransientHostClient: mocks.buildTransientHostClient,
 }));
+// jsdom reports a desktop width, so this only makes the default explicit -
+// the phone case flips it per test.
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => mocks.isMobile,
+  isMobileViewport: () => mocks.isMobile,
+}));
 vi.mock(
   "@/components/home/host-workspace-selector/use-home-workspace-source",
   () => ({
@@ -239,20 +263,25 @@ vi.mock(
         useEffect(() => {
           const hostIds = hostKey.length === 0 ? [] : hostKey.split("\u0000");
           hostIds.forEach((hostId) => {
+            const status =
+              mocks.plainAuthorityStatusByHost[hostId] ??
+              mocks.plainAuthorityStatus;
+            const canMutate =
+              mocks.plainCanMutateByHost[hostId] ?? mocks.plainCanMutate;
             onEntry(hostId, {
               authority: {
                 hostId,
                 scope: { kind: "independent" },
                 capability:
-                  mocks.plainAuthorityStatus === "capable"
+                  status === "capable"
                     ? {
                         status: "capable",
                         schemaVersion: { major: 1, minor: 0 },
                       }
-                    : { status: mocks.plainAuthorityStatus },
+                    : { status },
                 collection: mocks.plainCollection,
                 terminals: [],
-                canMutate: mocks.plainCanMutate,
+                canMutate,
                 query: {},
               },
               mutations: {
@@ -286,6 +315,7 @@ vi.mock("@/components/epic-canvas/renderers/xterm-host-registry", () => ({
 import { LandingTerminalPanel } from "@/components/home/terminal-panel/landing-terminal-panel";
 import { LandingTerminalGestureProvider } from "@/components/home/terminal-panel/landing-terminal-gesture-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const TEST_LANDING_PAGE_ID = "test-landing-page";
 
@@ -503,6 +533,12 @@ function testRect(width: number, height: number, left: number): DOMRect {
   };
 }
 
+/** Stands in for MobileAppHeader: renders whatever the slot currently holds. */
+function MobileHeaderSlotProbe() {
+  const rightActions = useMobileHeaderStore((state) => state.rightActions);
+  return <>{rightActions}</>;
+}
+
 // The panel outlives its start page's activation, so several behaviors now
 // depend on which top-level surface owns the screen. Default layout = a start
 // page is active, which is what every other case in this file assumes.
@@ -544,12 +580,15 @@ describe("<LandingTerminalPanel />", () => {
     mocks.probeError = null;
     mocks.dataUpdatedAt = 1;
     mocks.primaryWorkspacePath = null;
+    mocks.isMobile = false;
     mocks.workspacePaths = [];
     mocks.mutableWorkspacePaths = [];
     mocks.kill.mockReset();
     mocks.killAsync.mockClear();
     mocks.plainAuthorityStatus = "legacy";
     mocks.plainCanMutate = false;
+    mocks.plainAuthorityStatusByHost = {};
+    mocks.plainCanMutateByHost = {};
     mocks.plainCollection = undefined;
     mocks.plainCreateAsync.mockReset();
     mocks.plainEnsureAsync.mockReset();
@@ -584,6 +623,7 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useMobileHeaderStore.setState({ rightActions: null });
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
     resetTerminalFocusRegistryForTests();
@@ -591,6 +631,85 @@ describe("<LandingTerminalPanel />", () => {
     useLandingTerminalStore.getState().resetForTests();
     setSystemTabModalApi(null);
     useTabsStore.setState(INITIAL_TABS_LAYOUT);
+  });
+
+  describe("at phone width", () => {
+    beforeEach(() => {
+      mocks.isMobile = true;
+      mocks.activeHostId = "host-a";
+      mocks.clientActiveHostId = "host-a";
+      mocks.probeData = emptyList("/Users/dev");
+    });
+
+    it("publishes the reveal toggle into the mobile header instead of floating it", async () => {
+      render(panelUi());
+      await waitFor(() => {
+        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+      });
+
+      // Nothing floating in the content area: the header slot owns it now.
+      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+    });
+
+    it("opens the panel from the slotted toggle", async () => {
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      fireEvent.click(await screen.findByTestId("landing-terminal-toggle"));
+
+      expect(testLayout().panelOpen).toBe(true);
+    });
+
+    // The overlay is absolute inside the PAGE container, so it never covers the
+    // app header - collapse therefore belongs in the same slot rather than in a
+    // panel bar stacked under a header that is still on screen.
+    it("turns into collapse in the same slot while the panel is open", async () => {
+      useLandingTerminalStore
+        .getState()
+        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(
+        <>
+          {panelUi()}
+          <MobileHeaderSlotProbe />
+        </>,
+      );
+      await screen.findByTestId("landing-terminal-panel");
+
+      // One control, not two: the reveal icon is gone and the panel renders no
+      // header row of its own at this width.
+      expect(screen.queryByTestId("landing-terminal-toggle")).toBeNull();
+      fireEvent.click(await screen.findByTestId("landing-terminal-collapse"));
+
+      expect(testLayout().panelOpen).toBe(false);
+    });
+
+    it("renders no panel header row of its own", async () => {
+      useLandingTerminalStore
+        .getState()
+        .setPanelOpen(TEST_LANDING_PAGE_ID, true);
+      render(panelUi());
+      await screen.findByTestId("landing-terminal-panel");
+
+      // Collapse lives in the header slot, which this render does not mount.
+      expect(screen.queryByTestId("landing-terminal-collapse")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Maximize terminal panel" }),
+      ).toBeNull();
+    });
+
+    it("clears the slot on unmount so it cannot leak to another surface", async () => {
+      const view = render(panelUi());
+      await waitFor(() => {
+        expect(useMobileHeaderStore.getState().rightActions).not.toBeNull();
+      });
+
+      view.unmount();
+
+      expect(useMobileHeaderStore.getState().rightActions).toBeNull();
+    });
   });
 
   it("hides while no host is selected, preserving an open panel until selection", async () => {
@@ -1148,7 +1267,67 @@ describe("<LandingTerminalPanel />", () => {
     expect(mocks.kill).not.toHaveBeenCalled();
   });
 
-  it("blocks capable-host create, rename, and close while authority is stale", async () => {
+  it("leaves the tombstone to the owner when its close merely joins one", async () => {
+    // The close coordinator keys by the terminal's LIFETIME, not by RPC, so
+    // this close can join an in-flight `terminal.kill` the recovery bridge
+    // already sent. A kill answers an already-gone session with `killed: false`
+    // as data, and for a `pendingCreate` record the kill mutation deliberately
+    // KEEPS the tombstone - so a joiner that retired it here would overrule the
+    // owner and strand the PTY the create is about to produce.
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    const projection = plainTerminal({
+      terminalId: "terminal-owned",
+      manualTitle: "Owned title",
+      runtime: "running",
+    });
+    mocks.plainCollection = freshPlainCollection([projection]);
+    useLandingTerminalStore.getState().addTab({
+      instanceId: "owned-instance",
+      sessionId: "terminal-owned",
+      hostId: "host-a",
+      cwd: "/legacy",
+      name: "Legacy title",
+      titleSource: "manual" as const,
+      hostAuthorityAcknowledged: true,
+    });
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+
+    // Another surface's request is already in flight for this lifetime, and it
+    // settles without retiring the record.
+    let releaseOwner = (): void => undefined;
+    const ownerClose = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseOwner = resolve;
+        }),
+    );
+    void requestLandingTerminalClose({
+      hostId: "host-a",
+      sessionId: "terminal-owned",
+      close: ownerClose,
+    });
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    render(panelUi());
+    fireEvent.click(screen.getByRole("button", { name: "Close Owned title" }));
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+    });
+    releaseOwner();
+    await waitFor(() => expect(ownerClose).toHaveBeenCalledTimes(1));
+
+    // It joined rather than sending its own, and left the record alone.
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("blocks capable-host create and rename, but still tombstones a close without dispatching, while authority is stale", async () => {
     mocks.activeHostId = "host-a";
     mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/project";
@@ -1178,15 +1357,84 @@ describe("<LandingTerminalPanel />", () => {
     const plus = await screen.findByRole("button", { name: "New terminal" });
     expect(plus.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(plus);
+    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+
+    // Rename gates on the same authority readiness create does - unlike
+    // close, it has no durable fallback.
+    fireEvent.contextMenu(
+      screen.getByTestId("landing-terminal-tab-stale-instance"),
+    );
+    fireEvent.click(await screen.findByText("Rename"));
+    expect(
+      screen.queryByTestId("landing-terminal-tab-input-stale-instance"),
+    ).toBeNull();
+
+    // Close is deliberately NOT gated on authority readiness: the ×
+    // affordance stays enabled, and clicking it still tombstones and
+    // removes the tab even though this host cannot be asked right now. The
+    // fast-path RPC dispatch is skipped - the tombstone recovery bridge
+    // drains it once the host's authority becomes ready.
     const closeButton = screen.getByRole("button", {
       name: "Close Cached title",
     });
     expect(
       closeButton instanceof HTMLButtonElement && closeButton.disabled,
-    ).toBe(true);
+    ).toBe(false);
     fireEvent.click(closeButton);
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([local]);
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: "host-a",
+        sessionId: "terminal-stale",
+        hostAuthorityAcknowledged: true,
+        pendingCreate: false,
+      },
+    ]);
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
+    expect(mocks.kill).not.toHaveBeenCalled();
+  });
+
+  it("tombstones and removes a tab without dispatching when the host's capability probe has not answered", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "unknown";
+    const local = {
+      instanceId: "unresolved-instance",
+      sessionId: "terminal-unresolved",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "Unresolved title",
+      titleSource: "default" as const,
+    };
+    useLandingTerminalStore.getState().addTab(local);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const closeButton = await screen.findByRole("button", {
+      name: "Close Unresolved title",
+    });
+    expect(
+      closeButton instanceof HTMLButtonElement && closeButton.disabled,
+    ).toBe(false);
+    fireEvent.click(closeButton);
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      {
+        hostId: "host-a",
+        sessionId: "terminal-unresolved",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
+    ]);
     expect(mocks.plainCloseAsync).not.toHaveBeenCalled();
     expect(mocks.kill).not.toHaveBeenCalled();
   });
@@ -1286,11 +1534,117 @@ describe("<LandingTerminalPanel />", () => {
     // with are drained by the reconciliation that follows, once the host list
     // confirms the sessions are gone - the durable write itself is pinned in
     // the store test.)
-    before.forEach((tab) => {
-      expect(mocks.kill).toHaveBeenCalledWith({
-        hostId: tab.hostId,
-        sessionId: tab.sessionId,
+    // Dispatched through the shared close boundary, which hops a microtask.
+    await waitFor(() => {
+      before.forEach((tab) => {
+        expect(mocks.killAsync).toHaveBeenCalledWith({
+          hostId: tab.hostId,
+          sessionId: tab.sessionId,
+        });
       });
+    });
+  });
+
+  it("closes every tab across a mix of ready and not-ready hosts, dispatching only for the ready one", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = emptyList("/Users/dev");
+    mocks.freshProbeData = mocks.probeData;
+    mocks.plainAuthorityStatus = "capable";
+    mocks.plainCanMutate = true;
+    mocks.plainAuthorityStatusByHost = { "host-b": "capable" };
+    mocks.plainCanMutateByHost = { "host-b": false };
+    // The ready host's close hangs until resolved below, so the assertions
+    // in between observe the tombstone-first write before either RPC has
+    // had a chance to settle and clear it.
+    let resolveReadyClose: (() => void) | null = null;
+    mocks.plainCloseAsync.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReadyClose = resolve;
+        }),
+    );
+    const readyTab = {
+      instanceId: "ready-instance",
+      sessionId: "terminal-ready",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "Ready title",
+      titleSource: "default" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    const notReadyTab = {
+      instanceId: "not-ready-instance",
+      sessionId: "terminal-not-ready",
+      hostId: "host-b",
+      cwd: "/workspace/other",
+      name: "Not ready title",
+      titleSource: "default" as const,
+      hostAuthorityAcknowledged: true,
+    };
+    useLandingTerminalStore.getState().addTab(readyTab);
+    useLandingTerminalStore.getState().addTab(notReadyTab);
+    useLandingTerminalStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    await screen.findByTestId(`landing-terminal-tab-${readyTab.instanceId}`);
+    await screen.findByTestId(`landing-terminal-tab-${notReadyTab.instanceId}`);
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`landing-terminal-tab-${readyTab.instanceId}`),
+    );
+    fireEvent.click(await screen.findByText("Close All"));
+
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+    });
+    // Tombstone-first, batched: both refs are durably recorded - the
+    // not-ready host's tombstone is the recovery bridge's only record that a
+    // shell needs killing once that host becomes dialable.
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual(
+      expect.arrayContaining([
+        {
+          hostId: "host-a",
+          sessionId: "terminal-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+      ]),
+    );
+    await waitFor(() => {
+      expect(mocks.plainCloseAsync).toHaveBeenCalledWith({
+        hostId: "host-a",
+        terminalId: "terminal-ready",
+      });
+    });
+    expect(mocks.plainCloseAsync).not.toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "host-b" }),
+    );
+    expect(mocks.kill).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveReadyClose?.();
+      await Promise.resolve();
+    });
+
+    // Only the dispatched (ready-host) tombstone clears on acknowledgement;
+    // the not-ready host's stays until the recovery bridge can ask it.
+    await waitFor(() => {
+      expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+        {
+          hostId: "host-b",
+          sessionId: "terminal-not-ready",
+          hostAuthorityAcknowledged: true,
+          pendingCreate: false,
+        },
+      ]);
     });
   });
 
@@ -1360,7 +1714,12 @@ describe("<LandingTerminalPanel />", () => {
       });
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([
-      { hostId: "host-a", sessionId: "still-running" },
+      {
+        hostId: "host-a",
+        sessionId: "still-running",
+        hostAuthorityAcknowledged: false,
+        pendingCreate: false,
+      },
     ]);
   });
 
@@ -1452,9 +1811,11 @@ describe("<LandingTerminalPanel />", () => {
     expect(useLandingTerminalStore.getState().tabs[0].instanceId).toBe(
       first.instanceId,
     );
-    expect(mocks.kill).toHaveBeenCalledWith({
-      hostId: second.hostId,
-      sessionId: second.sessionId,
+    await waitFor(() => {
+      expect(mocks.killAsync).toHaveBeenCalledWith({
+        hostId: second.hostId,
+        sessionId: second.sessionId,
+      });
     });
   });
 

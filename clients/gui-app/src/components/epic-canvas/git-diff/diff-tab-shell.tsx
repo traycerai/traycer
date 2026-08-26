@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { FileDiff } from "lucide-react";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 const DiffTabHeaderAccessoryContext = createContext<HTMLElement | null>(null);
 
@@ -15,11 +17,21 @@ interface DiffTabShellProps {
 export function DiffTabShell(props: DiffTabShellProps) {
   const [headerAccessoryTarget, setHeaderAccessoryTarget] =
     useState<HTMLElement | null>(null);
+  // The whole diff toolbar - view mode, refresh, settings, collapse-all - is
+  // `icon-sm` controls sized for a mouse. Below md they are the tile's only
+  // affordances and the phone shell's hit-slop scope (header, drawer, sheets)
+  // does not reach a canvas tile, so this header opts into it directly. Scope
+  // only where the mobile layout is live, keeping the rule's "desktop never
+  // carries the scope" invariant intact.
+  const isMobileViewport = useIsMobileViewport();
 
   return (
     <DiffTabHeaderAccessoryContext.Provider value={headerAccessoryTarget}>
       <div className="flex h-full min-h-0 w-full flex-col bg-background">
-        <div className="z-10 flex min-h-[clamp(2.5rem,5dvh,3rem)] shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background px-3 py-2">
+        <div
+          data-mobile-shell-touch-scope={isMobileViewport ? "" : undefined}
+          className="z-10 flex min-h-[clamp(2.5rem,5dvh,3rem)] shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background px-3 py-2"
+        >
           <div className="flex min-w-0 items-center gap-2">
             <FileDiff className="size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">

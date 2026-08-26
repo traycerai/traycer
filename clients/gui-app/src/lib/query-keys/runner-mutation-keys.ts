@@ -92,6 +92,8 @@ export const runnerMutationKeys = {
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
   openExternalLink: () => ["runner.openExternalLink"] as const,
+  // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
+  openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.
   openTopLevelMenu: () => ["runner.menu.openTopLevel"] as const,
   zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
@@ -108,6 +110,12 @@ export const runnerMutationKeys = {
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
     ["runner.globalShortcuts.set", id] as const,
+  // Settings → Notifications → "This phone". Both act on the ONE device this
+  // renderer runs on, so a static key is the whole scope - there is no second
+  // OS permission to hold a separate entry for.
+  pushPermissionRequest: () => ["runner.pushPermission.request"] as const,
+  pushPermissionOpenSettings: () =>
+    ["runner.pushPermission.openSettings"] as const,
 };
 
 const runnerHostQueryScopeIds = new WeakMap<object, number>();
@@ -328,6 +336,10 @@ export const runnerQueryKeys = {
     target: string,
   ) =>
     ["runner.support.frozenLogTail", supportScopeId, draftId, target] as const,
+  // This phone's OS push permission (Settings → Notifications → "This
+  // phone"). Machine-local and singular - one renderer, one OS switch - so a
+  // static key suffices, like `logLevels` and `installedFonts` above.
+  pushPermission: () => ["runner.pushPermission"] as const,
   // Report-issue evidence strip's "Nth time on this install" line (ticket 06
   // ledger read). Scoped by fingerprint - each distinct defect caches
   // independently.

@@ -32,7 +32,10 @@ import {
   resolveTabIdForEpic,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  newestLandingDraftId,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import {
   tabCommandCoordinator,
@@ -629,14 +632,19 @@ export class TabNavigationController {
 
     if (action === "BACK" || action === "FORWARD" || action === "GO") {
       this.establishExternalAuthority();
-      this.resolveExternalLocation(location, false, navigate);
+      // The one caller that is a STEP: the user moved through their own
+      // history. Every other path into the resolver is the app arriving
+      // somewhere (a launch, a synchronization, an external commit), and the
+      // difference decides what the landing means - see the resolver's landing
+      // branch.
+      this.resolveExternalLocation(location, false, true, navigate);
       return;
     }
 
     const envelope = envelopeFromState(location.state);
     if (envelope === null || envelope.sessionId !== this.sessionId) {
       this.establishExternalAuthority();
-      this.resolveExternalLocation(location, false, navigate);
+      this.resolveExternalLocation(location, false, false, navigate);
       return;
     }
 
@@ -647,7 +655,7 @@ export class TabNavigationController {
         return;
       }
       this.establishExternalAuthority();
-      this.resolveExternalLocation(location, false, navigate);
+      this.resolveExternalLocation(location, false, false, navigate);
       return;
     }
 
@@ -664,12 +672,12 @@ export class TabNavigationController {
         return;
       }
       this.establishExternalAuthority();
-      this.resolveExternalLocation(location, false, navigate);
+      this.resolveExternalLocation(location, false, false, navigate);
       return;
     }
 
     this.establishExternalAuthority();
-    this.resolveExternalLocation(location, false, navigate);
+    this.resolveExternalLocation(location, false, false, navigate);
   }
 
   synchronizeInitialLocation(): void {
@@ -698,7 +706,7 @@ export class TabNavigationController {
       synchronizationOnly &&
       (envelope === null || envelope.sessionId !== this.sessionId)
     ) {
-      this.resolveExternalLocation(location, true, navigate);
+      this.resolveExternalLocation(location, true, false, navigate);
       return;
     }
     this.classifySynchronizedLocation(location, preserveStartupFocus, navigate);
@@ -716,11 +724,12 @@ export class TabNavigationController {
         this.resolveExternalLocation(
           current,
           queuedExternal.preserveStartupFocus,
+          false,
           navigate,
         );
       } else {
         this.establishExternalAuthority();
-        this.resolveExternalLocation(current, false, navigate);
+        this.resolveExternalLocation(current, false, false, navigate);
       }
     }
     const queuedActivation = this.queuedActivation;
@@ -1097,7 +1106,12 @@ export class TabNavigationController {
       return;
     }
     this.establishExternalAuthority();
-    this.resolveExternalLocation(location, preserveStartupFocus, navigate);
+    this.resolveExternalLocation(
+      location,
+      preserveStartupFocus,
+      false,
+      navigate,
+    );
   }
 
   private acknowledge(
@@ -1367,9 +1381,17 @@ export class TabNavigationController {
     this.notifyFailureListeners();
   }
 
+  /**
+   * @param historyStep - whether this location was reached by the user STEPPING
+   * through their own history (back, forward, or a controller `go`), as opposed
+   * to the app arriving somewhere: a launch, a synchronization, or an external
+   * commit. Only the landing branch reads it, and only because those two cases
+   * want opposite things from the same pathname.
+   */
   private resolveExternalLocation(
     location: TabNavigationLocation,
     preserveStartupFocus: boolean,
+    historyStep: boolean,
     navigate: NavigateFn,
   ): void {
     if (location.pathname === "/draft/new") {
@@ -1378,7 +1400,10 @@ export class TabNavigationController {
     }
     const routed = routedTabTarget(location.pathname);
     if (routed === null) {
-      if (isLandingPath(location.pathname)) return;
+      if (isLandingPath(location.pathname)) {
+        if (historyStep) this.resolveSteppedLanding();
+        return;
+      }
       this.issueLandingCorrection(location, navigate);
       return;
     }
@@ -1503,6 +1528,34 @@ export class TabNavigationController {
     }
     this.rememberRoute(ref, systemIntent, location.search);
     useTabsStore.getState().rememberSystemTabPath(kind, location.pathname);
+  }
+
+  /**
+   * The landing, reached because the user STEPPED here rather than because the
+   * app arrived here.
+   *
+   * Home on this shell is the landing DRAFT surface, so "show me Home" is an
+   * activation like any other, not the absence of one - a populated strip
+   * always has exactly one active item (`repairLayout` restores that invariant
+   * after every commit), and a step that activated nothing left the previous
+   * tab on screen while the route moved underneath it.
+   *
+   * IDEMPOTENT, which is what makes it safe to run on every step. The existing
+   * landing draft is named explicitly, so repeated steps back to `/` re-activate
+   * the one Home instead of stacking a new draft per press; only a session that
+   * has never had one mints, through the same activation `/draft/new` runs.
+   */
+  private resolveSteppedLanding(): void {
+    this.activateExternalTarget({
+      kind: "draft",
+      draftId: newestLandingDraftId(),
+      // Same seed as `/draft/new`: the landing composer opens on the app-wide
+      // active host, so it inherits that host's last-run bucket.
+      settings: useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(activeHostIdOrNull()),
+      create: true,
+    });
   }
 
   private resolveDraftEntry(

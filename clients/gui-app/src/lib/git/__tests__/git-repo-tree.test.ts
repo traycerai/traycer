@@ -322,10 +322,50 @@ describe("buildGitModuleGroups", () => {
       kind: "submodule",
       label: "traycer",
       repoRoot: null,
+      headKind: "reference",
       unavailable: true,
       parentReference: {
         status: "unavailable",
       },
     });
+  });
+
+  it("preserves checkout kinds independently from their display labels", () => {
+    const result = buildGitModuleGroups({
+      root: {
+        repoRoot: "/repo",
+        label: "traycer-internal",
+        branch: "detached-feature",
+        headSha: "abcdef1234",
+        files: [],
+        repoState: { kind: "clean" },
+        repoMode: "normal",
+      },
+      submodules: [changeset({ branch: null })],
+    });
+
+    expect(result.modules[0]).toMatchObject({
+      headKind: "branch",
+      headLabel: "detached-feature",
+    });
+    expect(result.modules[1]).toMatchObject({
+      headKind: "detached",
+      headLabel: "detached @ 2222222",
+    });
+
+    const emptyBranchResult = buildGitModuleGroups({
+      root: {
+        repoRoot: "/repo",
+        label: "traycer-internal",
+        branch: "",
+        headSha: "abcdef1234",
+        files: [],
+        repoState: { kind: "clean" },
+        repoMode: "normal",
+      },
+      submodules: [changeset({ branch: "" })],
+    });
+    expect(emptyBranchResult.modules[0].headKind).toBe("detached");
+    expect(emptyBranchResult.modules[1].headKind).toBe("detached");
   });
 });

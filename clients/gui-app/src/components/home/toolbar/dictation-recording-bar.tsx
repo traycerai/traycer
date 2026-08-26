@@ -4,8 +4,17 @@ import { DictationWaveform } from "@/components/home/toolbar/dictation-waveform"
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+
+// The chord rides inside the tooltip label rather than as a separate chip, so
+// it is dropped from the string where shortcut hints are suppressed. The
+// button's own `aria-label` is what names the action either way.
+function cancelDictationLabel(): string {
+  if (!shortcutHintsVisible()) return "Cancel";
+  return "Cancel (Esc)";
+}
 interface DictationRecordingBarProps {
   readonly state: VoiceDictationState;
   readonly getStream: () => MediaStream | null;
@@ -67,7 +76,7 @@ function RecordingControls({
         <DictationWaveform getStream={getStream} className={undefined} />
       </div>
       <TooltipWrapper
-        label="Cancel (Esc)"
+        label={cancelDictationLabel()}
         side="top"
         sideOffset={undefined}
         align={undefined}

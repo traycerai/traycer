@@ -30,6 +30,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import type { ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -38,6 +39,7 @@ import {
   screen,
   waitFor,
   within,
+  type RenderResult,
 } from "@testing-library/react";
 import { toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -120,20 +122,34 @@ async function waitForButton(name: string): Promise<HTMLElement> {
   return screen.findByRole("button", { name });
 }
 
-function renderPanel(): void {
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: { queries: { retry: false, gcTime: 0 } },
-        })
-      }
-    >
+/**
+ * The panel tree, over a caller-supplied query client.
+ *
+ * Split from `renderPanel` so a test can RE-render the same element with the
+ * same client — which is what a scoped-host switch actually is. Building a
+ * fresh client would tear the subtree down instead, and a test whose subtree
+ * remounts cannot observe state that is supposed to survive a remount or be
+ * cleared without one.
+ */
+function panelElement(client: QueryClient): ReactElement {
+  return (
+    <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={makeRunnerHost()}>
         <HostSettingsPanel />
       </RunnerHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+}
+
+function newQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+}
+
+function renderPanel(): RenderResult & { readonly queryClient: QueryClient } {
+  const queryClient = newQueryClient();
+  return { ...render(panelElement(queryClient)), queryClient };
 }
 
 /**
@@ -143,6 +159,13 @@ function renderPanel(): void {
  * cases here assemble the manifest by hand instead of growing a second
  * exported helper for a shape only this file needs.
  */
+/** The provenance an explicit override produces — never `installed-rc`. */
+function sourceForExplicit(
+  include: boolean,
+): "explicit-include" | "explicit-exclude" {
+  return include ? "explicit-include" : "explicit-exclude";
+}
+
 function multiVersionManifest(
   versions: readonly string[],
 ): HostAvailableManifest {
@@ -243,6 +266,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           checkCalls += 1;
           return Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.7.0", "1.6.0"]),
           });
         },
@@ -278,7 +303,10 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     // available` decides what counts as a pre-release, and a client-side
     // predicate would disagree with the CLI the first time a build id stopped
     // being semver.
-    const requests: boolean[] = [];
+    // `boolean | undefined`, because ABSENT is one of the three states this
+    // records - a `boolean[]` could not tell the default apart from an
+    // explicit exclude, which is the distinction under test.
+    const requests: Array<boolean | undefined> = [];
     const fixture = buildOverviewHostFixture({
       hostId: "host-a",
       isLocalMachine: true,
@@ -288,6 +316,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
           requests.push(req.includePreReleases);
           return Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(
               req.includePreReleases ? ["1.8.0-rc.1", "1.7.0"] : ["1.7.0"],
             ),
@@ -302,19 +332,23 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
 
     // NO "Check now" click, and its removal is load-bearing rather than tidying.
     // The check fires on mount now, so a click here would race its own setup:
-    // whether it produces a SECOND `false` request or silently joins the
-    // in-flight one is a matter of timing, and `toEqual([false])` passes on only
-    // one of those. That the list arrives at all without a click is the
+    // whether it produces a SECOND default request or silently joins the
+    // in-flight one is a matter of timing, and the assertion below passes on
+    // only one of those. That the list arrives at all without a click is the
     // behaviour this line now also pins.
     await openHostOverviewAdvanced();
-    await waitFor(() => expect(requests).toEqual([false]));
+    // ABSENT, not `false`. The first load states no override at all, which is
+    // what lets the host derive inclusion from its own installed version; a
+    // `false` here would be an explicit exclusion nobody asked for, and would
+    // hide the RC line from exactly the hosts that should see it.
+    await waitFor(() => expect(requests).toEqual([undefined]));
 
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Include release candidates" }),
     );
 
     // A SECOND request, carrying the flag — not the same answer re-filtered.
-    await waitFor(() => expect(requests).toEqual([false, true]));
+    await waitFor(() => expect(requests).toEqual([undefined, true]));
     await waitFor(() => {
       expect(
         within(screen.getByTestId("host-version-rows")).getByText(
@@ -343,6 +377,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
           }),
         "host.update.install": async (req) => {
@@ -415,6 +451,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.7.0", "1.6.0", "1.5.0"]),
           }),
         "host.update.install": (req) => {
@@ -472,7 +510,12 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
       hostVersion: "1.0.0",
       overrideHandlers: {
         "host.update.check": () =>
-          Promise.resolve({ outcome: "ok" as const, manifest: yankedLatest }),
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
+            manifest: yankedLatest,
+          }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
@@ -512,6 +555,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: soleKeyManifest("1.7.0", "linux-x64"),
           }),
       },
@@ -550,6 +595,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: soleKeyManifest("1.7.0", "win32-x64"),
           }),
       },
@@ -589,6 +636,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.6.0"]),
           }),
       },
@@ -637,6 +686,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.6.0"]),
           }),
         "host.update.install": () =>
@@ -685,6 +736,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(["1.6.0"]),
           }),
       },
@@ -740,6 +793,8 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
         "host.update.check": () =>
           Promise.resolve({
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: multiVersionManifest(versions),
           }),
       },
@@ -773,5 +828,403 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
     expect(screen.getByTestId("host-version-rows-toggle").textContent).toBe(
       "Show recent",
     );
+  });
+
+  /**
+   * The v1.1 tri-state, from the checkbox down to the wire.
+   *
+   * The state under test is the one a boolean could not express: a host whose
+   * DEFAULT catalog already includes release candidates, where "unchecked" and
+   * "never touched" have to reach the host as different requests or unticking
+   * the box does nothing at all (critique finding 7).
+   */
+  it("sends an explicit exclude when the box is unticked on a host whose default includes RCs", async () => {
+    const requests: Array<boolean | undefined> = [];
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": (req) => {
+          requests.push(req.includePreReleases);
+          // What an RC host's CLI answers: with no flag it DERIVES inclusion
+          // from the install and says so; an explicit flag is obeyed verbatim.
+          const derived = req.includePreReleases === undefined;
+          const included = derived || req.includePreReleases === true;
+          const source = derived
+            ? ("installed-rc" as const)
+            : sourceForExplicit(req.includePreReleases === true);
+          return Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: included,
+            includePreReleasesSource: source,
+            manifest: multiVersionManifest(
+              included ? ["2.0.0-rc.2", "1.7.0"] : ["1.7.0"],
+            ),
+          });
+        },
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await openHostOverviewAdvanced();
+    await waitFor(() => expect(requests).toEqual([undefined]));
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: "Include release candidates",
+    });
+    // TICKED before any interaction: the box reports what the catalog did, and
+    // this catalog included RCs. Rendering it unticked beside visible RC rows
+    // would be the control contradicting the list under it.
+    await waitFor(() =>
+      expect(checkbox.getAttribute("aria-checked")).toBe("true"),
+    );
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("host-version-rows")).getByText(
+          "v2.0.0-rc.2",
+        ),
+      ).toBeTruthy();
+    });
+
+    fireEvent.click(checkbox);
+
+    // FALSE, not absent. Absent would re-ask the same question and get the
+    // same RC rows back.
+    await waitFor(() => expect(requests).toEqual([undefined, false]));
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("host-version-rows")).queryByText(
+          "v2.0.0-rc.2",
+        ),
+      ).toBeNull();
+    });
+  });
+
+  it("explains an RC-derived catalog, and says nothing when provenance is not installed-rc", async () => {
+    async function renderWithSource(
+      source: "installed-rc" | "stable-default",
+      hostId: string,
+    ): Promise<void> {
+      const fixture = buildOverviewHostFixture({
+        hostId,
+        isLocalMachine: true,
+        hostVersion: "2.0.0-rc.1",
+        overrideHandlers: {
+          "host.update.check": () =>
+            Promise.resolve({
+              outcome: "ok" as const,
+              effectiveIncludePreReleases: source === "installed-rc",
+              includePreReleasesSource: source,
+              manifest: multiVersionManifest(["1.7.0"]),
+            }),
+        },
+      });
+      recordNegotiatedHostMethods(hostId, ALL_OVERVIEW_METHODS);
+      hostBindingMock.current = { hostClient: fixture.client };
+      scopeOverrides.current = scopeFrom(hostId, fixture);
+      renderPanel();
+      await openHostOverviewAdvanced();
+    }
+
+    await renderWithSource("installed-rc", "host-a");
+    const reason = await screen.findByTestId(
+      "host-overview-include-pre-releases-reason",
+    );
+    // Provenance, phrased as a fact about the host. It must not imply a saved
+    // preference, because there is none to turn off.
+    expect(reason.textContent).toContain("2.0.0-rc.1");
+
+    cleanup();
+
+    // `stable-default` is also what the v1.0->v1.1 bridge reports for an old
+    // host, which is exactly why the copy is gated on `installed-rc` alone:
+    // that value is unreachable from a peer that derived nothing, so a
+    // negotiated v1.0 response can never produce an explanation.
+    await renderWithSource("stable-default", "host-b");
+    expect(
+      screen.queryByTestId("host-overview-include-pre-releases-reason"),
+    ).toBeNull();
+  });
+
+  it("offers matching stable over a later same-line RC when latest still lags", async () => {
+    // `latest` is stable-CHANNEL metadata. On a host running 2.0.0-rc.1 it can
+    // still read 1.9.0 while 2.0.0 is published, so a summary keyed off
+    // `latest` would offer a DOWNGRADE - or, once the strictly-newer gate
+    // rejected it, claim the host was up to date with its own stable sitting
+    // in the list. Matching stable also wins over the later RC, which is what
+    // makes implicit following terminate.
+    const manifest = multiVersionManifest(["2.0.0-rc.2", "2.0.0", "1.9.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: { ...manifest, latest: "1.9.0" },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("v2.0.0 is available.")).toBeTruthy();
+    });
+  });
+
+  it("asks a newly scoped host with no override, discarding the previous host's filter", async () => {
+    // The override is a decision about ONE machine, and this pins the
+    // OBSERVABLE rule: whatever host Settings scopes to next is asked with no
+    // override, so it gets its own derived default.
+    //
+    // Two mechanisms enforce that today and this test does not distinguish
+    // them: the panel remounts under a host key, AND `useHostOverviewUpdates`
+    // clears the override when `hostId` changes. The hook-level clear is the
+    // backstop for the day the key changes — isolating it would need the
+    // condition-poll coordinator harness the panel provides, so it is covered
+    // here at the level a user would notice.
+    const requestsByHost: Array<{
+      readonly hostId: string;
+      readonly includePreReleases: boolean | undefined;
+    }> = [];
+    function fixtureFor(hostId: string): OverviewHostFixture {
+      const fixture = buildOverviewHostFixture({
+        hostId,
+        isLocalMachine: true,
+        hostVersion: "2.0.0-rc.1",
+        overrideHandlers: {
+          "host.update.check": (req) => {
+            requestsByHost.push({
+              hostId,
+              includePreReleases: req.includePreReleases,
+            });
+            return Promise.resolve({
+              outcome: "ok" as const,
+              effectiveIncludePreReleases: req.includePreReleases !== false,
+              includePreReleasesSource:
+                req.includePreReleases === undefined
+                  ? ("installed-rc" as const)
+                  : ("explicit-exclude" as const),
+              manifest: multiVersionManifest(["1.7.0"]),
+            });
+          },
+        },
+      });
+      recordNegotiatedHostMethods(hostId, ALL_OVERVIEW_METHODS);
+      return fixture;
+    }
+
+    const hostA = fixtureFor("host-a");
+    hostBindingMock.current = { hostClient: hostA.client };
+    scopeOverrides.current = scopeFrom("host-a", hostA);
+    const view = renderPanel();
+
+    await openHostOverviewAdvanced();
+    await waitFor(() =>
+      expect(requestsByHost).toEqual([
+        { hostId: "host-a", includePreReleases: undefined },
+      ]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Include release candidates" }),
+    );
+    await waitFor(() =>
+      expect(requestsByHost).toContainEqual({
+        hostId: "host-a",
+        includePreReleases: false,
+      }),
+    );
+
+    const hostB = fixtureFor("host-b");
+    hostBindingMock.current = { hostClient: hostB.client };
+    scopeOverrides.current = scopeFrom("host-b", hostB);
+    view.rerender(panelElement(view.queryClient));
+
+    // host-b is asked with NO override — host-a's exclusion did not follow it.
+    await waitFor(() =>
+      expect(
+        requestsByHost.filter((entry) => entry.hostId === "host-b"),
+      ).toEqual([{ hostId: "host-b", includePreReleases: undefined }]),
+    );
+  });
+
+  it("does not claim an abandoned-line RC is on the latest version while a newer row is listed", async () => {
+    // The regression this batch created: with `installed-rc` and NOTHING on
+    // the installed line, `targetCandidates` is empty, so the summary read
+    // "This host is running the latest version." — directly above an enabled,
+    // installable row for a newer version on another line.
+    //
+    // Not moving automatically is deliberate (a follower must not be pushed
+    // onto a line nobody put it on). Saying it is already latest is not.
+    const manifest = multiVersionManifest(["2.1.0", "1.9.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText("This host is running the latest version."),
+      ).toBeNull();
+    });
+    const summary = await screen.findByText(/2\.1\.0 is available/);
+    // Names the newer version AND says it will not be taken automatically, so
+    // the sentence and the enabled row below it agree.
+    expect(summary.textContent).toContain("2.0.0-rc.1");
+    expect(summary.textContent).toContain("won't update to it automatically");
+
+    // The manual route stays open: the newer row is present and installable.
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    const row = rowFor(rows.getAllByRole("listitem"), "2.1.0");
+    expect(
+      within(row)
+        .getByRole("button", { name: "Install 2.1.0" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("still says up to date when the abandoned line really is the newest build", async () => {
+    // The other half: no same-line candidate AND nothing newer anywhere. The
+    // original sentence is correct here and must survive.
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest: multiVersionManifest(["1.9.0"]),
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("This host is running the latest version."),
+      ).toBeTruthy();
+    });
+  });
+
+  it("falls back to the HIGHEST later same-line RC when the line's stable is unusable", async () => {
+    // Exercises the ordered candidate list end to end: matching stable first,
+    // then later RCs newest-first. The stable is yanked, so the gate loop must
+    // walk past it — and must land on rc.3 rather than rc.2, which is what the
+    // ordering (and its now-lawful comparator) is for.
+    const base = multiVersionManifest([
+      "2.0.0",
+      "2.0.0-rc.3",
+      "2.0.0-rc.2",
+      "1.9.0",
+    ]);
+    const manifest = {
+      ...base,
+      latest: "1.9.0",
+      versions: base.versions.map((entry) =>
+        entry.version === "2.0.0" ? { ...entry, yanked: true } : entry,
+      ),
+    };
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "2.0.0-rc.1",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "installed-rc" as const,
+            manifest,
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByText("v2.0.0-rc.3 is available.")).toBeTruthy();
+    });
+  });
+
+  it("does not tell a STABLE host it follows a release line when explicit include surfaces a newer RC", async () => {
+    // The stranded-line sentence explains a mechanism — "follows its own
+    // release line" — that applies only to a host whose catalog was DERIVED
+    // from an installed release candidate. This host is stable, on the newest
+    // stable, and sees an RC row only because the user ticked the box. Gating
+    // the copy on `upToDate` alone would have narrated that state with a
+    // mechanism the host is not subject to.
+    const base = multiVersionManifest(["2.0.0-rc.1", "1.9.0"]);
+    const fixture = buildOverviewHostFixture({
+      hostId: "host-a",
+      isLocalMachine: true,
+      hostVersion: "1.9.0",
+      overrideHandlers: {
+        "host.update.check": () =>
+          Promise.resolve({
+            outcome: "ok" as const,
+            effectiveIncludePreReleases: true,
+            includePreReleasesSource: "explicit-include" as const,
+            // `latest` is the STABLE the host is already on; the RC is newer
+            // but is not what the stable channel points at.
+            manifest: { ...base, latest: "1.9.0" },
+          }),
+      },
+    });
+    recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);
+    hostBindingMock.current = { hostClient: fixture.client };
+    scopeOverrides.current = scopeFrom("host-a", fixture);
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("This host is running the latest version."),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByText(/follows its own release line/)).toBeNull();
+
+    // The RC the user asked to see is still there and still installable — the
+    // gate changes the sentence, never the manual route.
+    await openHostOverviewAdvanced();
+    const rows = within(await screen.findByTestId("host-version-rows"));
+    const row = rowFor(rows.getAllByRole("listitem"), "2.0.0-rc.1");
+    expect(
+      within(row)
+        .getByRole("button", { name: "Install 2.0.0-rc.1" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 });

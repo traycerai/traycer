@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { isMobileApp } from "@/lib/mobile-app";
 import { hostQueryKeys, speechMutationKeys } from "@/lib/query-keys";
 
 // `modelId: null` selects the host's default dictation model.
@@ -54,6 +55,17 @@ export interface DictationAvailability {
 export function useDictationAvailability(
   enabled: boolean,
 ): DictationAvailability {
+  // The installed mobile app never offers dictation, whatever the setting says.
+  // Dictation is HOST-executed: `speech.dictate` streams live microphone audio
+  // to the app-wide host (see above) and that host's on-device engine
+  // transcribes it. On desktop the app-wide host is the same machine, which is
+  // what Settings' "audio never leaves your machine" promise rests on. The
+  // mobile app has no local host - every host it can reach is a remote machine
+  // - so offering the mic there would stream phone microphone audio off the
+  // device and break that promise. Hence the gate is on the BUILD
+  // (`isMobileApp()`) and not on viewport width: a phone-width desktop browser
+  // can still be talking to an honest localhost host, and keeps its mic.
+  const available = enabled && !isMobileApp();
   const client = useHostClient();
   const queryClient = useQueryClient();
 
@@ -63,7 +75,7 @@ export function useDictationAvailability(
     method: "speech.getModelStatus",
     params: SPEECH_MODEL_PARAMS,
     options: {
-      enabled,
+      enabled: available,
     },
   });
 
@@ -111,7 +123,7 @@ export function useDictationAvailability(
       budgetHostRef.current = activeHostId;
       attemptsRef.current = 0;
     }
-    if (!enabled || !engineAvailable) return;
+    if (!available || !engineAvailable) return;
     if (downloadState === "ready") {
       attemptsRef.current = 0;
       return;
@@ -125,7 +137,7 @@ export function useDictationAvailability(
       ensure(SPEECH_MODEL_PARAMS);
     }
   }, [
-    enabled,
+    available,
     engineAvailable,
     downloadState,
     ensurePending,
@@ -133,7 +145,7 @@ export function useDictationAvailability(
     activeHostId,
   ]);
 
-  if (!enabled || !engineAvailable) return { ready: false, preparing: null };
+  if (!available || !engineAvailable) return { ready: false, preparing: null };
   if (downloadState === "ready") return { ready: true, preparing: null };
   // Engine present, model not ready yet → surface a preparing indicator.
   return {

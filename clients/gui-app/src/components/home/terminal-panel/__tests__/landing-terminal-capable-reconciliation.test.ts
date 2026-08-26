@@ -16,9 +16,14 @@ import {
 import {
   landingTerminalLayoutFor,
   useLandingTerminalStore,
+  type LandingTerminalPendingKill,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
-import { reconcileCapableLandingTerminals } from "@/components/home/terminal-panel/use-landing-terminal-reconciliation";
+import {
+  drainLegacyLandingTombstones,
+  reconcileCapableLandingTerminals,
+} from "@/components/home/terminal-panel/use-landing-terminal-reconciliation";
+import { requestLandingTerminalClose } from "@/lib/terminals/landing-terminal-close-coordinator";
 
 const HOST_ID = "host-a";
 const LANDING_PAGE_ID = "landing-a";
@@ -260,6 +265,145 @@ describe("capable landing-terminal reconciliation", () => {
     });
     expect(useLandingTerminalStore.getState().pendingKills).toEqual([]);
     expect(useLandingTerminalStore.getState().tabs).toEqual([]);
+  });
+
+  it("joins an in-flight close instead of racing the recovery bridge", async () => {
+    // A retained tombstone whose create lands late wakes BOTH this pass and
+    // `LandingTerminalTombstoneRecoveryBridge` on the same collection update.
+    // `terminal.plain.close` is fifo rather than coalescing, so going straight
+    // at the mutation is two real RPCs: the loser finds a terminal the winner
+    // already removed and raises "Couldn't close the terminal." for a close
+    // that succeeded.
+    const canonical = {
+      ...tab({
+        instanceId: "shared-close-instance",
+        terminalId: "terminal-shared-close",
+        name: "Host title",
+      }),
+      hostAuthorityAcknowledged: true,
+    };
+    const projection = terminal({
+      terminalId: "terminal-shared-close",
+      manualTitle: "Host title",
+      revision: 4,
+      runtime: "running",
+    });
+    useLandingTerminalStore.getState().addTab(canonical);
+    useLandingTerminalStore
+      .getState()
+      .closeTab(LANDING_PAGE_ID, canonical.instanceId);
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([projection]),
+    );
+
+    // Stand in for the bridge's close, already in flight for this identity.
+    const bridgeGate = deferred<void>();
+    const bridgeClose = vi.fn(() => bridgeGate.promise);
+    void requestLandingTerminalClose({
+      hostId: HOST_ID,
+      sessionId: "terminal-shared-close",
+      close: bridgeClose,
+    });
+    // The coordinator dispatches in a microtask, so wait for the request to be
+    // genuinely in flight before the reconcile pass looks for it to join.
+    await waitFor(() => expect(bridgeClose).toHaveBeenCalledTimes(1));
+
+    const closeTerminal = vi.fn(() => Promise.resolve());
+    const pass = reconcileCapableLandingTerminals({
+      activeHostId: HOST_ID,
+      landingPageId: LANDING_PAGE_ID,
+      capability: CAPABILITY,
+      canMutate: true,
+      closeTerminal,
+      importLegacyTerminal: () =>
+        Promise.reject(new Error("unexpected import")),
+      queryClient,
+    });
+
+    // The bridge's request is the only one on the wire.
+    queryClient.setQueryData(
+      hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      freshCollection([]),
+    );
+    bridgeGate.resolve(undefined);
+    await pass;
+
+    expect(bridgeClose).toHaveBeenCalledTimes(1);
+    expect(closeTerminal).not.toHaveBeenCalled();
+    // And it does NOT retire the record. The coordinator keys by the terminal's
+    // lifetime rather than by RPC, so a joined promise may belong to a
+    // `terminal.kill` - which answers an already-gone session with
+    // `killed: false` as data, the one answer a `pendingCreate` tombstone is
+    // deliberately kept for. Whoever owns the request owns that decision.
+    expect(useLandingTerminalStore.getState().pendingKills).toHaveLength(1);
+  });
+
+  it("joins an in-flight kill on the legacy arm too", async () => {
+    // Same class as the capable arm above, different RPC. `terminal.kill` does
+    // not throw for a session the winner already removed - it answers
+    // `killed: false`, which is the exact answer a `pendingCreate` reprieve has
+    // to keep treating as ambiguous, so an unmediated duplicate is both two
+    // `terminal.list` invalidations and a wasted reprieve answer.
+    const pending: LandingTerminalPendingKill = {
+      hostId: HOST_ID,
+      sessionId: "terminal-legacy-shared",
+      hostAuthorityAcknowledged: false,
+      pendingCreate: true,
+    };
+
+    const bridgeGate = deferred<void>();
+    const bridgeKill = vi.fn(() => bridgeGate.promise);
+    void requestLandingTerminalClose({
+      hostId: pending.hostId,
+      sessionId: pending.sessionId,
+      close: bridgeKill,
+    });
+    await waitFor(() => expect(bridgeKill).toHaveBeenCalledTimes(1));
+
+    const killTerminal = vi.fn(() => Promise.resolve());
+    const drain = drainLegacyLandingTombstones({
+      hostTombstones: [pending],
+      listedSessionIds: new Set([pending.sessionId]),
+      killTerminal,
+    });
+    bridgeGate.resolve(undefined);
+    await drain;
+
+    expect(bridgeKill).toHaveBeenCalledTimes(1);
+    expect(killTerminal).not.toHaveBeenCalled();
+  });
+
+  it("retains an unacknowledged tombstone the host's list does not mention", async () => {
+    // The other half of the legacy arm, and the rule the whole PR turns on:
+    // absence from the list retires an ACKNOWLEDGED record and nothing else.
+    const acknowledged: LandingTerminalPendingKill = {
+      hostId: HOST_ID,
+      sessionId: "terminal-legacy-acked",
+      hostAuthorityAcknowledged: true,
+      pendingCreate: false,
+    };
+    const unsettledCreate: LandingTerminalPendingKill = {
+      hostId: HOST_ID,
+      sessionId: "terminal-legacy-creating",
+      hostAuthorityAcknowledged: false,
+      pendingCreate: true,
+    };
+    useLandingTerminalStore.setState({
+      pendingKills: [acknowledged, unsettledCreate],
+    });
+
+    const killTerminal = vi.fn(() => Promise.resolve());
+    await drainLegacyLandingTombstones({
+      hostTombstones: [acknowledged, unsettledCreate],
+      listedSessionIds: new Set(),
+      killTerminal,
+    });
+
+    expect(killTerminal).not.toHaveBeenCalled();
+    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+      unsettledCreate,
+    ]);
   });
 
   it("removes late-hydrated legacy evidence against a retained tombstone without importing", async () => {

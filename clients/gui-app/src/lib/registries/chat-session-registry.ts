@@ -204,6 +204,8 @@ export function useChatSessionHandle(
         close: result.close,
         sameTurnSteeringProtocolSupported: () =>
           result.client.sameTurnSteeringProtocolSupported(),
+        interviewSettlementActionsProtocolSupported: () =>
+          result.client.interviewSettlementActionsProtocolSupported(),
       };
     };
 

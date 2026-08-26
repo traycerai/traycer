@@ -12,18 +12,27 @@
  * Two invariants the design calls out explicitly:
  *
  * - Retain last valid environment across a structural transfer. There is
- *   deliberately no "unregister"/"retract" write path: the ONLY way an
- *   environment changes is a fresh publish (source slot -> destination slot
- *   overwrites in place, never round-tripping through `null`) or membership
- *   itself removing the record. A transient gap between a source slot going
- *   quiet and a destination slot publishing must not surface as `null`.
+ *   deliberately no "unregister"/"retract" write path for the RECORD: the
+ *   only way an environment is replaced is a fresh publish (source slot ->
+ *   destination slot overwrites in place, never round-tripping through
+ *   `null`) or membership itself removing the record. A transient gap between
+ *   a source slot going quiet and a destination slot publishing must not
+ *   surface as `null`.
  * - Removal only by membership. The registry subscribes to
  *   `subscribeTileSurfaceMembership` and deletes a record (notifying its
  *   subscribers) only when the instance actually leaves membership - close,
  *   eviction past the pane's chat retention cap, or settled top-level MRU
  *   eviction. Deselecting a tab no longer removes anything (it did while
  *   decision #17 stood); it only flips the record out of
- *   `isTileSurfacePresented`. Nothing else clears it.
+ *   `isTileSurfacePresented`. Nothing else deletes a record.
+ *
+ * `retractTileSurfacePresentation` is the one narrow exception, and it is
+ * deliberately NOT an unregister: it lowers `canvasActivity.tabSelected` on a
+ * record that stays in the map with its identity, placement and `services`
+ * object references untouched, so every continuity guarantee below holds
+ * verbatim. Retention is about WHICH environment a consumer reads during a
+ * gap; presentation is about whether the record may paint right now. Only the
+ * latter may be withdrawn, and only by the slot that asserted it.
  *
  * Subscriptions are isolated per instance (`Map<instanceId, Set<listener>>`):
  * publishing or updating pane B's environment must not notify pane A's
@@ -177,6 +186,58 @@ export function publishTileSurfaceEnvironment(
   notify(instanceId);
 }
 
+/**
+ * Withdraws the PRESENTATION claim a slot made for `instanceId`, leaving the
+ * record itself - identity, placement, and every `services` handle, by
+ * reference - exactly as published. `getTileSurfaceEnvironment` keeps
+ * answering the same non-null environment; only `isTileSurfacePresented`
+ * flips, and subscribers are notified with a fresh object so a
+ * `useSyncExternalStore` reader actually re-renders.
+ *
+ * This exists because `canvasActivity.tabSelected` has exactly ONE writer -
+ * the slot that publishes it - and that writer is destroyed by the very
+ * transitions that end its claim: the slot re-pointed at a different
+ * instance, the pane torn down, the whole canvas navigated away from. A claim
+ * that outlives its writer paints forever, and because every record of a pane
+ * shares that pane's rect, "forever" means stacked on top of whatever took
+ * the rect next. There is no ancestor that survives all three transitions, so
+ * the withdrawal belongs to the writer: React runs its effect cleanup at
+ * precisely the moment the claim ends.
+ *
+ * `publishedAnchor` is that writer's own `services.geometryAnchorElement`,
+ * and the identity check on it is what makes the withdrawal safe to run
+ * unconditionally: a slot may only lower a claim that is still ITS OWN
+ * publish. Once a destination slot has published for the same instance, the
+ * source slot's later teardown is a no-op rather than a concealment of the
+ * live record.
+ *
+ * The opposite order is the accepted gap. A source slot that tears down
+ * BEFORE any destination has published leaves the record retained but
+ * unpresented, and it stays unpresented until that destination's own publish
+ * restores the claim. Nothing here schedules or bounds that interval: the
+ * bound is the destination publish, NOT a frame. It is short today only
+ * because the transfers that produce it are choreographed synchronously - a
+ * same-commit structural move republishes during the same layout phase, so
+ * the gap never reaches paint - and it would widen if that choreography ever
+ * became asynchronous. A record briefly unpainted while genuinely between
+ * owners is the deliberate trade for never painting two owners at once, which
+ * is the unrecoverable failure.
+ */
+export function retractTileSurfacePresentation(
+  instanceId: string,
+  publishedAnchor: HTMLElement | null,
+): void {
+  const current = environments.get(instanceId);
+  if (current === undefined) return;
+  if (current.services.geometryAnchorElement !== publishedAnchor) return;
+  if (!current.canvasActivity.tabSelected) return;
+  environments.set(instanceId, {
+    ...current,
+    canvasActivity: { ...current.canvasActivity, tabSelected: false },
+  });
+  notify(instanceId);
+}
+
 /** `null` for a member with no published environment yet, or a non-member. */
 export function getTileSurfaceEnvironment(
   instanceId: string,
@@ -198,6 +259,12 @@ export function getTileSurfaceEnvironment(
  * The geometry guard in `StableTileSurfaceHost` keys off this SAME predicate
  * deliberately: a concealed layer reports a rect its body must not reflow to,
  * and "is this painting" is precisely the question that guard is asking.
+ *
+ * Both inputs are ASSERTIONS by a live slot, never facts the registry can
+ * re-derive - so each one is only as current as its writer. `tabSelected` is
+ * therefore lowered by `retractTileSurfacePresentation` when the publishing
+ * slot's claim ends, which is what keeps a record that no longer has a writer
+ * from reading as presented on a stale `true`.
  */
 export function isTileSurfacePresented(
   environment: TileSurfaceEnvironment,

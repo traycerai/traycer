@@ -11,11 +11,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { IHostMessenger } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  IRunnerHost,
+  LinkLoginDeepLinkDelivery,
+} from "@traycer-clients/shared/platform/runner-host";
 import { useEffect } from "react";
 
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
+    // The bridge's "already signed in" notice rides the info channel.
+    info: vi.fn(),
   },
 }));
 
@@ -29,9 +35,14 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import type { AuthService } from "@/lib/auth/auth-service";
+import { setMobileApp } from "@/lib/mobile-app";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 function buildHost(): MockRunnerHost {
@@ -130,14 +141,17 @@ function okWithProfile(): Promise<Response> {
   );
 }
 
-interface MountResult {
-  readonly host: MockRunnerHost;
+interface MountResult<H extends IRunnerHost> {
+  readonly host: H;
   readonly cleanupClient: () => void;
   readonly getAuthService: () => AuthService;
   readonly waitForAuthService: () => Promise<AuthService>;
 }
 
-function mountSignInButton(host: MockRunnerHost): MountResult {
+function mountSignInButton<H extends IRunnerHost>(
+  host: H,
+  layout: "compact" | "hero",
+): MountResult<H> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -155,12 +169,13 @@ function mountSignInButton(host: MockRunnerHost): MountResult {
           fallback={<div data-testid="runtime-fallback">…</div>}
         >
           <AuthSessionExpiredToastBridge />
+          <LinkLoginDeepLinkBridge />
           <CaptureAuthService
             onCapture={(auth) => {
               authService = auth;
             }}
           />
-          <SignInButton layout="compact" />
+          <SignInButton layout={layout} />
         </HostRuntimeProvider>
       </QueryClientProvider>
     </RunnerHostProvider>,
@@ -245,6 +260,306 @@ function CaptureAuthService(props: {
   return null;
 }
 
+/**
+ * A link code can be handed to the app by the OS at any moment — including
+ * ones where this surface does not exist. What happens then is a decision, not
+ * a rendering concern, so it is asserted as one.
+ */
+describe("routing a link code the OS delivered", () => {
+  it("redeems only when signed out", () => {
+    expect(decideDeepLinkRouting("signed-out")).toBe("redeem");
+  });
+
+  it("refuses to claim while already signed in", () => {
+    // Claiming would swap the signed-in user underneath whatever they were
+    // doing, from a QR that may have been scanned by accident.
+    expect(decideDeepLinkRouting("signed-in")).toBe("already-signed-in");
+  });
+
+  it("holds the code while a sign-in is already in flight", () => {
+    // Not dropped: attempts supersede each other, so redeeming now would kill
+    // the attempt in progress. The decision is retaken when it settles.
+    expect(decideDeepLinkRouting("signing-in")).toBe("hold");
+  });
+});
+
+describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
+  // The immutable Capacitor product flag, never the viewport: a narrow
+  // desktop window is still a desktop, and a desktop offering to scan a QR
+  // from itself is a nonsense affordance (and would mint a `mobile` session
+  // for a non-mobile shell).
+  let restoreFetch: () => void = () => undefined;
+
+  beforeEach(() => {
+    useAuthStore.getState().setSignedOut();
+    restoreFetch = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 401 })),
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+    useAuthStore.getState().setSignedOut();
+    useLinkLoginDeepLinkOutcomeStore.getState().clear();
+    restoreFetch();
+  });
+
+  /**
+   * A code the SYSTEM camera delivered, with the claim under this test's
+   * control. `emitCode` is the OS handing the app a scanned QR.
+   */
+  function deepLinkHost(): {
+    readonly host: IRunnerHost;
+    readonly emitCode: (code: string) => void;
+  } {
+    // A holder, not a bare `let`: the assignment happens inside a callback,
+    // where narrowing would otherwise keep the binding at its initial `null`.
+    const sink: {
+      subscriber: ((delivery: LinkLoginDeepLinkDelivery) => void) | null;
+      nextDeliveryId: number;
+    } = { subscriber: null, nextDeliveryId: 1 };
+    const host = createFakeRunnerHost({
+      authnBaseUrl: "http://localhost:5005",
+      linkLoginDeepLinks: {
+        onLinkLoginCode: (handler) => {
+          sink.subscriber = handler;
+          return { dispose: () => undefined };
+        },
+      },
+    });
+    return {
+      host,
+      // Each call is a distinct arrival, exactly as the shell reports them -
+      // including a repeat of a code already delivered, which is what a
+      // deliberate rescan looks like from here.
+      emitCode: (code: string) => {
+        const subscriber = sink.subscriber;
+        if (subscriber === null) {
+          throw new Error("the bridge never subscribed");
+        }
+        subscriber({ code, deliveryId: sink.nextDeliveryId });
+        sink.nextDeliveryId += 1;
+      },
+    };
+  }
+
+  it("locks the in-app scan while a camera-launched claim is still outstanding", async () => {
+    // The race the gate closes: the claim POST is in flight, so nothing has
+    // published poll progress yet. A tap on the still-live Scan button would
+    // start a second attempt that SUPERSEDES the camera-launched one, whose
+    // failure then lands under the replacement's wait.
+    setMobileApp(true);
+    const outstanding = installFetch(
+      () => new Promise<Response>(() => undefined),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+    expect(
+      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+    ).toBe(false);
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
+      ).toBe(true);
+    });
+    expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
+    // Retry is the device flow's escape hatch from a stalled browser round
+    // trip. Offering it here offers to throw away a claim the user's desktop
+    // is prompting them to approve: `signIn()` is re-entrant, so tapping it
+    // would supersede the camera-launched attempt.
+    expect(screen.queryByTestId("signin-retry-link")).toBeNull();
+    outstanding();
+    mobile.cleanupClient();
+  });
+
+  it("keeps a superseded camera claim silent under whatever replaced it", async () => {
+    // The claim settles only AFTER a newer attempt has taken the surface. Its
+    // result is `superseded`, not a failure, and must not surface at all - a
+    // discarded attempt's complaint under the successor's progress describes a
+    // request nobody is waiting on.
+    setMobileApp(true);
+    const claimSettles: { resolve: (() => void) | null } = { resolve: null };
+    const gated = installFetch(
+      () =>
+        new Promise<Response>((resolveResponse) => {
+          claimSettles.resolve = () => {
+            resolveResponse(new Response(null, { status: 401 }));
+          };
+        }),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    const auth = await mobile.waitForAuthService();
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
+    });
+
+    // A newer attempt takes over, discarding the link attempt's fence.
+    await act(async () => {
+      await auth.signIn();
+    });
+    await act(async () => {
+      claimSettles.resolve?.();
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByTestId("link-code-signin-notice")).toBeNull();
+    gated();
+    mobile.cleanupClient();
+  });
+
+  it("claims a rescan of the same code the shell chose to redeliver", async () => {
+    // Scan while signed in (refused with a notice), sign out, rescan the same
+    // still-live QR. The shell judged that second arrival intentional; a guard
+    // here keyed on the code value would silently swallow it.
+    setMobileApp(true);
+    const claimed: string[] = [];
+    const observing = installFetch((url) => {
+      if (url.includes("/link/claim")) {
+        claimed.push(url);
+      }
+      return Promise.resolve(new Response(null, { status: 401 }));
+    });
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+        [],
+      );
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+    expect(claimed.length).toBe(0);
+
+    act(() => {
+      useAuthStore.getState().setSignedOut();
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(claimed.length).toBe(1);
+    });
+    observing();
+    mobile.cleanupClient();
+  });
+
+  it("explains a failed camera claim once, not twice", async () => {
+    // The precise reason and the generic "Sign-in failed - please try again"
+    // used to render together on the same screen; for an expired code the
+    // generic one is advice that cannot work.
+    setMobileApp(true);
+    const rejected = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 401 })),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-notice").textContent,
+      ).toContain("invalid, expired, or already used");
+    });
+    expect(screen.queryByTestId("signin-error")).toBeNull();
+    rejected();
+    mobile.cleanupClient();
+  });
+
+  it("retires a camera-scan notice when a newer attempt starts", async () => {
+    // Otherwise the verdict outlives its own flow and reappears on a later
+    // sign-in screen, describing something the user has moved on from.
+    setMobileApp(true);
+    useLinkLoginDeepLinkOutcomeStore.getState().report("invalid-code");
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+    expect(screen.getByTestId("link-code-signin-notice")).toBeTruthy();
+
+    act(() => {
+      useAuthStore.getState().setSigningIn("device");
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("link-code-signin-notice")).toBeNull();
+    });
+    mobile.cleanupClient();
+  });
+
+  it("speaks the real reason a camera-scanned code failed", async () => {
+    // The deep-link path is where a DEAD code is most likely: one live code
+    // per account means a re-mint kills the QR still on the desktop screen.
+    // "Try again" would be advice that cannot work, so the surface renders the
+    // same precise copy an in-app scan gets.
+    setMobileApp(true);
+    useLinkLoginDeepLinkOutcomeStore.getState().report("invalid-code");
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+    expect(screen.getByTestId("link-code-signin-notice").textContent).toContain(
+      "invalid, expired, or already used",
+    );
+    mobile.cleanupClient();
+  });
+
+  it("mobile hero leads with a primary Scan CTA above a secondary Sign in", async () => {
+    setMobileApp(true);
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+    const scan = screen.getByTestId("link-code-signin-open");
+    const signIn = screen.getByTestId("signin-button");
+    expect(scan.textContent).toContain("Scan QR code");
+    // Scan is the emphasized action and renders ABOVE the device-flow button.
+    expect(
+      scan.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Manual code entry stays reachable as a tertiary link.
+    expect(screen.getByTestId("link-code-signin-manual")).toBeTruthy();
+    mobile.cleanupClient();
+  });
+
+  it("shows the link-code entry only in the mobile app", async () => {
+    setMobileApp(true);
+    const mobile = mountSignInButton(buildHost(), "compact");
+    await mobile.waitForAuthService();
+    expect(screen.getByTestId("link-code-signin-open")).toBeTruthy();
+    cleanup();
+    mobile.cleanupClient();
+
+    setMobileApp(false);
+    const desktopHero = mountSignInButton(buildHost(), "hero");
+    await desktopHero.waitForAuthService();
+    expect(screen.getByTestId("signin-button")).toBeTruthy();
+    expect(screen.queryByTestId("link-code-signin-open")).toBeNull();
+    expect(screen.queryByTestId("link-code-signin-manual")).toBeNull();
+    desktopHero.cleanupClient();
+  });
+});
+
 describe("<SignInButton />", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -277,7 +592,7 @@ describe("<SignInButton />", () => {
   });
 
   it("renders 'Sign-in failed - please try again.' when lastError is sign-in-failed", async () => {
-    const result = mountSignInButton(buildHost());
+    const result = mountSignInButton(buildHost(), "compact");
 
     await waitFor(() => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
@@ -322,7 +637,7 @@ describe("<SignInButton />", () => {
   });
 
   it("offers a Retry affordance during signing-in that re-triggers the browser sign-in", async () => {
-    const result = mountSignInButton(buildHost());
+    const result = mountSignInButton(buildHost(), "compact");
 
     await waitFor(() => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
@@ -332,7 +647,7 @@ describe("<SignInButton />", () => {
     expect(screen.queryByTestId("signin-retry-link")).toBeNull();
 
     act(() => {
-      useAuthStore.getState().setSigningIn();
+      useAuthStore.getState().setSigningIn("device");
     });
 
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
@@ -371,7 +686,7 @@ describe("<SignInButton />", () => {
       },
       { id: "user-1", email: "test@example.com", name: "Test User" },
     );
-    const result = mountSignInButton(host);
+    const result = mountSignInButton(host, "compact");
 
     // The HostRuntimeProvider auto-starts the AuthService, which calls
     // validateToken() against the pre-installed 401 fetch; the stored-token
@@ -399,7 +714,7 @@ describe("<SignInButton />", () => {
       },
       { id: "user-1", email: "test@example.com", name: "Test User" },
     );
-    const result = mountSignInButton(host);
+    const result = mountSignInButton(host, "compact");
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(
@@ -424,7 +739,7 @@ describe("<SignInButton />", () => {
   it("toasts and clears session-expired after active-session revalidation rejects", async () => {
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
-    const result = mountSignInButton(buildHost());
+    const result = mountSignInButton(buildHost(), "compact");
 
     await waitFor(() => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();
@@ -465,7 +780,7 @@ describe("<SignInButton />", () => {
   it("starts the device flow and surfaces the user code on the single Sign in", async () => {
     restoreFetch();
     restoreFetch = installFetch(() => okWithProfile());
-    const result = mountSignInButton(buildHost());
+    const result = mountSignInButton(buildHost(), "compact");
 
     await waitFor(() => {
       expect(screen.queryByTestId("runtime-fallback")).toBeNull();

@@ -15,7 +15,7 @@ import {
   resolveLeaderOwner,
 } from "@/lib/keybindings/dispatch";
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
-import { getHistoryController } from "@/lib/history-navigation";
+import { historyNavChromeAvailable } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
 import {
   routerAdapterFor,
@@ -354,15 +354,16 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       dispatchAction(actionId, adapter);
     };
 
-    // Mouse back/forward (buttons 3/4). Desktop-only: gated on the current
-    // router carrying a persistent-history controller, so the browser/web build
-    // never intercepts these. `preventDefault()` runs only when handled, so the
-    // shell's native back/forward stays intact off-desktop.
+    // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
+    // predicate rather than the controller brand alone: the mobile app carries
+    // the brand too, and these buttons are chrome for a device that has them.
+    // `preventDefault()` runs only when handled, so the shell's native
+    // back/forward stays intact everywhere else.
     // NOTE: Windows may instead surface these as a main-process `app-command`
     // (`browser-backward`/`browser-forward`); that path is a verify-and-extend
     // follow-up tracked in the tech plan (§4.4).
     const handleMouseNav = (event: MouseEvent) => {
-      if (getHistoryController(router.history) === null) return;
+      if (!historyNavChromeAvailable(router.history)) return;
       if (event.button === 3) {
         event.preventDefault();
         adapter.goBack();

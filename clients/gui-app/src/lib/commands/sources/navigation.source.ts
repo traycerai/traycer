@@ -5,16 +5,17 @@
  *     `app.settings.open` chord so keyboard users see the direct
  *     shortcut even though the palette row opens a section picker)
  *
- * Settings sub-page: one row per `SETTINGS_SECTIONS` entry, with
- * the current section filtered out on `/settings/<id>` routes.
+ * Settings sub-page: one row per section this build offers
+ * (`visibleSettingsSections`), with the current section filtered
+ * out on `/settings/<id>` routes.
  *
  * Runs as a `ReactCommandSource` so the Open-Settings chord
  * refreshes live when the user rebinds `app.settings.open`.
  */
 import { useMemo } from "react";
 import {
-  SETTINGS_SECTIONS,
   SETTINGS_SECTION_GROUPS,
+  visibleSettingsSections,
   type SettingsSection,
   type SettingsSectionGroupId,
 } from "@/lib/settings-sections";
@@ -62,7 +63,7 @@ const SETTINGS_SUBPAGE: CommandSubpage = {
   useItems: (ctx: CommandContext) =>
     useMemo<ReadonlyArray<CommandItem>>(
       () =>
-        SETTINGS_SECTIONS.flatMap((section) =>
+        visibleSettingsSections().flatMap((section) =>
           ctx.pathname !== `/settings/${section.id}`
             ? [buildSectionItem(section)]
             : [],

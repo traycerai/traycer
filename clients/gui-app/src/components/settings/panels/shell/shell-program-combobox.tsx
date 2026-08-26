@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronsUpDown, X } from "lucide-react";
+import { Check, ChevronsUpDown, RotateCcw, X } from "lucide-react";
 import type {
   ConfigDetectedShell,
   ConfigShellProbeResponse,
@@ -118,6 +118,9 @@ export function ShellProgramCombobox(props: {
   readonly onAdd: (path: string) => void;
   readonly onRemove: (path: string) => void;
   readonly onUseSystemDefault: () => void;
+  /** Re-runs detection on the target machine; see `refreshShells`. */
+  readonly onRefresh: () => void;
+  readonly refreshing: boolean;
 }) {
   const {
     value,
@@ -129,6 +132,8 @@ export function ShellProgramCombobox(props: {
     onAdd,
     onRemove,
     onUseSystemDefault,
+    onRefresh,
+    refreshing,
   } = props;
   const pickProgramFile = probeSource.pickProgramFile;
   const queryClient = useQueryClient();
@@ -263,7 +268,12 @@ export function ShellProgramCombobox(props: {
               label="System default"
               labelMono={false}
               detail={`${defaultEntry.name} · ${defaultEntry.path}`}
-              missing={false}
+              // The OS default is `%COMSPEC%` on Windows, which a user can
+              // point at wsl.exe - so this row can be a broken WSL too, and
+              // must refuse exactly like its concrete twin rather than
+              // resetting the config to a shell that cannot start.
+              notice={shellRowNotice(defaultEntry)}
+              selectable={defaultEntry.wslHealth === undefined}
               testId="settings-shell-reset"
               onSelect={() => {
                 onUseSystemDefault();
@@ -281,7 +291,12 @@ export function ShellProgramCombobox(props: {
               label={entry.name}
               labelMono
               detail={entry.path}
-              missing={entry.missing}
+              notice={shellRowNotice(entry)}
+              // A missing added row stays selectable (reinstalling the shell
+              // heals it in place), but a broken-WSL row is refused outright:
+              // selecting it yields a terminal that prints wsl.exe usage text
+              // and dies, which reads as "terminals don't start at all".
+              selectable={entry.wslHealth === undefined}
               testId={null}
               onSelect={() => commitSelect(entry.path)}
               onRemove={
@@ -291,6 +306,12 @@ export function ShellProgramCombobox(props: {
             />
           ))}
         </div>
+
+        <RedetectShellsFooter
+          disabled={disabled}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+        />
 
         <div className="border-t border-border/60" />
 
@@ -379,10 +400,55 @@ function TriggerLabel(props: {
 }
 
 /**
+ * The explicit freshness control under the shell list. Detection is otherwise
+ * per-panel-visit, deliberately never focus-driven (unreliable desktop focus
+ * signals, a wsl.exe probe spawn per run, and window focus says nothing about
+ * a remote host) - this button is what lets a user who just ran `wsl --install`
+ * verify the picker now agrees.
+ */
+function RedetectShellsFooter(props: {
+  readonly disabled: boolean;
+  readonly refreshing: boolean;
+  readonly onRefresh: () => void;
+}) {
+  return (
+    <div className="flex justify-end border-t border-border/60 px-2 py-1">
+      <button
+        type="button"
+        disabled={props.disabled || props.refreshing}
+        onClick={props.onRefresh}
+        data-testid="settings-shell-refresh"
+        className="inline-flex items-center gap-1.5 rounded px-1.5 py-1 text-ui-xs text-muted-foreground transition-colors hover:enabled:text-foreground disabled:opacity-50"
+      >
+        <RotateCcw
+          className={cn("size-3", props.refreshing && "animate-spin")}
+        />
+        {props.refreshing ? "Detecting…" : "Re-detect shells"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The amber annotation on a row, when it has one: a vanished added shell reads
+ * "not found" (echoing the add-time probe), a WSL that cannot host a terminal
+ * names why. One slot - `missing` and `wslHealth` never coincide, since only
+ * detected rows carry health and detected rows are never missing.
+ */
+function shellRowNotice(entry: ConfigDetectedShell): string | null {
+  if (entry.missing) return "not found";
+  if (entry.wslHealth === "not-installed") return "WSL not installed";
+  if (entry.wslHealth === "no-distro") return "no Linux distribution";
+  return null;
+}
+
+/**
  * A single selectable option row (the System default row and every concrete
  * shell share this shape). A row that commits a selection and a nested remove
  * control cannot both be `<button>`, so the row is a `div[role=option]` (click +
- * Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`.
+ * Enter/Space) and the ✕ is a real `<button>` with `stopPropagation`. An
+ * unselectable row (broken WSL) stays listed with its notice - hiding it would
+ * read as "Traycer doesn't support WSL" - but commits nothing.
  */
 function ShellOptionRow(props: {
   readonly checked: boolean;
@@ -390,7 +456,8 @@ function ShellOptionRow(props: {
   readonly label: string;
   readonly labelMono: boolean;
   readonly detail: string;
-  readonly missing: boolean;
+  readonly notice: string | null;
+  readonly selectable: boolean;
   readonly testId: string | null;
   readonly onSelect: () => void;
   readonly onRemove: (() => void) | null;
@@ -402,32 +469,37 @@ function ShellOptionRow(props: {
     label,
     labelMono,
     detail,
-    missing,
+    notice,
+    selectable,
     testId,
     onSelect,
     onRemove,
     removeLabel,
   } = props;
+  const inert = disabled || !selectable;
   return (
     <div
       role="option"
       aria-selected={checked}
-      tabIndex={disabled ? -1 : 0}
+      aria-disabled={!selectable || undefined}
+      tabIndex={inert ? -1 : 0}
       data-testid={testId ?? undefined}
       data-checked={checked ? "true" : "false"}
       onClick={() => {
-        if (!disabled) onSelect();
+        if (!inert) onSelect();
       }}
       onKeyDown={(event) => {
-        if (disabled) return;
+        if (inert) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect();
         }
       }}
       className={cn(
-        "group flex cursor-pointer items-center gap-2 px-3 py-1.5 text-ui-sm outline-none",
-        "hover:bg-accent/50 focus-visible:bg-accent/50 data-[checked=true]:bg-accent/30",
+        "group flex items-center gap-2 px-3 py-1.5 text-ui-sm outline-none",
+        selectable
+          ? "cursor-pointer hover:bg-accent/50 focus-visible:bg-accent/50 data-[checked=true]:bg-accent/30"
+          : "cursor-default opacity-70",
       )}
     >
       <Check
@@ -439,19 +511,19 @@ function ShellOptionRow(props: {
       <span className={cn("shrink-0 font-medium", labelMono && "font-mono")}>
         {label}
       </span>
-      {/* A vanished (uninstalled) shell keeps its removable row but takes the
-          amber validation tone, echoing the add-time probe's "not found". */}
       <StartTruncatedText
         className={cn(
           "min-w-0 flex-1 font-mono text-code-xs",
-          missing ? "text-[var(--term-ansi-yellow)]" : "text-muted-foreground",
+          notice !== null
+            ? "text-[var(--term-ansi-yellow)]"
+            : "text-muted-foreground",
         )}
       >
         {detail}
       </StartTruncatedText>
-      {missing ? (
+      {notice !== null ? (
         <span className="shrink-0 text-ui-xs text-[var(--term-ansi-yellow)]/80">
-          not found
+          {notice}
         </span>
       ) : null}
       {onRemove !== null ? (

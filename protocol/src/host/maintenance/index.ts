@@ -4,7 +4,9 @@ export {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateCheckUpgradeV10ToV11,
   hostUpdateCheckV10,
+  hostUpdateCheckV11,
   hostUpdateInstallV10,
 } from "./contracts";
 
@@ -25,8 +27,11 @@ export {
   hostServiceStateSchema,
   hostServiceStatusRequestSchema,
   hostServiceStatusResponseSchema,
+  hostIncludePreReleasesSourceSchema,
   hostUpdateCheckRequestSchema,
+  hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
+  hostUpdateCheckResponseSchemaV11,
   hostUpdateInstallRequestSchema,
   hostUpdateInstallResponseSchema,
   type HostAvailableManifest,
@@ -43,8 +48,11 @@ export {
   type HostServiceState,
   type HostServiceStatusRequest,
   type HostServiceStatusResponse,
+  type HostIncludePreReleasesSource,
   type HostUpdateCheckRequest,
+  type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponse,
+  type HostUpdateCheckResponseV11,
   type HostUpdateInstallRequest,
   type HostUpdateInstallResponse,
 } from "./schemas";
