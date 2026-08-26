@@ -16,10 +16,12 @@
  * a drop for every node the doc-based evaluator (`@/lib/reparent-rules`)
  * could not see.
  *
- * The matrix in section 1 mirrors `describe("evaluateReparent")` in
- * `lib/__tests__/epic-y-mutations-reparent.test.ts` case-for-case, so the two
- * suites read as parallel proof the two evaluators agreed before one of them
- * (the doc one) is deleted.
+ * The matrix in section 1 was ported case-for-case from the doc evaluator's
+ * own suite (`epic-y-mutations-reparent.test.ts`), which was written first and
+ * ran green alongside this file before that evaluator was deleted - so the two
+ * agreed on every cell at the moment the authority moved. That suite is gone
+ * with the code it covered; this is now the only matrix, and `git log` for the
+ * deleted file is where the parallel-proof history lives.
  */
 import { describe, expect, it } from "vitest";
 import {
