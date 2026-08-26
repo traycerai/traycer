@@ -280,6 +280,7 @@ describe("useVisibleRateLimitProviders", () => {
   it("keeps an authenticated managed profile visible and queue-eligible while excluding its unauthenticated ambient target", () => {
     const ambient: ProviderProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient",
       authType: "oauth",
       label: "Terminal",

@@ -92,6 +92,7 @@ type MockState = {
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
   enqueueBatch: Mock<(...args: unknown[]) => Promise<void>>;
+  refreshProfileStatus: Mock<(...args: unknown[]) => Promise<unknown>>;
   consumeReset: Mock<
     (
       request: ProvidersConsumeRateLimitResetCreditRequest,
@@ -136,6 +137,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
   enqueueBatch: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  refreshProfileStatus: vi.fn((..._args: unknown[]) => Promise.resolve()),
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
@@ -275,6 +277,15 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => null };
 });
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      isPending: false,
+      mutateAsync: (...args: unknown[]) => mocks.refreshProfileStatus(...args),
+    }),
+  }),
+);
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
@@ -443,6 +454,7 @@ function providerProfile(input: {
 }): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.label,
@@ -834,6 +846,9 @@ beforeEach(() => {
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.enqueueBatch = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.refreshProfileStatus = vi.fn((..._args: unknown[]) =>
+    Promise.resolve(),
+  );
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
@@ -1324,6 +1339,10 @@ describe("<RateLimitPopover /> rail", () => {
     expect(screen.getByText("Current session")).toBeTruthy();
     expect(screen.getByText("Work")).toBeTruthy();
     expect(screen.getByText("Pro 5x")).toBeTruthy();
+    const profileSwitch = screen.getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(profileSwitch.dataset.state).toBe("checked");
   });
 
   it("keeps an unauthenticated ambient row with cached lastGood data visible without a refresh action", () => {
@@ -1403,6 +1422,96 @@ describe("<RateLimitPopover /> rail", () => {
       ],
       { force: true },
     );
+  });
+
+  it("keeps a disabled profile's cached usage visible and exposes only direct maintenance refresh", () => {
+    const disabledProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "work-profile",
+        kind: "managed",
+        label: "Work",
+        tier: "Pro 5x",
+        usageUpdatedAt: NOW - 10_000,
+      }),
+      enabled: false,
+    };
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [disabledProfile],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+    const usageQuery = degradedRetainedResult(
+      codexReady(),
+      "usage_fetch_failed",
+    );
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: usageQuery,
+    };
+
+    renderPopover();
+
+    expect(screen.getByText("Work")).toBeTruthy();
+    expect(screen.getByText("Disabled")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Refresh Work status and usage limits",
+      }),
+    );
+    expect(mocks.refreshProfileStatus).toHaveBeenCalledWith({
+      providerId: "codex",
+      profileId: "work-profile",
+    });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.enqueueBatch).not.toHaveBeenCalled();
+    expect(usageQuery.refetch).not.toHaveBeenCalled();
+  });
+
+  it("does not present a disabled authenticated profile as signed out when usage has not been checked", () => {
+    const disabledProfile: ProviderProfile = {
+      ...providerProfile({
+        profileId: "work-profile",
+        kind: "managed",
+        label: "Work",
+        tier: "Pro 5x",
+        usageUpdatedAt: null,
+      }),
+      enabled: false,
+    };
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [disabledProfile],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ];
+
+    renderPopover();
+
+    expect(screen.getByText("Disabled")).toBeTruthy();
+    expect(screen.getByText("not checked")).toBeTruthy();
+    expect(
+      screen.getByText("Refresh to check usage without enabling this profile."),
+    ).toBeTruthy();
+    expect(screen.queryByText("signed out")).toBeNull();
+    expect(
+      screen.queryByText("Signed out — sign in to refresh usage."),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Refresh Work status and usage limits",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("switch", { name: "Allow agents to use Work" }).dataset
+        .state,
+    ).toBe("unchecked");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("shows a signed-out message and label for an unauthenticated ambient profile with no cached usage at all", () => {

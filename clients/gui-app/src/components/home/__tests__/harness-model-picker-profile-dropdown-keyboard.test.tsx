@@ -23,6 +23,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 const PROFILES: ReadonlyArray<ProviderProfile> = [
   {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -42,6 +43,7 @@ const PROFILES: ReadonlyArray<ProviderProfile> = [
   },
   {
     profileId: "work",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label: "Work",
@@ -109,9 +111,11 @@ function NestedPickerSurface() {
               createProfileDisabled={false}
               createProfileDisabledReason={undefined}
               shortcutHintForIndex={noShortcutHint}
+              profileEnablementPending={null}
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
+              eligibilityControls={null}
               admissionByProfileId={null}
             />
           )}
@@ -168,6 +172,7 @@ describe("nested picker profile-dropdown keyboard ownership", () => {
 const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
   {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -187,6 +192,7 @@ const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
   },
   {
     profileId: "work",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label: "Work",
@@ -206,6 +212,7 @@ const PROFILES_WITH_MIDDLE_DISABLED: ReadonlyArray<ProviderProfile> = [
   },
   {
     profileId: "personal",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label: "Personal",
@@ -254,9 +261,11 @@ function OpenProfileDropdownSurface() {
               createProfileDisabled={false}
               createProfileDisabledReason={undefined}
               shortcutHintForIndex={noShortcutHint}
+              profileEnablementPending={null}
               contentContainer={contentContainer}
               onCloseAutoFocus={null}
               usagePresentation={null}
+              eligibilityControls={null}
               admissionByProfileId={WORK_LOCKED_ADMISSION}
             />
           )}
