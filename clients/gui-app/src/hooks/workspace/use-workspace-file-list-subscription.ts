@@ -160,18 +160,24 @@ export function useWorkspaceFileListSubscription(args: {
   readonly hostId: string | null;
   readonly workspacePath: string | null;
   readonly enabled: boolean;
+  /** Null uses the persistent sidebar expansion store. */
+  readonly expandedPathsOverride: ReadonlyArray<string> | null;
+  readonly onPrunedOverride:
+    | ((directoryPaths: ReadonlyArray<string>) => void)
+    | null;
 }): WorkspaceFileListSubscriptionResult {
   const queryClient = useQueryClient();
   const wsStreamClient = useWsStreamClient();
   const pruneExpandedPaths = useFileTreeStore((s) => s.pruneExpandedPaths);
-  const expandedPaths = useFileTreeExpandedPaths(
+  const storedExpandedPaths = useFileTreeExpandedPaths(
     args.epicId,
     args.hostId,
     args.workspacePath,
   );
+  const expandedPaths = args.expandedPathsOverride ?? storedExpandedPaths;
   const [consumerId] = useState(() => Symbol("workspace-file-list-consumer"));
 
-  const { epicId, hostId, workspacePath, enabled } = args;
+  const { epicId, hostId, workspacePath, enabled, onPrunedOverride } = args;
   const watchPaths = useMemo(
     () => selectWatchableDirectoryPaths(expandedPaths),
     [expandedPaths],
@@ -208,7 +214,11 @@ export function useWorkspaceFileListSubscription(args: {
 
     shared.refCount += 1;
     shared.pruneListeners.set(consumerId, (directoryPaths) => {
-      pruneExpandedPaths(epicId, hostId, workspacePath, directoryPaths);
+      if (onPrunedOverride !== null) {
+        onPrunedOverride(directoryPaths);
+      } else {
+        pruneExpandedPaths(epicId, hostId, workspacePath, directoryPaths);
+      }
     });
     // A joining consumer may find a GC-collected query slot (the listings
     // themselves live on the shared entry, and an idle workspace produces no
@@ -237,6 +247,7 @@ export function useWorkspaceFileListSubscription(args: {
     epicId,
     hostId,
     pruneExpandedPaths,
+    onPrunedOverride,
     queryClient,
     workspacePath,
     wsStreamClient,

@@ -96,6 +96,28 @@ vi.mock("@/hooks/workspace/use-workspace-search-paths-query", async () => {
     }),
   };
 });
+vi.mock("@/hooks/workspace/use-workspace-file-list-subscription", () => ({
+  useWorkspaceFileListSubscription: () => {
+    const files = state.searchResults.flatMap((result) =>
+      result.kind === "file" ? [[result.relPath, result.name] as const] : [],
+    );
+    const directories = new Set<string>();
+    for (const [path] of files) {
+      const segments = path.split("/");
+      for (let index = 1; index < segments.length; index += 1) {
+        directories.add(`${segments.slice(0, index).join("/")}/`);
+      }
+    }
+    return {
+      paths: [...directories, ...files.map(([path]) => path)],
+      fileNameByPath: new Map(files),
+      ignoredPaths: [],
+      truncated: state.searchTruncated,
+      isPending: false,
+      error: null,
+    };
+  },
+}));
 
 function buildSearchResponse(
   source: WorkspaceSearchSource,
@@ -130,6 +152,9 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
 vi.mock("@/stores/command-palette/command-palette-store", () => ({
   useCommandPaletteStore: (selector: (s: { query: string }) => unknown) =>
     selector({ query: state.query }),
+}));
+vi.mock("@/lib/commands/palette-query-context", () => ({
+  usePaletteLiveQuery: () => state.query,
 }));
 
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
@@ -371,8 +396,19 @@ describe("Files opener sub-page (code root step)", () => {
     state.searchResults = [fileResult("src/a.ts", "a.ts")];
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
+      "open:files:default-host:/ws/only:directory:src",
       "open:files:/ws/only:src/a.ts",
     ]);
+    expect(fileItems[0].pathTreeRow).toMatchObject({
+      kind: "directory",
+      depth: 0,
+      hasChildren: true,
+    });
+    expect(fileItems[1].pathTreeRow).toMatchObject({
+      kind: "file",
+      depth: 1,
+      ancestorIds: ["open:files:default-host:/ws/only:directory:src"],
+    });
     runById(fileItems, "open:files:/ws/only:src/a.ts");
     const opened = lastTileOpen();
     expect(opened.groupId).toBe("group-1");
@@ -386,12 +422,14 @@ describe("Files opener sub-page (code root step)", () => {
     state.searchTruncated = true;
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
+      "open:files:default-host:/ws/only:directory:src",
       "open:files:/ws/only:src/a.ts",
       "open:files:truncated",
     ]);
   });
 
   it("shows a distinct notice when the workspace root is unavailable", () => {
+    state.query = "missing";
     state.searchRootUnavailable = true;
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
@@ -401,6 +439,7 @@ describe("Files opener sub-page (code root step)", () => {
   });
 
   it("shows a distinct notice when the host lacks the search RPC", () => {
+    state.query = "a";
     state.searchIsError = true;
     const fileItems = codeStepItems("/ws/only");
     expect(fileItems.map((i) => i.id)).toEqual([
@@ -409,6 +448,7 @@ describe("Files opener sub-page (code root step)", () => {
   });
 
   it("returns no rows for a ready-but-empty search (distinct from unavailable)", () => {
+    state.query = "missing";
     state.searchResults = [];
     state.searchRootUnavailable = false;
     const fileItems = codeStepItems("/ws/only");
@@ -416,6 +456,7 @@ describe("Files opener sub-page (code root step)", () => {
   });
 
   it("drops a late reply echoing a different root (stale-selection guard)", () => {
+    state.query = "a";
     state.searchResults = [fileResult("src/a.ts", "a.ts")];
     state.echoRootOverride = "/ws/some-previous-workspace";
     const fileItems = codeStepItems("/ws/only");
@@ -469,11 +510,15 @@ describe("Files opener sub-page (Artifacts step)", () => {
     ];
     const items = artifactStepItems();
     expect(items.map((i) => i.label)).toEqual([
-      "Parent A / Notes",
-      "Parent B / Notes",
+      "Parent A",
+      "Notes",
+      "Parent B",
+      "Notes",
     ]);
     expect(items.map((i) => i.id)).toEqual([
+      "open:files:artifacts:epic-1:directory:Parent A",
       "open:files:artifacts:c1",
+      "open:files:artifacts:epic-1:directory:Parent B",
       "open:files:artifacts:c2",
     ]);
   });
@@ -567,6 +612,7 @@ describe("Diff opener sub-page", () => {
     state.changedFiles = [changedFile("src/x.ts")];
     const items = renderItems(useDiffOpenerItems);
     expect(items.map((i) => i.id)).toEqual([
+      "open:diff:default-host:/ws/only:directory:src",
       "open:diff:/ws/only:src/x.ts:unstaged",
     ]);
     runById(items, "open:diff:/ws/only:src/x.ts:unstaged");
