@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { Command, CommandList } from "@/components/ui/command";
+import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { SubpageView } from "@/components/command-palette/palette-cmdk";
 import type {
   CommandContext,
@@ -130,6 +130,7 @@ function renderTree(id: "open:agents" | "open:artifacts"): void {
   };
   render(
     <Command>
+      <CommandInput aria-label="Search" />
       <CommandList>
         <SubpageView
           subpage={subpage}
@@ -149,11 +150,11 @@ describe.each(["open:agents", "open:artifacts"] as const)(
     it("expands with ArrowRight and collapses with ArrowLeft", () => {
       renderTree(id);
       expect(screen.queryByText("Grandchild")).toBeNull();
-      const childRow = screen.getByText("Child").closest('[role="option"]');
-      if (childRow === null) throw new Error("missing child option");
-      fireEvent.keyDown(childRow, { key: "ArrowRight" });
+      const input = screen.getByRole("combobox");
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowRight" });
       expect(screen.getByText("Grandchild")).toBeTruthy();
-      fireEvent.keyDown(childRow, { key: "ArrowLeft" });
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
       expect(screen.queryByText("Grandchild")).toBeNull();
     });
   },

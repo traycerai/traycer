@@ -5,7 +5,13 @@
  * opener root view. Non-component helpers (filter, row value, controller hook)
  * live in `palette-cmdk-controller.ts`.
  */
-import { Fragment, useState, type MouseEvent, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { useCommandState } from "cmdk";
 import { Bot, Folder, FolderOpen, MessageSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -70,6 +76,28 @@ function AgentTreeIndent(props: {
       </AgentTreeIndent>
     </span>
   );
+}
+
+function treeDescendantKeywords(
+  items: ReadonlyArray<CommandItemShape>,
+  getRow: (
+    item: CommandItemShape,
+  ) =>
+    | { readonly nodeId: string; readonly ancestorIds: ReadonlyArray<string> }
+    | undefined,
+): ReadonlyMap<string, ReadonlyArray<string>> {
+  const keywords = new Map<string, string[]>();
+  for (const item of items) {
+    const row = getRow(item);
+    if (row === undefined) continue;
+    const searchable = [item.label, ...item.keywords];
+    for (const ancestorId of row.ancestorIds) {
+      const existing = keywords.get(ancestorId) ?? [];
+      existing.push(...searchable);
+      keywords.set(ancestorId, existing);
+    }
+  }
+  return keywords;
 }
 
 function AgentTreeItemLabel(props: {
@@ -145,6 +173,7 @@ function AgentSubpageRows(props: {
     () => new Set<string>(),
   );
   const search = useCommandState((state) => state.search);
+  const selectedValue = useCommandState((state) => state.value);
   const isExpanded = (row: NonNullable<CommandItemShape["agentTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
@@ -172,6 +201,37 @@ function AgentSubpageRows(props: {
         : [[item.agentTreeRow.nodeId, item.agentTreeRow] as const],
     ),
   );
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        event.target.closest("[cmdk-root]") === null
+      ) {
+        return;
+      }
+      const item = props.items.find(
+        (candidate) => buildCmdkValue(candidate) === selectedValue,
+      );
+      const row = item?.agentTreeRow;
+      if (row?.hasChildren !== true) return;
+      const expanded = isExpanded(row);
+      if (event.key === "ArrowRight" && !expanded) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRowExpanded(row, true);
+      } else if (event.key === "ArrowLeft" && expanded) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRowExpanded(row, false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  });
+  const descendantKeywords = treeDescendantKeywords(
+    props.items,
+    (item) => item.agentTreeRow,
+  );
   const visibleItems =
     search.length > 0
       ? props.items
@@ -190,21 +250,12 @@ function AgentSubpageRows(props: {
       <PaletteItemRow
         key={item.id}
         value={buildCmdkValue(item)}
-        keywords={[...item.keywords]}
+        keywords={[
+          ...item.keywords,
+          ...(descendantKeywords.get(row?.nodeId ?? "") ?? []),
+        ]}
         disabled={item.disabled === true}
         onSelect={() => props.onSelect(item)}
-        onKeyDown={(event) => {
-          if (row?.hasChildren !== true) return;
-          if (event.key === "ArrowRight" && !expanded) {
-            event.preventDefault();
-            event.stopPropagation();
-            setRowExpanded(row, true);
-          } else if (event.key === "ArrowLeft" && expanded) {
-            event.preventDefault();
-            event.stopPropagation();
-            setRowExpanded(row, false);
-          }
-        }}
       >
         <AgentTreeItemLabel
           item={item}
@@ -281,6 +332,7 @@ function ArtifactSubpageRows(props: {
     () => new Set<string>(),
   );
   const search = useCommandState((state) => state.search);
+  const selectedValue = useCommandState((state) => state.value);
   const isExpanded = (row: NonNullable<CommandItemShape["artifactTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
@@ -308,6 +360,37 @@ function ArtifactSubpageRows(props: {
         : [[item.artifactTreeRow.nodeId, item.artifactTreeRow] as const],
     ),
   );
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        event.target.closest("[cmdk-root]") === null
+      ) {
+        return;
+      }
+      const item = props.items.find(
+        (candidate) => buildCmdkValue(candidate) === selectedValue,
+      );
+      const row = item?.artifactTreeRow;
+      if (row?.hasChildren !== true) return;
+      const expanded = isExpanded(row);
+      if (event.key === "ArrowRight" && !expanded) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRowExpanded(row, true);
+      } else if (event.key === "ArrowLeft" && expanded) {
+        event.preventDefault();
+        event.stopPropagation();
+        setRowExpanded(row, false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  });
+  const descendantKeywords = treeDescendantKeywords(
+    props.items,
+    (item) => item.artifactTreeRow,
+  );
   const visibleItems =
     search.length > 0
       ? props.items
@@ -326,21 +409,12 @@ function ArtifactSubpageRows(props: {
       <PaletteItemRow
         key={item.id}
         value={buildCmdkValue(item)}
-        keywords={[...item.keywords]}
+        keywords={[
+          ...item.keywords,
+          ...(descendantKeywords.get(row?.nodeId ?? "") ?? []),
+        ]}
         disabled={item.disabled === true}
         onSelect={() => props.onSelect(item)}
-        onKeyDown={(event) => {
-          if (row?.hasChildren !== true) return;
-          if (event.key === "ArrowRight" && !expanded) {
-            event.preventDefault();
-            event.stopPropagation();
-            setRowExpanded(row, true);
-          } else if (event.key === "ArrowLeft" && expanded) {
-            event.preventDefault();
-            event.stopPropagation();
-            setRowExpanded(row, false);
-          }
-        }}
       >
         <ArtifactTreeItemLabel
           item={item}

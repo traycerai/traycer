@@ -37,6 +37,7 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 import {
+  buildRankedPathItems,
   buildPathTreeItems,
   openerPathTreeId,
 } from "@/lib/commands/sources/open/path-tree-items";
@@ -80,11 +81,11 @@ function changedFileLeaves(
         }),
     }),
   }));
-  const treeItems = buildPathTreeItems(
-    openerPathTreeId("diff", hostId, workspacePath),
-    leaves,
-    [],
-  );
+  const treeId = openerPathTreeId("diff", hostId, workspacePath);
+  const treeItems =
+    query.trim().length > 0
+      ? buildRankedPathItems(treeId, leaves)
+      : buildPathTreeItems(treeId, leaves, []);
   if (matched.length > shown.length) {
     return [...treeItems, openerTruncatedHint("diff", shown.length)];
   }

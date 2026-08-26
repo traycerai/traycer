@@ -62,6 +62,7 @@ import type {
 } from "@/lib/commands/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 import {
+  buildRankedPathItems,
   buildPathTreeItems,
   openerPathTreeId,
 } from "@/lib/commands/sources/open/path-tree-items";
@@ -97,6 +98,7 @@ function openerNotice(id: string, label: string): CommandItem {
     shortcut: null,
     actionId: null,
     subpage: null,
+    disabled: true,
     run: () => undefined,
   };
 }
@@ -164,10 +166,9 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
       },
     ];
   });
-  const treeItems = buildPathTreeItems(
+  const treeItems = buildRankedPathItems(
     openerPathTreeId("files", hostId, workspacePath),
     leaves,
-    [],
   );
   return view.truncated
     ? [...treeItems, openerTruncatedHint("files", leaves.length)]
@@ -331,10 +332,11 @@ interface ArtifactLeavesArgs {
   readonly view: WorkspaceSearchPathsView | null;
   readonly isError: boolean;
   readonly pathIndex: ReadonlyMap<string, ArtifactPathEntry>;
+  readonly isSearching: boolean;
 }
 
 function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
-  const { ctx, defaultHostId, view, isError, pathIndex } = args;
+  const { ctx, defaultHostId, view, isError, pathIndex, isSearching } = args;
   if (isError) {
     return [
       openerNotice(
@@ -390,11 +392,10 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
       },
     ];
   });
-  const treeItems = buildPathTreeItems(
-    `open:files:artifacts:${ctx.activeEpicId ?? ""}`,
-    leaves,
-    [],
-  );
+  const treeId = `open:files:artifacts:${ctx.activeEpicId ?? ""}`;
+  const treeItems = isSearching
+    ? buildRankedPathItems(treeId, leaves)
+    : buildPathTreeItems(treeId, leaves, []);
   return view.truncated
     ? [...treeItems, openerTruncatedHint("files-artifacts", leaves.length)]
     : treeItems;
@@ -409,6 +410,7 @@ function useArtifactsStepItems(
   const client = useHostClientForHostId(activeEpicHostId);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const query = usePaletteLiveQuery();
+  const isSearching = query.trim().length > 0;
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
   const projection = useActiveEpicProjection(ctx.activeEpicId);
@@ -434,8 +436,16 @@ function useArtifactsStepItems(
     [projection],
   );
   return useMemo<ReadonlyArray<CommandItem>>(
-    () => artifactLeaves({ ctx, defaultHostId, view, isError, pathIndex }),
-    [ctx, defaultHostId, view, isError, pathIndex],
+    () =>
+      artifactLeaves({
+        ctx,
+        defaultHostId,
+        view,
+        isError,
+        pathIndex,
+        isSearching,
+      }),
+    [ctx, defaultHostId, view, isError, pathIndex, isSearching],
   );
 }
 

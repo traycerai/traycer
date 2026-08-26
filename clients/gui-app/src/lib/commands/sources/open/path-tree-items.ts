@@ -157,6 +157,34 @@ export function buildPathTreeItems(
   return items;
 }
 
+/** Preserve an authoritative search order while retaining file-row visuals. */
+export function buildRankedPathItems(
+  namespace: string,
+  leaves: ReadonlyArray<PathTreeLeaf>,
+): ReadonlyArray<CommandItem> {
+  return leaves.map((leaf) => ({
+    ...leaf.item,
+    label:
+      leaf.displaySegments === null
+        ? leaf.path
+        : leaf.displaySegments.join(" / "),
+    pathTreeRow: {
+      treeId: namespace,
+      nodeId: leaf.item.id,
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: false,
+      kind: "file",
+      path: leaf.path,
+      displayPath:
+        leaf.displaySegments === null
+          ? leaf.path
+          : leaf.displaySegments.join(" / "),
+      gitStatus: leaf.gitStatus,
+    },
+  }));
+}
+
 export function openerPathTreeId(
   kind: "files" | "diff",
   hostId: string,
