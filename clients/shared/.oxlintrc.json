@@ -71,6 +71,22 @@
             ],
             "patterns": [
               {
+                "group": ["@traycer/protocol/**/_internal/**"],
+                "message": "Do not import from `@traycer/protocol/.../_internal/...`. Use `getRecordSchema(<registry>, \"<record-name>\", \"latest\")` to obtain a versioned record schema, or use `RecordValue<typeof <registry>, \"<record-name>\">` for the type."
+              },
+              {
+                "group": ["@traycerai/**"],
+                "message": "Client packages must not import `@traycerai/*` (for example packages/common). Use `@traycer/protocol/*` or `@traycer-clients/*` instead."
+              },
+              {
+                "group": [
+                  "@traycer/**",
+                  "!@traycer/protocol",
+                  "!@traycer/protocol/**"
+                ],
+                "message": "Client packages may only import `@traycer` through `@traycer/protocol/*`. Use the protocol path alias or `@traycer-clients/*` for other shared code."
+              },
+              {
                 "group": [
                   "**/traycer-cli/**",
                   "**/service/platforms/**",
@@ -89,7 +105,29 @@
     {
       "files": ["host-lifecycle/__tests__/real-supervisor-*.ts"],
       "rules": {
-        "no-restricted-imports": "off"
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["@traycer/protocol/**/_internal/**"],
+                "message": "Do not import from `@traycer/protocol/.../_internal/...`. Use `getRecordSchema(<registry>, \"<record-name>\", \"latest\")` to obtain a versioned record schema, or use `RecordValue<typeof <registry>, \"<record-name>\">` for the type."
+              },
+              {
+                "group": ["@traycerai/**"],
+                "message": "Client packages must not import `@traycerai/*` (for example packages/common). Use `@traycer/protocol/*` or `@traycer-clients/*` instead."
+              },
+              {
+                "group": [
+                  "@traycer/**",
+                  "!@traycer/protocol",
+                  "!@traycer/protocol/**"
+                ],
+                "message": "Client packages may only import `@traycer` through `@traycer/protocol/*`. Use the protocol path alias or `@traycer-clients/*` for other shared code."
+              }
+            ]
+          }
+        ]
       }
     }
   ]

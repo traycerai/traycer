@@ -57,6 +57,7 @@ repos:
             bunfig\.toml|
             nx\.json|
             package\.json|
+            \.oxfmtrc\.json|
             \.pre-commit-config\.yaml|
             tsconfig.*\.json|
             eslint/.*|

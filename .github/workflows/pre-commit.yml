@@ -48,7 +48,7 @@ jobs:
         with:
           node-version: "24"
       - name: Cache Nx
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .nx/cache
           key: ${{ runner.os }}-nx-${{ matrix.lane }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
@@ -57,7 +57,7 @@ jobs:
             ${{ runner.os }}-nx-
       - name: Cache GUI ESLint fallback
         if: matrix.lane == 'static'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: clients/gui-app/.eslintcache
           key: ${{ runner.os }}-eslint-${{ github.sha }}

@@ -21,6 +21,7 @@
         "{projectRoot}/eslint.config.*",
         "{projectRoot}/.oxlintrc*",
         "{projectRoot}/oxlint.config.*",
+        "{workspaceRoot}/eslint/*.mjs",
         "sharedGlobals"
       ]
     },
