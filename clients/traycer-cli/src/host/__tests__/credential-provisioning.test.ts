@@ -1197,7 +1197,7 @@ describe("provisionInstalledHostCredential", () => {
     // budget ran out would hold `host install` open past its bound, and
     // disposing the store does not cancel one already in flight.
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 100, progress: vi.fn() }),
+      makeOptions({ deadlineMs: 0, progress: vi.fn() }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({
