@@ -4,6 +4,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import { isMac, modLabel } from "@/lib/keybindings/platform";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
 import { useIsComposerNarrow } from "@/components/home/composer/composer-narrow-hooks";
 
 import {
@@ -83,7 +84,10 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
   const isNarrow = useIsComposerNarrow();
   const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
   let placeholder = basePlaceholder;
-  if (steerHintActive) {
+  // The steer hint is entirely a naming of two keys, so where shortcut hints
+  // are suppressed there is nothing left of it to show - the composer keeps
+  // its ordinary placeholder rather than a hint stripped of its chord.
+  if (steerHintActive && shortcutHintsVisible()) {
     placeholder = isNarrow
       ? NARROW_STEER_HINT_PLACEHOLDER
       : STEER_HINT_PLACEHOLDER;

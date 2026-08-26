@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
-import { type SettingsSectionId } from "@/lib/settings-sections";
+import {
+  isSettingsSectionVisible,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
 import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
@@ -9,6 +12,7 @@ import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
 import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
+import { LinkPhonePanel } from "@/components/settings/panels/link-phone-panel";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
@@ -25,12 +29,20 @@ export interface SettingsModalContentProps {
  * Renders the settings UI inside the modal: sidebar (modal mode) +
  * the panel for the active section. Falls back to the General panel
  * when `section` is null (e.g., on the very first open).
+ *
+ * The section is REMEMBERED across launches, so it can also name a section
+ * this build does not offer - and the rail beside it would then have no row
+ * for the panel on screen. That falls back to General too, keyed off the
+ * offered list rather than off the reason a section is missing from it.
  */
 export function SettingsModalContent(
   props: SettingsModalContentProps,
 ): ReactNode {
   const { setSection } = useSystemTabModalActions();
-  const section: SettingsSectionId = props.section ?? "general";
+  const requested: SettingsSectionId = props.section ?? "general";
+  const section: SettingsSectionId = isSettingsSectionVisible(requested)
+    ? requested
+    : "general";
   return (
     <SettingsDensityContext.Provider value="compact">
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -40,6 +52,7 @@ export function SettingsModalContent(
             activeSection: section,
             onSelect: setSection,
           }}
+          variant="rail"
         />
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
           <SettingsPanelForSection section={section} />
@@ -73,6 +86,8 @@ export function SettingsPanelForSection(props: {
       return <HostSettingsPanel />;
     case "devices":
       return <DevicesSessionsPanel />;
+    case "link-phone":
+      return <LinkPhonePanel />;
     case "app-diagnostics":
       return <AppDiagnosticsSettingsPanel />;
     case "diagnostics":

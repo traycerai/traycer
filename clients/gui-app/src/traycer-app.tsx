@@ -2,6 +2,7 @@ import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
+import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
@@ -288,6 +289,7 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <RunnerHostBridges />
       <HostControllerStatusListener />
       <AppUpdateToastController />
+      <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />

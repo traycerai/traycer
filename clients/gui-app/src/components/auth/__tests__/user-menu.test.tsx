@@ -222,7 +222,7 @@ describe("<UserMenu />", () => {
     result.cleanupClient();
   });
 
-  it("calls AuthService.signOut() when the Sign out item is selected", async () => {
+  it("calls AuthService.signOut() once the Sign out confirm is accepted", async () => {
     const host = buildHost();
     await host.tokenStore.signIn(
       { token: "token", refreshToken: "token-refresh" },
@@ -243,10 +243,44 @@ describe("<UserMenu />", () => {
     const signOut = await screen.findByTestId("user-menu-sign-out");
     fireEvent.click(signOut);
 
-    await waitFor(() => {
-      expect(useAuthStore.getState().status).toBe("signed-out");
+    // Selecting the item only asks - signing out is not undoable from the UI.
+    expect(await host.tokenStore.get()).not.toBeNull();
+    fireEvent.click(await screen.findByTestId("confirm-action"));
+
+    // The cleared token store, not `useAuthStore.status`: this harness's auth
+    // bootstrap lands on "signed-out" at mount regardless, so asserting the
+    // status alone would pass whether or not sign-out ran.
+    await waitFor(async () => {
+      expect(await host.tokenStore.get()).toBeNull();
     });
-    expect(await host.tokenStore.get()).toBeNull();
+    result.cleanupClient();
+  });
+
+  it("leaves the session alone when the Sign out confirm is cancelled", async () => {
+    const host = buildHost();
+    await host.tokenStore.signIn(
+      { token: "token", refreshToken: "token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    const result = mountMenu(
+      host,
+      <UserMenu
+        userName="Ada Lovelace"
+        email="ada@example.com"
+        avatarUrl={null}
+        showAppSettings={false}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId("user-menu-trigger"));
+    fireEvent.click(await screen.findByTestId("user-menu-sign-out"));
+    fireEvent.click(await screen.findByTestId("confirm-cancel"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+    // The session survives - the token the accept case clears is still there.
+    expect(await host.tokenStore.get()).not.toBeNull();
     result.cleanupClient();
   });
 

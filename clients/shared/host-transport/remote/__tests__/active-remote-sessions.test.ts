@@ -8,6 +8,7 @@ import {
   hasReadyRemoteSession,
   remoteSessionRefCountForTest,
   retireAllRemoteSessions,
+  wakeHeldRemoteSessions,
   type RemoteSessionIdentity,
 } from "../active-remote-sessions";
 
@@ -27,6 +28,13 @@ interface FakeSession extends IRemoteSession<
   VersionedStreamRpcRegistry
 > {
   readonly closeCalls: number;
+  /**
+   * Every reason `wake` was called with, in order. An accumulator rather than
+   * a `vi.fn()` reference for the same reason `closeCalls` is one: referencing
+   * a method-shorthand interface member as a value trips
+   * `@typescript-eslint/unbound-method`.
+   */
+  readonly wakeReasons: readonly string[];
   ready: boolean;
   /**
    * Mirrors a session-level fatal: the real `RemoteSession` flips itself to
@@ -38,9 +46,13 @@ interface FakeSession extends IRemoteSession<
 
 function fakeSession(): FakeSession {
   let closeCalls = 0;
+  const wakeReasons: string[] = [];
   const session: FakeSession = {
     get closeCalls() {
       return closeCalls;
+    },
+    get wakeReasons() {
+      return wakeReasons;
     },
     // Mirrors the real `RemoteSession`: not ready until it has actually
     // connected, so a fresh fake never masquerades as evidence of liveness.
@@ -57,6 +69,9 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    wake: (reason) => {
+      wakeReasons.push(reason);
+    },
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
@@ -907,5 +922,132 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(builds).toBe(1);
     first.close();
     second.close();
+  });
+});
+
+describe("wake ownership", () => {
+  it("forwards a wake while the consumer still holds its reference", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+
+    view.wake("app-resumed");
+
+    expect(session.wakeReasons).toEqual(["app-resumed"]);
+    view.close();
+  });
+
+  it("ignores a wake from a view whose reference was already released", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+    view.close();
+
+    // The stale-callback case: a discarded render or a disposed binding still
+    // holding the view. Honouring it would hurry a session this consumer no
+    // longer holds - possibly one sitting at refCount 0 with nobody waiting.
+    view.wake("app-resumed");
+
+    expect(session.wakeReasons).toEqual([]);
+    expireLinger();
+  });
+
+  it("ignores a wake on a superseded entry even while a consumer still holds it", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+    // The host re-keyed underneath the live reference. The entry is marked
+    // superseded but not torn out from under its holder.
+    const rotated: RemoteSessionIdentity = {
+      ...identity,
+      hostPublicKey: `${identity.hostPublicKey}-rotated`,
+    };
+    const successor = acquireRemoteSession(rotated, fakeSession);
+
+    view.wake("app-resumed");
+
+    // Its key embeds a public key the host has moved off, so it can never
+    // re-handshake; hurrying it only spends grants against a dead identity.
+    expect(session.wakeReasons).toEqual([]);
+    view.close();
+    successor.close();
+    expireLinger();
+  });
+
+  it("ignores a wake once the session has closed underneath the view", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+    session.closedUnderneath = true;
+
+    view.wake("app-resumed");
+
+    expect(session.wakeReasons).toEqual([]);
+    view.close();
+  });
+});
+
+describe("wakeHeldRemoteSessions", () => {
+  it("wakes every held entry exactly once", () => {
+    const firstIdentity = freshIdentity();
+    const secondIdentity = freshIdentity();
+    const first = fakeSession();
+    const second = fakeSession();
+    const firstView = acquireRemoteSession(firstIdentity, () => first);
+    const secondView = acquireRemoteSession(secondIdentity, () => second);
+    // A second consumer of the SAME session must not double its wake: the
+    // sweep walks cache entries, not consumers, which is what lets any number
+    // of React consumers share one physical session safely.
+    const firstAgain = acquireRemoteSession(firstIdentity, () => first);
+
+    wakeHeldRemoteSessions("app-resumed");
+
+    expect(first.wakeReasons).toEqual(["app-resumed"]);
+    expect(second.wakeReasons).toEqual(["app-resumed"]);
+    firstView.close();
+    firstAgain.close();
+    secondView.close();
+    expireLinger();
+  });
+
+  it("skips a zero-reference entry inside its keep-warm linger", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+    view.close();
+
+    // Still cached and still connected, but nobody holds it. Keep-warm exists
+    // so a prompt re-acquire is free, not so an abandoned session redials on
+    // wakes no consumer asked for - the adopter brings its own wake.
+    wakeHeldRemoteSessions("app-resumed");
+
+    expect(session.wakeReasons).toEqual([]);
+    expireLinger();
+  });
+
+  it("skips superseded and closed entries", () => {
+    const supersededIdentity = freshIdentity();
+    const closedIdentity = freshIdentity();
+    const superseded = fakeSession();
+    const closed = fakeSession();
+    const supersededView = acquireRemoteSession(
+      supersededIdentity,
+      () => superseded,
+    );
+    const successor = acquireRemoteSession(
+      { ...supersededIdentity, hostPublicKey: "rotated" },
+      fakeSession,
+    );
+    const closedView = acquireRemoteSession(closedIdentity, () => closed);
+    closed.closedUnderneath = true;
+
+    wakeHeldRemoteSessions("app-resumed");
+
+    expect(superseded.wakeReasons).toEqual([]);
+    expect(closed.wakeReasons).toEqual([]);
+    supersededView.close();
+    successor.close();
+    closedView.close();
+    expireLinger();
   });
 });

@@ -80,6 +80,13 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    mintLinkLoginCode: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    linkLoginStatus: () => Promise.resolve({ kind: "network-error" as const }),
+    respondLinkLogin: () => Promise.resolve({ kind: "network-error" as const }),
+    linkCodeScanner: null,
+    linkLoginDeepLinks: null,
+    deviceDescriber: null,
     updateHostVersionPolicy: () =>
       Promise.resolve({ kind: "network-error" as const }),
     deregisterHostFromAccount: () =>
@@ -121,6 +128,7 @@ export function createFakeRunnerHost(
       rotate: () =>
         Promise.resolve({ outcome: "deleted" as const, pair: null }),
       delete: () => Promise.resolve(),
+      deleteIfToken: () => Promise.resolve("kept" as const),
       subscribe: () => ({ dispose: () => undefined }),
       migrateLegacyCredentials: () =>
         Promise.resolve("identity-unknown" as const),
@@ -143,6 +151,9 @@ export function createFakeRunnerHost(
     // `createInertSelectionAuthorityClient()` through `overrides` instead.
     selectionAuthority: createDefaultLocalSelectionAuthority("fake-local-host"),
     zoom: null,
+    // Desktop-shaped by default; a phone-shaped test passes its own
+    // `pushPermission` double through `overrides`.
+    pushPermission: null,
   };
   return { ...base, ...overrides };
 }

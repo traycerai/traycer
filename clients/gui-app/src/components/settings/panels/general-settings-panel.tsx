@@ -6,6 +6,7 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -67,12 +68,6 @@ export function GeneralSettingsPanel() {
   const migrationProgressLabel = formatMigrationProgress(migrationState);
   const migrationIsRunning =
     migrationState.status === "running" || migrationState.remoteRunning;
-  const preventSleepWhileRunning = useSettingsStore(
-    (s) => s.preventSleepWhileRunning,
-  );
-  const setPreventSleepWhileRunning = useSettingsStore(
-    (s) => s.setPreventSleepWhileRunning,
-  );
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -168,20 +163,7 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
-          <SettingsRow
-            label="Prevent sleep while running"
-            description="Keep the computer awake while an agent is running, so work continues when you step away."
-            control={
-              <Switch
-                checked={preventSleepWhileRunning}
-                onCheckedChange={(value) => {
-                  trackGeneralSetting("preventSleepWhileRunning");
-                  setPreventSleepWhileRunning(value);
-                }}
-                aria-label="Prevent sleep while running"
-              />
-            }
-          />
+          <PreventSleepSettingsSection />
           <SettingsRow
             label="Show global resources button"
             description="Show the app-wide resource monitor in the header."

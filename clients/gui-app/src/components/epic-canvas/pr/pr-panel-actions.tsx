@@ -1,5 +1,5 @@
 import { useCallback, type ReactNode } from "react";
-import { RotateCcw } from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,6 @@ import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import { newestObservedAt } from "@/lib/pr/pr-list-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
-import { cn } from "@/lib/utils";
 import {
   useLeftPanelSectionCollapsed,
   useMainPanelCollapsed,
@@ -92,9 +91,7 @@ function PrPanelActionsLive(props: {
         data-testid="pr-panel-refresh"
         className="text-muted-foreground hover:text-foreground"
       >
-        <RotateCcw
-          className={cn("size-4", refresh.refreshing && "animate-spin")}
-        />
+        <RefreshIcon refreshing={refresh.refreshing} />
       </Button>
     </div>
   );

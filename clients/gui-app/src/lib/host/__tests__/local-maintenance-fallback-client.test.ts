@@ -365,11 +365,13 @@ describe("buildMaintenanceFallbackServeMap", () => {
   it("forwards includePreReleases verbatim on host.update.check", async () => {
     const maintenanceUpdateCheck = vi.fn(
       (_input: {
-        readonly includePreReleases: boolean;
+        readonly includePreReleases: boolean | undefined;
         readonly expectedHostId: string;
       }) =>
         Promise.resolve({
           outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
           manifest: updateCheckManifest("1.2.0"),
         }),
     );
@@ -393,6 +395,8 @@ describe("buildMaintenanceFallbackServeMap", () => {
     const maintenanceUpdateCheck = vi.fn(() =>
       Promise.resolve({
         outcome: "ok" as const,
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default" as const,
         manifest: updateCheckManifest("1.2.0"),
       }),
     );
@@ -490,6 +494,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
           rpcCalls.push("host.update.check");
           return {
             outcome: "ok" as const,
+            effectiveIncludePreReleases: false,
+            includePreReleasesSource: "stable-default" as const,
             manifest: updateCheckManifest("1.2.0"),
           };
         },
@@ -575,7 +581,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
   function servingManagement(): {
     readonly management: IHostManagement;
     readonly checkCalls: Array<{
-      readonly includePreReleases: boolean;
+      readonly includePreReleases: boolean | undefined;
       readonly expectedHostId: string;
     }>;
     readonly installCalls: Array<{
@@ -587,7 +593,7 @@ describe("createLocalMaintenanceFallbackClient", () => {
     readonly installInfoCalls: Array<{ readonly expectedHostId: string }>;
   } {
     const checkCalls: Array<{
-      readonly includePreReleases: boolean;
+      readonly includePreReleases: boolean | undefined;
       readonly expectedHostId: string;
     }> = [];
     const installCalls: Array<{
@@ -602,6 +608,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
         checkCalls.push(input);
         return Promise.resolve({
           outcome: "ok" as const,
+          effectiveIncludePreReleases: false,
+          includePreReleasesSource: "stable-default" as const,
           manifest: updateCheckManifest("1.2.0"),
         });
       },
@@ -818,6 +826,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
 
     expect(answer).toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("1.2.0"),
     });
     expect(rpcCalls).toEqual(["host.update.check"]);
@@ -943,6 +953,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
 
     expect(answer).toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("1.2.0"),
     });
     expect(rpcCalls).toEqual([]);
@@ -1032,6 +1044,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
     );
     expect(answer).toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("1.2.0"),
     });
     controller.abort();
@@ -1053,6 +1067,8 @@ describe("createLocalMaintenanceFallbackClient", () => {
       client.request("host.update.check", { includePreReleases: false }),
     ).resolves.toEqual({
       outcome: "ok",
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default" as const,
       manifest: updateCheckManifest("1.2.0"),
     });
     await expect(

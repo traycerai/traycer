@@ -18,6 +18,7 @@ import type {
 // first.
 const mocks = vi.hoisted(() => ({
   fetchManifestMock: vi.fn(),
+  readHostInstallRecordMock: vi.fn(),
 }));
 
 vi.mock("../../registry", async (importOriginal) => {
@@ -36,10 +37,25 @@ vi.mock("../../registry", async (importOriginal) => {
   };
 });
 
+// The derived default is the one thing this command reads off local disk, so
+// the install record is mocked rather than materialized: these cases are about
+// what the CLI CONCLUDES from a version string (and from a read that fails),
+// not about `install.json` parsing, which `manifest/host-install` owns.
+vi.mock("../../manifest/host-install", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../manifest/host-install")>();
+  return {
+    ...actual,
+    readHostInstallRecord: mocks.readHostInstallRecordMock,
+  };
+});
+
 import {
   buildHostAvailableCommand,
   buildHostAvailableListing,
+  resolveIncludePreReleases,
 } from "../host-available";
+import type { HostInstallRecord } from "../../manifest/host-install";
 import type { CommandContext } from "../../runner/runner";
 
 const AVAILABLE_ASSET: HostPlatformAsset = {
@@ -100,6 +116,7 @@ describe("buildHostAvailableListing", () => {
       manifestUrl: "https://example.com/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
       cliVersion: "9.9.9",
     });
 
@@ -124,6 +141,7 @@ describe("buildHostAvailableListing", () => {
         "https://github.com/traycerai/traycer/releases/download/released-host-versions/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
       cliVersion: "9.9.9",
     });
 
@@ -148,6 +166,7 @@ describe("buildHostAvailableListing", () => {
         "https://github.com/traycerai/traycer/releases/download/released-host-versions/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: true,
+      includePreReleasesSource: "explicit-include",
       cliVersion: "9.9.9",
     });
 
@@ -235,6 +254,201 @@ function parseAvailableSnapshotLikeDesktop(raw: unknown): {
   });
   return { latest: manifest.latest, versions };
 }
+
+// The catalog default is derived, not stored, and the CLI is the only process
+// that can derive it - it is the one that can read this environment's install
+// record. These cases pin all four provenances plus the fail-closed rule that
+// keeps a corrupt record from breaking the listing.
+describe("resolveIncludePreReleases", () => {
+  it("honours an explicit include regardless of what is installed", () => {
+    expect(
+      resolveIncludePreReleases({
+        override: true,
+        installedHostVersion: "1.2.0",
+      }),
+    ).toEqual({ includePreReleases: true, source: "explicit-include" });
+  });
+
+  it("honours an explicit exclude even on an RC host - the whole point of the negative flag", () => {
+    // Without a negative flag an RC host could never be shown a stable-only
+    // catalog: its derived default includes RCs, and "unchecked" would be
+    // indistinguishable from "never touched".
+    expect(
+      resolveIncludePreReleases({
+        override: false,
+        installedHostVersion: "2.0.0-rc.1",
+      }),
+    ).toEqual({ includePreReleases: false, source: "explicit-exclude" });
+  });
+
+  it("derives inclusion from a canonical RC install", () => {
+    expect(
+      resolveIncludePreReleases({
+        override: null,
+        installedHostVersion: "2.0.0-rc.1",
+      }),
+    ).toEqual({ includePreReleases: true, source: "installed-rc" });
+  });
+
+  it("derives stable-default for every non-canonical installed version", () => {
+    // Canonical `X.Y.Z-rc.N` is the ONLY prerelease shape that activates
+    // implicit following; everything else - including a version that merely
+    // contains a hyphen - fails closed to the stable catalog.
+    for (const installedHostVersion of [
+      "1.2.0",
+      "2.0.0-beta.1",
+      "2.0.0-alpha",
+      "2.0.0-nightly.3",
+      "2.0.0-rc",
+      "2.0.0-rc.01",
+      "2.0.0-rc.1.2",
+      "2.0.0-rc.1+build.7",
+      "local-traycer-host-1730000000",
+      "not-a-version",
+      "",
+    ]) {
+      expect(
+        resolveIncludePreReleases({ override: null, installedHostVersion }),
+      ).toEqual({ includePreReleases: false, source: "stable-default" });
+    }
+  });
+
+  it("derives stable-default when nothing is installed or the record was unreadable", () => {
+    expect(
+      resolveIncludePreReleases({ override: null, installedHostVersion: null }),
+    ).toEqual({ includePreReleases: false, source: "stable-default" });
+  });
+});
+
+function installRecord(version: string): HostInstallRecord {
+  return {
+    installId: "install-1",
+    version,
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-06-22T00:00:00.000Z",
+    source: { kind: "registry", value: "https://example.com/host.tar.gz" },
+    archiveSha256: null,
+    signatureVerifiedAt: "2026-06-22T00:00:00.000Z",
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: "/opt/traycer/host",
+  };
+}
+
+describe("buildHostAvailableCommand's derived catalog default", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("lists an RC host's own line with no flag passed, and says why", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["2.0.0-rc.2", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      installRecord("2.0.0-rc.1"),
+    );
+
+    const command = buildHostAvailableCommand({ includePreReleases: null });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: true,
+      includePreReleasesSource: "installed-rc",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "2.0.0-rc.2", available: true },
+      { version: "1.2.0", available: true },
+    ]);
+    expect(result.human).toContain(
+      "pre-releases: included (following the installed release candidate's line)",
+    );
+  });
+
+  it("keeps a stable host on the stable catalog with no flag passed", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["2.0.0-rc.2", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(installRecord("1.2.0"));
+
+    const command = buildHostAvailableCommand({ includePreReleases: null });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "1.2.0", available: true },
+    ]);
+  });
+
+  it("still lists the registry when the install record is corrupt", async () => {
+    // A corrupt `install.json` is exactly when someone needs to see which
+    // versions exist. `readHostInstallRecord` throws rather than overwrite a
+    // suspect record - right for the install path, wrong for a listing - so
+    // this must fail closed to stable-default, not propagate.
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["2.0.0-rc.2", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockRejectedValue(
+      Object.assign(new Error("host install record is invalid"), {
+        code: "E_HOST_INSTALL_RECORD_INVALID",
+      }),
+    );
+
+    const command = buildHostAvailableCommand({ includePreReleases: null });
+    const result = await command(fakeCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.data).toMatchObject({
+      includePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "1.2.0", available: true },
+    ]);
+  });
+
+  it("filters RC rows off an RC host when the negative flag is passed, without reading the record", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["2.0.0-rc.2", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(
+      installRecord("2.0.0-rc.1"),
+    );
+
+    const command = buildHostAvailableCommand({ includePreReleases: false });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "1.2.0", available: true },
+    ]);
+    // An explicit answer must not depend on a disk read that can fail.
+    expect(mocks.readHostInstallRecordMock).not.toHaveBeenCalled();
+  });
+
+  it("includes RCs on a stable host when the positive flag is passed", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["2.0.0-rc.2", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(installRecord("1.2.0"));
+
+    const command = buildHostAvailableCommand({ includePreReleases: true });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: true,
+      includePreReleasesSource: "explicit-include",
+    });
+    expect(mocks.readHostInstallRecordMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("buildHostAvailableCommand's real data envelope against desktop's parse contract", () => {
   afterEach(() => {
@@ -344,6 +558,7 @@ describe("buildHostAvailableListing platform scoping", () => {
       manifestUrl: "https://example.com/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
       cliVersion: "9.9.9",
     });
 
@@ -362,6 +577,7 @@ describe("buildHostAvailableListing platform scoping", () => {
       manifestUrl: "https://example.com/versions.json",
       platformKey: "darwin-arm64",
       includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
       cliVersion: "9.9.9",
     });
 

@@ -11,9 +11,11 @@ import {
   type ArtifactCommentAction,
   type CollabUser,
 } from "@/editor-core";
+import { useActivateCommentThread } from "@/hooks/comments/use-activate-comment-thread";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";
 import { TILE_CONTENT_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
@@ -23,10 +25,7 @@ import {
 } from "@/lib/artifacts/node-display";
 import { consumeArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { commentArtifactKindFor } from "@/lib/comments/artifact-comment-kind";
-import {
-  registerCommentEditor,
-  revealCommentThreadAnchor,
-} from "@/lib/comments/comment-editor-registry";
+import { registerCommentEditor } from "@/lib/comments/comment-editor-registry";
 import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
@@ -49,7 +48,6 @@ import {
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
-import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { EpicArtifactRoomAvailability } from "@/stores/epics/open-epic/types";
 import type { Editor } from "@tiptap/core";
@@ -264,7 +262,6 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // surfaces simply don't render; everything else opts in.
   const commentsSupported = commentArtifactKind !== null;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
-  const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
   const activeThreadId = useActiveThreadId(epicId);
   const hoverThreadId = useHoverThreadId(epicId);
   const flashThread = useFlashThread(epicId);
@@ -281,11 +278,6 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     artifactId: node.id,
     options: { enabled: commentsSupported },
   });
-  const setActivePanelIdAndExpand = useLeftPanelStore(
-    (s) => s.setActivePanelIdAndExpand,
-  );
-  const revealCommentsPanel = useLeftPanelStore((s) => s.revealCommentsPanel);
-  const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
   const resolvedThreadIds = useMemo(
     () =>
@@ -432,27 +424,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     };
   }, [editor, isActive, editable]);
 
-  // Swap the left panel to Comments + focus the matching thread. Shared
-  // by the floating-draft `onCreated` callback and the hover popover's
-  // click handler so both paths land on the same surface.
-  const onActivateThread = useCallback(
-    (threadId: string) => {
-      setActiveThread(epicId, threadId);
-      setFlashThread(epicId, threadId);
-      revealCommentsPanel(viewTabId);
-      setActivePanelIdAndExpand(viewTabId, "comments");
-      revealCommentThreadAnchor(epicId, node.id, threadId);
-    },
-    [
-      epicId,
-      node.id,
-      setActiveThread,
-      setFlashThread,
-      revealCommentsPanel,
-      setActivePanelIdAndExpand,
-      viewTabId,
-    ],
-  );
+  // Shared by the floating-draft `onCreated` callback, the anchor tap and the
+  // hover popover's click, so every path lands on the same surface.
+  const onActivateThread = useActivateCommentThread({
+    epicId,
+    artifactId: node.id,
+    viewTabId,
+  });
 
   useEffect(() => {
     if (flashThread === null) return;
@@ -636,6 +614,11 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
  * conditions do not count against that component's complexity ceiling. Only
  * artifact kinds get an outline - a workspace file tile shares this body but
  * is not a document with a heading skeleton.
+ *
+ * `hide` unmounts it on a desktop viewport, exactly as before the phone tile
+ * bar existed - the rail is the only consumer there. On a phone viewport it
+ * stays mounted and suppresses only its own rail, because the tile bar's
+ * button reads the outline it registers and does not obey `hide`.
  */
 function ArtifactHeadingMinimapMount(props: {
   readonly editor: Editor | null;
@@ -644,10 +627,11 @@ function ArtifactHeadingMinimapMount(props: {
   readonly scroller: HTMLElement | null;
 }) {
   const side = useSettingsStore((state) => state.chatTurnMinimapSide);
+  const isMobileViewport = useIsMobileViewport();
   if (
     props.editor === null ||
     !isEpicArtifactKind(props.node.type) ||
-    side === "hide"
+    (side === "hide" && !isMobileViewport)
   ) {
     return null;
   }

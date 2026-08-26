@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
 import { singleDigitLeaderDigitFor } from "@/providers/keybinding-context";
+import { setMobileApp } from "@/lib/mobile-app";
 import { pickerProfileShortcutHintForIndex } from "../harness-model-picker-shortcut-hint";
 
 describe("pickerProfileShortcutHintForIndex", () => {
+  afterEach(() => {
+    setMobileApp(false);
+  });
+
   it("shows a ⌘⇧-digit shortcut hint per row, matching the shared platform helper", () => {
     expect(pickerProfileShortcutHintForIndex(0)).toEqual({
       digit: singleDigitLeaderDigitFor(0),
@@ -35,5 +40,10 @@ describe("pickerProfileShortcutHintForIndex", () => {
     // (`model.profile.byDigit` maps `digit === 0 ? 9 : digit - 1`), so its
     // hint must advertise "0", not the untypable "10".
     expect(pickerProfileShortcutHintForIndex(9)?.digit).toBe("0");
+  });
+
+  it("returns null on the installed mobile app regardless of index", () => {
+    setMobileApp(true);
+    expect(pickerProfileShortcutHintForIndex(0)).toBeNull();
   });
 });

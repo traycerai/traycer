@@ -383,6 +383,45 @@ describe("maintenanceUpdateCheck IPC", () => {
           },
         ],
       },
+      // Reconstructed from the REQUEST, because this fixture's CLI envelope
+      // carries no inclusion metadata — the fail-closed path for a CLI that
+      // predates the fields. It never claims `installed-rc`, which asserts a
+      // derivation only a reporting CLI can have performed.
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+    });
+  });
+
+  it("preserves the CLI envelope's own resolved inclusion and provenance", async () => {
+    // The Settings explanation is keyed off `installed-rc`, and only the CLI
+    // can know it: dropping the metadata here would make the same CLI output
+    // explain itself on a remote host and stay silent on a local one.
+    installFakeCli(
+      resolveWith({
+        ...(realShapedAvailablePayload() as Record<string, unknown>),
+        includePreReleases: true,
+        includePreReleasesSource: "installed-rc",
+      }),
+    );
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+
+    const result = await handler(null, {});
+
+    expect(result).toMatchObject({
+      outcome: "ok",
+      effectiveIncludePreReleases: true,
+      includePreReleasesSource: "installed-rc",
     });
   });
 
@@ -409,7 +448,11 @@ describe("maintenanceUpdateCheck IPC", () => {
     );
   });
 
-  it("shells host available --json without --include-pre-releases when the flag is false", async () => {
+  it("shells the NEGATIVE flag when the override is explicitly false", async () => {
+    // Not omission. Omission now means "derive from the installed host", and
+    // on a host running a release candidate that DERIVES inclusion — so an
+    // unchecked filter that sent nothing would keep returning the RC rows it
+    // was just asked to hide.
     installFakeCli(resolveWith(realShapedAvailablePayload()));
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
@@ -424,6 +467,29 @@ describe("maintenanceUpdateCheck IPC", () => {
       throw new Error("expected maintenanceUpdateCheck handler");
     }
     await handler(null, { includePreReleases: false });
+    expect(bundledCliCalls).toEqual([
+      ["host", "available", "--json", "--no-include-pre-releases"],
+    ]);
+  });
+
+  it("shells NO flag when the override is absent, leaving the default to the CLI", async () => {
+    // The CLI is the catalog-default authority: it is the process that can
+    // read this environment's install record. Picking a flag here would
+    // override the derivation the absent state exists to request.
+    installFakeCli(resolveWith(realShapedAvailablePayload()));
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(
+      RunnerHostInvoke.traycerMaintenanceUpdateCheck,
+    );
+    if (handler === undefined) {
+      throw new Error("expected maintenanceUpdateCheck handler");
+    }
+    await handler(null, {});
     expect(bundledCliCalls).toEqual([["host", "available", "--json"]]);
   });
 
@@ -2566,5 +2632,132 @@ describe("maintenance identity + doctorRepairIfIdle IPC", () => {
       kind: "declined",
       message: "Another process holds the host lock.",
     });
+  });
+});
+
+/**
+ * `traycerHostAvailable` resolves the DISCOVERED manifest/PATH CLI, which —
+ * unlike the bundled, version-matched CLI the maintenance projections use —
+ * can be older than the app driving it. Sending it a flag it does not have
+ * turned "untick Include release candidates" into a hard error.
+ */
+describe("traycerHostAvailable old-CLI compatibility", () => {
+  beforeEach(beginSandbox);
+  afterEach(endSandbox);
+
+  const NEGATIVE_FLAG = "--no-include-pre-releases";
+
+  function rejectUnknownOption(
+    flag: string,
+  ): (args: readonly string[], CliError: CliErrorCtor) => Promise<unknown> {
+    return (args, CliError) => {
+      if (args.includes(flag)) {
+        // The real envelope: the CLI entry's `applyRunnerErrorRouting` routes
+        // commander's parse failure into the JSON error contract under
+        // `--json`, carrying commander's own code in `details`.
+        return Promise.reject(
+          new CliError(
+            {
+              message: `unknown option '${flag}'\n(Did you mean --include-pre-releases?)`,
+              code: "E_INVALID_ARGUMENT",
+              details: { commanderCode: "commander.unknownOption" },
+              exitCode: 1,
+              stderrTail: "",
+            },
+            null,
+          ),
+        );
+      }
+      return Promise.resolve(realShapedAvailablePayload());
+    };
+  }
+
+  async function availableHandler(): Promise<
+    (event: unknown, raw: unknown) => Promise<unknown>
+  > {
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const handler = bridge.handlers.get(RunnerHostInvoke.traycerHostAvailable);
+    if (handler === undefined) {
+      throw new Error("expected traycerHostAvailable handler");
+    }
+    return handler;
+  }
+
+  it("retries once without the negative flag when the CLI does not know it", async () => {
+    installFakeCli(rejectUnknownOption(NEGATIVE_FLAG));
+    const handler = await availableHandler();
+
+    const result = await handler(null, { includePreReleases: false });
+
+    expect(bundledCliCalls).toEqual([
+      ["host", "available", "--json", NEGATIVE_FLAG],
+      // Dropping the flag is not a degradation: a CLI that lacks it also
+      // predates derived defaults, so its no-flag behaviour IS stable-only.
+      ["host", "available", "--json"],
+    ]);
+    expect(result).toMatchObject({ latest: "1.2.0" });
+  });
+
+  it("does NOT retry a generic CLI failure", async () => {
+    installFakeCli((_args, CliError) =>
+      Promise.reject(
+        new CliError(
+          {
+            message: "registry unreachable",
+            code: "E_REGISTRY_UNREACHABLE",
+            details: null,
+            exitCode: 1,
+            stderrTail: "",
+          },
+          null,
+        ),
+      ),
+    );
+    const handler = await availableHandler();
+
+    await expect(handler(null, { includePreReleases: false })).rejects.toThrow(
+      "registry unreachable",
+    );
+    expect(bundledCliCalls).toHaveLength(1);
+  });
+
+  it("does NOT retry when an unrelated option is the unknown one", async () => {
+    // The refusal names a DIFFERENT flag, so it is a caller bug rather than
+    // version skew and must surface rather than trigger a second run.
+    installFakeCli((_args, CliError) =>
+      Promise.reject(
+        new CliError(
+          {
+            message: "unknown option '--totally-unrelated'",
+            code: "E_INVALID_ARGUMENT",
+            details: { commanderCode: "commander.unknownOption" },
+            exitCode: 1,
+            stderrTail: "",
+          },
+          null,
+        ),
+      ),
+    );
+    const handler = await availableHandler();
+
+    await expect(handler(null, { includePreReleases: false })).rejects.toThrow(
+      "unknown option",
+    );
+    expect(bundledCliCalls).toHaveLength(1);
+  });
+
+  it("does NOT retry an include or derive request", async () => {
+    installFakeCli(rejectUnknownOption("--include-pre-releases"));
+    const handler = await availableHandler();
+
+    await expect(handler(null, { includePreReleases: true })).rejects.toThrow(
+      "unknown option",
+    );
+    expect(bundledCliCalls).toHaveLength(1);
   });
 });

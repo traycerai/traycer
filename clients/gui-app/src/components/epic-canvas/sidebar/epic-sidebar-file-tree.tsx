@@ -81,6 +81,7 @@ import {
   useWorkspaceSearchPaths,
 } from "@/hooks/workspace/use-workspace-search-paths-query";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { gitChangedFileToPierreStatusEntry } from "@/lib/git/panel-file-rendering";
 import {
   StreamRuntimeContext,
@@ -115,6 +116,19 @@ const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
 /** Filter-box pause before either filter source runs. */
 const SEARCH_DEBOUNCE_MS = 200;
+
+/**
+ * Tree row height (px) under a touch viewport, where the panel is the phone tab
+ * switcher's File tree category rather than a sidebar column. Pierre's
+ * `compact` preset is 24px, and its rows live in a shadow root that the mobile
+ * shell's hit-area stylesheet cannot reach - so the row itself has to be the
+ * 44px target the rest of the phone surfaces use (`min-h-11`).
+ *
+ * `useFileTree` constructs its model from these options once and exposes no
+ * height setter, so the body is keyed on the viewport class to rebuild it -
+ * see {@link FileTreePanelBodyForWorkspace}.
+ */
+const TOUCH_TREE_ROW_HEIGHT_PX = 44;
 
 const EMPTY_TREE_PATHS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
@@ -494,9 +508,23 @@ export function FileTreePanelBodyForWorkspace(
   // The value to PROVIDE: ambient while following, the pin's own binding once
   // built, null while pending - never the ambient socket for a pinned host.
   const pinnedStreamBinding = useSurfaceHostStreamBinding(props.hostId);
+  // Keyed on the viewport CLASS, which is the one remount this body wants.
+  // Pierre reads `density` / `itemHeight` when it constructs the model and
+  // offers no setter for either, and its row height is not merely painted -
+  // it is the virtualizer's arithmetic (total height, sticky-row tops, scroll
+  // offsets), so re-painting the CSS variables alone would leave the layout
+  // disagreeing with the positions. Without the key a window crossing the
+  // breakpoint gets the other class's filter box over rows that kept their
+  // original geometry. Expansion survives the rebuild - it is persisted per
+  // (epic, host, workspace) and re-seeded on the next reset; the filter query
+  // does not, which is the right answer for a layout change.
+  const isTouchViewport = useIsMobileViewport();
   return (
     <StreamRuntimeContext.Provider value={pinnedStreamBinding}>
-      <FileTreeBodyForResolvedHost {...props} />
+      <FileTreeBodyForResolvedHost
+        key={isTouchViewport ? "touch" : "pointer"}
+        {...props}
+      />
     </StreamRuntimeContext.Provider>
   );
 }
@@ -509,6 +537,7 @@ function FileTreeBodyForResolvedHost(
   // so they keep resolving against the same host after a later swap
   // (CLAUDE.md: tabs are bound to a host for life).
   const { hostId, onLatchHost } = props;
+  const isMobileViewport = useIsMobileViewport();
   // The box is a filter, not a search field: the query is applied on a pause,
   // and the same debounced value gates both the host RPC and the local row
   // filter so the two can never disagree about what is being filtered for.
@@ -571,6 +600,13 @@ function FileTreeBodyForResolvedHost(
       onLatchHost();
       navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
     };
+    // Preview is right on a touch viewport too, even though the double-click
+    // that promotes it there has no touch equivalent: that viewport shows ONE
+    // tile at a time, none of its lists surfaces an open workspace-file tile,
+    // and nothing there can close one - so a permanent open buys nothing
+    // visible and leaves an unreachable tile behind. Recycling the single
+    // preview is what browsing a tree by tap wants, and the row itself is the
+    // way back to a file already visited.
     handlersRef.current.onSelect = (treePath) => {
       openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
     };
@@ -600,7 +636,8 @@ function FileTreeBodyForResolvedHost(
   const { model } = useFileTree({
     paths: treePaths,
     initialExpansion: "closed",
-    density: "compact",
+    density: isMobileViewport ? "default" : "compact",
+    itemHeight: isMobileViewport ? TOUCH_TREE_ROW_HEIGHT_PX : undefined,
     icons: "complete",
     stickyFolders: true,
     gitStatus,
@@ -687,11 +724,19 @@ function FileTreeBodyForResolvedHost(
         pierreSearch.value.length > 0 &&
         pierreSearch.matchingPaths.length === 0;
 
-  const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    const treePath = extractPierreItemPathFromEvent(event);
-    if (treePath === null) return;
-    handlersRef.current.onOpen(treePath);
-  }, []);
+  const handleDoubleClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      // A touch browser synthesises `dblclick` from a rapid double tap, which
+      // would promote the preview to a permanent tile - the one outcome this
+      // viewport cannot undo, since nothing there lists or closes an open
+      // workspace-file tile. Promotion stays a pointer gesture.
+      if (isMobileViewport) return;
+      const treePath = extractPierreItemPathFromEvent(event);
+      if (treePath === null) return;
+      handlersRef.current.onOpen(treePath);
+    },
+    [isMobileViewport],
+  );
 
   // Bridge Pierre's shadow-DOM rows into the root dnd-kit drag flow. Files keep
   // their canvas-openable source; directory rows carry a composer-only mention
@@ -743,7 +788,12 @@ function FileTreeBodyForResolvedHost(
       className="relative flex min-h-0 flex-1 flex-col px-2 pb-2"
       onDoubleClickCapture={handleDoubleClick}
     >
-      <InputGroup className="mb-1.5 h-7 shrink-0">
+      {/* The sidebar's 28px filter row is below the touch target every other
+          phone control meets, and this one is a text field the user has to hit
+          precisely rather than a control with room for invisible hit-slop. */}
+      <InputGroup
+        className={cn("mb-1.5 shrink-0", isMobileViewport ? "h-11" : "h-7")}
+      >
         <InputGroupAddon align="inline-start">
           <Search className="size-3.5" aria-hidden />
         </InputGroupAddon>

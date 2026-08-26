@@ -1,10 +1,8 @@
-import { memo, useCallback, useRef, type ChangeEvent } from "react";
-import { ImagePlus } from "lucide-react";
-import { ToolbarIconButton } from "@/components/home/toolbar/toolbar-buttons";
+import { memo } from "react";
+import { ComposerAttachImageButton } from "@/components/home/toolbar/composer-attach-image-button";
 import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import type { PermissionMode } from "@/components/home/data/landing-options";
 
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
   permission: PermissionMode;
@@ -36,50 +34,10 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
     showNextTurnPermissionNote,
     settingsLocked,
   } = props;
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const handleOpenImagePicker = useCallback(() => {
-    const input = inputRef.current;
-    if (input === null) return;
-    input.value = "";
-    input.click();
-  }, []);
-
-  const handleImageChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const files = Array.from(event.currentTarget.files ?? []);
-      event.currentTarget.value = "";
-      if (files.length === 0) return;
-      onAttachImages(files);
-    },
-    [onAttachImages],
-  );
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        tabIndex={-1}
-        aria-hidden="true"
-        className="hidden"
-        onChange={handleImageChange}
-      />
-      <TooltipWrapper
-        label="Attach image"
-        side="top"
-        sideOffset={undefined}
-        align={undefined}
-      >
-        <ToolbarIconButton
-          aria-label="Attach image"
-          onClick={handleOpenImagePicker}
-        >
-          <ImagePlus className="size-4" />
-        </ToolbarIconButton>
-      </TooltipWrapper>
+      <ComposerAttachImageButton onAttachImages={onAttachImages} />
       <PermissionsPicker
         value={permission}
         disabled={settingsLocked}

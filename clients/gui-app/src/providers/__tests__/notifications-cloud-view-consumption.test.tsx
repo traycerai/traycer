@@ -77,7 +77,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => null,
+  useHostStreamClientBindingFor: () => null,
 }));
 
 // Visit-to-clear still acknowledges local rows through the local host client.

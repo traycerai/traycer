@@ -1,6 +1,6 @@
-import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
+import { RefreshIcon } from "@/components/refresh-icon";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // Hard cap on the spinning/disabled state so a hung refetch can't wedge the
@@ -51,7 +51,7 @@ export function RefreshIconButton(props: RefreshIconButtonProps) {
             className,
           )}
         >
-          <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+          <RefreshIcon refreshing={refreshing} />
         </button>
       </span>
     </TooltipWrapper>

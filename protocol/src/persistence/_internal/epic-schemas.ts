@@ -1,11 +1,34 @@
 import { z } from "zod";
 import {
   chatSchema,
+  chatSchemaPreReasonix,
   deletedEpicArtifactSchema,
   epicArtifactSchema,
   roleClaimsSchema,
   tuiAgentSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
+
+const epicIdentityFields = {
+  id: z.string(),
+  title: z.string(),
+  isTitleEditedByUser: z.boolean(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+};
+
+const epicNonChatFields = {
+  artifacts: z.record(z.string(), epicArtifactSchema),
+  deletedArtifacts: z.record(z.string(), deletedEpicArtifactSchema),
+  tuiAgents: z.record(z.string(), tuiAgentSchema).default({}),
+  roleClaims: roleClaimsSchema.default({}),
+};
+
+/** Epic 2.0 as shipped before the Reasonix persisted enum/union variants. */
+export const epicSchemaPreReasonix = z.object({
+  ...epicIdentityFields,
+  chats: z.record(z.string(), chatSchemaPreReasonix),
+  ...epicNonChatFields,
+});
 
 /**
  * Private Zod value for the V200 epic record.
@@ -27,23 +50,16 @@ import {
  * `getRecordSchema(persistenceRecordRegistry, "epic")`.
  */
 export const epicSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  isTitleEditedByUser: z.boolean(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
+  ...epicIdentityFields,
   chats: z.record(z.string(), chatSchema),
-  artifacts: z.record(z.string(), epicArtifactSchema),
-  deletedArtifacts: z.record(z.string(), deletedEpicArtifactSchema),
+  ...epicNonChatFields,
   // TUI agent sessions live alongside chats in their own map. Records carry
   // resume metadata (harnessId + harnessSessionId + hostId +
   // workspaceFolders); supported transcripts come from host-local provider
   // session history and are not persisted in the epic record.
   // Default `{}` so existing epics without the field still parse.
-  tuiAgents: z.record(z.string(), tuiAgentSchema).default({}),
   // Agent role claims, keyed by claimId. Agents self-designate a role over a
   // Task-local scope so peers can avoid duplicating responsibility; unrelated
   // to the collaborator ACL that `epic.batchUpdateRoles` manages.
   // Default `{}` so existing epics without the field still parse.
-  roleClaims: roleClaimsSchema.default({}),
 });

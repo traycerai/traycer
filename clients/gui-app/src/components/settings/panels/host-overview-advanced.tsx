@@ -94,8 +94,18 @@ export interface VersionPickerProps {
   readonly totalCount: number;
   readonly showAll: boolean;
   readonly onToggleShowAll: () => void;
+  /**
+   * What the catalog actually did — the host's resolved inclusion until the
+   * user overrides it, not a preference this checkbox owns.
+   */
   readonly includePreReleases: boolean;
   readonly onIncludePreReleasesChange: (value: boolean) => void;
+  /**
+   * Why the catalog resolved that way, when it is worth saying. Non-null only
+   * for a host that derived inclusion from its own installed release
+   * candidate; see `describeIncludePreReleasesSource`.
+   */
+  readonly includePreReleasesExplanation: string | null;
   readonly installingVersion: string | null;
   readonly disabled: boolean;
   readonly onInstall: (version: string) => void;
@@ -153,6 +163,14 @@ function VersionPicker(props: VersionPickerProps): ReactNode {
         >
           <span className="text-foreground">Include release candidates</span>
           <span>Show RC host versions when choosing a version.</span>
+          {/* Provenance, and worded as a fact about the host rather than a
+              setting: there is no stored preference behind this state, so copy
+              implying one would point at a switch that does not exist. */}
+          {props.includePreReleasesExplanation !== null ? (
+            <span data-testid="host-overview-include-pre-releases-reason">
+              {props.includePreReleasesExplanation}
+            </span>
+          ) : null}
         </label>
       </div>
       {props.awaitingFirstCheck ? (

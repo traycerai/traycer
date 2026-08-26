@@ -24,9 +24,15 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Single grid shared by the header, every row, and the add row so the column
 // edges line up exactly (the previous header/rows used different padding). The
 // last track is fixed so the row delete button and the add button never shift
-// the Name/Value boundaries.
+// the Name/Value boundaries. Below `sm` the three columns can't fit, so rows
+// restack onto two lines - name + actions, then the value field full-width
+// (see VALUE_FIELD_PLACEMENT / ROW_ACTIONS_PLACEMENT) - and the header hides.
 const GRID =
-  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem] items-center gap-2";
+  "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.7fr)_4.75rem]";
+const VALUE_FIELD_PLACEMENT =
+  "col-span-2 row-start-2 sm:col-span-1 sm:row-start-auto";
+const ROW_ACTIONS_PLACEMENT =
+  "col-start-2 row-start-1 justify-self-end sm:col-start-auto sm:row-start-auto sm:justify-self-center";
 
 type EnvMode = "set" | "unset";
 
@@ -88,7 +94,7 @@ export function EnvOverrideEditor(props: {
           GRID,
           // muted-fill-ok: header band inside a border-border/60 container and
           // carrying its own border-b; a collapse loses the tint, not the row
-          "border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground",
+          "hidden border-b border-border/40 bg-muted/30 px-3 py-2 text-ui-xs font-medium text-muted-foreground sm:grid",
         )}
       >
         <span>Name</span>
@@ -233,6 +239,7 @@ function EnvOverrideRow(props: {
           mode={draft.mode}
           disabled={disabled}
           ariaLabel={`Value for ${entry.key}`}
+          className={VALUE_FIELD_PLACEMENT}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
@@ -246,7 +253,10 @@ function EnvOverrideRow(props: {
           aria-label={`Remove ${entry.key}`}
           // muted-fill-ok: hover also swings the icon to text-destructive, so
           // the state keeps a channel that no theme can collapse
-          className="flex size-8 items-center justify-center justify-self-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50"
+          className={cn(
+            ROW_ACTIONS_PLACEMENT,
+            "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-destructive disabled:opacity-50",
+          )}
         >
           <Trash2 className="size-4" />
         </button>
@@ -302,13 +312,14 @@ function EnvOverrideAddRow(props: {
           mode={draft.mode}
           disabled={disabled}
           ariaLabel="New environment variable value"
+          className={VALUE_FIELD_PLACEMENT}
           onModeChange={(mode) => setDraft((current) => ({ ...current, mode }))}
           onValueChange={(value) =>
             setDraft((current) => ({ ...current, value }))
           }
           onBlur={() => undefined}
         />
-        <div className="flex justify-self-center">
+        <div className={cn(ROW_ACTIONS_PLACEMENT, "flex")}>
           <Button
             type="button"
             size="icon-sm"
@@ -343,6 +354,7 @@ function EnvValueField(props: {
   readonly mode: EnvMode;
   readonly disabled: boolean;
   readonly ariaLabel: string;
+  readonly className: string;
   readonly onModeChange: (mode: EnvMode) => void;
   readonly onValueChange: (value: string) => void;
   readonly onBlur: () => void;
@@ -352,12 +364,13 @@ function EnvValueField(props: {
     mode,
     disabled,
     ariaLabel,
+    className,
     onModeChange,
     onValueChange,
     onBlur,
   } = props;
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className={cn("flex min-w-0 items-center gap-2", className)}>
       <Select
         value={mode}
         disabled={disabled}

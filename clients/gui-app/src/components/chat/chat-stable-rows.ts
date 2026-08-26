@@ -17,6 +17,37 @@ export const EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE: StableChatTimelineRowsState 
     result: [],
   };
 
+/** The row keys in order, as the list will see them. */
+export function chatTimelineKeySequence(
+  rows: ReadonlyArray<ChatMessage>,
+): ReadonlyArray<string> {
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Whether `rows` presents a different sequence of row KEYS than `committed` -
+ * a row inserted, removed, or moved, as opposed to a row whose content changed
+ * in place. A streaming reply produces a continuous run of the latter, and
+ * `ChatTimeline` reads this to decide whether that commit needs MVCP's data
+ * channel.
+ *
+ * `committed` must be the sequence the list last actually RENDERED, never one
+ * a render merely computed: React discards renders, and a baseline advanced by
+ * a discarded one makes a real insertion that follows it look like settled
+ * content. `undefined` is a first population, which no reader is positioned
+ * within and so cannot have shifted.
+ */
+export function didChatTimelineKeySequenceChange(
+  committed: ReadonlyArray<string> | undefined,
+  rows: ReadonlyArray<ChatMessage>,
+): boolean {
+  if (committed === undefined || committed.length === 0) return false;
+  if (committed.length !== rows.length) return true;
+  // By INDEX, so a reorder counts even when the set of ids is identical - the
+  // timeline moves rows as well as adding and dropping them.
+  return rows.some((row, index) => committed[index] !== row.id);
+}
+
 /**
  * Reuses the previous message object reference wherever a message is
  * unchanged, so `ChatMessage`'s `memo` boundary (and LegendList's own item

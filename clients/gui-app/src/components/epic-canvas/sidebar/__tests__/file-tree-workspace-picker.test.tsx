@@ -335,6 +335,31 @@ describe("<FileTreeWorkspacePicker />", () => {
     ).toBeNull();
   });
 
+  it("keeps a failed-setup worktree selectable with an explicit warning", () => {
+    const onSelectPath = vi.fn();
+    const failedSetup: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      setupState: "failed",
+    };
+    listQuery.current = {
+      data: { rows: [failedSetup] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(null, onSelectPath);
+
+    const option = screen.getByRole("option", { name: /feature-x/i });
+    const warning = within(option).getByText("setup failed");
+    expect(warning.getAttribute("data-status-tone")).toBe("warning");
+    expect(warning.getAttribute("aria-label")).toContain(
+      "worktree is still usable",
+    );
+
+    fireEvent.click(option);
+
+    expect(onSelectPath).toHaveBeenCalledWith("/work/traycer-wt/feature-x");
+  });
+
   it("keeps non-git binding rows selectable for file browsing", () => {
     const onSelectPath = vi.fn();
     stubLoadedNonGitWorkspace();
@@ -415,7 +440,11 @@ describe("<FileTreeWorkspacePicker />", () => {
     openPicker(missingWorktree.runningDir, () => undefined);
 
     const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
-    expect(within(worktreeOption).getByText("missing")).toBeDefined();
+    const missing = within(worktreeOption).getByText("missing");
+    expect(missing.getAttribute("data-status-tone")).toBe("error");
+    expect(missing.getAttribute("aria-label")).toContain(
+      "directory could not be found",
+    );
     expect(within(worktreeOption).queryByText("checking")).toBeNull();
   });
 

@@ -5,6 +5,7 @@ import {
   Copy,
   ImagePlus,
   Inbox,
+  MoreHorizontal,
   Pencil,
   SendHorizontal,
   Trash2,
@@ -31,6 +32,13 @@ import { ComposerContentRenderer } from "@/components/chat/composer/content-rend
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -407,6 +415,12 @@ function UserMessageDisplayView({
           copyText={copyText}
           structuredContent={message.structuredContent}
         />
+        <UserMessageTouchMenu
+          confirmingDelete={confirmingDelete}
+          actions={actions}
+          copyText={copyText}
+          structuredContent={message.structuredContent}
+        />
       </div>
       {profileProvenance !== null && tombstoneIdentity !== null ? (
         <UserMessageTombstonedProfileFooter
@@ -436,9 +450,15 @@ function UserMessageActionOverlay({
     <div
       className={cn(
         "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
+        // The group-focus-within reveal is fine-pointer-only: on coarse
+        // pointers the touch "…" menu (UserMessageTouchMenu) replaces this
+        // chip, and Radix returning focus to that trigger on menu close would
+        // otherwise reveal the chip on top of it. The chip's own
+        // focus-within reveal stays unscoped so tabbing into its buttons with
+        // a hardware keyboard still shows them on any device.
         confirmingDelete
           ? "pointer-events-auto opacity-100"
-          : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 group-focus-within/user-message:pointer-events-auto group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+          : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 pointer-fine:group-focus-within/user-message:pointer-events-auto pointer-fine:group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
       )}
     >
       {actions !== null ? <MessageActionBar actions={actions} /> : null}
@@ -1013,17 +1033,15 @@ function inlineHashOnlyImageNodes(
 }
 
 /**
- * Copy-to-clipboard button for the user message action chip. Sits alongside
- * edit/delete but stays available even while a turn is streaming (when those
- * two are gated off), so a user can always grab their own prompt text.
+ * Copy behavior shared by the hover chip's copy button and the coarse-pointer
+ * "…" menu's Copy item, so both entry points write the identical clipboard
+ * payload (rich composer content with re-inlined image bytes when the message
+ * is structured, plain text otherwise).
  */
-function MessageCopyButton({
-  text,
-  structuredContent,
-}: {
-  text: string;
-  structuredContent: JsonContent | null;
-}): ReactNode {
+function useUserMessageCopy(
+  text: string,
+  structuredContent: JsonContent | null,
+): { readonly copied: boolean; readonly onCopy: () => void } {
   const { copied, copy, copyWith } = useClipboardCopy({
     resetMs: COPIED_RESET_MS,
     onSuccess: null,
@@ -1036,7 +1054,7 @@ function MessageCopyButton({
   // guarantee now comes from the timeout. A hash that does not resolve stays
   // hash-only, exactly as before, and downstream paste validation drops it.
   const resolveAttachmentBytes = useChatAttachmentByteReader();
-  const onClick = useCallback(() => {
+  const onCopy = useCallback(() => {
     if (structuredContent === null) {
       copy(text);
       return;
@@ -1074,6 +1092,23 @@ function MessageCopyButton({
     });
   }, [copy, copyWith, resolveAttachmentBytes, structuredContent, text]);
 
+  return { copied, onCopy };
+}
+
+/**
+ * Copy-to-clipboard button for the user message action chip. Sits alongside
+ * edit/delete but stays available even while a turn is streaming (when those
+ * two are gated off), so a user can always grab their own prompt text.
+ */
+function MessageCopyButton({
+  text,
+  structuredContent,
+}: {
+  text: string;
+  structuredContent: JsonContent | null;
+}): ReactNode {
+  const { copied, onCopy } = useUserMessageCopy(text, structuredContent);
+
   return (
     <MessageActionButton
       label={copied ? "Copied" : "Copy message"}
@@ -1082,7 +1117,7 @@ function MessageCopyButton({
       tooltip={false}
       disabled={false}
       className={undefined}
-      onClick={onClick}
+      onClick={onCopy}
     >
       {copied ? (
         <Check className="size-3.5" aria-hidden />
@@ -1090,6 +1125,97 @@ function MessageCopyButton({
         <Copy className="size-3.5" aria-hidden />
       )}
     </MessageActionButton>
+  );
+}
+
+/**
+ * Coarse-pointer replacement for the hover action chip: a single muted "…"
+ * trigger straddling the bubble's bottom-right border (the chip's exact spot)
+ * opening a menu with Edit / Copy / Delete wired to the same handlers the chip
+ * uses. Hidden on fine pointers via `hidden pointer-coarse:flex`, so
+ * hover-capable desktops keep today's chip untouched; hover reveals never
+ * apply on coarse pointers (Tailwind gates `hover:` behind
+ * `@media (hover: hover)`), which is exactly the gap this menu fills.
+ *
+ * Delete hands off to the existing confirm flow: `onDeleteRequest` sets the
+ * chip's `confirmingDelete` state, which force-reveals the inline check/cross
+ * confirm on every pointer type - so this trigger unmounts while that confirm
+ * occupies the same corner, and no second confirm surface is introduced.
+ *
+ * Mirrors the chip's gating: Edit/Delete only while `actions` is present and
+ * enabled (`canModifyMessages`, not pending); Copy whenever there is text,
+ * including mid-stream when `actions` is null.
+ */
+function UserMessageTouchMenu({
+  confirmingDelete,
+  actions,
+  copyText,
+  structuredContent,
+}: {
+  readonly confirmingDelete: boolean;
+  readonly actions: ChatMessageUserActions | null;
+  readonly copyText: string;
+  readonly structuredContent: JsonContent | null;
+}): ReactNode {
+  const { onCopy } = useUserMessageCopy(copyText, structuredContent);
+  const canModify = actions !== null && actions.enabled;
+  const canCopy = copyText.trim().length > 0;
+  if (confirmingDelete || (!canModify && !canCopy)) return null;
+
+  return (
+    // Tucked onto the bubble's bottom-right corner, straddling the border
+    // (`top-full -translate-y-1/2`): the glyph's upper half only ever covers
+    // the bubble's bottom padding, so it can't collide with message text on
+    // short or multi-line bubbles, and it reads as attached to the bubble
+    // edge rather than floating beneath it. The confirming-delete chip takes
+    // this same corner region while this trigger is unmounted.
+    <div className="absolute right-1 top-full z-10 hidden -translate-y-1/2 pointer-coarse:flex">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Message actions"
+            // Resting bg-muted matches ghost's aria-expanded open surface,
+            // so the glyph reads as a button before it is tapped. The
+            // invisible ::after slop widens the 24px visual control to the
+            // 44px touch-target guideline without painting anything (Button
+            // renders no ::after of its own, so nothing merges with it).
+            // muted-fill-ok: transcript row renders on bg-background/canvas
+            className="relative bg-muted text-muted-foreground/70 hover:text-foreground after:absolute after:-inset-2.5 after:content-['']"
+          >
+            <MoreHorizontal className="size-3.5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {canModify ? (
+            <DropdownMenuItem onSelect={actions.onEdit}>
+              <Pencil className="size-3.5" />
+              Edit
+            </DropdownMenuItem>
+          ) : null}
+          {canCopy ? (
+            <DropdownMenuItem onSelect={onCopy}>
+              <Copy className="size-3.5" />
+              Copy
+            </DropdownMenuItem>
+          ) : null}
+          {canModify ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={actions.onDeleteRequest}
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 

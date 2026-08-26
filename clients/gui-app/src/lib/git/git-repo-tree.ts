@@ -49,6 +49,10 @@ export function formatRepoHeadLabel(
   return "detached";
 }
 
+function repoHeadKind(branch: string | null): "branch" | "detached" {
+  return branch !== null && branch.length > 0 ? "branch" : "detached";
+}
+
 export interface ParentFileSplit {
   /** Parent files with gitlink rows removed from ordinary file rendering. */
   readonly ordinaryFiles: ReadonlyArray<GitChangedFileV11>;
@@ -271,6 +275,7 @@ export interface GitModuleGroup {
   readonly label: string;
   readonly repoRoot: string | null;
   readonly parentPath: string | null;
+  readonly headKind: "branch" | "detached" | "reference";
   readonly headLabel: string;
   readonly files: ReadonlyArray<GitChangedFileV11>;
   readonly repoState: RepoState | null;
@@ -360,6 +365,7 @@ function buildSubmoduleGroup(args: {
     label: changeset.parentPath,
     repoRoot: changeset.repoRoot,
     parentPath: changeset.parentPath,
+    headKind: repoHeadKind(changeset.branch),
     headLabel,
     files: changeset.files,
     repoState: changeset.repoState,
@@ -391,6 +397,7 @@ function buildPointerOnlySubmoduleGroup(
     label: reference.label,
     repoRoot: null,
     parentPath: reference.parentPath,
+    headKind: "reference",
     headLabel: "reference",
     files: [],
     repoState: null,
@@ -442,6 +449,7 @@ export function buildGitModuleGroups(
     label: input.root.label,
     repoRoot: input.root.repoRoot,
     parentPath: null,
+    headKind: repoHeadKind(input.root.branch),
     headLabel: rootHeadLabel,
     files: split.ordinaryFiles,
     repoState: input.root.repoState,

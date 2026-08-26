@@ -56,6 +56,11 @@ const API_KEY_DASHBOARD_URL: Record<ProviderId, string | null> = {
   pi: null,
   hermes: null,
   omp: null,
+  // Reasonix keys are pasted into its own terminal `setup` wizard, which
+  // writes them to Reasonix's global store - there is no Reasonix-hosted key
+  // page to send the user to, and the provider key page it would name depends
+  // on which model provider they configured.
+  reasonix: null,
 };
 
 function apiKeyStatusLabel(apiKey: ProviderCliState["apiKey"]): string {

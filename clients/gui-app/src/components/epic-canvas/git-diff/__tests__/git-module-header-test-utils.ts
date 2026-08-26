@@ -27,7 +27,7 @@ export async function expectModuleHeaderPreview(
     expect(surfaceClasses).not.toContain("bg-foreground");
     expect(surfaceClasses).not.toContain("text-background");
     preview.querySelectorAll("dd").forEach((rowValue) => {
-      expect(rowValue.className.split(/\s+/)).toContain("truncate");
+      expect(rowValue.className.split(/\s+/)).toContain("break-words");
     });
     const previewText = preview.textContent;
     expect(previewText).toContain(expected);

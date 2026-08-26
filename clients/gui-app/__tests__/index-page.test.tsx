@@ -30,7 +30,7 @@ describe("RootLandingPage", () => {
   });
 
   it("keeps the auth landing page visible while an auth attempt is in flight", () => {
-    useAuthStore.getState().setSigningIn();
+    useAuthStore.getState().setSigningIn("device");
 
     render(<RootLandingPage />);
 

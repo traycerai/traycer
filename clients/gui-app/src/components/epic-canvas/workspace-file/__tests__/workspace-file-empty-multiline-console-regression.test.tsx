@@ -127,6 +127,7 @@ function EmptyFileEditHarness(): ReactNode {
         language="text"
         editing={editing}
         editAdapter={editAdapter}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}

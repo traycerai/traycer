@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { GitDiffPanelActions } from "../git-diff-panel-actions";
+import {
+  GitDiffPanelActions,
+  GitDiffPanelInlineActions,
+} from "../git-diff-panel-actions";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -81,7 +84,8 @@ describe("<GitDiffPanelActions />", () => {
     expect(
       screen.getByRole("menuitem", { name: "Switch to tree view" }),
     ).toBeDefined();
-    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeDefined();
+    const refresh = screen.getByRole("menuitem", { name: "Refresh" });
+    expect(refresh.querySelector(".lucide-refresh-cw")).not.toBeNull();
   });
 
   it("toggles list layout from the header action", () => {
@@ -196,5 +200,71 @@ describe("<GitDiffPanelActions />", () => {
     expect(usePanelHeaderMenuStore.getState().openBySurfaceKey).toEqual(
       expect.objectContaining({ '["tab-1","git-diff","more"]': true }),
     );
+  });
+});
+
+describe("<GitDiffPanelInlineActions />", () => {
+  beforeEach(() => {
+    cleanup();
+    testState.refresh.mockReset();
+    testState.refresh.mockResolvedValue(undefined);
+    testState.refreshArgs = [];
+    useGitPanelStore.setState({ stateByEpicId: {} });
+    usePanelHeaderMenuStore.setState({ openBySurfaceKey: {} });
+    useSettingsStore.setState({
+      diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+    });
+    useGitPanelStore.getState().setSelectedRepo("epic-1", {
+      hostId: "host-1",
+      rootRunningDir: "/repo",
+      repoRoot: "/repo",
+    });
+  });
+
+  it("offers the same menu the sidebar header does", () => {
+    const { wrapper } = setup();
+    render(<GitDiffPanelInlineActions epicId="epic-1" />, { wrapper });
+
+    openMoreMenu();
+
+    expect(
+      screen.getByRole("menuitem", { name: "Switch to tree view" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Refresh" })).toBeDefined();
+  });
+
+  it("drives the same layout mutation as the sidebar header", () => {
+    const { wrapper } = setup();
+    render(<GitDiffPanelInlineActions epicId="epic-1" />, { wrapper });
+
+    openMoreMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Switch to tree view" }),
+    );
+
+    expect(useGitPanelStore.getState().stateByEpicId["epic-1"].listLayout).toBe(
+      "tree",
+    );
+  });
+
+  it("refreshes the active root's nested snapshot slot", () => {
+    const { wrapper } = setup();
+    render(<GitDiffPanelInlineActions epicId="epic-1" />, { wrapper });
+
+    openMoreMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Refresh" }));
+
+    expect(testState.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps its open state local to the trigger", () => {
+    const { wrapper } = setup();
+    render(<GitDiffPanelInlineActions epicId="epic-1" />, { wrapper });
+
+    openMoreMenu();
+
+    // No sidebar section to reopen behind it, so the panel-header menu store
+    // stays untouched - it is the sidebar's collapse-survival mechanism.
+    expect(usePanelHeaderMenuStore.getState().openBySurfaceKey).toEqual({});
   });
 });

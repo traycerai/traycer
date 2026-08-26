@@ -82,12 +82,47 @@ export class RemoteStreamClient<
   }
 
   /**
-   * No-op (see {@link IHostStreamClient.reconnectAll}): a remote session's
-   * attach endpoint is the relay's fixed WS URL, never a per-host address that
-   * moves on respawn, so there is nothing to nudge. The session's own
-   * resume/backoff loop (Architecture §3) already owns reconnection.
+   * Wakes THIS client's session and no other (see {@link IRemoteSession.wake}).
+   *
+   * There is no endpoint to re-resolve - a remote session's attach address is
+   * the relay's fixed WS URL, never a per-host one that moves on respawn - so
+   * this does not force a re-dial the way the local client's `reconnectAll`
+   * does; it forwards the caller's demand to the session's own resume/backoff
+   * loop, which cannot otherwise tell that the wait it armed has gone stale.
+   *
+   * Scope is the whole point, and it is why this is NOT the cache-wide sweep.
+   * The caller here is asking about a connection it can name - a user tapping
+   * Retry on a banner that told them about ONE session - and a verdict and its
+   * remedy must share scope. A button that reports session A and then dials A,
+   * B and C is lying about at least two of them. Runtime resume is a different
+   * question with a different answer (`wakeHeldRemoteSessions`): there the
+   * evidence is about the whole process, so the whole cache is in scope.
+   *
+   * Production builds this over an ACQUIRED view, so a client whose consumer
+   * has released inherits that view's ownership guard and this becomes a no-op
+   * rather than hurrying a session nobody holds.
    */
-  reconnectAll(_reason: string, _options: ReconnectAllOptions): void {}
+  reconnectAll(reason: string, _options: ReconnectAllOptions): void {
+    // `probeFirst` is not consulted: `wake` IS probe-first by construction
+    // (the session pokes the socket's keepalive and re-dials only on a failed
+    // verdict), and the forced flavour has nothing to force here - there is no
+    // endpoint to re-resolve, per the contract note above.
+    this.session.wake(reason);
+  }
+
+  /**
+   * Whether the session backing THIS client is carrying traffic right now
+   * (see {@link IRemoteSession.isReady}) - full attach, every live stream
+   * restored, and the host still attached at the relay.
+   *
+   * Exact by construction: one client, one shared session, no lookup by host.
+   * A ready one-shot session or a lingering keep-warm one for the same host
+   * cannot answer here, which is the whole reason a surface speaking for one
+   * connection must ask its client rather than scan the cache.
+   */
+  isReady(): boolean {
+    return this.session.isReady();
+  }
 
   /**
    * Bridges the session's ready-boundary transition (full attach + every

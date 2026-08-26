@@ -13,7 +13,7 @@ import {
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import { ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon, Settings2 } from "lucide-react";
 import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
 import { cn } from "@/lib/utils";
 import { TraycerMarkdown } from "@/markdown";
@@ -46,6 +46,16 @@ import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scr
 import { WorkspaceFileDeadTileBanner } from "./dead-tile-banner";
 import { WorkspaceMarkdownLinkProvider } from "@/components/epic-canvas/workspace-file/workspace-markdown-link-provider";
 import { WorkspaceFileRenderer } from "@/components/epic-canvas/workspace-file/workspace-file-renderer";
+import { useWorkspaceFileWordWrap } from "@/components/epic-canvas/workspace-file/workspace-file-word-wrap";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { FileAutosaveStatus } from "@/components/diff/file-autosave-status";
 import {
   useDiffClickToEdit,
@@ -409,6 +419,7 @@ function WorkspaceFileTileLive(props: {
     [node.name],
   );
   const [viewMode, setViewMode] = useState<WorkspaceFileViewMode>("source");
+  const { wordWrap, setWordWrap } = useWorkspaceFileWordWrap();
   const editIdentity = useMemo(
     () => ({
       userId,
@@ -675,6 +686,8 @@ function WorkspaceFileTileLive(props: {
           viewMode={effectiveViewMode}
           editing={editing}
           onViewModeChange={setViewMode}
+          wordWrap={wordWrap}
+          onWordWrapChange={setWordWrap}
           svgToggle={props.svgToggle}
           status={
             <FileAutosaveStatus
@@ -708,6 +721,7 @@ function WorkspaceFileTileLive(props: {
             isLoading={query.isLoading}
             language={language}
             viewMode={effectiveViewMode}
+            wordWrap={wordWrap}
             revealLine={revealTarget?.line ?? null}
             revealNonce={revealTarget?.nonce ?? null}
             sourceFindTarget={sourceFindTarget}
@@ -734,12 +748,22 @@ function WorkspaceFileToolbar(props: {
   readonly viewMode: WorkspaceFileViewMode;
   readonly editing: boolean;
   readonly onViewModeChange: (mode: WorkspaceFileViewMode) => void;
+  readonly wordWrap: boolean;
+  readonly onWordWrapChange: (value: boolean) => void;
   readonly status: ReactNode;
   readonly svgToggle: ReactNode;
 }) {
+  // The settings trigger is an `icon-sm` control - below the 44px touch-target
+  // guideline, and on a phone this toolbar is the tile's own chrome, outside
+  // the mobile shell's hit-slop scope (header, drawer, sheets). Opt in here,
+  // and only where the mobile layout is live, so desktop never carries the
+  // scope. Same arrangement as the diff tab header.
+  const isMobileViewport = useIsMobileViewport();
+
   return (
     <div
       className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
+      data-mobile-shell-touch-scope={isMobileViewport ? "" : undefined}
       data-testid="workspace-file-toolbar"
     >
       <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
@@ -758,8 +782,62 @@ function WorkspaceFileToolbar(props: {
           onModeChange={props.onViewModeChange}
         />
       ) : null}
+      {/* Wrapping only describes the source surface. Rendered markdown reflows
+          on its own and has no line to wrap, so the control stays out of the
+          preview's toolbar rather than sitting there doing nothing. */}
+      {props.viewMode === "source" ? (
+        <WorkspaceFileSettingsMenu
+          wordWrap={props.wordWrap}
+          onWordWrapChange={props.onWordWrapChange}
+        />
+      ) : null}
       {props.svgToggle}
     </div>
+  );
+}
+
+/**
+ * The file viewer's view-options menu, mirroring the diff tab's settings
+ * popover: an `icon-sm` trigger opening one switch row per option. It serves
+ * both pointer classes - this toolbar is part of the tile body, so a phone
+ * rendering the tile full-screen reaches the same menu the desktop chrome
+ * shows, and there is no second placement to keep in step with this one.
+ */
+function WorkspaceFileSettingsMenu(props: {
+  readonly wordWrap: boolean;
+  readonly onWordWrapChange: (value: boolean) => void;
+}): ReactNode {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <TooltipWrapper
+          label="File view settings"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="File view settings"
+            data-testid="workspace-file-settings"
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <Settings2 className="size-4" />
+          </Button>
+        </TooltipWrapper>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
+        <Label className="cursor-pointer justify-between gap-3 rounded-md px-2 py-1.5 font-normal transition-colors hover:bg-accent">
+          <span>Word wrap</span>
+          <Switch
+            checked={props.wordWrap}
+            onCheckedChange={props.onWordWrapChange}
+          />
+        </Label>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -799,6 +877,7 @@ function WorkspaceFilePreviewContent(props: {
   readonly isLoading: boolean;
   readonly language: string;
   readonly viewMode: WorkspaceFileViewMode;
+  readonly wordWrap: boolean;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
   readonly sourceFindTarget: WorkspaceFileSourceFindTargetWithNonce | null;
@@ -865,6 +944,7 @@ function WorkspaceFilePreviewContent(props: {
       fileName={props.fileName}
       editing={props.editing}
       editAdapter={props.editAdapter}
+      wordWrap={props.wordWrap}
       revealLine={props.revealLine}
       revealNonce={props.revealNonce}
       findTarget={props.sourceFindTarget}
@@ -949,6 +1029,7 @@ function MarkdownViewModeToggle(props: {
                   "inline-flex h-6 items-center rounded-[3px] px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
                   disabled &&
                     "cursor-not-allowed opacity-45 hover:text-muted-foreground",
+                  // muted-fill-ok: toolbar row on bg-canvas, never inside this file's popover; --canvas never equals --muted
                   active && "bg-muted text-foreground",
                 )}
                 onClick={() => {
