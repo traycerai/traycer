@@ -61,6 +61,8 @@ function historyResult(
     isFetching: false,
     error: null,
     hostId: "host-1",
+    projectFilterActive: false,
+    preProjectFilterCount: items.length,
     refetch: () => Promise.resolve(),
     fetchNextPage: () => undefined,
     hasNextPage: false,
