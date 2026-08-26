@@ -67,7 +67,7 @@ export function ExpandedImageDialogContent(props: {
           className="block max-h-[min(88vh,52rem)] max-w-full object-contain"
           draggable={false}
         />
-        <div className="absolute bottom-3 right-3">
+        <div className="absolute bottom-safe-bottom-gutter right-3">
           <ExpandedImageActionBar
             src={image.src}
             mediaType={image.mediaType}

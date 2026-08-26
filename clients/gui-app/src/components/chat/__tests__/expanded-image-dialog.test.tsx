@@ -175,7 +175,9 @@ describe("<ExpandedImageDialogContent />", () => {
   it("shows no action buttons when the image is unavailable", () => {
     renderOpenDialog({ status: "unavailable" });
 
-    expect(screen.getByText("Image unavailable")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Image unavailable",
+    );
     expect(screen.queryByRole("button", { name: "Copy image" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Download image" })).toBeNull();
   });

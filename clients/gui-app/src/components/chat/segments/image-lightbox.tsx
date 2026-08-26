@@ -134,7 +134,9 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
               draggable={false}
             />
           )}
-          <div className="absolute bottom-3 right-3">{actions}</div>
+          <div className="absolute bottom-safe-bottom-gutter right-3">
+            {actions}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

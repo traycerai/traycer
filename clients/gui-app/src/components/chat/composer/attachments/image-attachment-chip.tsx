@@ -118,7 +118,9 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         alt={alt}
         image={
           src === null
-            ? { status: "loading" }
+            ? blob.status === "unavailable"
+              ? { status: "unavailable" }
+              : { status: "loading" }
             : { status: "ready", src, mediaType }
         }
         suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
