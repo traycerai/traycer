@@ -117,6 +117,34 @@ describe("<ExpandedImageDialogContent />", () => {
     expect(blob.size).toBeGreaterThan(0);
   });
 
+  it("normalizes an octet-stream response to the known media type before copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(TINY_PNG_BYTES, {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          }),
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderOpenDialog({
+      status: "ready",
+      src: "blob:http://localhost/raster",
+      mediaType: "image/png",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Copy image" }));
+
+    await waitFor(() => {
+      expect(copyImageMock).toHaveBeenCalledTimes(1);
+    });
+    const [blob] = copyImageMock.mock.calls[0];
+    expect(blob.type).toBe("image/png");
+  });
+
   it("hides Copy image but keeps Download image for a non-clipboard media type", () => {
     renderOpenDialog({
       status: "ready",

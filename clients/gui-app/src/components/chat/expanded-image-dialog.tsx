@@ -80,7 +80,7 @@ export function ExpandedImageDialogContent(props: {
 
   return (
     <DialogContent
-      className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
+      className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem,var(--safe-area-width))] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem,var(--safe-area-width))]"
       showCloseButton
       ref={contentRef}
       // Focus the dialog itself, not the first action button, whose tooltip

@@ -12,7 +12,11 @@ async function fetchImageBlob(
   const response = await fetch(src);
   if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
   const blob = await response.blob();
-  if (blob.type.length > 0 || mediaType === null) return blob;
+  // A missing or generic octet-stream Content-Type would make ClipboardItem
+  // reject the copy; the caller's known media type is the trustworthy one.
+  const untyped =
+    blob.type.length === 0 || blob.type === "application/octet-stream";
+  if (!untyped || mediaType === null) return blob;
   return new Blob([blob], { type: mediaType });
 }
 
