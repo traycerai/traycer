@@ -100,7 +100,7 @@ export function RemoteFolderPickerDialog(): ReactNode {
       }}
     >
       <DialogContent
-        className="top-[18svh] flex h-[min(80dvh,36rem)] w-full max-w-[min(90vw,40rem)] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(90vw,40rem)]"
+        className="top-[18svh] flex h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))] w-full max-w-[min(90vw,40rem,var(--safe-area-width))] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(90vw,40rem,var(--safe-area-width))]"
         data-testid="remote-folder-picker-dialog"
         // Phone-facing portal outside HomePage's touch scope: re-apply the
         // coarse-pointer hit-slop rules (home-touch-targets.css) so every

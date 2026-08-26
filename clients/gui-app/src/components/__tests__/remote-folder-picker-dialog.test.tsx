@@ -225,10 +225,16 @@ describe("<RemoteFolderPickerDialog />", () => {
     const dialogClasses = dialog.className.split(" ");
     expect(dialogClasses).toContain("top-[18svh]");
     expect(dialogClasses).toContain("translate-y-0");
-    expect(dialogClasses).toContain("h-[min(80dvh,36rem)]");
+    expect(dialogClasses).toContain(
+      "h-[min(80dvh,36rem,calc(100dvh-18svh-var(--safe-area-inset-bottom)))]",
+    );
     expect(dialogClasses).not.toContain("max-h-[min(80dvh,36rem)]");
-    expect(dialogClasses).toContain("max-w-[min(90vw,40rem)]");
-    expect(dialogClasses).toContain("sm:max-w-[min(90vw,40rem)]");
+    expect(dialogClasses).toContain(
+      "max-w-[min(90vw,40rem,var(--safe-area-width))]",
+    );
+    expect(dialogClasses).toContain(
+      "sm:max-w-[min(90vw,40rem,var(--safe-area-width))]",
+    );
     expect(dialogClasses).not.toContain("top-safe-center-y");
     expect(dialogClasses).not.toContain("-translate-y-1/2");
     expect(dialogClasses).not.toContain("sm:max-w-sm");
