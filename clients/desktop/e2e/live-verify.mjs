@@ -2,10 +2,11 @@
 // CDP (per-target WebSockets; Bun-native WebSocket). No deps beyond bun.
 // Run: TRAYCER_CDP_PORT=28960 bun e2e/live-verify.mjs
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const CDP_PORT = process.env.TRAYCER_CDP_PORT ?? "28960";
-const ART = "/tmp/opencode/e2e-artifacts";
-fs.mkdirSync(ART, { recursive: true });
+const ART = fs.mkdtempSync(path.join(os.tmpdir(), "traycer-e2e-"));
 
 const results = [];
 function report(id, name, pass, evidence) {
