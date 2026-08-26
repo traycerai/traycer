@@ -818,12 +818,6 @@ export const browserScreencastServerFrameSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("complete"),
     ...textFrameFields,
-    cause: z.enum(["electron-placement"]).nullable(),
-  }),
-  z.object({
-    kind: z.literal("electronPlacementPending"),
-    ...textFrameFields,
-    pending: z.boolean(),
   }),
   z.object({
     kind: z.literal("pong"),

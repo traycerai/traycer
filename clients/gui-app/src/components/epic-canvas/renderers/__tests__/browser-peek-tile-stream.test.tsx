@@ -309,55 +309,13 @@ describe("BrowserPeekTile", () => {
     });
   });
 
-  it("shows and clears the pending Electron placement affordance", () => {
+  it("renders a terminal screencast frame", () => {
     render(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
-      />,
-    );
-    const stream = liveStream();
-
-    act(() => {
-      stream.emit(
-        {
-          kind: "electronPlacementPending",
-          hasBinaryPayload: false,
-          pending: true,
-        },
-        null,
-      );
-    });
-    expect(
-      screen.getByText("Will go native when the agent pauses"),
-    ).toBeTruthy();
-
-    act(() => {
-      stream.emit(
-        {
-          kind: "electronPlacementPending",
-          hasBinaryPayload: false,
-          pending: false,
-        },
-        null,
-      );
-    });
-    expect(
-      screen.queryByText("Will go native when the agent pauses"),
-    ).toBeNull();
-  });
-
-  it("notifies the tile owner when the session is placed in Electron", () => {
-    const onComplete = vi.fn();
-    render(
-      <BrowserPeekTile
-        viewTabId="view-tab-1"
-        paneId="pane-1"
-        epicId="epic-1"
-        node={PEEK_NODE}
-        onComplete={onComplete}
       />,
     );
     const stream = liveStream();
@@ -367,13 +325,11 @@ describe("BrowserPeekTile", () => {
         {
           kind: "complete",
           hasBinaryPayload: false,
-          cause: "electron-placement",
         },
         null,
       );
     });
 
-    expect(onComplete).toHaveBeenCalledWith("electron-placement");
     expect(screen.getByText("Ended")).toBeTruthy();
     expect(screen.getByText("Screencast ended.")).toBeTruthy();
   });

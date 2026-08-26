@@ -163,7 +163,6 @@ interface BrowserPeekRenderState {
   readonly image: { readonly src: string; readonly sequence: number } | null;
   readonly lifecycle: PeekLifecycle;
   readonly details: string | null;
-  readonly electronPlacementPending: boolean;
   readonly frameSize: {
     readonly width: number;
     readonly height: number;
@@ -176,21 +175,15 @@ type BrowserPeekDialog = Extract<
   { readonly kind: "dialogOpened" }
 > & { readonly armEpoch: number };
 
-type BrowserScreencastCompleteCause = Extract<
-  BrowserScreencastServerFrame,
-  { readonly kind: "complete" }
->["cause"];
-
 export interface BrowserPeekTileProps {
   readonly epicId: string;
   readonly node: BrowserPeekTileRef;
   readonly viewTabId?: string;
   readonly paneId?: string;
-  readonly onComplete?: (cause: BrowserScreencastCompleteCause) => void;
 }
 
 export function BrowserPeekTile(props: BrowserPeekTileProps) {
-  const { epicId, node, onComplete } = props;
+  const { epicId, node } = props;
   const tabHostId = useTabHostId();
   const hostEntry = useHostDirectoryEntry(tabHostId);
   const auth = useStreamAuthRevalidator();
@@ -286,7 +279,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
       image: null,
       lifecycle: "connecting",
       details: null,
-      electronPlacementPending: false,
       frameSize: null,
       navState: EMPTY_SCREENCAST_NAV_STATE,
     }),
@@ -295,8 +287,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const image = stateMatchesClient ? streamState.image : null;
   const lifecycle = stateMatchesClient ? streamState.lifecycle : "connecting";
   const details = peekDetailsForRender(stateMatchesClient, streamState, client);
-  const electronPlacementPending =
-    stateMatchesClient && streamState.electronPlacementPending;
   const frameSize = stateMatchesClient ? streamState.frameSize : null;
   const navState = stateMatchesClient
     ? streamState.navState
@@ -424,16 +414,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           publishSelfPaintedTileFrame(snapshotKey, dataUrl);
         },
       });
-      if (parsed.data.kind === "complete") {
-        onComplete?.(parsed.data.cause);
-      }
-      if (parsed.data.kind === "electronPlacementPending") {
-        const pending = parsed.data.pending;
-        setStreamState((current) => ({
-          ...resetPeekStateForClient(current, client),
-          electronPlacementPending: pending,
-        }));
-      }
       if (parsed.data.kind === "navState") {
         const nextNavState: ScreencastNavState = {
           url: parsed.data.url,
@@ -490,7 +470,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     epicId,
     node.sessionId,
     node.tabId,
-    onComplete,
     setDetails,
     setFrameSize,
     setImage,
@@ -1132,7 +1111,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
         loading={navState.loading}
         armed={presentedArmedEpoch !== null}
         status={status}
-        electronPlacementPending={electronPlacementPending}
         onRelease={disarm}
       />
       <div
@@ -1302,7 +1280,6 @@ function ScreencastPeekChromeBar(props: {
   readonly loading: boolean;
   readonly armed: boolean;
   readonly status: BrowserPeekStatus;
-  readonly electronPlacementPending: boolean;
   readonly onRelease: () => void;
 }) {
   return (
@@ -1361,14 +1338,6 @@ function ScreencastPeekChromeBar(props: {
           </div>
         </div>
       </div>
-      {props.electronPlacementPending ? (
-        <div
-          className="truncate px-2 pb-1 text-ui-xs text-muted-foreground"
-          aria-live="polite"
-        >
-          Will go native when the agent pauses
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1482,7 +1451,6 @@ function resetPeekStateForClient(
     image: null,
     lifecycle: "connecting",
     details: client === null ? "Waiting for the host stream." : null,
-    electronPlacementPending: false,
     frameSize: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   };

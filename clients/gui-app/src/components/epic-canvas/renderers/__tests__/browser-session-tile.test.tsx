@@ -217,5 +217,18 @@ describe("BrowserSessionTile lifecycle projection", () => {
     renderTile();
 
     expect(harness.closeCanvasTile).not.toHaveBeenCalled();
+    expect(screen.getByText("Loading browser session…")).toBeTruthy();
+    expect(
+      screen.queryByText("Browser tab is no longer available."),
+    ).toBeNull();
+  });
+
+  it("does not start a headless projection while an Electron binding is reconnecting", () => {
+    harness.items = [session("ready", "electron")];
+
+    renderTile();
+
+    expect(screen.getByText("Reconnecting browser tab…")).toBeTruthy();
+    expect(screen.queryByTestId("headless-browser-tab")).toBeNull();
   });
 });

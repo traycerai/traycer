@@ -107,20 +107,6 @@ describe("browser.screencast@1.0 control frames", () => {
     }
   });
 
-  it("parses pending Electron placement on the screencast contract", () => {
-    const pending = {
-      kind: "electronPlacementPending",
-      hasBinaryPayload: false,
-      pending: true,
-    };
-    expect(browserScreencastServerFrameSchema.safeParse(pending).success).toBe(
-      true,
-    );
-    expect(
-      browserScreencastV1.serverFrameSchema.safeParse(pending).success,
-    ).toBe(true);
-  });
-
   it("parses generation-bound dialog open and response frames", () => {
     const opened = {
       kind: "dialogOpened",
