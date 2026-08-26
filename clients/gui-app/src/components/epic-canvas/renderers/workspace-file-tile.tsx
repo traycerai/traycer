@@ -70,9 +70,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   isImageAssetPath,
+  isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
-import { useImageAsset } from "@/hooks/assets/use-image-asset";
+import { useFileAsset } from "@/hooks/assets/use-file-asset";
+import { PdfPreviewLazy } from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import {
   DEFAULT_ANIMATION_MS,
   ImagePreview,
@@ -163,7 +166,32 @@ function WorkspaceFileTileRouter(props: {
   const { node } = props;
   const isImage = isImageAssetPath(node.filePath);
   const isSvg = isSvgAssetPath(node.filePath);
+  const isPdf = isPdfAssetPath(node.filePath);
   const [viewAsSource, setViewAsSource] = useState(false);
+  // PDF needs `workspace.streamAsset >= 1.1` (the minor that taught the
+  // host `application/pdf`) - `useHostMethodSchemaVersion` reads the
+  // advertised version from the last handshake. Fails closed: an old host,
+  // or no handshake yet, keeps the pre-PDF behavior below (the text path's
+  // binary handling), exactly what every client showed before this feature.
+  const hostId = useTabHostId();
+  const assetStreamVersion = useHostMethodSchemaVersion(
+    hostId,
+    "workspace.streamAsset",
+  );
+  const pdfSupported =
+    assetStreamVersion !== null &&
+    assetStreamVersion.major === 1 &&
+    assetStreamVersion.minor >= 1;
+
+  if (isPdf && pdfSupported) {
+    return (
+      <WorkspacePdfFileTile
+        node={node}
+        viewTabId={props.viewTabId}
+        revealTarget={props.revealTarget}
+      />
+    );
+  }
 
   if (!isImage) {
     return (
@@ -212,7 +240,7 @@ function WorkspaceFileTileRouter(props: {
 }
 
 /**
- * Image mode for a workspace file tile: fetches over `useImageAsset` (never
+ * Image mode for a workspace file tile: fetches over `useFileAsset` (never
  * `workspace.readFile`) and renders `ImagePreview`, or the shared
  * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
  * WHY the fetch fell back (image-preview decision log, decision #14).
@@ -225,7 +253,7 @@ function WorkspaceImageFileTile(props: {
   readonly svgToggle: ReactNode;
 }) {
   const { node, revealTarget } = props;
-  const assetState = useImageAsset({
+  const assetState = useFileAsset({
     method: "workspace",
     workspacePath: node.workspacePath,
     filePath: node.filePath,
@@ -319,6 +347,111 @@ function WorkspaceImageFileTile(props: {
           doubleClickOverride={null}
           onDecodeError={handleDecodeError}
         />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * PDF mode for a workspace file tile: same shape as the image mode above -
+ * `useFileAsset` for the bytes, `BinaryPlaceholder` for any fallback,
+ * uniformly - but the ready state hands the blob to the lazy-loaded pdf.js
+ * viewer instead of an `<img>`. Only mounted behind the router's
+ * `workspace.streamAsset >= 1.1` gate.
+ */
+function WorkspacePdfFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+}) {
+  const { node, revealTarget } = props;
+  const assetState = useFileAsset({
+    method: "workspace",
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+  });
+  const handleRenderFailure = assetState.reportDecodeFailure;
+  const defaultEditor = useSettingsStore((s) => s.defaultEditor);
+  const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
+  const {
+    active: openExternallyFeedbackActive,
+    trigger: triggerOpenExternallyFeedback,
+  } = useEditorOpenFeedback();
+  const openExternallyOpening =
+    editorOpen.isPending || openExternallyFeedbackActive;
+  const handleOpenExternally = useCallback(() => {
+    if (openExternallyOpening) return;
+    triggerOpenExternallyFeedback();
+    editorOpen.mutate({
+      editorId: defaultEditor ?? "vscode",
+      paths: [resolveAbsolutePath(node.workspacePath, node.filePath)],
+    });
+  }, [
+    defaultEditor,
+    editorOpen,
+    node.filePath,
+    node.workspacePath,
+    openExternallyOpening,
+    triggerOpenExternallyFeedback,
+  ]);
+
+  // No line-goto in PDF mode either - evict a reveal target immediately
+  // rather than stranding it (same rationale as the image mode above).
+  useEffect(() => {
+    if (revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [revealTarget, props.viewTabId, node.id]);
+
+  if (assetState.status === "fallback") {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceImageFileToolbar
+          filePath={node.filePath}
+          svgToggle={null}
+          openExternally={null}
+        />
+        <div className="min-h-0 flex-1">
+          <BinaryPlaceholder
+            fileName={node.name}
+            sizeBytes={assetState.totalBytes}
+            reason={assetState.reason}
+            onOpenExternally={handleOpenExternally}
+            openExternallyOpening={openExternallyOpening}
+            compact={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+      <WorkspaceImageFileToolbar
+        filePath={node.filePath}
+        svgToggle={null}
+        openExternally={{
+          onOpenExternally: handleOpenExternally,
+          opening: openExternallyOpening,
+        }}
+      />
+      <div className="min-h-0 flex-1">
+        {assetState.status === "ready" && assetState.url !== null ? (
+          <PdfPreviewLazy
+            url={assetState.url}
+            fileName={node.name}
+            compact={false}
+            onRenderFailure={handleRenderFailure}
+          />
+        ) : (
+          <div className="flex size-full items-center justify-center">
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

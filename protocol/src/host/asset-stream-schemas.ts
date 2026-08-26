@@ -1,9 +1,10 @@
 /**
- * Shared server-frame schema for the image "asset stream" methods -
+ * Shared server-frame schema for the "asset stream" methods -
  * `workspace.streamAsset` and `git.streamFileAsset`. Both fetch a file's raw
- * bytes as one of the five supported image formats (PNG, JPEG, GIF, WebP,
- * SVG) and stream the same four-frame sequence, so the frame shape lives
- * here once instead of duplicated per method:
+ * bytes as one of the supported preview formats (five image formats - PNG,
+ * JPEG, GIF, WebP, SVG - plus PDF since 1.1) and stream the same four-frame
+ * sequence, so the frame shape lives here once instead of duplicated per
+ * method:
  *
  *   `assetHeader` -> N x `assetChunk` -> `assetComplete`
  *
@@ -33,11 +34,21 @@ export const assetMediaTypeSchema = z.enum([
   "image/gif",
   "image/webp",
   "image/svg+xml",
+  // Added in 1.1. A host must never emit it on a 1.0-negotiated stream: a
+  // 1.0 client's copy of this enum predates the literal, so the whole
+  // header frame would fail its parse. The resolvers gate admission and
+  // emission on the negotiated minor for exactly this reason.
+  "application/pdf",
 ]);
 export type AssetMediaType = z.infer<typeof assetMediaTypeSchema>;
 
 export const assetStreamErrorReasonSchema = z.enum([
   "not-found",
+  // Historical name, kept as the wire literal forever: it means "not a
+  // supported asset type" (since 1.1 that set includes PDF, so a PDF
+  // request on a 1.0-negotiated stream also lands here). Renaming would be
+  // a breaking change for every shipped client's parser; display copy owns
+  // the honest phrasing.
   "not-image",
   "mismatch",
   "too-large",
@@ -56,8 +67,10 @@ export const assetStreamServerFrameSchema = z.discriminatedUnion("kind", [
     // requested file's extension.
     mediaType: assetMediaTypeSchema,
     sizeBytes: z.number().int().nonnegative(),
-    // `null` only for SVG without declared dimensions - no binary magic
-    // exists for SVG, and not every SVG declares a width/height/viewBox.
+    // `null` when the asset has no known intrinsic raster dimensions: an
+    // SVG that declares no width/height/viewBox, or a non-raster document
+    // (PDF - pages have geometry, but the client learns it from the bytes;
+    // the host stays a validate-and-stream layer and parses no documents).
     width: z.number().int().positive().nullable(),
     height: z.number().int().positive().nullable(),
     // The git OID for an object side, else a `size:mtimeMs` fingerprint for

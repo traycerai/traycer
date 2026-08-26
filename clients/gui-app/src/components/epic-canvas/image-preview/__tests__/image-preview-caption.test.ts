@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
+import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
 import {
   formatImageByteSize,
   formatImagePreviewCaption,
 } from "../image-preview-caption";
 
-const META: ImageAssetMeta = {
+const META: FileAssetMeta = {
   mediaType: "image/png",
   sizeBytes: 2048,
   width: 640,

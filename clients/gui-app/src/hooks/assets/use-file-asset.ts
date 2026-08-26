@@ -20,26 +20,28 @@ import {
   type ImageBytesFetcher,
   type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Which side of which surface an image asset came from - the routing part of
  * the blob-cache key (image-preview decision log, decision #11).
  */
-type ImageAssetSource = "workspace" | "git-old" | "git-new";
+type FileAssetSource = "workspace" | "git-old" | "git-new";
 
-export type ImageAssetStatus = "loading" | "header" | "ready" | "fallback";
+export type FileAssetStatus = "loading" | "header" | "ready" | "fallback";
 
-export interface ImageAssetMeta {
+export interface FileAssetMeta {
   readonly mediaType: AssetMediaType;
   readonly sizeBytes: number;
   readonly width: number | null;
   readonly height: number | null;
 }
 
-export interface ImageAssetState {
-  readonly status: ImageAssetStatus;
+export interface FileAssetState {
+  readonly status: FileAssetStatus;
   readonly url: string | null;
-  readonly meta: ImageAssetMeta | null;
+  readonly meta: FileAssetMeta | null;
   /** Human-readable one-liner, set only at `status === "fallback"`. */
   readonly reason: string | null;
   /** `null` until the header arrives. */
@@ -48,7 +50,7 @@ export interface ImageAssetState {
   readonly servedFromCache: boolean;
 }
 
-export interface UseImageAssetResult extends ImageAssetState {
+export interface UseFileAssetResult extends FileAssetState {
   /**
    * Call from an `<img onError>` (or equivalent decode-failure signal) once
    * `status === "ready"`: the fetched bytes were valid enough to reach a
@@ -65,7 +67,7 @@ export interface UseImageAssetResult extends ImageAssetState {
   readonly reportDecodeFailure: () => void;
 }
 
-export type ImageAssetRequest =
+export type FileAssetRequest =
   | {
       readonly method: "workspace";
       readonly workspacePath: string;
@@ -82,7 +84,7 @@ export type ImageAssetRequest =
        * Scopes pre-header subscription COALESCING ONLY (sol re-review) -
        * never `requestKeyFor` (a change here always accompanies a full
        * caller-side remount already, so no request ever needs to detect it
-       * changing while staying mounted) or `buildImageAssetCacheKey` (whose
+       * changing while staying mounted) or `buildFileAssetCacheKey` (whose
        * `contentIdentity` comes from the header itself and is already
        * revision-correct by construction). Without this, two independently
        * mounted requests for the identical (path, stage) at DIFFERENT
@@ -94,7 +96,7 @@ export type ImageAssetRequest =
       readonly coalesceRevision: string;
     };
 
-const LOADING_STATE: ImageAssetState = {
+const LOADING_STATE: FileAssetState = {
   status: "loading",
   url: null,
   meta: null,
@@ -104,11 +106,20 @@ const LOADING_STATE: ImageAssetState = {
 };
 
 /**
+ * What the asset renders AS on the client - decides failure copy (and the
+ * PdfPreview vs ImagePreview routing at the surfaces). Derived from the
+ * request's extension, mirroring the same extension gate the surfaces use.
+ */
+export type FileAssetRenderKind = "image" | "document";
+
+/**
  * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
  * (image-preview decision log, decision #14) - this is only the one-line
- * message shown alongside it.
+ * message shown alongside it, per render kind so a PDF failure never reads
+ * as an image bug ("not one of the supported image formats" next to a PDF
+ * that the app usually previews would read as broken, not as a limit).
  */
-const FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
+const IMAGE_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "unsupported-method": "This host does not support image previews yet.",
   fatal: "This image could not be loaded.",
   interrupted: "The image transfer was interrupted.",
@@ -121,19 +132,45 @@ const FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "read-failed": "This image could not be read.",
 };
 
-function describeFailure(failure: AssetStreamFailure): string {
-  return FAILURE_MESSAGES[failure.reason];
+const DOCUMENT_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
+  "unsupported-method": "This host does not support PDF previews yet.",
+  fatal: "This PDF could not be loaded.",
+  interrupted: "The file transfer was interrupted.",
+  "length-mismatch": "The file transfer did not complete.",
+  "not-found": "This file could not be found.",
+  // The wire literal is historical ("unsupported asset type") - for a PDF
+  // request it means the host refused admission, i.e. it negotiated below
+  // 1.1. The client-side version gate should prevent this ever rendering;
+  // honest copy in case a gap lets it through.
+  "not-image": "This host does not support PDF previews yet.",
+  mismatch: "This file's contents do not match its extension.",
+  "too-large": "This PDF is too large to preview (20 MiB limit).",
+  // Host never emits this for a PDF (raster-specific check) - generic copy.
+  "too-many-pixels": "This PDF could not be previewed.",
+  "read-failed": "This PDF could not be read.",
+};
+
+function describeFailure(
+  failure: AssetStreamFailure,
+  renderKind: FileAssetRenderKind,
+): string {
+  return renderKind === "document"
+    ? DOCUMENT_FAILURE_MESSAGES[failure.reason]
+    : IMAGE_FAILURE_MESSAGES[failure.reason];
 }
 
-const DECODE_FAILURE_REASON = "This image could not be decoded.";
+const DECODE_FAILURE_REASONS: Record<FileAssetRenderKind, string> = {
+  image: "This image could not be decoded.",
+  document: "This PDF could not be rendered.",
+};
 
-function assetSourceFor(request: ImageAssetRequest): ImageAssetSource {
+function assetSourceFor(request: FileAssetRequest): FileAssetSource {
   if (request.method === "workspace") return "workspace";
   return request.side === "old" ? "git-old" : "git-new";
 }
 
-/** A workspace path or git running-dir can legally contain `::`/`|` - the request's own fields go into `buildImageAssetCacheKey`/`requestKeyFor` as SEPARATE array elements (JSON-encoded), never delimiter-joined into one string first. */
-function locationFor(request: ImageAssetRequest): string {
+/** A workspace path or git running-dir can legally contain `::`/`|` - the request's own fields go into `buildFileAssetCacheKey`/`requestKeyFor` as SEPARATE array elements (JSON-encoded), never delimiter-joined into one string first. */
+function locationFor(request: FileAssetRequest): string {
   return request.method === "workspace"
     ? request.workspacePath
     : request.runningDir;
@@ -149,9 +186,9 @@ function locationFor(request: ImageAssetRequest): string {
  * `contentIdentity`, so a re-stat that finds the same fingerprint reuses the
  * cached blob instead of re-transferring bytes.
  */
-function buildImageAssetCacheKey(parts: {
+function buildFileAssetCacheKey(parts: {
   readonly hostId: string;
-  readonly source: ImageAssetSource;
+  readonly source: FileAssetSource;
   readonly location: string;
   readonly filePath: string;
   readonly contentIdentity: string;
@@ -166,16 +203,16 @@ function buildImageAssetCacheKey(parts: {
 }
 
 /**
- * Identifies WHICH request a resolved `ImageAssetState` belongs to, so a
+ * Identifies WHICH request a resolved `FileAssetState` belongs to, so a
  * request change can be told apart from a stream event that is still in
  * flight for the previous one - the same "does this resolved value still
  * belong to the current key" shape `useImageBlobUrlState` uses. Deliberately
  * NOT the blob-cache key: this exists before the header (and its
  * `contentIdentity`) ever arrives. JSON-encoded for the same reason as
- * `buildImageAssetCacheKey` - a delimiter-joined string can't tell a `|` in a
+ * `buildFileAssetCacheKey` - a delimiter-joined string can't tell a `|` in a
  * path apart from the join itself.
  */
-function requestKeyFor(request: ImageAssetRequest): string {
+function requestKeyFor(request: FileAssetRequest): string {
   return request.method === "workspace"
     ? JSON.stringify(["workspace", request.workspacePath, request.filePath])
     : JSON.stringify([
@@ -227,7 +264,7 @@ function requestKeyFor(request: ImageAssetRequest): string {
  */
 function sharedSubscriptionKeyFor(
   hostId: string,
-  request: ImageAssetRequest,
+  request: FileAssetRequest,
   focusRefreshGeneration: number,
 ): string {
   return JSON.stringify([
@@ -246,14 +283,14 @@ function sharedSubscriptionKeyFor(
  * immutable for the life of the session (decision #11): it must neither
  * re-fetch on refocus nor lose its cached blob to grace-window revocation.
  */
-function isWorktreeBackedRequest(request: ImageAssetRequest): boolean {
+function isWorktreeBackedRequest(request: FileAssetRequest): boolean {
   if (request.method === "workspace") return true;
   return request.side === "new" && request.stage === "unstaged";
 }
 
 function openAssetStreamClient(
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
-  request: ImageAssetRequest,
+  request: FileAssetRequest,
   callbacks: AssetStreamCallbacks,
 ): AssetStreamClient {
   return request.method === "workspace"
@@ -363,7 +400,7 @@ let nextFocusRefreshGeneration = 1;
 function acquireSharedAssetSubscription(
   sharedKey: string,
   wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
-  request: ImageAssetRequest,
+  request: FileAssetRequest,
   callbacks: AssetStreamCallbacks,
   // Only consulted when THIS call creates a NEW entry (this caller becomes
   // the creator) - a joiner's own pin/unpin are irrelevant, since the
@@ -471,13 +508,13 @@ function acquireSharedAssetSubscription(
  * OWNS the shared cache fetch (the first to reach a given identity) keeps its
  * stream alive across its own unmount as long as the cache still has other
  * consumers - only the cache's own last-reference-drops abort, or this
- * fetch's own terminal frame, closes it - so a sibling `useImageAsset` still
+ * fetch's own terminal frame, closes it - so a sibling `useFileAsset` still
  * mid-fetch is never stranded on the header skeleton nor poisoned by an
  * unrelated unmount.
  */
-export function useImageAsset(
-  request: ImageAssetRequest | null,
-): UseImageAssetResult {
+export function useFileAsset(
+  request: FileAssetRequest | null,
+): UseFileAssetResult {
   const hostId = useTabHostId();
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
@@ -493,6 +530,8 @@ export function useImageAsset(
     latestRequestRef.current = request;
   });
   const isWorktreeBacked = request !== null && isWorktreeBackedRequest(request);
+  const renderKind: FileAssetRenderKind =
+    request !== null && isPdfAssetPath(request.filePath) ? "document" : "image";
 
   // Re-stat on refocus (decision #11): only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
@@ -522,7 +561,7 @@ export function useImageAsset(
   // until the new request's own callbacks resolve.
   const [resolved, setResolved] = useState<{
     readonly key: string;
-    readonly state: ImageAssetState;
+    readonly state: FileAssetState;
   } | null>(null);
 
   // Lets `reportDecodeFailure` reach the CURRENT fetch cycle's cache key and
@@ -586,12 +625,12 @@ export function useImageAsset(
         status: "fallback",
         url: null,
         meta: null,
-        reason: DECODE_FAILURE_REASON,
+        reason: DECODE_FAILURE_REASONS[renderKind],
         totalBytes: null,
         servedFromCache: false,
       },
     });
-  }, [resolved]);
+  }, [resolved, renderKind]);
 
   useEffect(() => {
     const normalizedRequest = latestRequestRef.current;
@@ -602,6 +641,14 @@ export function useImageAsset(
       return;
     }
     const requestKey = requestKeyFor(normalizedRequest);
+    // Derived inside the effect from ITS request (not the component-scope
+    // `renderKind`) so the closure can never pair a stale kind with a new
+    // request's callbacks.
+    const streamRenderKind: FileAssetRenderKind = isPdfAssetPath(
+      normalizedRequest.filePath,
+    )
+      ? "document"
+      : "image";
     isMountedRef.current = true;
     cacheKeyRef.current = null;
     requestKeyRef.current = requestKey;
@@ -625,7 +672,7 @@ export function useImageAsset(
     const callbacks: AssetStreamCallbacks = {
       onHeader: (header: AssetStreamHeader) => {
         if (!active) return;
-        const meta: ImageAssetMeta = {
+        const meta: FileAssetMeta = {
           mediaType: header.mediaType,
           sizeBytes: header.sizeBytes,
           width: header.width,
@@ -643,7 +690,7 @@ export function useImageAsset(
           },
         });
 
-        const key = buildImageAssetCacheKey({
+        const key = buildFileAssetCacheKey({
           hostId,
           source: assetSourceFor(normalizedRequest),
           location: locationFor(normalizedRequest),
@@ -751,8 +798,17 @@ export function useImageAsset(
         settleFetch?.(new Uint8Array(bytes));
       },
       onFailure: (failure: AssetStreamFailure) => {
+        // Over-cap telemetry (PDF product decision, Q6): the 20 MiB cap is
+        // accepted for v1 on the strength of "Open Externally covers it" -
+        // this event is the evidence stream for revisiting that (range
+        // streaming / a per-type cap) if real users hit the wall.
+        if (streamRenderKind === "document" && failure.reason === "too-large") {
+          Analytics.getInstance().track(AnalyticsEvent.PdfPreviewTooLarge, {
+            surface: assetSourceFor(normalizedRequest),
+          });
+        }
         if (rejectFetch !== null) {
-          rejectFetch(new Error(describeFailure(failure)));
+          rejectFetch(new Error(describeFailure(failure, streamRenderKind)));
           return;
         }
         if (!active) return;
@@ -762,7 +818,7 @@ export function useImageAsset(
             status: "fallback",
             url: null,
             meta: null,
-            reason: describeFailure(failure),
+            reason: describeFailure(failure, streamRenderKind),
             totalBytes: null,
             servedFromCache: false,
           },

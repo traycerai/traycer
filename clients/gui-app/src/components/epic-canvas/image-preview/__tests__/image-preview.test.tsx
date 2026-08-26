@@ -6,13 +6,13 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import type { ImageAssetMeta } from "@/hooks/assets/use-image-asset";
+import type { FileAssetMeta } from "@/hooks/assets/use-file-asset";
 import { DEFAULT_ANIMATION_MS, ImagePreview } from "../image-preview";
 
 const IMAGE_WIDTH = 640;
 const IMAGE_HEIGHT = 480;
 
-const META: ImageAssetMeta = {
+const META: FileAssetMeta = {
   mediaType: "image/png",
   sizeBytes: 2048,
   width: IMAGE_WIDTH,
@@ -21,7 +21,7 @@ const META: ImageAssetMeta = {
 
 function renderPreview(
   status: "loading" | "header" | "ready",
-  meta: ImageAssetMeta | null,
+  meta: FileAssetMeta | null,
   compact: boolean,
   servedFromCache: boolean,
 ) {

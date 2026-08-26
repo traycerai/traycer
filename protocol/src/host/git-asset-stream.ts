@@ -53,3 +53,16 @@ export const gitStreamFileAssetV10 = defineStreamRpcContract({
   serverFrameSchema: assetStreamServerFrameSchema,
   clientFrameSchema: assetStreamClientFrameSchema,
 });
+
+/**
+ * 1.1 adds PDF - same delta and same emission-gating obligation as
+ * `workspace.streamAsset@1.1` (see `workspace/asset-stream.ts`); the two
+ * methods share their frame schemas and move minors together.
+ */
+export const gitStreamFileAssetV11 = defineStreamRpcContract({
+  method: "git.streamFileAsset",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: gitStreamFileAssetOpenRequestSchema,
+  serverFrameSchema: assetStreamServerFrameSchema,
+  clientFrameSchema: assetStreamClientFrameSchema,
+});

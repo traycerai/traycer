@@ -12,9 +12,9 @@ import type {
   GitGetFileDiffResponse,
 } from "@traycer/protocol/host";
 import type {
-  ImageAssetRequest,
-  ImageAssetState,
-} from "@/hooks/assets/use-image-asset";
+  FileAssetRequest,
+  FileAssetState,
+} from "@/hooks/assets/use-file-asset";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import { makeGitFileDiffTile } from "@/lib/git/git-diff-tile";
 
@@ -50,8 +50,8 @@ const state = vi.hoisted(() => ({
   openFeedback: vi.fn(),
   refresh: vi.fn(),
   updateView: vi.fn(),
-  assetRequests: [] as Array<ImageAssetRequest | null>,
-  asset: null as ImageAssetState | null,
+  assetRequests: [] as Array<FileAssetRequest | null>,
+  asset: null as FileAssetState | null,
 }));
 
 // The tile re-provides its own `StreamRuntimeContext` for the host it is BOUND
@@ -90,8 +90,8 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
 }));
 
-vi.mock("@/hooks/assets/use-image-asset", () => ({
-  useImageAsset: (request: ImageAssetRequest | null): ImageAssetState => {
+vi.mock("@/hooks/assets/use-file-asset", () => ({
+  useFileAsset: (request: FileAssetRequest | null): FileAssetState => {
     state.assetRequests.push(request);
     if (state.asset === null) throw new Error("missing image state");
     return state.asset;

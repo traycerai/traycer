@@ -24,7 +24,7 @@ import {
   PaneSurfaceActivityContext,
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
-import { useImageAsset, type ImageAssetRequest } from "../use-image-asset";
+import { useFileAsset, type FileAssetRequest } from "../use-file-asset";
 import type { AssetStreamFailureReason } from "@traycer-clients/shared/host-transport/asset-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -63,7 +63,7 @@ vi.mock("@/lib/host", () => ({
 const defaultStreamBindingRef = vi.hoisted(() => ({
   // Memoized per `wsStreamClientRef.value` (not rebuilt on every call) - the
   // real `useHostStreamClientBindingFor` returns a REFERENCE-STABLE binding
-  // across renders via React state, and `useImageAsset`'s effect now
+  // across renders via React state, and `useFileAsset`'s effect now
   // depends on this binding directly. A mock returning a fresh object every
   // call would make that dependency change on EVERY render, re-running the
   // effect forever (caught as an OOM crash, not a normal test failure).
@@ -78,7 +78,7 @@ const defaultStreamBindingRef = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => wsStreamClientRef.value,
-  // `useImageAsset` now takes the full binding (Codex re-review, transport
+  // `useFileAsset` now takes the full binding (Codex re-review, transport
   // pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single
   // shared `wsStreamClientRef.value` never actually tears down regardless;
   // tests exercising the pin/unpin CONTRACT itself construct their own
@@ -250,13 +250,13 @@ function enablePerHookTransports(): PerHookTransport[] {
   return transports;
 }
 
-const WORKSPACE_REQUEST: ImageAssetRequest = {
+const WORKSPACE_REQUEST: FileAssetRequest = {
   method: "workspace",
   workspacePath: "/repo",
   filePath: "images/logo.png",
 };
 
-const GIT_REQUEST: ImageAssetRequest = {
+const GIT_REQUEST: FileAssetRequest = {
   method: "git",
   runningDir: "/repo",
   filePath: "images/logo.png",
@@ -503,10 +503,10 @@ afterEach(async () => {
   restoreUrlMethod("revokeObjectURL", originalRevokeObjectURLDescriptor);
 });
 
-describe("useImageAsset", () => {
+describe("useFileAsset", () => {
   it("surfaces the header before bytes finish and then resolves a blob URL", async () => {
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
 
     expect(mockWsStreamClient.sessions).toHaveLength(1);
@@ -561,11 +561,11 @@ describe("useImageAsset", () => {
   });
 
   it("creates one URL per identity, shares it, and revokes it after the last release", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
       emitHeader(firstSession, "shared-identity", 3);
@@ -608,8 +608,8 @@ describe("useImageAsset", () => {
   });
 
   it("opens exactly one subscription for concurrent first mounts", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
 
     // This boundary assertion is the regression guard: same-URL sharing alone
     // would also pass against the pre-coalescing implementation.
@@ -630,7 +630,7 @@ describe("useImageAsset", () => {
   });
 
   it("replays the header to a late concurrent subscriber", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
 
@@ -638,7 +638,7 @@ describe("useImageAsset", () => {
       emitHeader(session, "late-join-identity", 3);
     });
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
 
     act(() => {
@@ -655,7 +655,7 @@ describe("useImageAsset", () => {
   });
 
   it("replays a shared failure to a late concurrent subscriber", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
 
@@ -663,7 +663,7 @@ describe("useImageAsset", () => {
       emitHeader(session, "late-failure-identity", 3);
     });
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
 
     act(() => {
@@ -674,7 +674,7 @@ describe("useImageAsset", () => {
     expect(first.result.current.status).toBe("fallback");
     expect(second.result.current.status).toBe("fallback");
 
-    const third = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const third = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(2);
     const retrySession = mockWsStreamClient.sessions[1];
     act(() => {
@@ -689,7 +689,7 @@ describe("useImageAsset", () => {
 
   it("resumes a same-identity reconnect without leaking its cache lease", async () => {
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
@@ -725,7 +725,7 @@ describe("useImageAsset", () => {
 
   it("falls back when a reconnect reports a changed identity", async () => {
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
@@ -745,7 +745,7 @@ describe("useImageAsset", () => {
 
   it("reports a browser decode failure by discarding the ready asset", async () => {
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
     const session = mockWsStreamClient.sessions[0];
     act(() => {
@@ -772,7 +772,7 @@ describe("useImageAsset", () => {
   });
 
   it("discards an immutable git asset on browser decode failure", async () => {
-    const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
+    const { result, unmount } = renderHook(() => useFileAsset(GIT_REQUEST));
     const session = mockWsStreamClient.sessions[0];
     act(() => {
       emitHeader(session, "decode-session", 3);
@@ -793,7 +793,7 @@ describe("useImageAsset", () => {
 
   it("makes repeated decode-failure reports idempotent", async () => {
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
     const session = mockWsStreamClient.sessions[0];
     act(() => {
@@ -816,7 +816,7 @@ describe("useImageAsset", () => {
   });
 
   it("discards the ready asset when a stale decode error arrives after unmount", async () => {
-    const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
+    const { result, unmount } = renderHook(() => useFileAsset(GIT_REQUEST));
     const session = mockWsStreamClient.sessions[0];
     act(() => {
       emitHeader(session, "decode-after-unmount", 3);
@@ -833,14 +833,14 @@ describe("useImageAsset", () => {
   });
 
   it("ignores a decode reporter captured before the request changes", async () => {
-    const secondRequest: ImageAssetRequest = {
+    const secondRequest: FileAssetRequest = {
       method: "workspace",
       workspacePath: "/repo",
       filePath: "images/second.png",
     };
     const { result, rerender, unmount } = renderHook(
-      ({ request }: { readonly request: ImageAssetRequest }) =>
-        useImageAsset(request),
+      ({ request }: { readonly request: FileAssetRequest }) =>
+        useFileAsset(request),
       { initialProps: { request: WORKSPACE_REQUEST } },
     );
     const firstSession = mockWsStreamClient.sessions[0];
@@ -874,7 +874,7 @@ describe("useImageAsset", () => {
   });
 
   it("opens a fresh stream when a git image remounts during an in-flight transfer", () => {
-    const first = renderHook(() => useImageAsset(GIT_REQUEST));
+    const first = renderHook(() => useFileAsset(GIT_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
 
@@ -885,7 +885,7 @@ describe("useImageAsset", () => {
     first.unmount();
     expect(firstSession.closed).toBe(true);
 
-    const remounted = renderHook(() => useImageAsset(GIT_REQUEST));
+    const remounted = renderHook(() => useFileAsset(GIT_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(2);
     const remountedSession = mockWsStreamClient.sessions[1];
     expect(remountedSession).not.toBe(firstSession);
@@ -897,8 +897,8 @@ describe("useImageAsset", () => {
   });
 
   it("opens a new revision stream while an old consumer keeps its stream alive", async () => {
-    const first = renderHook(() => useImageAsset(GIT_REQUEST));
-    const second = renderHook(() => useImageAsset(GIT_REQUEST));
+    const first = renderHook(() => useFileAsset(GIT_REQUEST));
+    const second = renderHook(() => useFileAsset(GIT_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const sharedSession = mockWsStreamClient.sessions[0];
 
@@ -910,7 +910,7 @@ describe("useImageAsset", () => {
     first.unmount();
 
     const remounted = renderHook(() =>
-      useImageAsset({
+      useFileAsset({
         ...GIT_REQUEST,
         coalesceRevision: "git-revision-2",
       }),
@@ -938,7 +938,7 @@ describe("useImageAsset", () => {
   });
 
   it("opens a fresh stream after a decode failure discards the old entry", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     const firstSession = mockWsStreamClient.sessions[0];
     act(() => {
       emitHeader(firstSession, "decode-remount", 3);
@@ -952,7 +952,7 @@ describe("useImageAsset", () => {
     });
     first.unmount();
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(2);
     const secondSession = mockWsStreamClient.sessions[1];
     act(() => {
@@ -967,11 +967,11 @@ describe("useImageAsset", () => {
   });
 
   it("keeps the owning stream alive when its first mount unmounts mid-fetch", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
       emitHeader(firstSession, "shared-in-flight", 3);
@@ -992,11 +992,11 @@ describe("useImageAsset", () => {
   });
 
   it("retries a shared identity after the owning stream fails", async () => {
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const firstSession = mockWsStreamClient.sessions[0];
 
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     act(() => {
       emitHeader(firstSession, "retryable-identity", 3);
@@ -1015,7 +1015,7 @@ describe("useImageAsset", () => {
     expect(second.result.current.status).toBe("fallback");
     expect(imageBlobCache.size()).toBe(0);
 
-    const third = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const third = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
     expect(mockWsStreamClient.sessions).toHaveLength(2);
     const thirdSession = mockWsStreamClient.sessions[1];
     act(() => {
@@ -1033,7 +1033,7 @@ describe("useImageAsset", () => {
 
   it("opens the git stream and keys the old side separately", async () => {
     const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
-    const { result, unmount } = renderHook(() => useImageAsset(GIT_REQUEST));
+    const { result, unmount } = renderHook(() => useFileAsset(GIT_REQUEST));
 
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
@@ -1074,7 +1074,7 @@ describe("useImageAsset", () => {
     "maps $reason to its exact fallback message",
     async ({ reason, expected, totalBytes }) => {
       const { result, unmount } = renderHook(() =>
-        useImageAsset(WORKSPACE_REQUEST),
+        useFileAsset(WORKSPACE_REQUEST),
       );
       expect(mockWsStreamClient.sessions).toHaveLength(1);
       const session = mockWsStreamClient.sessions[0];
@@ -1095,7 +1095,7 @@ describe("useImageAsset", () => {
   it("closes the stream and releases the cache entry on unmount mid-stream", () => {
     const acquireSpy = vi.spyOn(imageBlobCache, "acquire");
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
     expect(mockWsStreamClient.sessions).toHaveLength(1);
     const session = mockWsStreamClient.sessions[0];
@@ -1125,14 +1125,14 @@ describe("useImageAsset", () => {
   });
 
   it("ignores frames from a superseded request", async () => {
-    const secondRequest: ImageAssetRequest = {
+    const secondRequest: FileAssetRequest = {
       method: "workspace",
       workspacePath: "/repo",
       filePath: "images/second.png",
     };
     const { result, rerender, unmount } = renderHook(
-      ({ request }: { readonly request: ImageAssetRequest }) =>
-        useImageAsset(request),
+      ({ request }: { readonly request: FileAssetRequest }) =>
+        useFileAsset(request),
       { initialProps: { request: WORKSPACE_REQUEST } },
     );
 
@@ -1166,7 +1166,7 @@ describe("useImageAsset", () => {
     const paneState: PaneTestState = { focused: true, visible: true };
     const wrapper = makePaneWrapper(paneState);
     const { result, rerender, unmount } = renderHook(
-      () => useImageAsset(WORKSPACE_REQUEST),
+      () => useFileAsset(WORKSPACE_REQUEST),
       { wrapper },
     );
 
@@ -1193,10 +1193,10 @@ describe("useImageAsset", () => {
   it("does not coalesce one pane's refocus refresh onto another pane's stream", async () => {
     const firstPaneState: PaneTestState = { focused: true, visible: true };
     const secondPaneState: PaneTestState = { focused: true, visible: true };
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST), {
       wrapper: makePaneWrapper(firstPaneState),
     });
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST), {
       wrapper: makePaneWrapper(secondPaneState),
     });
 
@@ -1239,10 +1239,10 @@ describe("useImageAsset", () => {
   it("does not collide when two panes refocus at different times", async () => {
     const firstPaneState: PaneTestState = { focused: true, visible: true };
     const secondPaneState: PaneTestState = { focused: true, visible: true };
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST), {
       wrapper: makePaneWrapper(firstPaneState),
     });
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST), {
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST), {
       wrapper: makePaneWrapper(secondPaneState),
     });
 
@@ -1284,7 +1284,7 @@ describe("useImageAsset", () => {
     const paneState: PaneTestState = { focused: true, visible: true };
     const wrapper = makePaneWrapper(paneState);
     const { result, rerender, unmount } = renderHook(
-      () => useImageAsset(GIT_REQUEST),
+      () => useFileAsset(GIT_REQUEST),
       { wrapper },
     );
 
@@ -1309,8 +1309,8 @@ describe("useImageAsset", () => {
 
   it("keeps an owner's per-hook transport alive for a joined transfer", async () => {
     const transports = enablePerHookTransports();
-    const first = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const first = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
 
     expect(transports).toHaveLength(2);
     expect(transports[0].client.sessions).toHaveLength(1);
@@ -1343,7 +1343,7 @@ describe("useImageAsset", () => {
   it("closes an unshared transport after its settled hook unmounts", async () => {
     const transports = enablePerHookTransports();
     const { result, unmount } = renderHook(() =>
-      useImageAsset(WORKSPACE_REQUEST),
+      useFileAsset(WORKSPACE_REQUEST),
     );
 
     expect(transports).toHaveLength(1);
@@ -1366,8 +1366,8 @@ describe("useImageAsset", () => {
 
   it("defers the creator transport close until its pin is released", async () => {
     const transports = enablePerHookTransports();
-    const { unmount } = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
-    const second = renderHook(() => useImageAsset(WORKSPACE_REQUEST));
+    const { unmount } = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
+    const second = renderHook(() => useFileAsset(WORKSPACE_REQUEST));
 
     const transport = transports[0];
     const session = transport.client.sessions[0];

@@ -106,6 +106,7 @@ vi.mock("@/hooks/agent/use-host-reachability", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => state.supportsEditing,
 }));
 

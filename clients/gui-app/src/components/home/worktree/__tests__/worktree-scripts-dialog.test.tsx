@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => mocks.supportsSetRepoBranchPrefix.current,
 }));
 

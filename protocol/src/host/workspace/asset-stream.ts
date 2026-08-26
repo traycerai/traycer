@@ -38,3 +38,20 @@ export const workspaceStreamAssetV10 = defineStreamRpcContract({
   serverFrameSchema: assetStreamServerFrameSchema,
   clientFrameSchema: assetStreamClientFrameSchema,
 });
+
+/**
+ * 1.1 adds PDF: `application/pdf` joins `assetMediaTypeSchema`, served with
+ * `width`/`height: null` on the same `assetHeader` frame. The wire shapes
+ * are shared with 1.0 (the enum literal is the whole delta), so both minors
+ * reference the same schema objects; what distinguishes them is the
+ * negotiated number, which the host's resolver consults to (a) reject
+ * `.pdf` requests on 1.0 streams with `assetError "not-image"` and (b)
+ * never emit the new enum literal to a client whose parser predates it.
+ */
+export const workspaceStreamAssetV11 = defineStreamRpcContract({
+  method: "workspace.streamAsset",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: workspaceStreamAssetOpenRequestSchema,
+  serverFrameSchema: assetStreamServerFrameSchema,
+  clientFrameSchema: assetStreamClientFrameSchema,
+});

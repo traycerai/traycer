@@ -315,6 +315,10 @@ export enum AnalyticsEvent {
   WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
+  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open
+  // Externally" - the metric that decides whether the cap needs a
+  // per-type raise or range streaming (PDF preview design, Q6).
+  PdfPreviewTooLarge = "pdf_preview_too_large",
   WorktreeCreated = "worktree_created",
   WorktreeImported = "worktree_imported",
   WorktreeSelected = "worktree_selected",
@@ -604,6 +608,10 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
+  readonly [AnalyticsEvent.PdfPreviewTooLarge]: {
+    /** Which asset-stream surface the over-cap PDF was requested from. */
+    readonly surface: "workspace" | "git-old" | "git-new";
+  };
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
   };
@@ -1230,6 +1238,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.TaskCreationFailed],
     ["source", "blocker", "mode"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.PdfPreviewTooLarge], ["surface"]),
   ...eventKeyEntries(
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     ["reason"],

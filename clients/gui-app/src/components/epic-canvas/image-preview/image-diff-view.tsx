@@ -13,14 +13,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
-import { isImageAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  isImageAssetPath,
+  isPdfAssetPath,
+} from "@/lib/assets/image-extension-allowlist";
 import { cn } from "@/lib/utils";
 import {
-  useImageAsset,
-  type ImageAssetMeta,
-  type ImageAssetRequest,
-  type UseImageAssetResult,
-} from "@/hooks/assets/use-image-asset";
+  useFileAsset,
+  type FileAssetMeta,
+  type FileAssetRequest,
+  type UseFileAssetResult,
+} from "@/hooks/assets/use-file-asset";
 import { ImagePreview, type ImagePreviewStatus } from "./image-preview";
 import {
   clampPositionToVisibleBounds,
@@ -117,7 +120,7 @@ function combinedMode(
 }
 
 /** `meta`'s own width/height ratio, or `null` when either dimension is unknown (a dimensionless SVG, or the header hasn't arrived yet). */
-function aspectRatioOf(meta: ImageAssetMeta | null): number | null {
+function aspectRatioOf(meta: FileAssetMeta | null): number | null {
   if (meta === null) return null;
   if (meta.width === null || meta.height === null) return null;
   if (meta.width <= 0 || meta.height <= 0) return null;
@@ -138,8 +141,8 @@ function aspectRatioOf(meta: ImageAssetMeta | null): number | null {
  * the resulting box.
  */
 function compactAspectRatio(
-  oldMeta: ImageAssetMeta | null,
-  newMeta: ImageAssetMeta | null,
+  oldMeta: FileAssetMeta | null,
+  newMeta: FileAssetMeta | null,
 ): number | null {
   const oldRatio = aspectRatioOf(oldMeta);
   const newRatio = aspectRatioOf(newMeta);
@@ -179,8 +182,8 @@ interface CompactRootSizing {
  */
 function compactRootSizing(
   compact: boolean,
-  oldMeta: ImageAssetMeta | null,
-  newMeta: ImageAssetMeta | null,
+  oldMeta: FileAssetMeta | null,
+  newMeta: FileAssetMeta | null,
 ): CompactRootSizing {
   if (!compact) return { className: "h-full", style: undefined };
   const ratio = compactAspectRatio(oldMeta, newMeta);
@@ -205,7 +208,7 @@ export interface ImageDiffViewProps {
    * stage) at the OLD revision keeps that revision's shared pre-header
    * subscription alive (e.g. the same file open in two panes, one remounts
    * before the other's git-status catches up) - without this, the
-   * remounted side's fresh `useImageAsset` call would still coalesce onto
+   * remounted side's fresh `useFileAsset` call would still coalesce onto
    * that surviving old-revision subscription and replay its stale header
    * (sol re-review).
    */
@@ -289,7 +292,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldIsImageSide = oldSideExists && isImageAssetPath(oldEffectivePath);
   const newIsImageSide = newSideExists && isImageAssetPath(newEffectivePath);
 
-  const oldRequest = useMemo<ImageAssetRequest | null>(() => {
+  const oldRequest = useMemo<FileAssetRequest | null>(() => {
     if (props.oldStage === null || !oldIsImageSide) return null;
     return {
       method: "git",
@@ -309,7 +312,7 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.revisionKey,
   ]);
 
-  const newRequest = useMemo<ImageAssetRequest | null>(() => {
+  const newRequest = useMemo<FileAssetRequest | null>(() => {
     if (props.newStage === null || !newIsImageSide) return null;
     return {
       method: "git",
@@ -329,8 +332,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     props.revisionKey,
   ]);
 
-  const oldAsset = useImageAsset(oldRequest);
-  const newAsset = useImageAsset(newRequest);
+  const oldAsset = useFileAsset(oldRequest);
+  const newAsset = useFileAsset(newRequest);
 
   // "The git stage is non-null" (`oldSideExists` above) is NOT "this side
   // currently has a mounted, reporting `ImagePreview`" - a non-image side
@@ -694,7 +697,7 @@ function ImageDiffSide(props: {
   /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
   readonly isImageSide: boolean;
   readonly effectivePath: string;
-  readonly asset: UseImageAssetResult;
+  readonly asset: UseFileAssetResult;
   readonly emptyLabel: "Added" | "Deleted";
   readonly compact: boolean;
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null>;
@@ -720,7 +723,15 @@ function ImageDiffSide(props: {
       <BinaryPlaceholder
         fileName={props.effectivePath}
         sizeBytes={null}
-        reason="This file is not one of the supported image formats."
+        // A PDF side is a deliberate product cut (workspace tile previews
+        // PDFs; diffs don't - PDF preview design, Q7), so its copy must
+        // read as a limit, not as "unsupported format" next to a file the
+        // app previews elsewhere.
+        reason={
+          isPdfAssetPath(props.effectivePath)
+            ? "PDF diffs aren't previewed - use Open Externally to view either version."
+            : "This file is not one of the supported image formats."
+        }
         onOpenExternally={props.onOpenExternally}
         openExternallyOpening={props.openExternallyOpening}
         compact

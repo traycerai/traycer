@@ -6,9 +6,9 @@
  * generation, React fiber, and surface that renders the same image shares
  * that one URL instead of carrying its own base64 copy, so a given image
  * occupies the heap exactly once regardless of how many places reference it.
- * Workspace/git image assets (`useImageAsset`) key on a composite
+ * Workspace/git image assets (`useFileAsset`) key on a composite
  * `hostId + source + path + contentIdentity` string built by
- * `buildImageAssetCacheKey` instead - the cache itself is agnostic to what
+ * `buildFileAssetCacheKey` instead - the cache itself is agnostic to what
  * the key encodes, so both callers share the same lifecycle unchanged.
  *
  * Lifecycle is reference-counted: a `"grace"`-retention URL is revoked once

@@ -87,7 +87,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
 
 /**
  * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
- * `useImageAsset` request key covers `(path, stage)`, never `headSha`/
+ * `useFileAsset` request key covers `(path, stage)`, never `headSha`/
  * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
  * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
  * alone is unchanged. The unstaged/worktree side already has its own re-stat
@@ -118,7 +118,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * JSON-encoded with an explicit `"oid"`/`"stats"` tag on each side, not
  * delimiter-joined into the OID's own slot: an OID and a stats fallback
  * must never be able to alias each other structurally, not just avoid
- * colliding by string luck (mirrors `requestKeyFor`/`buildImageAssetCacheKey`'s
+ * colliding by string luck (mirrors `requestKeyFor`/`buildFileAssetCacheKey`'s
  * own JSON-array discipline for the identical reason).
  */
 type GitRevisionSideKey =
