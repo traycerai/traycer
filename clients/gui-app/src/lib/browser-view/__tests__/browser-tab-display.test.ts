@@ -59,7 +59,7 @@ describe("browser-tab-display", () => {
     expect(browserTabFaviconUrl("not a URL")).toBeNull();
   });
 
-  it("holds settled identity through transient navigation and never regresses a document title", () => {
+  it("holds settled identity through transient navigation and same-origin title gaps", () => {
     const first = nextSettledTabIdentity(
       null,
       tab({
@@ -134,7 +134,7 @@ describe("browser-tab-display", () => {
     expect(settledEmpty.title).toBe("The Capital Grille");
     expect(settledEmpty.hasDocumentTitle).toBe(true);
 
-    const hostnameRegression = nextSettledTabIdentity(
+    const crossOriginHostname = nextSettledTabIdentity(
       first,
       tab({
         tabId: "grille",
@@ -143,8 +143,12 @@ describe("browser-tab-display", () => {
         status: "ready",
       }),
     );
-    expect(hostnameRegression.title).toBe("The Capital Grille");
-    expect(hostnameRegression.hasDocumentTitle).toBe(true);
+    expect(crossOriginHostname).toMatchObject({
+      title: "www.thecapitalgrille.com",
+      url: "https://www.thecapitalgrille.com/menu",
+      faviconUrl: "https://www.thecapitalgrille.com/favicon.ico",
+      hasDocumentTitle: false,
+    });
 
     const sameTitleOnNewOrigin = nextSettledTabIdentity(
       first,

@@ -66,7 +66,12 @@ export function nextSettledTabIdentity(
       hasDocumentTitle: true,
     };
   }
-  if (previous !== null && previous.hasDocumentTitle) {
+  if (
+    previous !== null &&
+    previous.hasDocumentTitle &&
+    browserTabOrigin(previous.url) !== null &&
+    browserTabOrigin(previous.url) === browserTabOrigin(tab.url)
+  ) {
     return previous;
   }
   return {
