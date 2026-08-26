@@ -1,7 +1,5 @@
-import type {
-  AssistantMessage,
-  Message,
-} from "@traycer/protocol/persistence/epic/messages";
+import type { AssistantMessage } from "@traycer/protocol/persistence/epic/messages";
+import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
 /**
  * # The chat's fork boundary
@@ -61,71 +59,71 @@ export function assistantTurnKey(message: AssistantMessage): string {
 }
 
 /**
- * Whether a turn's blocks render at least one ASSISTANT row.
- *
- * Nearly every turn does, and a caller may reasonably wonder why this exists.
- * It is the one shape that does not: a turn whose blocks are ALL steers renders
- * only the nested user bubbles, so `withTurnCompletion` finds no assistant row
- * to stamp and the turn contributes no fork boundary at all. A turn with no
- * blocks does render one (an empty slice), so this is not simply "has blocks".
- *
- * The stopped case is the caller's, not this function's: a stopped steer-only
- * turn gets a synthesized trailing assistant row from
- * `attachRunStateToTrailingAssistantSlice` precisely so the stop marker has
- * somewhere to land, and that row IS a boundary.
- */
-function turnRendersAssistantRow(
-  blocks: ReadonlyArray<{ readonly type: string }>,
-): boolean {
-  if (blocks.length === 0) return true;
-  return blocks.some((block) => block.type !== "steer");
-}
-
-/**
  * The most recent completed assistant turn's persisted message id, or `null`
  * when the chat has none - the agent has never replied, or its only assistant
  * turn is the one running right now.
  *
- * @param messages Persisted records in CANONICAL ORDER (`row-order.ts`).
- * Scanned backwards, which is sound because turns are sequential: a chat has at
- * most one turn in flight, so one turn's records never interleave with
- * another's, and the last assistant record in canonical order is therefore its
- * own turn's last record - the one whose `messageId` the renderer's accumulator
- * keeps (`existing.messageId = message.messageId`, last write wins).
+ * ## Why this reads ROWS and not the records
+ *
+ * The renderer answers this with TWO different orders, and an earlier version
+ * of this function took one array and tried to serve both:
+ *
+ * - **Which turn** is the last assistant row in DISPLAY order - the renderer
+ *   scans `renderedMessages`, which it has already sorted with
+ *   `compareCanonicalRowOrder`.
+ * - **Which record id** within that turn is the last contributing record in
+ *   PROJECTION order - the turn accumulator's `existing.messageId =
+ *   message.messageId`, last write wins over the raw array walk.
+ *
+ * Those orders are the same until they are not. `upsertEntry` appends an
+ * unseen record at the TAIL, so a checkpoint restore re-adds an older record
+ * at the end of the array while its `timestamp` - and therefore its display
+ * position - stays historical. Passing projection order then picks the wrong
+ * TURN; passing canonical order picks the wrong RECORD ID inside a multi-record
+ * turn. One array cannot satisfy both, which is what the cold review found.
+ *
+ * A projected row already carries both, because `projectTranscriptRows` returns
+ * rows sorted into canonical order while each `assistant-slice` source carries
+ * its turn's `messageIds` in raw WALK order - the same walk the renderer's
+ * accumulator runs. So the scan below reads display order from the array and
+ * projection order from `messageIds`, and cannot drift from the renderer
+ * without the ordinal space drifting too.
+ *
+ * ## Why the steer-only and stopped cases need no parameters
+ *
+ * They are decided by which rows exist, which the projection has already
+ * settled:
+ *
+ * - A turn whose blocks are ALL steers plans only steer entries, so it
+ *   contributes no `assistant-slice` row and is skipped here - matching the
+ *   renderer, where `withTurnCompletion` finds no assistant row to stamp.
+ * - A turn with no blocks still plans ONE empty slice, so it IS a boundary.
+ * - A STOPPED steer-only turn gets a synthesized trailing slice
+ *   (`assistantTurnNeedsTrailingRow`) precisely so the stop marker has
+ *   somewhere to land, so it is a boundary again - without this function
+ *   needing to be told which turns were stopped.
+ *
+ * @param rows The projected transcript rows from `projectTranscriptRows`, in
+ * canonical order. Scanned backwards.
  * @param activeTurnId The turn in flight, or `null` when the chat is idle. The
  * live turn is never a fork boundary: forking there would cut at a turn the
  * user is still watching.
- * @param stoppedTurnIds Turns with a `turn.stopped` event. Only consulted for
- * the steer-only shape above; pass an empty set to ignore it and accept that a
- * stopped steer-only turn resolves to the boundary before it.
  */
 export function latestForkableAssistantMessageId(
-  messages: readonly Message[],
+  rows: readonly TranscriptRowDescriptor[],
   activeTurnId: string | null,
-  stoppedTurnIds: ReadonlySet<string>,
 ): string | null {
-  const blocksByTurnKey = new Map<string, { readonly type: string }[]>();
-  for (const message of messages) {
-    if (message.role !== "assistant") continue;
-    const turnKey = assistantTurnKey(message);
-    const blocks = blocksByTurnKey.get(turnKey);
-    if (blocks === undefined) {
-      blocksByTurnKey.set(turnKey, [...message.blocks]);
-      continue;
-    }
-    blocks.push(...message.blocks);
-  }
-
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message.role !== "assistant") continue;
-    const turnKey = assistantTurnKey(message);
-    if (turnKey === activeTurnId) continue;
-    const blocks = blocksByTurnKey.get(turnKey) ?? [];
-    if (!turnRendersAssistantRow(blocks) && !stoppedTurnIds.has(turnKey)) {
-      continue;
-    }
-    return message.messageId;
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const source = rows[index].source;
+    if (source.kind !== "assistant-slice") continue;
+    if (source.turnKey === activeTurnId) continue;
+    // Walk order, so the last entry is the record the renderer's accumulator
+    // ended up holding. Empty only if a turn were projected with no records at
+    // all, which the accumulator cannot produce - guarded rather than indexed
+    // blindly, because reading `[-1]` here would return `undefined` as an id.
+    const lastContributingId = source.messageIds.at(-1);
+    if (lastContributingId === undefined) continue;
+    return lastContributingId;
   }
   return null;
 }

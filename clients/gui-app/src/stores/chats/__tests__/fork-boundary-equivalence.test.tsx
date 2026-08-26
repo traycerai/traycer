@@ -3,11 +3,11 @@ import { renderHook } from "@testing-library/react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   AgentSender,
-  ChatEvent,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { latestForkableAssistantMessageId as protocolLatestForkableAssistantMessageId } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
+import { projectTranscriptRows } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import {
   useRenderedMessages,
   type RenderedMessagesDisplayContext,
@@ -138,24 +138,13 @@ function activeTurn(turnId: string): ChatActiveTurn {
 }
 
 /**
- * Mirrors `stoppedTurnIds` the way the host computes it: `turn.stopped`
- * events keyed by `turnId` (see `turnStoppedInfoFromEvents` in
- * `rendered-messages.ts`, which this fixture set does not exercise).
- */
-function stoppedTurnIdsFromEvents(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const event of events) {
-    if (event.type !== "turn.stopped" || event.turnId === null) continue;
-    ids.add(event.turnId);
-  }
-  return ids;
-}
-
-/**
  * Runs a fixture through BOTH the renderer's own scan and the protocol
  * derivation and returns both answers for comparison.
+ *
+ * The protocol side goes through `projectTranscriptRows` because that is what
+ * the host feeds it (`chat-transcript-view.ts` → `chat-transcript-derived.ts`).
+ * The two sides stay genuinely independent: the renderer never calls the
+ * projection, it builds its own rows and sorts them itself.
  */
 function bothForkBoundaries(input: Partial<RenderedMessagesInput>): {
   rendererResult: string | null;
@@ -166,13 +155,20 @@ function bothForkBoundaries(input: Partial<RenderedMessagesInput>): {
     useRenderedMessages(value, displayContext),
   );
   const activeTurnId = value.activeTurn?.turnId ?? null;
-  const stoppedTurnIds = stoppedTurnIdsFromEvents(value.events);
+  const rows = projectTranscriptRows({
+    messages: value.messages,
+    events: value.events,
+    activeTurnId,
+    // `ownerKind` is "chat" throughout this fixture set, so the owner id IS
+    // the chat id. It only reaches setup-card row ids, which no fixture here
+    // produces - but passing the real one keeps the projection honest.
+    chatId: value.ownerId,
+  });
   return {
     rendererResult: rendererLatestForkableAssistantMessageId(result.current),
     protocolResult: protocolLatestForkableAssistantMessageId(
-      value.messages,
+      rows,
       activeTurnId,
-      stoppedTurnIds,
     ),
   };
 }
@@ -239,6 +235,65 @@ describe("latestForkableAssistantMessageId renderer/protocol equivalence", () =>
     });
 
     expect(rendererResult).toBe("a-1-second");
+    expect(protocolResult).toBe(rendererResult);
+  });
+
+  /*
+   * The shapes that drove the two orders apart. `upsertEntry` appends an
+   * unseen record at the array TAIL, so a checkpoint restore re-adds a record
+   * whose display position is historical. Before the fork boundary read
+   * projected rows these two disagreed: the protocol side scanned the record
+   * array and answered `a-1-restored` for the first and, given the canonical
+   * order its docstring asked for, `a-1-late` for the second.
+   */
+
+  it("agree when a restored record of an OLDER turn sits at the projection tail", () => {
+    const { rendererResult, protocolResult } = bothForkBoundaries({
+      messages: [
+        assistantMessage({
+          messageId: "a-1",
+          timestamp: 1000,
+          turnId: "turn-1",
+          blocks: [textBlock("b-1", 1000)],
+        }),
+        assistantMessage({
+          messageId: "a-2",
+          timestamp: 2000,
+          turnId: "turn-2",
+          blocks: [textBlock("b-2", 2000)],
+        }),
+        assistantMessage({
+          messageId: "a-1-restored",
+          timestamp: 1100,
+          turnId: "turn-1",
+          blocks: [textBlock("b-3", 1100)],
+        }),
+      ],
+    });
+
+    expect(rendererResult).toBe("a-2");
+    expect(protocolResult).toBe(rendererResult);
+  });
+
+  it("agree on the id when a restored sibling of the SAME turn is re-added after it", () => {
+    const { rendererResult, protocolResult } = bothForkBoundaries({
+      messages: [
+        assistantMessage({
+          messageId: "a-1-late",
+          timestamp: 2000,
+          turnId: "turn-1",
+          blocks: [textBlock("b-1", 2000)],
+        }),
+        assistantMessage({
+          messageId: "a-1-early",
+          timestamp: 1000,
+          turnId: "turn-1",
+          blocks: [textBlock("b-2", 1000)],
+        }),
+      ],
+    });
+
+    expect(rendererResult).toBe("a-1-early");
     expect(protocolResult).toBe(rendererResult);
   });
 
