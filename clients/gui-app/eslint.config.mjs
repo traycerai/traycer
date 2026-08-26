@@ -12,7 +12,6 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import pluginQuery from "@tanstack/eslint-plugin-query";
 import pluginRouter from "@tanstack/eslint-plugin-router";
 import oxlint from "eslint-plugin-oxlint";
-import { traycerTypeSafetyRestrictions } from "../../eslint/traycer-type-safety-rules.mjs";
 import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-clients-import-boundary-rules.mjs";
 import {
   nestedFocusBoundaryRestrictions,
@@ -345,7 +344,6 @@ function syntaxRestrictions({ exempt, nestedFocus, tabNavigation }) {
   }
   return [
     "error",
-    ...traycerTypeSafetyRestrictions,
     noFullStoreSubscription,
     ...generalCustomSyntaxRestrictions.filter(
       (restriction) => !lifted.has(restriction),
@@ -865,16 +863,9 @@ export default tseslint.config(
       }),
     },
   },
-  // Oxlint runs first and owns every rule represented in its generated config,
-  // including the type-aware rules. Keep this last so ESLint retains only the
-  // repository-specific boundaries and rules whose implementations differ.
+  // Oxlint runs first and owns every compatible rule represented in its
+  // generated config, including the type-aware rules. Keep this last so ESLint
+  // retains the repository-specific boundaries and selector-based invariants
+  // whose implementations and executable guard tests remain ESLint-specific.
   ...oxlint.buildFromOxlintConfigFile(".oxlintrc.json"),
-  {
-    rules: {
-      // Oxlint's local selector plugin owns this rule. Keep one source of
-      // diagnostics while the remaining unsupported/divergent rules stay in
-      // the ESLint fallback.
-      "no-restricted-syntax": "off",
-    },
-  },
 );
