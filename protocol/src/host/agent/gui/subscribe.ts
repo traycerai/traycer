@@ -37,7 +37,6 @@ import {
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
   userMessageSchemaPreReasonix,
-  userMessageSchemaPreTurnTail,
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
@@ -1181,7 +1180,7 @@ const chatSubscribeCommonServerFrameSchemasPreInReplyTo =
 // either an unknown harness discriminant or a managed-command queue item.
 const chatSubscribeCommonServerFrameSchemasPreManagedCommand =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchemaPreTurnTail,
+    message: userMessageSchemaPreReasonix,
     queue: chatQueueStateSchemaPreManagedCommand,
     // Pre-Reasonix event actor: an A2A chat event names the acting agent's
     // harness, and `eventAppended` rides this released line.
