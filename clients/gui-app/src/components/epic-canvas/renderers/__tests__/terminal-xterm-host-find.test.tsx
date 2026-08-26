@@ -1193,6 +1193,15 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(onUserInput).toHaveBeenCalledWith(
       "\x1b[200~\x1b]11;#112233\x07\x1b[201~",
     );
+
+    // Even a byte-exact colour REPORT pasted while the terminal is idle is
+    // user input, not a generated reply: replies only ever surface while a
+    // live output chunk is mid-parse, and the filter is gated on that window.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;rgb:1111/2222/3333\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;rgb:1111/2222/3333\x07\x1b[201~",
+    );
   });
 
   it("resets the buffer before replaying a reconnect snapshot", async () => {
