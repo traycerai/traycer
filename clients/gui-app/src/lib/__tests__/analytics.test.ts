@@ -44,7 +44,7 @@ describe("analytics", () => {
       disable_surveys_automatic_display: true,
       disable_product_tours: true,
       disable_web_experiments: true,
-      advanced_disable_decide: true,
+      advanced_disable_flags: true,
       advanced_disable_feature_flags: true,
       save_campaign_params: false,
       save_referrer: false,

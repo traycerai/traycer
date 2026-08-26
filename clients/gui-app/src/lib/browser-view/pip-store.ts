@@ -10,7 +10,11 @@ export const PIP_CAPTION_FADE_MS = 300;
 export type PipStreamHealth = "live" | "stale" | "disconnected";
 
 export type PipHostLifecycle =
-  "connecting" | "live" | "reconnecting" | "closed" | "failed";
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "closed"
+  | "failed";
 
 export interface PipTarget {
   readonly hostId: string;

@@ -48,7 +48,9 @@ function frame(overrides: Partial<EncodeMuxFrameInput>): MuxFrame {
 function bodyChunks(body: Uint8Array, chunkSize: number): Uint8Array[] {
   const chunks: Uint8Array[] = [];
   for (let offset = 0; offset < body.length; offset += chunkSize) {
-    chunks.push(body.subarray(offset, Math.min(offset + chunkSize, body.length)));
+    chunks.push(
+      body.subarray(offset, Math.min(offset + chunkSize, body.length)),
+    );
   }
   return chunks;
 }
@@ -114,7 +116,10 @@ export function runChunkReassemblerConformanceSpec(
 
     it("round-trips a chunk source's own frames (json-only body over the chunk size)", () => {
       const reassembler = createReassembler();
-      const json = { kind: "snapshot", blob: "x".repeat(BULK_CHUNK_SIZE_BYTES * 2) };
+      const json = {
+        kind: "snapshot",
+        blob: "x".repeat(BULK_CHUNK_SIZE_BYTES * 2),
+      };
       let seq = 7;
       const source = new OutboundChunkSource(
         {
@@ -129,7 +134,9 @@ export function runChunkReassemblerConformanceSpec(
       );
       let out: ReassembledMessage | null = null;
       while (!source.done) {
-        out = reassembler.accept(decodeMuxFrame(encodeMuxFrame(source.nextFrame())));
+        out = reassembler.accept(
+          decodeMuxFrame(encodeMuxFrame(source.nextFrame())),
+        );
       }
       expect(out?.json).toEqual(json);
       expect(out?.binary).toBeNull();
@@ -139,7 +146,12 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({ streamId: 2, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 2,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
       expect(() =>
@@ -158,7 +170,12 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({ streamId: 4, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 4,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
       const out = reassembler.accept(
@@ -175,7 +192,12 @@ export function runChunkReassemblerConformanceSpec(
       // The partial body is abandoned: a fresh sequence on the stream starts clean.
       expect(
         reassembler.accept(
-          frame({ streamId: 4, seq: 2, chunkFirst: true, binary: new Uint8Array([9]) }),
+          frame({
+            streamId: 4,
+            seq: 2,
+            chunkFirst: true,
+            binary: new Uint8Array([9]),
+          }),
         ),
       ).toBeNull();
     });
@@ -193,12 +215,22 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({ streamId: 7, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 7,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
       expect(() =>
         reassembler.accept(
-          frame({ streamId: 7, seq: 50, chunkFirst: true, binary: new Uint8Array([2]) }),
+          frame({
+            streamId: 7,
+            seq: 50,
+            chunkFirst: true,
+            binary: new Uint8Array([2]),
+          }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
       // The original sequence's accumulator was dropped by the interleave
@@ -214,13 +246,23 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({ streamId: 8, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 8,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
       // Expected seq 1; a reordering/splicing relay delivers seq 2 instead.
       expect(() =>
         reassembler.accept(
-          frame({ streamId: 8, seq: 2, chunkLast: true, binary: new Uint8Array([2]) }),
+          frame({
+            streamId: 8,
+            seq: 2,
+            chunkLast: true,
+            binary: new Uint8Array([2]),
+          }),
         ),
       ).toThrow(ChunkReassemblyErrorCtor);
     });
@@ -269,7 +311,12 @@ export function runChunkReassemblerConformanceSpec(
       const reassembler = createReassembler();
       expect(
         reassembler.accept(
-          frame({ streamId: 3, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 3,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
       reassembler.reset();
@@ -278,7 +325,12 @@ export function runChunkReassemblerConformanceSpec(
       // flight" - proving reset() actually cleared the prior state.
       expect(
         reassembler.accept(
-          frame({ streamId: 3, seq: 0, chunkFirst: true, binary: new Uint8Array([1]) }),
+          frame({
+            streamId: 3,
+            seq: 0,
+            chunkFirst: true,
+            binary: new Uint8Array([1]),
+          }),
         ),
       ).toBeNull();
     });

@@ -879,7 +879,8 @@ function renderPanel(input: {
   readonly onPause?: () => string | null;
   readonly onResume?: () => string | null;
   readonly onReorder:
-    ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void) | null;
+    | ((item: ChatQueuedItem, beforeQueueItemId: string | null) => void)
+    | null;
 }) {
   return render(
     <TooltipProvider delayDuration={0}>

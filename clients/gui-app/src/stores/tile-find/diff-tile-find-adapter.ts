@@ -21,7 +21,10 @@ const FIND_CAPABILITIES: ReadonlySet<TileFindCapability> =
   new Set<TileFindCapability>(["find"]);
 
 export type DiffTileFindSourceKind =
-  "loaded" | "metadata-partial" | "loading" | "missing";
+  | "loaded"
+  | "metadata-partial"
+  | "loading"
+  | "missing";
 
 export interface DiffTileFindSource {
   readonly kind: DiffTileFindSourceKind;

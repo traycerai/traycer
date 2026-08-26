@@ -78,7 +78,10 @@ export interface BrowserViewBoundsUpdate extends BrowserViewTileKey {
 }
 
 export type BrowserViewViewportPresetId =
-  "responsive" | "mobile" | "tablet" | "desktop";
+  | "responsive"
+  | "mobile"
+  | "tablet"
+  | "desktop";
 
 export type BrowserViewStatus = "loading" | "ready" | "dead";
 
@@ -118,7 +121,11 @@ export interface BrowserViewFindChange extends BrowserViewTileKey {
 }
 
 export type BrowserViewDownloadState =
-  "prompting" | "progressing" | "completed" | "cancelled" | "interrupted";
+  | "prompting"
+  | "progressing"
+  | "completed"
+  | "cancelled"
+  | "interrupted";
 
 export interface BrowserViewDownloadChange extends BrowserViewTileKey {
   readonly downloadId: string;
@@ -246,7 +253,12 @@ export interface BrowserLabsStateUpdate {
 }
 
 export type BrowserViewConsoleLevel =
-  "log" | "info" | "warning" | "error" | "debug" | "trace";
+  | "log"
+  | "info"
+  | "warning"
+  | "error"
+  | "debug"
+  | "trace";
 
 export interface BrowserViewStackFrame {
   readonly functionName: string;

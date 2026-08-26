@@ -179,7 +179,8 @@ type BoundOwnerSurface = {
   // host — a real terminal state, not an indefinite spinner).
   readonly bindingResolved: boolean;
   readonly onBindingCommitted:
-    ((changedWorkspacePaths: ReadonlyArray<string>) => void) | null;
+    | ((changedWorkspacePaths: ReadonlyArray<string>) => void)
+    | null;
   /**
    * Chat-only: the owning tile's handler for the host picker's "switch host"
    * gesture. Chats are host-bound for life (clone-not-migrate), so switching

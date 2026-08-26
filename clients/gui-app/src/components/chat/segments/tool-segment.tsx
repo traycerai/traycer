@@ -118,7 +118,11 @@ interface ReceiverOpenTarget {
 }
 
 type ToolBadgeState =
-  "background-complete" | "end-state" | "error" | "stopped" | "streaming";
+  | "background-complete"
+  | "end-state"
+  | "error"
+  | "stopped"
+  | "streaming";
 
 type ToolHeaderLayout = "inline" | "stacked";
 

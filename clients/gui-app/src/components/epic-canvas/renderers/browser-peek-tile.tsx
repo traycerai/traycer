@@ -94,7 +94,10 @@ type PeekNavInput =
   | { readonly kind: "reload" };
 
 type PeekInputFrame =
-  PeekPointerInput | PeekKeyboardInput | PeekInsertTextInput | PeekNavInput;
+  | PeekPointerInput
+  | PeekKeyboardInput
+  | PeekInsertTextInput
+  | PeekNavInput;
 
 interface CapturedPointer {
   readonly element: HTMLElement;

@@ -46,7 +46,9 @@ export type UserBusAvailability =
   | {
       readonly kind: "indeterminate";
       readonly cause:
-        "systemctl-timeout" | "systemctl-failed" | "user-bus-unavailable";
+        | "systemctl-timeout"
+        | "systemctl-failed"
+        | "user-bus-unavailable";
     };
 
 /**
@@ -204,6 +206,7 @@ export type LinuxWorld = {
     readonly removedByUser: LinuxEvidence<boolean>;
     readonly stoppedByUser: LinuxEvidence<boolean>;
     readonly pendingActivation:
-      DurableRecord<PendingActivation> | { readonly kind: "absent" };
+      | DurableRecord<PendingActivation>
+      | { readonly kind: "absent" };
   };
 };

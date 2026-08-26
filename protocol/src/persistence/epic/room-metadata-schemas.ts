@@ -16,7 +16,9 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
-  "permission-role", "latest");
+  "permission-role",
+  "latest",
+);
 
 export const collaboratorRolesSchema = z.record(
   z.string(),

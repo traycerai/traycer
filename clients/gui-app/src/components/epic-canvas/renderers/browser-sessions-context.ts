@@ -2,7 +2,11 @@ import { createContext, useContext } from "react";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 
 export type BrowserSessionsLifecycle =
-  "connecting" | "live" | "reconnecting" | "closed" | "failed";
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "closed"
+  | "failed";
 
 export interface OpenBrowserTabResult {
   readonly sessionId: string;

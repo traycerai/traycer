@@ -47,7 +47,9 @@ export function customNameFromIdentityDraft(draft: string): string | null {
  *     the cloud pin is the supported control, so the UI degrades to it.
  */
 export type OverviewDegradeReason =
-  "unsupported" | "cli-unavailable" | "externally-managed";
+  | "unsupported"
+  | "cli-unavailable"
+  | "externally-managed";
 
 /**
  * Resolve a per-button capability from the tri-state method answer.
@@ -117,7 +119,9 @@ export function describeOverviewDegrade(
  * broken connection for a host that answered perfectly well.
  */
 export type CliShellFailure =
-  "cli-unavailable" | "cli-failed" | "invalid-output";
+  | "cli-unavailable"
+  | "cli-failed"
+  | "invalid-output";
 
 export function describeCliShellFailure(
   failure: CliShellFailure,

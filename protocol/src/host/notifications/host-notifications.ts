@@ -1326,19 +1326,18 @@ export const hostNotificationsIndicatorState = defineRpcContract({
  * false so a newer renderer keeps its sidebar fully functional against an
  * older host rather than treating field absence as a malformed response.
  */
-export const hostNotificationsIndicatorStateUpgradeV10ToV11 =
-  defineUpgradePath<
-    typeof hostNotificationsIndicatorStateV10,
-    typeof hostNotificationsIndicatorState
-  >({
-    from: hostNotificationsIndicatorStateV10.schemaVersion,
-    to: hostNotificationsIndicatorState.schemaVersion,
-    upgradeRequest: (request) => request,
-    upgradeResponse: (response) => ({
-      epics: addPendingForkDefault(response.epics),
-      chats: addPendingForkDefault(response.chats),
-    }),
-  });
+export const hostNotificationsIndicatorStateUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostNotificationsIndicatorStateV10,
+  typeof hostNotificationsIndicatorState
+>({
+  from: hostNotificationsIndicatorStateV10.schemaVersion,
+  to: hostNotificationsIndicatorState.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    epics: addPendingForkDefault(response.epics),
+    chats: addPendingForkDefault(response.chats),
+  }),
+});
 
 function addPendingForkDefault(
   states: Readonly<Record<string, HostNotificationsIndicatorStateV10>>,

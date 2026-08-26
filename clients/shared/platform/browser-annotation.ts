@@ -64,7 +64,12 @@ export interface BrowserAnnotationAttachResultInput {
 }
 
 export type BrowserAnnotationEndReason =
-  "cancelled" | "navigation" | "reload" | "crash" | "tile-close" | "replaced";
+  | "cancelled"
+  | "navigation"
+  | "reload"
+  | "crash"
+  | "tile-close"
+  | "replaced";
 
 export type BrowserAnnotationStartFailureReason =
   | "tile-not-found"

@@ -6,7 +6,8 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 type ImageBytes = Uint8Array<ArrayBuffer>;
 
 type AttachBrowserAnnotationResult =
-  { readonly status: "attached" } | { readonly status: "store-failed" };
+  | { readonly status: "attached" }
+  | { readonly status: "store-failed" };
 
 /**
  * Store crop bytes in the existing hash-backed composer image store, mint the

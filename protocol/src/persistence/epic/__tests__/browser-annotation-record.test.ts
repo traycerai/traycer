@@ -27,7 +27,7 @@ const FULL_ANNOTATION = {
       elementId: null,
       classNames: ["hero"],
       attributes: [{ name: "class", value: "hero" }],
-      outerHtml: "<h1 class=\"hero\">Example Domain</h1>",
+      outerHtml: '<h1 class="hero">Example Domain</h1>',
       outerHtmlTruncated: false,
       textPreview: "Example Domain",
       ariaRole: "heading",
@@ -118,9 +118,9 @@ describe("browserAnnotationRecordSchema", () => {
 
   it("defaults droppedElementCount to 0 on older persisted records", () => {
     const { droppedElementCount: _dropped, ...legacy } = FULL_ANNOTATION;
-    expect(browserAnnotationRecordSchema.parse(legacy).droppedElementCount).toBe(
-      0,
-    );
+    expect(
+      browserAnnotationRecordSchema.parse(legacy).droppedElementCount,
+    ).toBe(0);
   });
 });
 

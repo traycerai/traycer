@@ -151,7 +151,14 @@ const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
 
 type RateLimitPopoverResizeDirection =
-  "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+  | "n"
+  | "ne"
+  | "e"
+  | "se"
+  | "s"
+  | "sw"
+  | "w"
+  | "nw";
 
 interface RateLimitPopoverPositionLock {
   readonly wrapperElement: HTMLElement;

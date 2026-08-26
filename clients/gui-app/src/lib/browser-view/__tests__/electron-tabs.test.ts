@@ -825,7 +825,8 @@ describe("ElectronTabs", () => {
   it("drops stale native status and forwards the exact accepted incarnation", async () => {
     const emit = {
       status: null as
-        Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0] | null,
+        | Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0]
+        | null,
     };
     const base = nativeWith(() => provisionedTab("registration-current"), null);
     const native = {
@@ -885,7 +886,8 @@ describe("ElectronTabs", () => {
   it("buffers the latest native status until acceptance, then publishes later status", async () => {
     const status = {
       emit: null as
-        Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0] | null,
+        | Parameters<BrowserViewBridge["onNativeTabStatusChange"]>[0]
+        | null,
     };
     const native = nativeWith(
       () => provisionedTab("registration-1"),
@@ -1012,7 +1014,8 @@ describe("ElectronTabs", () => {
   it("settles an exact native handoff drain from its action ack result", async () => {
     const handoffHandler = {
       emit: null as
-        ((change: BrowserViewElectronTabHandoffChange) => void) | null,
+        | ((change: BrowserViewElectronTabHandoffChange) => void)
+        | null,
     };
     const base = nativeWith(() => provisionedTab("registration-1"), null);
     const native = {

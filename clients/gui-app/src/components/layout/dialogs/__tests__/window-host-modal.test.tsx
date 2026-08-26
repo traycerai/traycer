@@ -277,7 +277,9 @@ describe("<WindowHostModal /> update-client (epoch rejection)", () => {
     observedClientKind: "desktop",
     observedClientAppVersion: "1.1.10",
     observedClientAppVersionStatus: "valid",
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     minimumKnownClientAppVersion: null,
+    // oxlint-disable-next-line typescript/no-deprecated -- Required null placeholder retained for shipped-client wire compatibility.
     upgradeChannel: null,
     hostReleaseChannel: "rc",
   };

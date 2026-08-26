@@ -12,7 +12,10 @@ export const PIP_NUDGE_PX = 8;
 export const PIP_RESIZE_STEP_PX = 16;
 
 export type PipCorner =
-  "bottom-right" | "bottom-left" | "top-left" | "top-right";
+  | "bottom-right"
+  | "bottom-left"
+  | "top-left"
+  | "top-right";
 
 export const PIP_CORNER_CYCLE: readonly PipCorner[] = [
   "bottom-right",

@@ -96,7 +96,8 @@ interface ProfileDropdownProps {
     index: number,
   ) => ProfileDropdownShortcutHint | null;
   readonly profileEnablementPending:
-    ((profileId: string | null) => boolean) | null;
+    | ((profileId: string | null) => boolean)
+    | null;
   /** Portal target for nested surfaces. The model picker passes its popover
    *  node so dropdown outside-click handling does not dismiss the whole picker;
    *  Settings passes null to keep the default document-level portal. */

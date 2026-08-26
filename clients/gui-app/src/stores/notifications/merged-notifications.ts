@@ -95,7 +95,10 @@ import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
-  "host" | "app-local" | "global" | "cloud";
+  | "host"
+  | "app-local"
+  | "global"
+  | "cloud";
 
 export interface MergedNotificationRow {
   readonly feedId: string;

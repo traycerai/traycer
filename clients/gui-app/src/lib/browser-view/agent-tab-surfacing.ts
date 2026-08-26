@@ -16,7 +16,9 @@ import {
 type AgentTabSurfacableAction = "float" | "tile" | "suppress";
 
 type AgentTabSuppressReason =
-  "mode-off" | "manual-pip-active" | "pip-epic-hidden";
+  | "mode-off"
+  | "manual-pip-active"
+  | "pip-epic-hidden";
 
 export interface AgentTabDisposition {
   readonly action: AgentTabSurfacableAction;

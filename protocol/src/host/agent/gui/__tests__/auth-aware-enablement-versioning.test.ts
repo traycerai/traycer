@@ -104,7 +104,12 @@ function providerState(providerId: string, overrides: ProviderStateOverrides) {
     disabledBy: null,
     selected: { kind: "bundled" as const },
     candidates: [],
-    auth: { status: "unknown" as const, badgeText: null, label: null, detail: null },
+    auth: {
+      status: "unknown" as const,
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
     authPending: false,
     checkedAt: null,
     apiKey: { supported: false, configured: false, source: null },
@@ -132,37 +137,59 @@ describe("agent.gui.listHarnesses@7.1 (auth-aware enablement row fields)", () =>
     expect(v70Response.harnesses[0]).not.toHaveProperty("authStatus");
     expect(v70Response.harnesses[0]).not.toHaveProperty("enablementMode");
 
-    const upgraded = agentGuiListHarnessesUpgradeV70ToV71.upgradeResponse(
-      v70Response,
-    );
+    const upgraded =
+      agentGuiListHarnessesUpgradeV70ToV71.upgradeResponse(v70Response);
     expect(upgraded.harnesses[0]).not.toHaveProperty("authStatus");
     expect(upgraded.harnesses[0]).not.toHaveProperty("enablementMode");
     // Absence must be distinguishable from every concrete value - a v7.0
     // host is exactly the host the client's providers.list fallback exists
     // for, and a fill here would fabricate a verdict the client then trusts
     // over that fallback.
-    expect(
-      listGuiHarnessesResponseSchemaV70.safeParse(upgraded).success,
-    ).toBe(true);
+    expect(listGuiHarnessesResponseSchemaV70.safeParse(upgraded).success).toBe(
+      true,
+    );
   });
 
   it.each([
-    ["v6.0", agentGuiListHarnessesDowngradeV7ToV6, listGuiHarnessesResponseSchemaV60, guiHarnessOptionSchemaV60],
-    ["v5.0", agentGuiListHarnessesDowngradeV7ToV5, listGuiHarnessesResponseSchemaV50, guiHarnessOptionSchemaV50],
-    ["v4.0", agentGuiListHarnessesDowngradeV7ToV4, listGuiHarnessesResponseSchemaV40, guiHarnessOptionSchemaV40],
-    ["v3.0", agentGuiListHarnessesDowngradeV7ToV3, listGuiHarnessesResponseSchemaV30, guiHarnessOptionSchemaV30],
-    ["v2.1", agentGuiListHarnessesDowngradeV7ToV2, listGuiHarnessesResponseSchemaV21, guiHarnessOptionSchemaV21],
+    [
+      "v6.0",
+      agentGuiListHarnessesDowngradeV7ToV6,
+      listGuiHarnessesResponseSchemaV60,
+      guiHarnessOptionSchemaV60,
+    ],
+    [
+      "v5.0",
+      agentGuiListHarnessesDowngradeV7ToV5,
+      listGuiHarnessesResponseSchemaV50,
+      guiHarnessOptionSchemaV50,
+    ],
+    [
+      "v4.0",
+      agentGuiListHarnessesDowngradeV7ToV4,
+      listGuiHarnessesResponseSchemaV40,
+      guiHarnessOptionSchemaV40,
+    ],
+    [
+      "v3.0",
+      agentGuiListHarnessesDowngradeV7ToV3,
+      listGuiHarnessesResponseSchemaV30,
+      guiHarnessOptionSchemaV30,
+    ],
+    [
+      "v2.1",
+      agentGuiListHarnessesDowngradeV7ToV2,
+      listGuiHarnessesResponseSchemaV21,
+      guiHarnessOptionSchemaV21,
+    ],
   ] as const)(
     "the 7.1 -> %s downgrade strips authStatus/enablementMode while preserving decodable rows",
     (_label, downgrade, responseSchema, rowSchema) => {
-      const v71Response = guiHarnessOptionSchemaV71
-        .array()
-        .parse([
-          harnessOption("claude", {
-            authStatus: "unauthenticated",
-            enablementMode: "auto",
-          }),
-        ]);
+      const v71Response = guiHarnessOptionSchemaV71.array().parse([
+        harnessOption("claude", {
+          authStatus: "unauthenticated",
+          enablementMode: "auto",
+        }),
+      ]);
       const result = downgrade.downgradeResponse({
         harnesses: v71Response,
       });
@@ -303,9 +330,7 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.value.providers[0]).not.toHaveProperty("enablementMode");
-      expect(result.value.providers[0]).not.toHaveProperty(
-        "enablementSource",
-      );
+      expect(result.value.providers[0]).not.toHaveProperty("enablementSource");
       expect(result.value.providers[0].enabled).toBe(true);
       expect(() => responseSchema.parse(result.value)).not.toThrow();
     },
@@ -327,40 +352,38 @@ describe("providers.list@7.1 (auth-aware enablement provider fields)", () => {
   // companion test below covers a row with no enablement fields at all, so a
   // failure here localizes to these two rather than to v1.0 downgrading
   // generally.
-  it(
-    "the 7.1 -> v1.0 downgrade strips both fields and PRESERVES the row",
-    () => {
-      const result = providersListDowngradeV7ToV1.downgradeResponse(
-        providersListResponseSchemaV71.parse({
-          providers: [
-            providerState("claude-code", {
-              enablementMode: "off",
-              enablementSource: "sticky",
-            }),
-            providerState("grok", {}),
-          ],
-          native: null,
-        }),
-      );
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.value.providers.map((p) => p.providerId)).toEqual([
-        "claude-code",
-      ]);
-      expect(result.value.providers[0]).not.toHaveProperty("enablementMode");
-      expect(result.value.providers[0]).not.toHaveProperty(
-        "enablementSource",
-      );
-      expect(() =>
-        providersListResponseSchemaV10.parse(result.value),
-      ).not.toThrow();
-    },
-  );
+  it("the 7.1 -> v1.0 downgrade strips both fields and PRESERVES the row", () => {
+    const result = providersListDowngradeV7ToV1.downgradeResponse(
+      providersListResponseSchemaV71.parse({
+        providers: [
+          providerState("claude-code", {
+            enablementMode: "off",
+            enablementSource: "sticky",
+          }),
+          providerState("grok", {}),
+        ],
+        native: null,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providers.map((p) => p.providerId)).toEqual([
+      "claude-code",
+    ]);
+    expect(result.value.providers[0]).not.toHaveProperty("enablementMode");
+    expect(result.value.providers[0]).not.toHaveProperty("enablementSource");
+    expect(() =>
+      providersListResponseSchemaV10.parse(result.value),
+    ).not.toThrow();
+  });
 
   it("the 7.1 -> v1.0 downgrade PRESERVES a row carrying no enablement fields, dropping only the post-v1.0 provider (unaffected baseline)", () => {
     const result = providersListDowngradeV7ToV1.downgradeResponse(
       providersListResponseSchemaV71.parse({
-        providers: [providerState("claude-code", {}), providerState("grok", {})],
+        providers: [
+          providerState("claude-code", {}),
+          providerState("grok", {}),
+        ],
         native: null,
       }),
     );
@@ -386,9 +409,8 @@ describe("providers.setEnabled@2.2 (tri-state mode)", () => {
     });
     expect(v21Request).not.toHaveProperty("mode");
 
-    const upgraded = providersSetEnabledUpgradeV21ToV22.upgradeRequest(
-      v21Request,
-    );
+    const upgraded =
+      providersSetEnabledUpgradeV21ToV22.upgradeRequest(v21Request);
     expect(upgraded).not.toHaveProperty("mode");
     expect(upgraded.enabled).toBe(true);
     expect(
@@ -459,7 +481,9 @@ describe("hostRpcRegistry loads with the auth-aware enablement lines at their ex
 
   it("providers.setEnabled major 2 -> latestMinor 2", () => {
     expect(hostRpcRegistry["providers.setEnabled"][2].latestMinor).toBe(2);
-    expect(hostRpcRegistry["providers.setEnabled"][2].versions[2]).toBeDefined();
+    expect(
+      hostRpcRegistry["providers.setEnabled"][2].versions[2],
+    ).toBeDefined();
     // The downgrade-from-latest table re-points at the new bridge.
     expect(
       hostRpcRegistry["providers.setEnabled"][2].downgradePathsFromLatest[1],

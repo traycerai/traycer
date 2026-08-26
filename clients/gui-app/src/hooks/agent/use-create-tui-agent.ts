@@ -158,7 +158,9 @@ export type TuiAgentPlacement =
   | { readonly kind: "target-group"; readonly groupId: string };
 
 export type CreateTuiAgentStatus =
-  "preparing-workspace" | "forking-session" | "starting-terminal";
+  | "preparing-workspace"
+  | "forking-session"
+  | "starting-terminal";
 
 export interface CreateTuiAgentInput {
   readonly epicId: string;

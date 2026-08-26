@@ -125,7 +125,8 @@ class FakeStreamSession {
       ) => void)
     | null = null;
   private statusHandler:
-    ((status: StreamConnectionStatus, reason: null) => void) | null = null;
+    | ((status: StreamConnectionStatus, reason: null) => void)
+    | null = null;
   closed = false;
 
   constructor(options: { readonly dropUntilLive: boolean }) {

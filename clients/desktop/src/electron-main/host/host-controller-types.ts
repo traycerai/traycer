@@ -201,7 +201,8 @@ export interface AbandonedByGuard {
 
 /** What an intent-taking (guardable) mutation resolves. */
 export type GuardedMutationOutcome<TOk> =
-  MutationOutcome<TOk> | AbandonedByGuard;
+  | MutationOutcome<TOk>
+  | AbandonedByGuard;
 
 /**
  * Narrows a guarded outcome for a caller that submitted a `background`

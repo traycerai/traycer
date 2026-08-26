@@ -16,12 +16,12 @@ All code tickets implemented on branch `feat/browser-tile-runtime`
 (submodule) / same-named internal branch. **Nothing is committed** pending
 manual verification. Test state at authoring time:
 
-| Suite | Result |
-| --- | --- |
-| desktop browser-view + ipc-contracts + agent ipc | 304/304 |
-| gui-app browser renderers + lib/browser-view (targeted) | 175/175 |
-| desktop `tsc --noEmit` error set | identical to base branch (pre-existing only) |
-| gui-app full canvas run | 26 failing — byte-identical failure list to base branch |
+| Suite                                                   | Result                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| desktop browser-view + ipc-contracts + agent ipc        | 304/304                                                 |
+| gui-app browser renderers + lib/browser-view (targeted) | 175/175                                                 |
+| desktop `tsc --noEmit` error set                        | identical to base branch (pre-existing only)            |
+| gui-app full canvas run                                 | 26 failing — byte-identical failure list to base branch |
 
 Known environment blocker (not code): `agent-browser-partition.test.ts`
 spawns real Electron and fails in fresh worktrees until the SUID sandbox
@@ -61,6 +61,7 @@ pass should be recorded inline.
 ## Phase 1 — Live bounds streaming
 
 ### BT-101 · Main-side bounds coalescing + perf marks · M
+
 Main-process prep so renderer streaming has something cheap to hit.
 
 - **Files:** `clients/desktop/src/electron-main/browser-view/browser-view-manager.ts` (`applyEntryBounds` / setBounds path)
@@ -72,6 +73,7 @@ Main-process prep so renderer streaming has something cheap to hit.
 - **Depends:** nothing.
 
 ### BT-102 · Stream bounds during gestures; stop freezing · M
+
 The actual fix for the overlap bug.
 
 - **Files:** `clients/gui-app/src/components/epic-canvas/renderers/use-browser-view-bounds-bridge.ts`
@@ -85,6 +87,7 @@ The actual fix for the overlap bug.
 - **Depends:** BT-101.
 
 ### BT-103 · Measurement gate: trail/jank report, pick steady-state rate · S (gate)
+
 R1 said measure-first; this is the decision vehicle.
 
 - **Tasks:**
@@ -102,6 +105,7 @@ R1 said measure-first; this is the decision vehicle.
 ## Phase 2 — Live frame cache + unified occluder
 
 ### BT-201 · `tile-frame-cache` module · M
+
 New main-process subsystem; no consumers yet.
 
 - **Files:** new `clients/desktop/src/electron-main/browser-view/tile-frame-cache.ts`
@@ -115,6 +119,7 @@ New main-process subsystem; no consumers yet.
 - **Depends:** nothing.
 
 ### BT-202 · Manager wiring: occlusion serves cached frames · M
+
 Kills the cold pipeline.
 
 - **Files:** `browser-view-manager.ts` (`ensureDebugSession`-adjacent lifecycle, `occludeEntryForOverlay`)
@@ -129,6 +134,7 @@ Kills the cold pipeline.
 - **Depends:** BT-201.
 
 ### BT-203 · Renderer occluder consumption audit · S
+
 - **Files:** `lib/browser-view/browser-overlay-coordinator.ts`, `components/epic-canvas/browser-overlay-coordinator.tsx`, `use-browser-view-snapshot.ts`
 - **Tasks:** verify snapshot store semantics against new latency profile
   (stale-mark timing, clear-on-release); drop any cold-capture-era tuning;
@@ -137,6 +143,7 @@ Kills the cold pipeline.
 - **Depends:** BT-202.
 
 ### BT-204 · Screencast tiles register as self-supplied frame sources (R14) · S
+
 - **Files:** `renderers/browser-session-tile.tsx`, `renderers/browser-peek-tile.tsx`, small adapter in `lib/browser-view/browser-overlay-coordinator.ts`
 - **Tasks:** last stream frame registers into the shared store API; DOM-mirror
   tiles need no hiding today — registration reserves the seam for unified
@@ -146,6 +153,7 @@ Kills the cold pipeline.
 - **Depends:** BT-203.
 
 ### BT-205 · Cache instrumentation + caps · S
+
 - **Tasks:** counters (entries, pause reasons, encode ms, slot bytes) onto the
   NDJSON lane; hard cap on concurrent subscriptions with documented eviction of
   lowest-priority (non-focused) caches.
@@ -157,6 +165,7 @@ Kills the cold pipeline.
 ## Phase 3 — Reserved-chord keyboard bridge
 
 ### BT-301 · Reserved-chord contract module · S
+
 - **Files:** new `clients/desktop/src/ipc-contracts/reserved-chords.ts`
 - **Tasks:** plain-data chord descriptors (key + modifier mask), accelerator
   normalization helper shared by both sides; consumed later by renderer
@@ -165,6 +174,7 @@ Kills the cold pipeline.
 - **Depends:** nothing.
 
 ### BT-302 · Main intercept + forward · M
+
 - **Files:** `browser-view-manager.ts` (entry creation), possibly new `guest-key-forwarder.ts`
 - **Tasks:**
   - `before-input-event` on guest webContents; match normalized chord set;
@@ -175,6 +185,7 @@ Kills the cold pipeline.
 - **Depends:** BT-301.
 
 ### BT-303 · Renderer registration bridge · S
+
 - **Files:** gui-app keybinding provider + desktop preload bridge channel
 - **Tasks:** idempotent startup call registering current binding set as
   reserved chords; HMR-safe (re-register replaces, never duplicates).
@@ -182,6 +193,7 @@ Kills the cold pipeline.
 - **Depends:** BT-301, BT-302.
 
 ### BT-304 · IME/dead-key manual pass · S (manual QA)
+
 - **Tasks:** CJK IME composition, dead keys, browser-reserved combos (⌘L etc.)
   verified untouched across all three platforms; results appended to ADR log.
 - **Depends:** BT-302.
@@ -191,6 +203,7 @@ Kills the cold pipeline.
 ## Phase 4 — Hidden-guest LRU eviction
 
 ### BT-401 · Hidden tracking, MRU sweep, cap enforcement · M
+
 - **Files:** `browser-view-manager.ts`
 - **Tasks:**
   - Group by webContents identity (`entriesByRuntimeKey`); bump last-visible on transitions.
@@ -201,12 +214,14 @@ Kills the cold pipeline.
 - **Depends:** nothing.
 
 ### BT-402 · Exemption registry · S
+
 - **Files:** `browser-view-manager.ts` + hooks off debug session / control grants / PiP / annotation session / agent posture release flag
 - **Tasks:** single predicate consulted by the sweep; agent-active panes survive.
 - **Accepts:** each exempt state proven to block eviction in unit tests.
 - **Depends:** BT-401.
 
 ### BT-403 · Capture-before-evict + silent reload revisit · M
+
 - **Files:** manager (eviction path + background-tab priming reuse), gui-app tile chrome (`browser-tile-status-panels.tsx`)
 - **Tasks:**
   - Persist `{url,title,favicon}` before destroy using the sibling-handoff claim
@@ -221,6 +236,7 @@ Kills the cold pipeline.
 ## Phase 5 — E2E suite (R13, R11)
 
 ### BT-501 · Harness scaffold + CI wiring · M
+
 - **Files:** new `clients/desktop/e2e/`; CI workflow mirroring `host-tests.yaml` shape (internal repo)
 - **Tasks:** Playwright `_electron` driver against packaged dev shell; linux+macos
   required, windows periodic job; fixtures for a local static site.
@@ -228,17 +244,20 @@ Kills the cold pipeline.
 - **Depends:** nothing.
 
 ### BT-502 · Pack A: resize + occlusion scenarios · M
+
 - **Scenarios:** mid-drag bounds delta within threshold of DOM rect; popover
   overlap snapshot latency budget; content-hash freshness over animated page;
   release restores live view.
 - **Depends:** BT-102, BT-202, BT-501.
 
 ### BT-503 · Pack B: keyboard scenarios · S
+
 - **Scenarios:** reserved chord opens palette with guest focused; unreserved
   chord reaches page; menu accelerators still fire; HMR re-registration safe.
 - **Depends:** BT-302, BT-303, BT-501.
 
 ### BT-504 · Pack C: eviction + multi-window scenarios · M
+
 - **Scenarios:** cap enforcement, agent-active exemption, silent-reload revisit,
   two windows × one tile simultaneous bounds correctness.
 - **Depends:** BT-401–BT-403, BT-501.

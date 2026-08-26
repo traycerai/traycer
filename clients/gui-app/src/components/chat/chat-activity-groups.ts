@@ -122,7 +122,14 @@ interface ActivitySummaryCounts {
 }
 
 type ToolActivityKind =
-  "explore" | "read" | "search" | "edit" | "run" | "hook" | "browser" | "tool";
+  | "explore"
+  | "read"
+  | "search"
+  | "edit"
+  | "run"
+  | "hook"
+  | "browser"
+  | "tool";
 
 const SUMMARY_MAX = 96;
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();

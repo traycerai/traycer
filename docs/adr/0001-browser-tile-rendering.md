@@ -16,7 +16,7 @@ cold-captured screenshot.
 
 Two product-visible defects exist today:
 
-1. **Resize overlap** — during a pane resize drag the bounds bridge *freezes*
+1. **Resize overlap** — during a pane resize drag the bounds bridge _freezes_
    (`PANEL_RESIZING_CLASS_NAME` gate, `use-browser-view-bounds-bridge.ts:44-76`),
    so the native view keeps its pre-drag rect and paints over neighboring tiles
    until pointer-up forces a refresh.
@@ -48,23 +48,23 @@ the real new risk.
 
 ## 2. Requirements (from architecture review interview)
 
-| #  | Requirement                                                                 |
-|----|-----------------------------------------------------------------------------|
-| R1 | Resize/drag follows the handle **live**; ≤1-frame trail acceptable, measure-first |
-| R2 | Occlusion must be **instant + crisp**; brief freeze of animated content tolerable |
-| R3 | Opening an agent-created background tab as a tile must **adopt the same live guest** (no recreate-with-reload) |
-| R4 | Guest state must survive host-renderer crashes and HMR (**prod-critical**) |
-| R5 | True multi-window: simultaneous browser tiles across windows               |
-| R6 | App chords win over guest keystrokes (reserved-chord interception)         |
-| R7 | One shared persistent user cookie jar; agent partitions never see it; crypto-gated durability stays |
-| R8 | Hidden guests LRU-capped (~3), agent-active exempt, silent reload on revisit |
-| R9 | App chrome always paints above page content (no page-over-chrome case)     |
-| R10| One visible surface per session at a time                                   |
-| R11| Full three-platform parity (macOS/Linux/Windows release-blocking)           |
-| R12| Clean replace on ship (no parallel-path flags); feature unreleased, schemas may grow additively |
-| R13| Add an Electron-driver E2E suite covering native-paint behavior             |
-| R14| Unify native + screencast pixel sources under one occlusion/frame story     |
-| R15| Chrome-feature polish (context menu, find UI, downloads/certs UX) deferred behind this pass |
+| #   | Requirement                                                                                                    |
+| --- | -------------------------------------------------------------------------------------------------------------- |
+| R1  | Resize/drag follows the handle **live**; ≤1-frame trail acceptable, measure-first                              |
+| R2  | Occlusion must be **instant + crisp**; brief freeze of animated content tolerable                              |
+| R3  | Opening an agent-created background tab as a tile must **adopt the same live guest** (no recreate-with-reload) |
+| R4  | Guest state must survive host-renderer crashes and HMR (**prod-critical**)                                     |
+| R5  | True multi-window: simultaneous browser tiles across windows                                                   |
+| R6  | App chords win over guest keystrokes (reserved-chord interception)                                             |
+| R7  | One shared persistent user cookie jar; agent partitions never see it; crypto-gated durability stays            |
+| R8  | Hidden guests LRU-capped (~3), agent-active exempt, silent reload on revisit                                   |
+| R9  | App chrome always paints above page content (no page-over-chrome case)                                         |
+| R10 | One visible surface per session at a time                                                                      |
+| R11 | Full three-platform parity (macOS/Linux/Windows release-blocking)                                              |
+| R12 | Clean replace on ship (no parallel-path flags); feature unreleased, schemas may grow additively                |
+| R13 | Add an Electron-driver E2E suite covering native-paint behavior                                                |
+| R14 | Unify native + screencast pixel sources under one occlusion/frame story                                        |
+| R15 | Chrome-feature polish (context menu, find UI, downloads/certs UX) deferred behind this pass                    |
 
 ## 3. Decision
 

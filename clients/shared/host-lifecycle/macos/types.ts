@@ -75,7 +75,10 @@ export type LaunchctlPrintProbe =
   | {
       readonly kind: "indeterminate";
       readonly cause:
-        "command-failed" | "timeout" | "permission" | "spawn-failed";
+        | "command-failed"
+        | "timeout"
+        | "permission"
+        | "spawn-failed";
     };
 
 export type ManifestProbe =
@@ -149,7 +152,8 @@ export type MacosWorld = {
     readonly removedByUser: MacosEvidence<boolean>;
     readonly stoppedByUser: MacosEvidence<boolean>;
     readonly pendingActivation:
-      DurableRecord<PendingActivation> | { readonly kind: "absent" };
+      | DurableRecord<PendingActivation>
+      | { readonly kind: "absent" };
   };
   readonly capabilities: MacosCapabilities;
 };
