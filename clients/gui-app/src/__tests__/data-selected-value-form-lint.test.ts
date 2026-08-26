@@ -6,24 +6,29 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * `data-selected` must always be matched by VALUE, never by presence.
+ * `data-selected` is written in the arbitrary form, `data-[selected=true]:`.
  *
- * cmdk sets the attribute on every item it renders (`"data-selected":
- * !!selected`, which React stringifies to `"false"` rather than omitting it),
- * while Tailwind compiles the shorter bare `data-selected:` variant to
- * `[data-selected]` - an attribute-PRESENCE selector. Every row in a cmdk list
- * therefore matched, and "selected" styling applied to all of them at once.
+ * It matters because cmdk sets the attribute on every item it renders
+ * (`"data-selected": !!selected`, which React stringifies to `"false"` rather
+ * than omitting it), so a variant that matched by PRESENCE would style every
+ * row in the list as selected at once - and would read as a theme rather than
+ * as a bug, since the variant drives a row's fill, border, shadow and icon tint
+ * together and there would be no unselected row to compare against.
  *
- * It read as a theme rather than as a bug because the variant drives all four
- * of a row's channels together - fill, border, shadow and icon tint - so
- * nothing looked half-applied; there was simply no unselected state to compare
- * against. It shipped that way in the command palette, the worktree folder
- * list, the theme-preset picker and the prompt stash simultaneously.
+ * Both spellings do match by value. `shadcn/tailwind.css` registers
+ * `@custom-variant data-selected { &:where([data-selected="true"]) { … } }`, so
+ * the bare form is not the presence selector a bare `data-*` variant would
+ * compile to unregistered. What the two forms do NOT share is specificity: the
+ * registration is `:where()`-wrapped and contributes zero, while
+ * `data-[selected=true]:` contributes a real attribute. A zero-specificity rule
+ * holds only while nothing else states the same property, and loses silently
+ * the moment something does - so this guard keeps the styling on the form that
+ * can hold its own, and keeps the tree from depending on a registration living
+ * in a dependency's stylesheet.
  *
- * The other `data-*` attributes in this codebase are written as
- * `data-x={cond ? "true" : undefined}`, where presence and truth coincide and
- * the bare form is correct - so this guard is deliberately scoped to
- * `data-selected` rather than banning bare `data-*` variants in general.
+ * Scoped to `data-selected` rather than banning bare `data-*` variants in
+ * general: the other `data-*` attributes here are written as
+ * `data-x={cond ? "true" : undefined}`, where presence and truth coincide.
  *
  * `components/ui/__tests__/command-selected-state.test.tsx` is the other half:
  * this file keeps the bare form out of the tree, that one checks the compiled

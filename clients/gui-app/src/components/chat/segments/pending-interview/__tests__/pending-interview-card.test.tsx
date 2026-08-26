@@ -12,6 +12,13 @@ import type {
   InterviewQuestion,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import {
+  draftFromStoredAnswer,
+  draftsFromStoredAnswers,
+  draftToStoredAnswer,
+  emptyDraft,
+  questionIdentity,
+} from "@/components/chat/segments/pending-interview/interview-draft";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -26,8 +33,305 @@ import type { ChatForkMode } from "@/components/chat/chat-message";
 // Slightly longer than the card's ~110ms highlight-then-advance window.
 const ADVANCE_MS = 200;
 
+describe("draftFromStoredAnswer", () => {
+  it("falls back to saved labels when option indices now name different labels", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        questionIdentity: questionIdentity(
+          singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+        ),
+        selected: ["Alpha"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+    );
+
+    expect([...restored.selected]).toEqual([1]);
+  });
+
+  it("does not treat indices from a different question as exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        questionIdentity: questionIdentity(
+          singleSelect("original-question", "Different prompt", ["Yes", "No"]),
+        ),
+        selected: ["Yes"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("replacement-question", "Different prompt", ["Yes", "No"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("keeps legacy index rows visible without promoting them to exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        selected: ["Yes"],
+        selectedOptionIndices: [1],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect(null, "Continue?", ["Yes", "Yes"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("preserves exact duplicate-label indices for a fresh question without an ID", () => {
+    const question = singleSelect(null, "Continue?", ["Yes", "Yes"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      question,
+    );
+
+    const restored = draftFromStoredAnswer(stored, question);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.selectionEvidenceExact).toBe(true);
+  });
+
+  it("does not carry anonymous-question indices across different prompt framing", () => {
+    const original = singleSelect(null, "First prompt", ["Yes", "Yes"]);
+    const replacement = singleSelect(null, "Replacement prompt", [
+      "Yes",
+      "Yes",
+    ]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, replacement);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("matches modern drafts by unique identity when questions reorder", () => {
+    const first = singleSelect("first", "First prompt", ["Yes", "No"]);
+    const second = singleSelect("second", "Second prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        first,
+      ),
+      draftToStoredAnswer(
+        {
+          selected: new Set(),
+          selectionEvidenceExact: true,
+          otherText: "second custom text",
+          otherSelected: true,
+        },
+        second,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [second, first]);
+    expect([...restored[0].selected]).toEqual([]);
+    expect(restored[0].otherText).toBe("second custom text");
+    expect([...restored[1].selected]).toEqual([0]);
+    expect(restored[1].otherText).toBe("");
+    expect(restored.every((draft) => draft.selectionEvidenceExact)).toBe(true);
+  });
+
+  it("preserves content but downgrades evidence across cosmetic framing updates", () => {
+    const original = singleSelect("stable", "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        description: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("preserves ID-less draft content across cosmetic framing updates", () => {
+    const original = {
+      ...singleSelect(null, "Choose", ["Yes", "No"]),
+      header: "Original header",
+    };
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "anonymous custom text",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        preview: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.otherText).toBe("anonymous custom text");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("does not positionally attach an unmatched modern draft", () => {
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to the old prompt",
+          otherSelected: true,
+        },
+        singleSelect("old", "Old prompt", ["Yes", "No"]),
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      singleSelect("new", "New prompt", ["Yes", "No"]),
+    ]);
+    expect(restored).toEqual({
+      selected: new Set(),
+      selectionEvidenceExact: true,
+      otherText: "",
+      otherSelected: false,
+    });
+  });
+
+  it("does not duplicate one modern draft across identical current questions", () => {
+    const question = singleSelect("same", "Same prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        question,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [question, question]);
+    expect(restored).toEqual([
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+    ]);
+  });
+
+  it("preserves draft content when a unique question gains a stable ID", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      { ...original, questionId: "provider-question" },
+    ]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("does not attach an ID-enriched draft across an ambiguous prompt", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to one question",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const current = { ...original, questionId: "provider-question" };
+
+    expect(draftsFromStoredAnswers(stored, [current, current])).toEqual([
+      emptyDraft(),
+      emptyDraft(),
+    ]);
+  });
+
+  it("downgrades exact evidence when options reorder under the same question ID", () => {
+    const original = singleSelect("same", "Choose", ["First", "Second"]);
+    const reordered = singleSelect("same", "Choose", ["Second", "First"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, reordered);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+});
+
 function singleSelect(
-  id: string,
+  id: string | null,
   question: string,
   labels: ReadonlyArray<string>,
 ): InterviewQuestion {
@@ -60,7 +364,13 @@ function renderCard(
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null,
-  onSkip: ((blockId: string, reason: string) => string | null) | null,
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null,
 ) {
   return renderCardFor({
     chatId: "chat-1",
@@ -84,7 +394,13 @@ function renderCardFor(args: {
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null;
-  readonly onSkip: ((blockId: string, reason: string) => string | null) | null;
+  readonly onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
   readonly onFork: ((mode: ChatForkMode) => void) | null;
 }) {
   return render(
@@ -117,7 +433,13 @@ function cardElement(args: {
         answers: ReadonlyArray<InterviewAnswer>,
       ) => string | null)
     | null;
-  readonly onSkip: ((blockId: string, reason: string) => string | null) | null;
+  readonly onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
   readonly onFork: ((mode: ChatForkMode) => void) | null;
 }) {
   return (
@@ -684,8 +1006,24 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
         pageIndex: 0,
         answers: [
-          { selected: [], otherText: "", otherSelected: true },
-          { selected: [], otherText: "", otherSelected: false },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: true,
+          },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: false,
+          },
         ],
       });
     } finally {
@@ -736,7 +1074,17 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(onSubmit).not.toHaveBeenCalled();
       expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
         pageIndex: 0,
-        answers: [{ selected: [], otherText: "", otherSelected: true }],
+        answers: [
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: true,
+          },
+        ],
       });
     } finally {
       vi.useRealTimers();
@@ -869,8 +1217,24 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
         pageIndex: 0,
         answers: [
-          { selected: [], otherText: "", otherSelected: false },
-          { selected: ["Gamma"], otherText: "", otherSelected: false },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: false,
+          },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+            ),
+            selected: ["Gamma"],
+            selectedOptionIndices: [0],
+            otherText: "",
+            otherSelected: false,
+          },
         ],
       });
     } finally {
@@ -931,9 +1295,33 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
         pageIndex: 2,
         answers: [
-          { selected: ["Alpha"], otherText: "", otherSelected: false },
-          { selected: [], otherText: "", otherSelected: false },
-          { selected: [], otherText: "", otherSelected: false },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+            ),
+            selected: ["Alpha"],
+            selectedOptionIndices: [0],
+            otherText: "",
+            otherSelected: false,
+          },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: false,
+          },
+          {
+            questionIdentity: questionIdentity(
+              singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
+            ),
+            selected: [],
+            selectedOptionIndices: [],
+            otherText: "",
+            otherSelected: false,
+          },
         ],
       });
     } finally {
@@ -1241,7 +1629,7 @@ describe("PendingInterviewCard keyboard navigation", () => {
 
     // Second Escape (from the card) skips the interview.
     fireEvent.keyDown(card(), { key: "Escape" });
-    expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user");
+    expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", []);
   });
 
   it("keeps Submit enabled and submits even with nothing answered (mouse)", () => {
@@ -1304,6 +1692,178 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(onSkip).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves duplicate-label option indices in exact selection evidence", () => {
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Same" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls).toEqual([
+      [
+        "interview-1",
+        [
+          {
+            questionId: "q",
+            question: "Which same label?",
+            values: ["Same"],
+            notes: null,
+            selection: {
+              questionIndex: 0,
+              optionIndices: [1],
+              optionLabels: ["Same"],
+              customText: null,
+            },
+          },
+        ],
+      ],
+    ]);
+  });
+
+  it("downgrades legacy label-only drafts to neutral selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit = vi.fn();
+    renderCard(
+      [
+        multiSelect("q", "Which same label?", ["Same", "Same"]),
+        singleSelect("q2", "Second question?", ["Next"]),
+      ],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"]
+        ?.answers[0]?.selectedOptionIndices,
+    ).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({
+        values: ["Same"],
+        selection: null,
+      }),
+      expect.objectContaining({
+        values: [],
+        selection: null,
+      }),
+    ]);
+  });
+
+  it("promotes an explicit multi-select edit to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Same" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [0, 1],
+      optionLabels: ["Same", "Same"],
+      customText: null,
+    });
+  });
+
+  it("promotes an explicit Other choice to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [singleSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.change(screen.getByLabelText("Other answer"), {
+      target: { value: "Custom" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [],
+      optionLabels: [],
+      customText: "Custom",
+    });
+  });
+
+  it("sends only non-empty saved pages when Skip includes draft metadata", () => {
+    vi.useFakeTimers();
+    try {
+      const onSkip = vi.fn();
+      renderCard(
+        [
+          singleSelect("q1", "First question?", ["Keep"]),
+          singleSelect("q2", "Untouched question?", ["Never send"]),
+        ],
+        vi.fn(),
+        onSkip,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Keep" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(screen.getByText("Untouched question?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /Skip/ }));
+
+      expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", [
+        expect.objectContaining({
+          questionId: "q1",
+          values: ["Keep"],
+        }),
+      ]);
+      const draftAnswers = onSkip.mock.calls[0]?.[2] as
+        ReadonlyArray<InterviewAnswer> | undefined;
+      expect(draftAnswers?.some((answer) => answer.questionId === "q2")).toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("scans between questions with the Right and Left arrow keys", () => {
     renderCard(
       [
@@ -1340,7 +1900,12 @@ describe("PendingInterviewCard keyboard navigation", () => {
         vi.advanceTimersByTime(ADVANCE_MS);
       });
 
-      expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user");
+      expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", [
+        expect.objectContaining({
+          questionId: "only",
+          values: ["Alpha"],
+        }),
+      ]);
       expect(onSubmit).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

@@ -144,9 +144,11 @@ function profile(
   profileId: string,
   kind: ProviderProfile["kind"],
   status: ProviderAuthStatus,
+  enabled: boolean,
 ): ProviderProfile {
   return {
     profileId,
+    enabled,
     kind,
     authType: "oauth",
     label: profileId,
@@ -167,7 +169,7 @@ describe("resolveRateLimitFetchEligibility", () => {
       const ambientSignedOut = state({
         providerId: "codex",
         auth: authStatus(summaryStatus),
-        profiles: [profile("ambient", "ambient", "unauthenticated")],
+        profiles: [profile("ambient", "ambient", "unauthenticated", true)],
       });
 
       expect(resolveRateLimitFetchEligibility(ambientSignedOut)).toEqual({
@@ -185,7 +187,7 @@ describe("resolveRateLimitFetchEligibility", () => {
   });
 
   it("keeps an authenticated managed target eligible while another managed profile is pending, but still honors provider gates", () => {
-    const managed = profile("managed", "managed", "authenticated");
+    const managed = profile("managed", "managed", "authenticated", true);
     const pending = state({
       providerId: "codex",
       authPending: true,
@@ -208,5 +210,18 @@ describe("resolveRateLimitFetchEligibility", () => {
       expect(gated.managedProfiles).toBe(false);
       expect(isRateLimitProfileFetchEligible(gated, managed)).toBe(false);
     }
+  });
+
+  it("rejects a disabled authenticated managed profile from ordinary usage fetches", () => {
+    const disabled = profile("disabled", "managed", "authenticated", false);
+    const eligibility = resolveRateLimitFetchEligibility(
+      state({ providerId: "codex", profiles: [disabled] }),
+    );
+
+    // Preserved auth keeps the provider-level managed lane visible, but the
+    // per-profile classifier must keep disabled rows out of every automatic
+    // usage lane.
+    expect(eligibility.managedProfiles).toBe(true);
+    expect(isRateLimitProfileFetchEligible(eligibility, disabled)).toBe(false);
   });
 });

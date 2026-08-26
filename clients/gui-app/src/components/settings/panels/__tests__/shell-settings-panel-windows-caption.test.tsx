@@ -26,7 +26,10 @@ vi.mock("@/lib/host", async (importOriginal) => {
 import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  IRunnerHost,
+  TraycerDetectedShell,
+} from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   recordNegotiatedHostMethods,
@@ -57,10 +60,16 @@ afterEach(() => {
   hostBindingMock.current = null;
 });
 
-function renderPanel(path: string): void {
+function renderPanel(
+  path: string,
+  detectedShells: readonly TraycerDetectedShell[] | undefined,
+): void {
   const hostId = "host-a";
   const fixture = buildConfigHostFixture({ hostId, isLocalMachine: true });
   fixture.cli.shellConfig = { path, args: [], synthesised: false };
+  if (detectedShells !== undefined) {
+    fixture.cli.detectedShells = detectedShells;
+  }
   recordNegotiatedHostMethods(hostId, CONFIG_SHELL_METHODS);
 
   scopeOverrides.current = {
@@ -97,17 +106,71 @@ function renderPanel(path: string): void {
 }
 
 const WSL_CAPTION = /WSL applies to terminal tabs only/;
+const WSL_PATH = "C:\\Windows\\System32\\wsl.exe";
+
+/** The picker list as a Windows host reports it when its WSL cannot run. */
+function brokenWslShells(
+  health: NonNullable<TraycerDetectedShell["wslHealth"]>,
+): readonly TraycerDetectedShell[] {
+  return [
+    {
+      name: "WSL",
+      path: WSL_PATH,
+      isDefault: false,
+      source: "detected",
+      missing: false,
+      wslHealth: health,
+    },
+  ];
+}
 
 describe("<ShellSettingsPanel /> WSL agent caption", () => {
   it("shows the one-line caption for wsl.exe, with the remedy in a hover card", async () => {
-    renderPanel("C:\\Windows\\System32\\wsl.exe");
+    renderPanel("C:\\Windows\\System32\\wsl.exe", undefined);
     expect(await screen.findByText(WSL_CAPTION)).toBeTruthy();
     // The remedy prose stays out of the inline caption - hover card only.
     expect(screen.queryByText(/does not move the Traycer host/)).toBeNull();
   });
 
+  it("escalates to the terminals-won't-start caption when the host flags WSL", async () => {
+    renderPanel(WSL_PATH, brokenWslShells("not-installed"));
+    expect(
+      await screen.findByText(/WSL isn't installed — terminals won't start/),
+    ).toBeTruthy();
+    // The escalated caption REPLACES the quiet scoping note rather than
+    // stacking with it: one line under the picker, the more urgent one.
+    expect(screen.queryByText(WSL_CAPTION)).toBeNull();
+  });
+
+  it("names the missing distribution when WSL itself runs", async () => {
+    renderPanel(WSL_PATH, brokenWslShells("no-distro"));
+    expect(
+      await screen.findByText(
+        /WSL has no Linux distribution — terminals won't start/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("still warns when a non-Windows GUI configures a Windows host", async () => {
+    // The regression this guards: `isWindows()` reads the RENDERER's platform,
+    // so a macOS/Linux app driving a remote Windows host would hide the
+    // warning. `wslHealth` is computed on the host, so it must not be gated on
+    // the renderer at all.
+    platformState.windows = false;
+    renderPanel(WSL_PATH, brokenWslShells("not-installed"));
+    expect(
+      await screen.findByText(/WSL isn't installed — terminals won't start/),
+    ).toBeTruthy();
+  });
+
+  it("keeps the quiet scoping note when the host reports a healthy WSL", async () => {
+    renderPanel(WSL_PATH, undefined);
+    expect(await screen.findByText(WSL_CAPTION)).toBeTruthy();
+    expect(screen.queryByText(/terminals won't start/)).toBeNull();
+  });
+
   it("exposes the WSL remedy as a keyboard-focusable docs link", async () => {
-    renderPanel("C:\\Windows\\System32\\wsl.exe");
+    renderPanel("C:\\Windows\\System32\\wsl.exe", undefined);
     await screen.findByText(WSL_CAPTION);
     // The hover card is pointer-only; the docs link must ALSO exist in the
     // sequential tab order - the caption's Info glyph is a real anchor.
@@ -118,7 +181,7 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
   });
 
   it("renders no WSL docs link for other shells", async () => {
-    renderPanel("C:\\Windows\\System32\\cmd.exe");
+    renderPanel("C:\\Windows\\System32\\cmd.exe", undefined);
     await screen.findByText("Startup flags for cmd.exe");
     expect(
       screen.queryByRole("link", { name: /install Traycer in WSL/i }),
@@ -126,26 +189,26 @@ describe("<ShellSettingsPanel /> WSL agent caption", () => {
   });
 
   it("shows no caption for PowerShell (profile loading is expected behavior)", async () => {
-    renderPanel("C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    renderPanel("C:\\Program Files\\PowerShell\\7\\pwsh.exe", undefined);
     await screen.findByText("Startup flags for pwsh.exe");
     expect(screen.queryByText(WSL_CAPTION)).toBeNull();
   });
 
   it("shows no caption for a Git-install bash", async () => {
-    renderPanel("C:\\Program Files\\Git\\bin\\bash.exe");
+    renderPanel("C:\\Program Files\\Git\\bin\\bash.exe", undefined);
     await screen.findByText("Startup flags for bash.exe");
     expect(screen.queryByText(WSL_CAPTION)).toBeNull();
   });
 
   it("shows no caption for cmd", async () => {
-    renderPanel("C:\\Windows\\System32\\cmd.exe");
+    renderPanel("C:\\Windows\\System32\\cmd.exe", undefined);
     await screen.findByText("Startup flags for cmd.exe");
     expect(screen.queryByText(WSL_CAPTION)).toBeNull();
   });
 
   it("shows no caption on a non-Windows host, even for a wsl-named path", async () => {
     platformState.windows = false;
-    renderPanel("/bin/zsh");
+    renderPanel("/bin/zsh", undefined);
     await screen.findByText("Startup flags for zsh");
     expect(screen.queryByText(WSL_CAPTION)).toBeNull();
   });

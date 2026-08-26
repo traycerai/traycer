@@ -31,6 +31,7 @@ const highlightPool = vi.hoisted(() => ({
   mountCount: 0,
   unmountCount: 0,
   lastEdit: null as boolean | null,
+  lastOverflow: null as string | null,
 }));
 
 vi.mock("@/providers/use-resolved-theme", () => ({
@@ -45,6 +46,7 @@ vi.mock("@pierre/diffs/react", () => ({
     readonly edit: boolean;
     readonly file: { readonly contents: string };
     readonly options: {
+      readonly overflow?: string;
       readonly onPostRender?: (
         node: HTMLElement,
         instance: unknown,
@@ -60,6 +62,7 @@ function MockDiffsFile(props: {
   readonly edit: boolean;
   readonly file: { readonly contents: string };
   readonly options: {
+    readonly overflow?: string;
     readonly onPostRender?: (
       node: HTMLElement,
       instance: unknown,
@@ -69,6 +72,10 @@ function MockDiffsFile(props: {
 }): ReactNode {
   const DiffsContainer = "diffs-container" as "div";
   const hostRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    highlightPool.lastOverflow = props.options.overflow ?? null;
+  }, [props.options.overflow]);
 
   useEffect(() => {
     highlightPool.lastEdit = props.edit;
@@ -107,6 +114,7 @@ beforeEach(() => {
   highlightPool.mountCount = 0;
   highlightPool.unmountCount = 0;
   highlightPool.lastEdit = null;
+  highlightPool.lastOverflow = null;
 });
 
 afterEach(() => {
@@ -115,6 +123,38 @@ afterEach(() => {
 });
 
 describe("<WorkspaceFileRenderer />", () => {
+  // Unwrapped, Diffs gives its code area a horizontal scroll box of its own,
+  // nested inside the tile's vertical one - the pair a touch drag feeds at the
+  // same time. Wrapping is what removes that box, so the two must not drift
+  // apart: this asserts the prop reaches the library option that decides it.
+  it("selects the Diffs overflow mode that matches the requested wrapping", async () => {
+    const editAdapter = createEditAdapter(vi.fn(), undefined);
+    const tree = (wordWrap: boolean): ReactNode => (
+      <WorkspaceFileRenderer
+        content={"const value = 1;\n"}
+        fileName="source.ts"
+        language="typescript"
+        editing={false}
+        editAdapter={editAdapter}
+        wordWrap={wordWrap}
+        revealLine={null}
+        revealNonce={null}
+        findTarget={null}
+        onRevealConsumed={vi.fn()}
+        fileIdentity={null}
+      />
+    );
+    const rendered = render(tree(false));
+    await waitFor(() => {
+      expect(highlightPool.lastOverflow).toBe("scroll");
+    });
+
+    rendered.rerender(tree(true));
+    await waitFor(() => {
+      expect(highlightPool.lastOverflow).toBe("wrap");
+    });
+  });
+
   it("keeps the same diffs-container DOM node across read → edit", async () => {
     const onChange = vi.fn();
     const editAdapter = createEditAdapter(onChange, undefined);
@@ -125,6 +165,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         editAdapter={editAdapter}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
@@ -154,6 +195,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing
         editAdapter={editAdapter}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
@@ -188,6 +230,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         editAdapter={editAdapter}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
@@ -214,6 +257,7 @@ describe("<WorkspaceFileRenderer />", () => {
           language="plaintext"
           editing={false}
           editAdapter={createEditAdapter(vi.fn(), undefined)}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -238,6 +282,7 @@ describe("<WorkspaceFileRenderer />", () => {
           language="typescript"
           editing={false}
           editAdapter={createEditAdapter(vi.fn(), undefined)}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -260,6 +305,7 @@ describe("<WorkspaceFileRenderer />", () => {
             activateEmptyOrigin: vi.fn(),
             attached: true,
           })}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -283,6 +329,7 @@ describe("<WorkspaceFileRenderer />", () => {
             activateEmptyOrigin,
             attached: false,
           })}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -307,6 +354,7 @@ describe("<WorkspaceFileRenderer />", () => {
             activateEmptyOrigin,
             attached: false,
           })}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -335,6 +383,7 @@ describe("<WorkspaceFileRenderer />", () => {
             activateEmptyOrigin: vi.fn(),
             attached: false,
           })}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -361,6 +410,7 @@ describe("<WorkspaceFileRenderer />", () => {
             activateEmptyOrigin: vi.fn(),
             attached: true,
           })}
+          wordWrap={false}
           revealLine={null}
           revealNonce={null}
           findTarget={null}
@@ -394,6 +444,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         editAdapter={createEditAdapter(vi.fn(), undefined)}
+        wordWrap={false}
         revealLine={null}
         revealNonce={null}
         findTarget={null}
@@ -439,6 +490,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         editAdapter={createEditAdapter(vi.fn(), undefined)}
+        wordWrap={false}
         revealLine={2}
         revealNonce={1}
         findTarget={null}
@@ -483,6 +535,7 @@ describe("<WorkspaceFileRenderer />", () => {
         language="typescript"
         editing={false}
         editAdapter={createEditAdapter(vi.fn(), undefined)}
+        wordWrap={false}
         revealLine={2}
         revealNonce={1}
         findTarget={null}
@@ -521,6 +574,7 @@ describe("<WorkspaceFileRenderer />", () => {
       language: "typescript",
       editing: false,
       editAdapter: createEditAdapter(vi.fn(), undefined),
+      wordWrap: false,
       revealLine: null,
       revealNonce: null,
       findTarget: null,

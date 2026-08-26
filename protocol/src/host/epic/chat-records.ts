@@ -7,7 +7,12 @@ import { tuiAgentRecordSummarySchema } from "@traycer/protocol/host/epic/tui-age
 // `serviceTier` or `profileId` existed, and the strict schema exists to stop a
 // partial WRITE from null-clobbering fields it never looked at. Parsing a
 // legacy record with it would fail the read outright.
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  agentModeSchema,
+  chatRunSettingsSchema,
+  guiHarnessIdSchema,
+  permissionModeSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
 
 const textFrameFields = {
   hasBinaryPayload: z.literal(false),
@@ -269,6 +274,77 @@ export const getChatRunSettingsResponseSchema = z.object({
 });
 export type GetChatRunSettingsResponse = z.infer<
   typeof getChatRunSettingsResponseSchema
+>;
+
+/**
+ * Frozen harness id set for `epic.getChatRunSettings@1.0`, as the v1.2.0 tags
+ * (2026-08-24) shipped it.
+ *
+ * This method is the reason the freeze audit cannot stop at the three canonical
+ * id-carrying methods: its response embeds the PERSISTED `guiHarnessIdSchema`
+ * (`persistence/epic/foundation.ts`), a second, deliberately-independent copy of
+ * the harness enum, and nothing about the method's name suggests a catalog. It
+ * is also `degrade: unsupported` and outside `RELEASED_FLOOR`, so a plain
+ * `bun run test` stays green - only the tag-based `protocol-compat` gate saw it,
+ * which is exactly the shape of the Hermes A2A-profiles trap recorded in
+ * `adding-a-harness.md`.
+ *
+ * `.extract()` off the live persisted enum rather than a hand-written list, the
+ * same idiom `guiHarnessIdSchemaV70` uses in `agent/shared.ts`: removing an id
+ * from the live enum then fails to compile here instead of silently narrowing a
+ * released line. Do NOT add ids here - extend the persisted enum and let the
+ * v2.0 line carry them.
+ */
+export const chatRunSettingsHarnessIdSchemaV10 = guiHarnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+
+/**
+ * Frozen `epic.getChatRunSettings@1.0` settings tuple. Hand-copied off
+ * `chatRunSettingsSchema` rather than `.extend()`ed from it, so a field added to
+ * the persisted tuple cannot leak onto this released line - the same discipline
+ * `providerLoginCapabilitySchemaV10` and `guiHarnessOptionBaseShapeV70` follow,
+ * and for the same reason: pinning only the id over a LIVE body is a half
+ * freeze.
+ *
+ * Keeps the persisted variant's `.default(...)` backstops verbatim (see the
+ * import comment at the top of this file): this is a READ of a record that may
+ * predate `serviceTier` / `profileId`, and the strict schema would fail it.
+ */
+export const chatRunSettingsSchemaV10 = z.object({
+  harnessId: chatRunSettingsHarnessIdSchemaV10,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsV10 = z.infer<typeof chatRunSettingsSchemaV10>;
+
+export const getChatRunSettingsResponseSchemaV10 = z.object({
+  settings: chatRunSettingsSchemaV10.nullable(),
+});
+export type GetChatRunSettingsResponseV10 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV10
 >;
 
 /**

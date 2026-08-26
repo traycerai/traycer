@@ -116,6 +116,7 @@ import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "./tile-host-load-state";
 import { useEpicUpdateChatRunSettings } from "@/hooks/epic/use-epic-chat-mutations";
 import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
+import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import {
   findManualCompactCommand,
@@ -584,17 +585,30 @@ export function ChatDeadTileBannerContainer(
     sourceOwnerUserId,
   });
   return (
-    <ChatDeadTileBanner
-      hostLabel={props.hostLabel}
-      reason={props.reason}
-      ownedByViewer={ownedByViewer}
-      cloneAllowed={cloneAllowed}
-      showsPublishedCopy={props.showsPublishedCopy}
-      onClone={offer.clone}
-      cloning={offer.cloning}
-      className={undefined}
-      testId={props.testId}
-    />
+    <>
+      <ChatDeadTileBanner
+        hostLabel={props.hostLabel}
+        reason={props.reason}
+        ownedByViewer={ownedByViewer}
+        cloneAllowed={cloneAllowed}
+        showsPublishedCopy={props.showsPublishedCopy}
+        onClone={offer.clone}
+        cloning={offer.cloning}
+        className={undefined}
+        testId={props.testId}
+      />
+      {offer.profileRecovery !== null ? (
+        <CloneProfileRecovery
+          client={offer.profileRecovery.client}
+          resolution={offer.profileRecovery.resolution}
+          targetHostLabel={offer.profileRecovery.targetHostLabel}
+          onChooseProfile={offer.profileRecovery.chooseProfile}
+          onRetry={offer.profileRecovery.retry}
+          onCancel={offer.profileRecovery.cancel}
+          onOpenProviderSettings={offer.profileRecovery.openProviderSettings}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1332,6 +1346,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
       steerProtocolSupported: s.steerProtocolSupported,
+      interviewDeliveryRetryProtocolSupported:
+        s.interviewDeliveryRetryProtocolSupported,
       turnInProgress: s.turnInProgress,
       pendingApprovals: s.pendingApprovals,
       pendingFileEditApprovals: s.pendingFileEditApprovals,
@@ -1825,19 +1841,24 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [chatActions],
   );
-  const handleInterviewError = useCallback(
-    (blockId: string, reason: string) => {
-      return chatActions.interviewError(blockId, reason);
+  const handleInterviewSkip = useCallback(
+    (
+      blockId: string,
+      reason: string,
+      draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+    ) => {
+      return chatActions.interviewSkip(blockId, reason, draftAnswers);
     },
     [chatActions],
   );
-
   const { messageActionsFor, forkAtAssistantMessage, revertOnEdit } =
     useChatMessageActions({
       dispatchUi,
       activeInlineEdit,
       canModifyMessages,
       canAct,
+      interviewDeliveryRetryProtocolSupported:
+        state.interviewDeliveryRetryProtocolSupported,
       currentComposerSettings,
       editSettings,
       slashCatalog,
@@ -1851,6 +1872,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       events: state.events,
       profile,
       chatActions,
+      pendingActions: state.pendingActions,
+      acceptedActions: state.acceptedActions,
       confirmingDeleteMessageId: uiState.confirmingDeleteMessageId,
       setForkTarget,
       worktreeBinding: state.worktreeBinding,
@@ -2315,7 +2338,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       unanswerable: unanswerableInterviews,
       unanswerableBusy: unanswerableInterviewsBusy,
       onAnswer: handleInterviewAnswer,
-      onError: handleInterviewError,
+      onSkip: handleInterviewSkip,
       onFork: forkFromPendingInterview,
     }),
     [
@@ -2324,7 +2347,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       unanswerableInterviews,
       unanswerableInterviewsBusy,
       handleInterviewAnswer,
-      handleInterviewError,
+      handleInterviewSkip,
       forkFromPendingInterview,
     ],
   );

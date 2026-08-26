@@ -167,6 +167,7 @@ function expectTaskTabHintsVisible(visible: boolean): void {
 function testProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,
@@ -206,6 +207,7 @@ function PickerReasoningScopeProbe(props: {
     activeProviderId: "codex",
     activeProviderProfiles: [],
     activeProviderProfileAdmission: null,
+    profileEnablementPending: () => false,
     onProfileChange: NOOP_PROFILE_CHANGE,
   });
   return null;
@@ -238,6 +240,7 @@ function PickerBadgeProbe(props: {
     activeProviderId: "codex",
     activeProviderProfiles: props.profiles,
     activeProviderProfileAdmission: null,
+    profileEnablementPending: () => false,
     onProfileChange: props.onProfileChange,
   });
   const providerLeader = usePickerProviderLeaderForIndex(0);

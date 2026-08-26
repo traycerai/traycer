@@ -50,7 +50,6 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -77,13 +76,10 @@ import { ChatsPanelSkeleton } from "@/components/epic-canvas/skeletons/chats-pan
 import { CommentsPanelSkeleton } from "@/components/epic-canvas/skeletons/comments-panel-skeleton";
 import { FileTreePanelSkeleton } from "@/components/epic-canvas/skeletons/file-tree-panel-skeleton";
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
-import { CommentSidebar } from "@/components/comments";
+import { CommentSidebarPanel } from "@/components/comments";
 import { DropLine } from "@/components/ui/drop-line";
 import { Sidebar } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useArtifactAnchorPositions } from "@/stores/comments/anchor-positions-store";
-import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import {
   DEFAULT_LEFT_PANEL_ID,
   useActiveLeftPanelId,
@@ -161,7 +157,6 @@ import {
   isArtifactUnread,
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
-import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
@@ -2220,9 +2215,9 @@ function ArtifactHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
-        {/* Hidden only when the Epic has NO artifacts - see
-            `useArtifactSearchAvailable` for why emptiness gates this and a size
-            threshold does not. */}
+        {/* Hidden when the Epic has NO artifacts or is open read-only - see
+            `useArtifactSearchAvailable` for why emptiness and write access gate
+            this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => openSearch(props.tabId, "artifacts", "")}
@@ -2499,47 +2494,5 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
     >
       <X className="size-4" />
     </Button>
-  );
-}
-
-interface CommentSidebarPanelProps {
-  readonly epicId: string;
-  readonly activeArtifactId: string;
-}
-
-function CommentSidebarPanel(props: CommentSidebarPanelProps) {
-  const { epicId, activeArtifactId } = props;
-  const artifactRecord = useEpicArtifact(activeArtifactId);
-  // The sidebar is a sibling of the canvas, deliberately outside every
-  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
-  // one, which re-points under it while this Epic keeps rendering (D15).
-  const hostClient = useEpicSessionHostClient();
-  const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
-  const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
-  const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
-
-  const artifactKind =
-    artifactRecord !== null && "kind" in artifactRecord
-      ? artifactRecord.kind
-      : null;
-
-  if (artifactRecord === null || artifactKind === null) {
-    return null;
-  }
-
-  return (
-    <CommentSidebar
-      epicId={epicId}
-      hostClient={hostClient}
-      artifactType={artifactKind}
-      artifactId={activeArtifactId}
-      anchorPositions={anchorPositions}
-      currentUserId={currentUserId}
-      canModerate={false}
-      onActivateThread={(threadId) => {
-        setFlashThread(epicId, threadId);
-        revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
-      }}
-    />
   );
 }

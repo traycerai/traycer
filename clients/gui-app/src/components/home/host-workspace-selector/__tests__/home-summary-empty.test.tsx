@@ -282,6 +282,10 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 
 vi.mock("@/hooks/workspace/use-workspace-list-recent-workspaces-query", () => ({
   useWorkspaceListRecentWorkspaces: () => mocks.recentsQuery.current,
+  recentWorkspacesQueryKey: (hostId: string | null) => [
+    "recent-workspaces",
+    hostId,
+  ],
 }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({

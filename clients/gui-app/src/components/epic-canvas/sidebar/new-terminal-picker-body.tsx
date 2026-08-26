@@ -35,11 +35,18 @@ import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortc
 export interface NewTerminalPickerBodyProps {
   readonly epicId: string;
   readonly surfaceKey: string;
+  /**
+   * Focus the workspace search input once the list mounts. The caller owns
+   * this because focusing a text field is a request for a keyboard, and
+   * whether that keyboard costs anything depends on the shell the surface is
+   * rendered in, which this body cannot see.
+   */
+  readonly autoFocusSearch: boolean;
   readonly onLaunch: (target: TerminalLaunchTarget) => void;
 }
 
 export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
-  const { epicId, onLaunch, surfaceKey } = props;
+  const { autoFocusSearch, epicId, onLaunch, surfaceKey } = props;
   const [explicitRow, setExplicitRow] =
     useState<WorktreeBindingSelectorRowV12 | null>(null);
   const pin = useSurfaceHostPin(surfaceKey);
@@ -122,23 +129,35 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
   return (
     <>
       {/*
-        The host section renders the RESOLVED host, which is what keeps this
-        create surface honest without a banner: a pin whose host died resolves
-        to `effective`, and the chip says so before Launch is pressed. The dead
-        host's own row is still in the list, worded `offline` by the shared
-        health vocabulary, so the pin is reselectable the moment it returns.
+        Everything above the Launch bar is one scrollable region, so a host
+        given a bounded height (a capped dialog) keeps Launch pinned and
+        reachable instead of pushing it past its own edge. Unbounded hosts -
+        the sidebar popover - never reach the scroll, since the region is only
+        as tall as its content.
       */}
-      <WorktreePickerHostSection surfaceKey={surfaceKey} />
-      <WorktreeFolderListBody
-        isPending={bindingsQuery.isPending}
-        isError={bindingsQuery.isError}
-        rows={rows}
-        selectedRow={selectedRow}
-        secondaryLabel={(row) => row.runningDir}
-        onSelect={setExplicitRow}
-        autoFocusSearch
-        emptyMessage="No directories available. Open a workspace in the epic first."
-      />
+      <div
+        className="flex min-h-0 flex-col overflow-y-auto"
+        data-testid="new-terminal-picker-scroller"
+      >
+        {/*
+          The host section renders the RESOLVED host, which is what keeps this
+          create surface honest without a banner: a pin whose host died resolves
+          to `effective`, and the chip says so before Launch is pressed. The dead
+          host's own row is still in the list, worded `offline` by the shared
+          health vocabulary, so the pin is reselectable the moment it returns.
+        */}
+        <WorktreePickerHostSection surfaceKey={surfaceKey} />
+        <WorktreeFolderListBody
+          isPending={bindingsQuery.isPending}
+          isError={bindingsQuery.isError}
+          rows={rows}
+          selectedRow={selectedRow}
+          secondaryLabel={(row) => row.runningDir}
+          onSelect={setExplicitRow}
+          autoFocusSearch={autoFocusSearch}
+          emptyMessage="No directories available. Open a workspace in the epic first."
+        />
+      </div>
       <div className="flex items-center justify-between gap-3 border-t border-border/60 bg-muted/20 px-2.5 py-2.5">
         <div className="min-w-0 text-xs text-muted-foreground">
           {folderlessCwdStatus}

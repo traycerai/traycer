@@ -26,6 +26,7 @@ import {
   type ShellEntry,
 } from "./schema";
 import { defaultShellArgs } from "./shell-family";
+import { annotateWslHealth, probeWslHealthCached } from "./wsl-health";
 import { isShellExecutablePathSupported } from "./shell-executable";
 import { DEFAULT_LOG_LEVEL, type LogLevel } from "./log-level";
 
@@ -396,7 +397,24 @@ export async function listShells(): Promise<readonly DetectedShell[]> {
         )),
       })),
   );
-  return [...detected, ...entryRows].sort(sortShellsDefaultFirst);
+  return annotateWslHealthHere(
+    [...detected, ...entryRows].sort(sortShellsDefaultFirst),
+    isWindows,
+  );
+}
+
+/**
+ * {@link annotateWslHealth} behind the platform gate. Gated on the REAL
+ * platform rather than the mockable `osPlatform()` so simulated-win32
+ * detection tests never spawn a live process; `isWindows` keeps it off every
+ * POSIX list, where no row can be a `wsl.exe` anyway.
+ */
+async function annotateWslHealthHere(
+  rows: readonly DetectedShell[],
+  isWindows: boolean,
+): Promise<readonly DetectedShell[]> {
+  if (!isWindows || process.platform !== "win32") return rows;
+  return await annotateWslHealth(rows, probeWslHealthCached);
 }
 
 // Oldest on-disk shape we know how to migrate from. A file whose `version`

@@ -18,7 +18,7 @@ import {
   TRAY_ACTION_PX,
   useRowSwipeTray,
 } from "@/components/epics/mobile/use-row-swipe-tray";
-import { useLongPress } from "@/components/epics/mobile/use-long-press";
+import { useLongPress } from "@/hooks/ui/use-long-press";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
 import {
   useInlineRename,

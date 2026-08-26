@@ -7,6 +7,11 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
+import type { ClonedChatProfileRecoveryRequired } from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 
 /**
  * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
@@ -31,6 +36,16 @@ export interface UseChatCloneOnHostSwitchArgs {
   readonly sourceOwnerUserId: string | null;
 }
 
+interface CloneProfileRecoveryOffer {
+  readonly resolution: ClonedChatProfileRecoveryRequired;
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly targetHostLabel: string;
+  readonly chooseProfile: (profileId: string | null) => void;
+  readonly retry: () => void;
+  readonly cancel: () => void;
+  readonly openProviderSettings: () => void;
+}
+
 /**
  * Wires the chat dead-tile banner's Clone action to
  * `cloneChatOnHostSwitch`. Targets the directory's currently selected
@@ -41,6 +56,7 @@ export interface UseChatCloneOnHostSwitchArgs {
 export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
   readonly clone: () => void;
   readonly cloning: boolean;
+  readonly profileRecovery: CloneProfileRecoveryOffer | null;
 } {
   const binding = useHostBinding();
   // Resolved at RENDER, not in the click handler: `cloneChatOnHostSwitch`
@@ -56,8 +72,11 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
   const cloneTargetClient = useHostClientForHostId(cloneTargetHostId);
   const createChat = useEpicCreateChatForHostClient(cloneTargetClient);
   const navigateNestedFocus = useEpicNestedFocusNavigation();
+  const { openSettings } = useSystemTabModalActions();
   const cancelRef = useRef<(() => void) | null>(null);
   const [cloning, setCloning] = useState(false);
+  const [profileRecovery, setProfileRecovery] =
+    useState<CloneProfileRecoveryOffer | null>(null);
 
   useEffect(() => {
     const cancelHandle = cancelRef;
@@ -96,48 +115,88 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
       toast("That host can't be reached right now - try again in a moment.");
       return;
     }
-    if (cancelRef.current !== null) cancelRef.current();
-    setCloning(true);
-    cancelRef.current = cloneChatOnHostSwitch({
-      epicId: args.epicId,
-      tabId: args.tabId,
-      sourceChatId: args.chatId,
-      sourceOwnerUserId: args.sourceOwnerUserId,
-      sourceHostId: args.sourceHostId,
-      sourceTitle: args.sourceTitle,
-      targetHostId: cloneTargetHostId,
-      directory: binding.directory,
-      sourceSettings: args.sourceSettings,
-      globalClient: binding.hostClient,
-      onProfileFallbackToAmbient: () => {
-        toast(
-          "Continuing on the Terminal account - your profile isn't available on this host.",
-        );
-      },
-      onHistoryUnavailable: (reason) => {
-        toast(
-          reason === "no-checkpoint"
-            ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
-            : "This device can't send this agent's history to that host version - continuing with settings only.",
-        );
-      },
-      onCloneFailed: () => {
-        setCloning(false);
-      },
-      navigateNestedFocus,
-      createChat: (request, callbacks) => {
-        createChat.mutate(request, {
-          onSuccess: callbacks.onSuccess,
-          onError: callbacks.onError,
-        });
-      },
-    });
+    const targetClient = cloneTargetClient;
+    const targetHostId = cloneTargetHostId;
+    let targetHostLabel = targetHostId;
+    try {
+      targetHostLabel =
+        binding.directory.findById(targetHostId)?.label ?? targetHostId;
+    } catch {
+      // The immutable host id is still an honest recovery label when a
+      // directory implementation cannot serve its cosmetic name.
+    }
+    const runAttempt = (
+      explicitTargetProfileId: {
+        readonly profileId: string | null;
+      } | null,
+    ): void => {
+      if (cancelRef.current !== null) cancelRef.current();
+      setProfileRecovery(null);
+      setCloning(true);
+      cancelRef.current = cloneChatOnHostSwitch({
+        epicId: args.epicId,
+        tabId: args.tabId,
+        sourceChatId: args.chatId,
+        sourceOwnerUserId: args.sourceOwnerUserId,
+        sourceHostId: args.sourceHostId,
+        sourceTitle: args.sourceTitle,
+        targetHostId,
+        directory: binding.directory,
+        sourceSettings: args.sourceSettings,
+        globalClient: binding.hostClient,
+        explicitTargetProfileId,
+        onProfileFallbackToAmbient: () => {
+          toast(
+            "Continuing on the Terminal account - your profile isn't available on this host.",
+          );
+        },
+        onProfileSelectionRequired: (resolution) => {
+          setCloning(false);
+          setProfileRecovery({
+            resolution,
+            client: targetClient,
+            targetHostLabel,
+            chooseProfile: (profileId) => runAttempt({ profileId }),
+            retry: () => runAttempt(null),
+            cancel: () => {
+              cancelRef.current?.();
+              cancelRef.current = null;
+              setProfileRecovery(null);
+              setCloning(false);
+            },
+            openProviderSettings: () => {
+              carryViewedHostIntoSettingsScope(targetHostId);
+              openSettings({ section: "providers", resetToGeneral: false });
+            },
+          });
+        },
+        onHistoryUnavailable: (reason) => {
+          toast(
+            reason === "no-checkpoint"
+              ? "This agent hasn't replied yet, so its history can't be carried - continuing with settings only."
+              : "This device can't send this agent's history to that host version - continuing with settings only.",
+          );
+        },
+        onCloneFailed: () => {
+          setCloning(false);
+        },
+        navigateNestedFocus,
+        createChat: (request, callbacks) => {
+          createChat.mutate(request, {
+            onSuccess: callbacks.onSuccess,
+            onError: callbacks.onError,
+          });
+        },
+      });
+    };
+    runAttempt(null);
   }, [
     binding,
     cloneTargetClient,
     cloneTargetHostId,
     createChat,
     navigateNestedFocus,
+    openSettings,
     args.epicId,
     args.tabId,
     args.chatId,
@@ -150,5 +209,9 @@ export function useChatCloneOnHostSwitch(args: UseChatCloneOnHostSwitchArgs): {
     args.sourceTitle,
   ]);
 
-  return { clone, cloning };
+  return {
+    clone,
+    cloning,
+    profileRecovery,
+  };
 }
