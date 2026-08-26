@@ -218,6 +218,7 @@ import {
   chatSubscribeV15,
   chatSubscribeV16,
   chatSubscribeV17,
+  chatSubscribeV18,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -4871,10 +4872,12 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // be fetched on demand. Off-floor, so a GUI meeting an older host falls back
   // to its legacy full-contents-in-snapshot path instead of losing the diff.
   //
-  // Registered NOW, unlike `chatSubscribeV17`, and the difference is not an
+  // Registered AHEAD of `chatSubscribeV18`, and that ordering was not an
   // oversight: a stream minor negotiates to the highest the peers share, so
-  // registering that one IS the switch to windowed frames. A unary method
-  // flips no negotiation - a client that never calls it cannot tell it exists.
+  // registering that one IS the switch to windowed frames - it waited until
+  // the renderer could draw placeholder rows and drive viewport hydration. A
+  // unary method flips no negotiation - a client that never calls it cannot
+  // tell it exists.
   "chat.readAccumulatedFileChange": {
     degrade: { kind: "unsupported" },
     1: {
@@ -8872,7 +8875,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 7,
+      latestMinor: 8,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -8897,6 +8900,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         7: {
           contract: chatSubscribeV17,
+        },
+        8: {
+          contract: chatSubscribeV18,
         },
       },
     },
