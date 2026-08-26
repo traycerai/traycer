@@ -472,7 +472,7 @@ describe("buildApplicationMenu", () => {
   });
 
   it("keeps terminal-conflicting accelerator labels visible but unregisters them off macOS", () => {
-    for (const platform of ["win32", "linux"] as const) {
+    (["win32", "linux"] as const).forEach((platform) => {
       const items = template(
         buildApplicationMenu(buildState(platform), {
           command: () => undefined,
@@ -502,7 +502,7 @@ describe("buildApplicationMenu", () => {
       expect(findNext.registerAccelerator).toBe(false);
       expect(minimize.registerAccelerator).toBe(false);
       expect(findPrevious.registerAccelerator).toBeUndefined();
-    }
+    });
   });
 
   it("keeps terminal-conflicting accelerators registered on macOS", () => {

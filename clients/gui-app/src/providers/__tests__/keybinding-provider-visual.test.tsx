@@ -792,13 +792,46 @@ describe("<KeybindingProvider /> visual leader hints", () => {
     platformMock.mac = false;
     renderProbe("/epics/e1");
 
-    const event = terminalKeyDown({
+    const palette = terminalKeyDown({
       code: "KeyK",
       key: "k",
       ctrlKey: true,
     });
+    const closeOthers = terminalKeyDown({
+      code: "KeyW",
+      key: "w",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const split = terminalKeyDown({
+      code: "KeyN",
+      key: "n",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const toggleTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+    });
+    const maximizeTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const stash = terminalKeyDown({
+      code: "KeyS",
+      key: "s",
+      ctrlKey: true,
+    });
 
-    expect(event.defaultPrevented).toBe(false);
+    expect(palette.defaultPrevented).toBe(false);
+    expect(closeOthers.defaultPrevented).toBe(false);
+    expect(split.defaultPrevented).toBe(false);
+    expect(toggleTerminal.defaultPrevented).toBe(false);
+    expect(maximizeTerminal.defaultPrevented).toBe(false);
+    expect(stash.defaultPrevented).toBe(false);
   });
 
   it("reserves non-mac app-policy Ctrl digit chords when a terminal is focused", () => {
@@ -849,22 +882,28 @@ describe("<KeybindingProvider /> visual leader hints", () => {
 
   it("reserves explicit user-rebound Ctrl chords when a terminal is focused", () => {
     platformMock.mac = false;
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler("app.zoom.in", () =>
+      calls.push("zoom-in"),
+    );
     useKeybindingStore.setState({
       bindings: {
         ...getDefaultBindings(),
-        "group.split.horizontal": "mod+shift+x",
+        "app.zoom.in": "mod+shift+p",
       },
     });
     renderProbe("/epics/e1");
 
     const event = terminalKeyDown({
-      code: "KeyX",
-      key: "x",
+      code: "KeyP",
+      key: "p",
       ctrlKey: true,
       shiftKey: true,
     });
+    unregister();
 
     expect(event.defaultPrevented).toBe(true);
+    expect(calls).toEqual(["zoom-in"]);
   });
 
   it("reserves macOS Command chords when a terminal is focused", () => {

@@ -153,6 +153,11 @@ export function findActionMatchForChord(
           : "app";
       return { actionId: id, terminalPolicy };
     }
+  }
+
+  for (const id of ACTION_IDS) {
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord" || bindings[id] === null) continue;
     const secondaryChord = resolveActionSecondaryChord(meta);
     if (secondaryChord === chord) {
       return {
