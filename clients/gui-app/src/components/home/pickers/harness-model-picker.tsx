@@ -370,9 +370,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         ? []
         : orderModelPickerHarnesses(
             restrictToTui(harnessesQuery.data.harnesses, tuiOnly),
-            degradedHarnessIds,
           ),
-    [degradedHarnessIds, harnessesQuery.data, tuiOnly],
+    [harnessesQuery.data, tuiOnly],
   );
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
@@ -504,12 +503,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
   // derived structure (active provider, rows, rail) inherits the restriction.
   const catalogHarnesses = useMemo(
-    () =>
-      orderModelPickerHarnesses(
-        restrictToTui(catalog.harnesses, tuiOnly),
-        degradedHarnessIds,
-      ),
-    [catalog.harnesses, degradedHarnessIds, tuiOnly],
+    () => orderModelPickerHarnesses(restrictToTui(catalog.harnesses, tuiOnly)),
+    [catalog.harnesses, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalogForClient(runTargetClient);
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
@@ -1157,15 +1152,21 @@ function restrictToTui<T extends HarnessOption>(
   return tuiOnly ? harnesses.filter(isTuiCapable) : harnesses;
 }
 
+/**
+ * Provider order, and nothing else.
+ *
+ * Degraded providers used to sink to the bottom here, which is a stable rule
+ * only if the verdict behind it is stable - and it is not: `authStatus`
+ * arrives with the catalog row while `degradedHarnessIds` comes from a
+ * separately-timed `providers.list` query, so either can flip after the list
+ * has been drawn. The row the user was reading would then jump to the end of
+ * the list under their cursor. Dimming says the same thing without moving
+ * anything, so dimming is all that is left.
+ */
 function orderModelPickerHarnesses<T extends HarnessOption>(
   harnesses: ReadonlyArray<T>,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ReadonlyArray<T> {
-  return sortGuiHarnessesByProviderOrder(harnesses).toSorted(
-    (left, right) =>
-      Number(railHarnessDegraded(left, degradedHarnessIds)) -
-      Number(railHarnessDegraded(right, degradedHarnessIds)),
-  );
+  return sortGuiHarnessesByProviderOrder(harnesses);
 }
 
 function degradedHarnessIdsFromProviderStates(

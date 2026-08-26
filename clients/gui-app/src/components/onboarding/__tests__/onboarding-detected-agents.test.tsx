@@ -27,19 +27,42 @@ type AwaitLoginVariables = {
   readonly providerId: string;
   readonly profileId: string | null;
 };
-type AwaitLoginMutate = (variables: AwaitLoginVariables) => void;
+type AwaitLoginCompletion = {
+  readonly state: { readonly auth: { readonly status: string } } | null;
+};
+type AwaitLoginOptions = {
+  readonly onSuccess: (completion: AwaitLoginCompletion) => void;
+};
+type AwaitLoginMutate = (
+  variables: AwaitLoginVariables,
+  options: AwaitLoginOptions,
+) => void;
+type SetEnabledMutate = (variables: {
+  readonly providerId: string;
+  readonly enabled: boolean;
+  readonly profileAction: unknown;
+}) => void;
 
-// `codex` gets the auto-undetected enablement source so it's the one row that
-// renders `SignInToEnableButton` - every other provider's row has no cached
-// `ProviderCliState` at all, so its trailing content is null and cannot
-// collide with the role queries below.
+// `codex` is disabled with a DETECTED candidate, so it's the one row that
+// satisfies `providerNeedsSignInToEnable` (`!state.enabled && installDetected`)
+// and renders `SignInToEnableButton` - every other provider's row has no
+// cached `ProviderCliState` at all, so its trailing content is null and
+// cannot collide with the role queries below.
 const fixtures = vi.hoisted(() => {
   const signInProvider: ProviderCliState = {
     providerId: "codex",
     enabled: false,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/usr/bin/codex",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
     auth: {
       status: "unauthenticated",
       badgeText: null,
@@ -72,8 +95,6 @@ const fixtures = vi.hoisted(() => {
     versionVisibility: null,
     advisory: null,
     profiles: [],
-    enablementMode: "auto",
-    enablementSource: "auto-undetected",
   };
   return {
     signInProvider,
@@ -83,6 +104,7 @@ const fixtures = vi.hoisted(() => {
     startLoginSuccess: false,
     startLoginData: undefined as StartLoginData | undefined,
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+    setEnabledMutate: vi.fn<SetEnabledMutate>(),
     toastError: vi.fn(),
   };
 });
@@ -99,7 +121,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
   useProvidersSetEnabled: () => ({
     isPending: false,
-    mutate: vi.fn(),
+    mutate: fixtures.setEnabledMutate,
   }),
 }));
 
@@ -154,6 +176,7 @@ describe("OnboardingDetectedAgents", () => {
     fixtures.startLoginSuccess = false;
     fixtures.startLoginData = undefined;
     fixtures.awaitLoginMutate.mockReset();
+    fixtures.setEnabledMutate.mockReset();
     fixtures.toastError.mockReset();
   });
 
@@ -201,6 +224,31 @@ describe("OnboardingDetectedAgents", () => {
       }),
     ).toEqual(expectedNames);
   });
+
+  it("shows only the toggle for a disabled traycer row - no sign-in affordance, no 'Not signed in' fallback", () => {
+    // Traycer seeds disabled on purpose (its inference bills credits), and its
+    // account IS the host session - there is nothing to sign into. Without the
+    // traycer guard in `providerNeedsSignInToEnable`, the row would fall
+    // through `providerSignInUnavailableHint` to a muted "Not signed in",
+    // which is exactly backwards for the one provider that is always signed
+    // in. The enable toggle is the whole gesture.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        providerId: "traycer",
+        loginCapability: null,
+      },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    expect(
+      screen.queryByRole("button", { name: /sign in to enable/i }),
+    ).toBeNull();
+    expect(screen.queryByText("Not signed in")).toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Enable Traycer Inference" }),
+    ).toBeTruthy();
+  });
 });
 
 // Regression coverage for the declined-sign-in path: the GUI rules
@@ -217,6 +265,7 @@ describe("SignInToEnableButton declined sign-in", () => {
     fixtures.startLoginSuccess = false;
     fixtures.startLoginData = undefined;
     fixtures.awaitLoginMutate.mockReset();
+    fixtures.setEnabledMutate.mockReset();
     fixtures.toastError.mockReset();
   });
 
@@ -255,9 +304,49 @@ describe("SignInToEnableButton declined sign-in", () => {
     view.rerender(<OnboardingDetectedAgents />);
 
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(fixtures.awaitLoginMutate).toHaveBeenCalledWith({
+    const awaitCall = fixtures.awaitLoginMutate.mock.calls.at(-1);
+    if (awaitCall === undefined) {
+      throw new Error("Expected an awaitLogin call.");
+    }
+    expect(awaitCall[0]).toEqual({ providerId: "codex", profileId: null });
+    // The options object carries the enable-on-authenticated chain; its
+    // behaviour is pinned by the next test.
+    expect(typeof awaitCall[1].onSuccess).toBe("function");
+  });
+
+  it("enables the provider only on an authenticated completion", () => {
+    fixtures.providers = [fixtures.signInProvider];
+    render(<OnboardingDetectedAgents />);
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in to enable/i }));
+    const [, startOptions] = latestStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({ started: true });
+    });
+    const awaitCall = fixtures.awaitLoginMutate.mock.calls.at(-1);
+    if (awaitCall === undefined) {
+      throw new Error("Expected an awaitLogin call.");
+    }
+    const [, awaitOptions] = awaitCall;
+
+    // A cancelled/failed login (null state) and a signed-out completion must
+    // both leave the sticky choice alone - the button is "sign in TO enable",
+    // and only a completed, authenticated login is that gesture.
+    act(() => {
+      awaitOptions.onSuccess({ state: null });
+      awaitOptions.onSuccess({
+        state: { auth: { status: "unauthenticated" } },
+      });
+    });
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+
+    act(() => {
+      awaitOptions.onSuccess({ state: { auth: { status: "authenticated" } } });
+    });
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      profileId: null,
+      enabled: true,
+      profileAction: null,
     });
   });
 

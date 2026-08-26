@@ -1678,7 +1678,7 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("tab", { name: "Claude" })).not.toBeNull();
   });
 
-  it("orders the rail by provider defaults and moves degraded providers down", async () => {
+  it("orders the rail by provider defaults, keeping degraded providers in place", async () => {
     const codex = codexModels();
     const claude = claudeModels();
     queryMock.harnesses = [
@@ -1711,12 +1711,16 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     const tabs = screen.getAllByRole("tab");
 
+    // OpenRouter is degraded (setup required) yet HOLDS its canonical slot:
+    // the old degraded sink re-sorted rows when late verdicts landed, which
+    // is exactly the mid-render movement this picker no longer does. Degraded
+    // is a flag on the row, never a position.
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Codex",
       "Claude",
+      "OpenRouter",
       "Droid",
       "Cursor",
-      "OpenRouter",
     ]);
     expect(
       screen

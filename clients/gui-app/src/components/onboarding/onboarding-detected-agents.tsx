@@ -158,23 +158,34 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
 }
 
 /**
- * Whether this row should offer "Sign in to enable".
+ * Whether this row should offer "Sign in to enable": the provider is off, and
+ * its CLI is actually on this machine.
  *
- * Under auto-enablement a provider with no detected account is effectively
- * disabled, and onboarding is precisely where a user would fix that - but only
- * for a provider whose sign-in this screen can actually start. Terminal-login
+ * The host leaves a provider disabled at first boot when it found no account
+ * for it, and onboarding is precisely where a user would fix that. Only for a
+ * provider whose sign-in this screen can start, though - terminal-login
  * providers are excluded by the shared hint helper, which is the point of
- * reusing it: onboarding has no epic and no terminal surface to open one into,
- * so offering the button here would be a dead end.
+ * reusing it: onboarding has no epic and no terminal surface to open one into.
  *
- * Gated on `enablementSource` when the host sends it, so the CTA appears for
- * exactly the providers auto-enablement turned off. On an older host the field
- * is absent, no row is auto-undetected, and onboarding keeps its current shape
- * with no sign-in buttons - the surface does not regress, it just gains
- * nothing.
+ * The INSTALL gate is what keeps this from becoming noise. Seeded defaults
+ * leave most of a dozen-plus rows off, and offering to sign a user in to a CLI
+ * they have never installed is an invitation to a failure. It is also not a
+ * proxy for auth: a disabled provider's credentials are never probed
+ * (`resolveAuthState` short-circuits it rather than spawning its CLI), so the
+ * row cannot report a signed-out verdict to key on, and the sign-in itself is
+ * what discovers whether there was an account to find.
  */
-function providerNeedsSignInToEnable(state: ProviderCliState): boolean {
-  return state.enablementSource === "auto-undetected";
+function providerNeedsSignInToEnable(
+  state: ProviderCliState,
+  installDetected: boolean,
+): boolean {
+  // Traycer's account IS the host session - there is no sign-in to perform,
+  // and it seeds disabled on purpose (its inference bills credits), so the
+  // toggle is the whole enable gesture. Without this guard the row would
+  // render the sign-in affordance's "Not signed in" fallback, which is
+  // exactly backwards for the one provider that is always signed in.
+  if (state.providerId === "traycer") return false;
+  return !state.enabled && installDetected;
 }
 
 /**
@@ -186,8 +197,11 @@ function providerNeedsSignInToEnable(state: ProviderCliState): boolean {
  * this whole act require one even on a host that has no auto-enablement to
  * report and would never render a single one of these buttons.
  */
-function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
-  const { state } = props;
+function SignInToEnableButton(props: {
+  readonly state: ProviderCliState;
+  readonly onEnable: (providerId: ProviderId) => void;
+}) {
+  const { state, onEnable } = props;
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useHostScopedProvidersAwaitLogin();
   // Browser OAuth opens a browser on the machine running the host, so it is
@@ -211,10 +225,15 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
   // needing an effect to.
   const declined = startLogin.isSuccess && !startLogin.data.started;
   const onSignIn = (providerId: ProviderId): void => {
-    // Start, then await the honest completion edge. The await is what makes
-    // this worth wiring at all: its `onSuccess` overlays the fresh state onto
-    // `providers.list` and re-reads the row, so a provider that was
-    // auto-disabled for want of an account becomes usable without a restart.
+    // Start, then await the honest completion edge, then ENABLE.
+    //
+    // That third step is not a convenience, it is the whole contract: signing
+    // in does not enable a provider anywhere in this app, because a sign-in
+    // from the re-auth rail is a user fixing something they already chose, not
+    // asking for a new row in their picker. Onboarding is the one screen where
+    // the two gestures genuinely coincide - the button says "sign in TO
+    // ENABLE" - so this screen states the enablement explicitly rather than
+    // relying on the host to infer it from a credential appearing.
     startLogin.mutate(
       // Ambient login, not a managed profile: onboarding has no profile
       // management surface, and the account a first sign-in creates is the
@@ -223,7 +242,19 @@ function SignInToEnableButton(props: { readonly state: ProviderCliState }) {
       {
         onSuccess: (result) => {
           if (!result.started) return;
-          awaitLogin.mutate({ providerId, profileId: null });
+          awaitLogin.mutate(
+            { providerId, profileId: null },
+            {
+              // Only on a completed login: `state` is null when the host has
+              // no settled outcome to report, and a cancelled or failed
+              // sign-in must not leave the user with a provider they never
+              // got to use.
+              onSuccess: (completion) => {
+                if (completion.state?.auth.status !== "authenticated") return;
+                onEnable(providerId);
+              },
+            },
+          );
         },
       },
     );
@@ -333,23 +364,15 @@ export function OnboardingDetectedAgents() {
 
   const handleSetEnabled = (providerId: ProviderId, enabled: boolean): void => {
     // No profile management UI yet - this call never renames/removes a profile.
-    //
-    // Deliberately still the BINARY call, with no `mode`, even though the host
-    // now stores a tri-state. Onboarding is the one screen whose entire purpose
-    // is the user stating which agents they want, so a toggle here IS sticky
-    // intent - which is exactly what `enabled` maps to (`setProviderEnabled`
-    // writes `on`/`off`). Offering Auto here would ask a first-time user to
-    // reason about a mechanism they have not met yet, and Settings owns that
-    // choice.
     setEnabled.mutate({
       providerId,
       enabled,
       profileAction: null,
     });
   };
-  // Enabled providers first. On a fresh install auto-enablement lights up only
-  // the accounts the user actually has, so without this the two or three rows
-  // that matter sit scattered among a dozen-plus they have never used.
+  // Enabled providers first. The host's one-time seeding enables only the
+  // accounts the user actually has, so without this the two or three rows that
+  // matter sit scattered among a dozen-plus they have never used.
   const rows = orderProvidersByEnablement((providerId) =>
     enabledForProvider(providerStateFor(providers, providerId)),
   ).map(({ providerId }): ProviderListRow => {
@@ -383,8 +406,13 @@ export function OnboardingDetectedAgents() {
             {/* Beside the switch, not instead of it: the switch still states
                 sticky intent, and this only answers the reason the provider is
                 off. A user who wants it on regardless can still say so. */}
-            {providerNeedsSignInToEnable(state) ? (
-              <SignInToEnableButton state={state} />
+            {providerNeedsSignInToEnable(state, installDetected) ? (
+              <SignInToEnableButton
+                state={state}
+                onEnable={(providerId) => {
+                  handleSetEnabled(providerId, true);
+                }}
+              />
             ) : null}
             <ProviderEnableSwitch
               providerId={state.providerId}

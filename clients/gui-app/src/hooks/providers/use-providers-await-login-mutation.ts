@@ -181,21 +181,24 @@ export function useProvidersAwaitLoginForClient(args: {
         // The overlay above is optimistic-only, and deliberately cannot be
         // the last word. The echo is pinned to
         // `providerMutationCliStateSchemaV21`, whose field set is the
-        // hand-frozen `providerCliStateBaseShapeV40` - so it carries the new
-        // `enabled` but NOT `enablementMode` / `enablementSource`, which exist
-        // only on the live `providers.list@7.1` shape. Spreading it therefore
-        // flips `enabled` to true while leaving `enablementSource` reading
-        // `"auto-undetected"`, and those two fields are exactly what the
-        // screens the user is looking at render: onboarding keeps offering
-        // "Sign in to enable" and Settings keeps saying "Auto · disabled - no
-        // account detected" beside a provider that just signed in.
+        // hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+        // the live `providers.list` row, and a login is exactly the moment the
+        // rest of that row moves too (the profile list gains the new account,
+        // its ambient identity resolves). Left at the overlay, the screens the
+        // user is looking at would keep rendering pre-login values for every
+        // field the echo does not model.
         //
         // `commitAuthoritativeProvidersList` invalidates every
         // `PROVIDER_INVALIDATIONS` entry EXCEPT `providers.list` (the one it
         // just wrote), which is right for the force-refresh callers - their
-        // payload IS a full v7.1 list response. It is wrong here, so this path
-        // adds the one invalidation the helper withholds: without it the
-        // contradiction stands for a full `staleTime` (15 minutes).
+        // payload IS a full list response. It is wrong here, so this path adds
+        // the one invalidation the helper withholds: without it the stale
+        // fields stand for a full `staleTime` (15 minutes).
+        //
+        // Note what the refetch will NOT do: enable the provider. Signing in
+        // never changes enablement - the row comes back with the same sticky
+        // `enabled` it had. Onboarding, the one screen where a sign-in is
+        // meant to enable, sends that toggle itself.
         await queryClient.invalidateQueries({
           queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
         });
