@@ -1,10 +1,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
-import {
-  ChatTranscriptPlaceholderRow,
-  placeholderRowHeight,
-} from "@/components/chat/chat-transcript-placeholder-row";
+import { ChatTranscriptPlaceholderRow } from "@/components/chat/chat-transcript-placeholder-row";
+import { placeholderRowHeight } from "@/components/chat/chat-transcript-placeholder-height";
 
 afterEach(() => {
   cleanup();
@@ -31,9 +29,9 @@ function entry(input: {
 describe("placeholderRowHeight", () => {
   it("uses the minimum for a null entry and tiny entries", () => {
     expect(placeholderRowHeight(null)).toBe(44);
-    expect(placeholderRowHeight(entry({ role: "assistant", byteLength: 0 }))).toBe(
-      44,
-    );
+    expect(
+      placeholderRowHeight(entry({ role: "assistant", byteLength: 0 })),
+    ).toBe(44);
   });
 
   it("caps a very large entry at 320px", () => {

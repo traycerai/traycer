@@ -234,9 +234,13 @@ function nearestHydratedMessageId(
   rows: ReadonlyArray<TranscriptListRow>,
   anchorRowIndex: number,
 ): string | null {
-  for (let index = anchorRowIndex; index >= 0; index -= 1) {
+  for (
+    let index = Math.min(anchorRowIndex, rows.length - 1);
+    index >= 0;
+    index -= 1
+  ) {
     const row = rows[index];
-    if (row !== undefined && row.kind === "hydrated") return row.model.id;
+    if (row.kind === "hydrated") return row.model.id;
   }
   for (let index = anchorRowIndex + 1; index < rows.length; index += 1) {
     const row = rows[index];
@@ -281,7 +285,6 @@ export function viewportActiveUserMessageId(
   );
   if (rowIndex === null) return null;
   const anchorRow = rows[rowIndex];
-  if (anchorRow === undefined) return null;
   const semanticAnchorId = nearestHydratedMessageId(rows, rowIndex);
   if (semanticAnchorId === null) return anchorRow.key;
   return (

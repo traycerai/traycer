@@ -48,11 +48,7 @@ function rowsOf(messages: ReadonlyArray<ChatMessageModel>) {
 }
 
 function rowOf(message: ChatMessageModel) {
-  const [row] = rowsOf([message]);
-  if (row === undefined) {
-    throw new Error(`expected a wrapped transcript row for ${message.id}`);
-  }
-  return row;
+  return rowsOf([message])[0];
 }
 
 describe("buildRowKeyToIndex", () => {
@@ -68,7 +64,9 @@ describe("buildRowKeyToIndex", () => {
 
 describe("chatTimelineLocationForMessage", () => {
   it("returns navigation location with the fixed view offset", () => {
-    const indexById = buildRowKeyToIndex(rowsOf([user("a", 1), assistant("b", 2)]));
+    const indexById = buildRowKeyToIndex(
+      rowsOf([user("a", 1), assistant("b", 2)]),
+    );
     expect(chatTimelineLocationForMessage("b", indexById, true)).toEqual({
       index: 1,
       viewOffset: CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
