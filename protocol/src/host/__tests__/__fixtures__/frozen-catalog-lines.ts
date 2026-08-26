@@ -11852,6 +11852,38 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "enabled": {
+                      "default": true,
+                      "type": "boolean"
+                    },
+                    "launchCommand": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "command": {
+                              "type": "string"
+                            },
+                            "shell": {
+                              "type": "string",
+                              "enum": [
+                                "posix",
+                                "powershell"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "command",
+                            "shell"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -11866,7 +11898,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "rateLimitLimitedScopes",
                     "duplicateOfProfileId",
                     "ambientDriftNotice",
-                    "accentColor"
+                    "accentColor",
+                    "enabled"
                   ],
                   "additionalProperties": false
                 }

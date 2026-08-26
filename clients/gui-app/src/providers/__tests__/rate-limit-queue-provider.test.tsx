@@ -118,6 +118,7 @@ function profile(input: {
 }): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.profileId,

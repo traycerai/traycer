@@ -5,6 +5,7 @@ import {
   type RailEntry,
 } from "@/components/home/pickers/harness-rail-providers";
 import {
+  eligibleProfilesForShortcut,
   profileCommitId,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
@@ -40,6 +41,7 @@ interface PickerLeaderScopeInput {
     string | null,
     ProfileRowAdmission
   > | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   /** Same commit path the dropdown's row clicks use - `handleProfileChange` -
    *  so the lock rule and memory-aware funnel apply identically here. */
   readonly onProfileChange: (
@@ -67,8 +69,13 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   } = input;
+  const eligibleProfileCount = eligibleProfilesForShortcut(
+    activeProviderProfiles,
+    profileEnablementPending,
+  ).length;
   const stateRef = useRef({
     railEntries,
     onEntryChange,
@@ -77,6 +84,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   });
   useEffect(() => {
@@ -88,6 +96,7 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
       activeProviderId,
       activeProviderProfiles,
       activeProviderProfileAdmission,
+      profileEnablementPending,
       onProfileChange,
     };
   }, [
@@ -98,13 +107,14 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
     activeProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission,
+    profileEnablementPending,
     onProfileChange,
   ]);
 
   useEffect(() => {
     if (!open) return;
     notifyLeaderScopesChanged();
-  }, [open, reasoningActionable, activeProviderProfiles.length]);
+  }, [open, reasoningActionable, eligibleProfileCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -155,9 +165,16 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
           // Progressive disclosure: active only when the dropdown itself is
           // rendered (2+ profiles) - otherwise there is nothing to hint or
           // dispatch to, matching the rail/reasoning gates above.
-          isActive: () => stateRef.current.activeProviderProfiles.length >= 2,
+          isActive: () =>
+            eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
+            ).length >= 2,
           dispatch: (digit) => {
-            const profiles = stateRef.current.activeProviderProfiles;
+            const profiles = eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
+            );
             // Beyond digit 9, profiles stay click-only - mirrors the provider
             // rail's own overflow behavior above.
             const index = digit === 0 ? 9 : digit - 1;

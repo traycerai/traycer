@@ -58,6 +58,7 @@ import { ProviderProfileScopedSection } from "@/components/settings/panels/provi
 function ambientProfile(): ProviderCliState["profiles"][number] {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label: "Terminal account",
@@ -138,6 +139,10 @@ function renderSection(
           onDismissFailedAttempt={() => undefined}
           selectedProfileId={null}
           onSelectedProfileIdChange={() => undefined}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={() => undefined}
           {...overrides}
         />
       </TooltipProvider>
