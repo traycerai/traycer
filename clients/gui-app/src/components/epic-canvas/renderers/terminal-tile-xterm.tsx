@@ -43,6 +43,7 @@ import {
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useTerminalTheme } from "@/lib/terminal-theme";
 import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
@@ -777,6 +778,21 @@ function createXtermEntry(
   // user input that merely looks like one (a pasted report while the terminal
   // is idle) - payload shape alone cannot (CodeRabbit review on #1424).
   let liveParseDepth = 0;
+  // A host answers colour queries itself from `terminal.create@2.1` (it
+  // replies with the session's spawn-time `themeHint`). Older hosts have no
+  // responder, so this viewer's xterm reply - imperfect as it is (it misses
+  // every startup probe and conflicts across viewers) - is the only answer a
+  // late-probing TUI would get there; suppressing it would be a regression
+  // (Codex review on #1424). Read per event, not captured: the negotiated
+  // manifest fills in on the first completed RPC and flips when a host is
+  // upgraded in place. `null` (no handshake recorded, or a legacy name-only
+  // recording) fails toward forwarding, the legacy-safe side.
+  const hostAnswersColorQueries = (): boolean => {
+    if (hostId === null) return false;
+    const version = getNegotiatedHostMethodVersion(hostId, "terminal.create");
+    if (version === null) return false;
+    return version.major > 2 || (version.major === 2 && version.minor >= 1);
+  };
   const dataDisposable = term.onData((d) => {
     if (snapshotReplayDepth > 0) return;
     // The HOST answers OSC 10/11 default-colour queries (with the theme the
@@ -790,7 +806,9 @@ function createXtermEntry(
     // one residual ambiguity and stays filtered only if it is byte-exact
     // report grammar.
     const filtered =
-      liveParseDepth > 0 ? d.replace(OSC_COLOR_REPORT_PATTERN, "") : d;
+      liveParseDepth > 0 && hostAnswersColorQueries()
+        ? d.replace(OSC_COLOR_REPORT_PATTERN, "")
+        : d;
     if (filtered.length === 0 && d.length > 0) return;
     // A sticky modifier latched on the mobile key bar combines with the next
     // typed character here. Desktop input takes the empty-latch fast path
