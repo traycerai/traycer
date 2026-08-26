@@ -146,10 +146,7 @@ export const CATALOG_HOST_TO_CLIENT_METHODS = [
   "providers.list",
 ] as const;
 
-export const HOST_TO_CLIENT_PAYLOADS = [
-  "response",
-  "serverFrame",
-] as const;
+export const HOST_TO_CLIENT_PAYLOADS = ["response", "serverFrame"] as const;
 
 export const CLIENT_TO_HOST_PAYLOADS = [
   "request",
@@ -425,7 +422,6 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-
 /** True when this payload slot is host→client (unconditionally decoded by clients). */
 export function isHostToClientPayload(payload: string | null): boolean {
   return payload !== null && hostToClientPayloadNames.includes(payload);
@@ -534,7 +530,10 @@ export function matchMethodGlob(pattern: string, method: string): boolean {
   return new RegExp(regex).test(method);
 }
 
-export function matchVersionGlob(pattern: string, version: string | null): boolean {
+export function matchVersionGlob(
+  pattern: string,
+  version: string | null,
+): boolean {
   if (pattern === "*") return true;
   return pattern === version;
 }
@@ -781,8 +780,7 @@ function diffSchemasAtSameVersion(
           divergences.push({
             path: joinPath(path, `anyOf[${signature}]`),
             severity: "breaking",
-            detail:
-              `union variant added at a released version on a host→client slot - a released client strict-decodes this frame and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
+            detail: `union variant added at a released version on a host→client slot - a released client strict-decodes this frame and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
           });
         } else {
           divergences.push({

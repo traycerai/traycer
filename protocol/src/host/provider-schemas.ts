@@ -3399,7 +3399,8 @@ export type DowngradableToV10ProviderState = (
   // snapshots: callers reach this function holding either shape, and the
   // strict v1.0 parse strips the field either way.
   nativeCapabilities?:
-    ProviderNativeCapabilities | ProviderNativeCapabilitiesV70Preimage;
+    | ProviderNativeCapabilities
+    | ProviderNativeCapabilitiesV70Preimage;
   // Widened to the live OR the pre-image union once the version-manager work
   // grew the live arms with `version`. `providersListDowngradeV7ToV1` feeds
   // this function pre-image rows, which no longer satisfy the live type - both
@@ -3567,7 +3568,9 @@ export function downgradeProviderCliStateListToV50(
  */
 export function upgradeProviderCliStateToV70Preimage(
   state:
-    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
+    | ProviderCliStateV20
+    | ProviderCliStateV30
+    | ProviderMutationCliStateV20,
 ): ProviderCliStateV70Preimage {
   return providerCliStateSchemaV70Preimage.parse({
     ...state,
@@ -3577,7 +3580,9 @@ export function upgradeProviderCliStateToV70Preimage(
 
 export function upgradeProviderCliStateListToV70Preimage(
   states: readonly (
-    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20
+    | ProviderCliStateV20
+    | ProviderCliStateV30
+    | ProviderMutationCliStateV20
   )[],
 ): ProviderCliStateV70Preimage[] {
   return states.map(upgradeProviderCliStateToV70Preimage);
@@ -3666,7 +3671,9 @@ export function upgradeProviderMutationCliStateV20ToLatest(
 /** Upgrade frozen list@2.0 / v3.0 state to latest by attaching the default descriptor. */
 export function upgradeProviderCliStateToLatest(
   state:
-    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
+    | ProviderCliStateV20
+    | ProviderCliStateV30
+    | ProviderMutationCliStateV20,
 ): ProviderCliState {
   return providerCliStateSchema.parse({
     ...state,
@@ -3676,7 +3683,9 @@ export function upgradeProviderCliStateToLatest(
 
 export function upgradeProviderCliStateListToLatest(
   states: readonly (
-    ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20
+    | ProviderCliStateV20
+    | ProviderCliStateV30
+    | ProviderMutationCliStateV20
   )[],
 ): ProviderCliState[] {
   return states.map(upgradeProviderCliStateToLatest);

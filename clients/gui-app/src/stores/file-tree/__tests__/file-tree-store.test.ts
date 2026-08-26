@@ -12,7 +12,8 @@ interface PersistedFileTreeState {
       Record<string, Readonly<Record<string, string>>>
     >;
     readonly expandedPathsByScope:
-      Readonly<Record<string, ReadonlyArray<string>>> | undefined;
+      | Readonly<Record<string, ReadonlyArray<string>>>
+      | undefined;
   };
   readonly version: number;
 }

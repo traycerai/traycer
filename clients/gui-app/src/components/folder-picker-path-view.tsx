@@ -32,7 +32,7 @@ export function HighlightedName(props: {
       <span
         key={`hit-${String(index)}`}
         data-testid="folder-picker-name-hit"
-        className="font-semibold text-primary underline decoration-primary/40 underline-offset-2"
+        className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 group-aria-selected/button:text-foreground group-aria-selected/button:decoration-current/40"
       >
         {props.name.slice(range.start, range.end)}
       </span>,

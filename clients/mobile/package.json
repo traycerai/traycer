@@ -1,11 +1,11 @@
 {
   "name": "@traycer-clients/mobile",
   "version": "0.0.0",
+  "private": true,
   "description": "Capacitor mobile runner for Traycer gui-app. Thin native shell that consumes gui-app as a library and bridges Capacitor plugins to the shared IRunnerHost contract.",
   "type": "module",
-  "private": true,
   "scripts": {
-    "compile": "tsc -b",
+    "compile": "tsgo -b",
     "build:web": "vite build --config vite.config.ts",
     "build:web:staging": "TRAYCER_MOBILE_ENV=staging vite build --config vite.config.ts",
     "dev:web": "vite --config vite.config.ts",
@@ -19,8 +19,9 @@
     "sync:android": "bun run build:web && bun x cap sync android",
     "open:android": "bun x cap open android",
     "build:android": "bun run sync:android && bun x cap build android",
-    "lint": "eslint . --cache --fix --max-warnings 0",
-    "format": "bun x prettier --write .",
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts"
   },

@@ -317,7 +317,9 @@ function buildCreateChatRequest(args: {
 }
 
 type ProjectedChatOpenResult =
-  "not_projected" | "opened" | "target_unavailable";
+  | "not_projected"
+  | "opened"
+  | "target_unavailable";
 
 function openProjectedChat(
   intent: CreatedChatOpenIntent,

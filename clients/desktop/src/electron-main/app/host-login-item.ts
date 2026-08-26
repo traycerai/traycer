@@ -117,7 +117,9 @@ export type HostLoginItemStatus =
  * rationale in `registerHostLoginItemUnserialized`).
  */
 export type RegisterHostLoginItemResult =
-  HostLoginItemStatus | "removed-by-user" | "deferred-busy";
+  | HostLoginItemStatus
+  | "removed-by-user"
+  | "deferred-busy";
 
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop

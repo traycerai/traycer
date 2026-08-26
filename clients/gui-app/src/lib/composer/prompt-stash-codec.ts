@@ -79,7 +79,8 @@ export interface PromptStashAvailableRow {
 }
 
 export type PromptStashRow =
-  PromptStashAvailableRow | PromptStashUnavailableRow;
+  | PromptStashAvailableRow
+  | PromptStashUnavailableRow;
 
 export function promptStashRowId(row: PromptStashRow): string {
   return row.kind === "entry" ? row.entry.id : row.id;

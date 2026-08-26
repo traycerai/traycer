@@ -54,8 +54,9 @@ export type WorktreeBusyHolders = z.infer<typeof worktreeBusyHoldersSchema>;
  * (absent, null, malformed) becomes `undefined` so adding this optional
  * field can never reject an envelope that parsed before the minor.
  */
-export const worktreeBusyHoldersWireFieldSchema =
-  worktreeBusyHoldersSchema.optional().catch(undefined);
+export const worktreeBusyHoldersWireFieldSchema = worktreeBusyHoldersSchema
+  .optional()
+  .catch(undefined);
 
 /**
  * `WORKTREE_BUSY` envelope a current client parses when it wants the typed

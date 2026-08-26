@@ -166,7 +166,8 @@ export function isPlatformCompatibleRelease(
 // drawn from. `reason` is a log-only diagnostic; it is never surfaced to the
 // user (the updater sanitizes all update failures).
 export type DesktopReleaseManifestValidation =
-  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // Deep, network-informed compatibility check run during discovery: the cheap
 // `isPlatformCompatibleRelease` gate only proves the manifest/installer *assets

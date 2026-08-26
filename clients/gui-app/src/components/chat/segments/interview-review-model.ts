@@ -7,7 +7,11 @@ import type {
 } from "@traycer/protocol/persistence/epic/schemas";
 
 export type InterviewReviewFidelity =
-  "exact" | "inferred" | "neutral" | "no-answer" | "draft";
+  | "exact"
+  | "inferred"
+  | "neutral"
+  | "no-answer"
+  | "draft";
 
 export interface InterviewDisplayFraming {
   readonly title: string | null;

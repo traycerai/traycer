@@ -76,7 +76,8 @@ const testState = vi.hoisted(() => ({
   pasteDisabled: false,
   resolvingPaths: false,
   runPendingImageJob: null as
-    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
+    | ((job: (signal: AbortSignal) => Promise<void>) => void)
+    | null,
   /** The target `useLandingComposerActions` was actually constructed with. */
   actionsTarget: null as { readonly hostLabel: string } | null,
   // G4 fixture: `ComposerPlacement.followsEffective` as `useComposerPlacement`

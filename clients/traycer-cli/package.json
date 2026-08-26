@@ -1,26 +1,24 @@
 {
   "name": "@traycer-clients/traycer-cli",
   "version": "0.1.0",
-  "description": "Traycer CLI - host supervisor, auth, and config surface",
-  "type": "module",
   "private": true,
-  "bin": {
-    "traycer": "./src/index.ts"
-  },
-  "engines": {
-    "node": ">=20.18.1"
-  },
+  "description": "Traycer CLI - host supervisor, auth, and config surface",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/traycerai/traycer.git",
     "directory": "clients/traycer-cli"
   },
-  "license": "MIT",
+  "bin": {
+    "traycer": "./src/index.ts"
+  },
+  "type": "module",
   "scripts": {
     "traycer": "bun run src/index.ts",
-    "compile": "tsc --noEmit",
-    "format": "bun x prettier --write .",
-    "lint": "eslint . --cache --fix --max-warnings 0",
+    "compile": "tsgo --noEmit",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings .",
     "test": "vitest run --config vitest.config.ts",
     "build": "node scripts/build-cli-npm.cjs",
     "prepack": "bun run build",
@@ -40,8 +38,8 @@
   },
   "devDependencies": {
     "@sentry/esbuild-plugin": "catalog:",
-    "@traycer/protocol": "workspace:*",
     "@traycer-clients/shared": "workspace:*",
+    "@traycer/protocol": "workspace:*",
     "@types/node": "catalog:",
     "@types/qrcode": "catalog:",
     "@typescript-eslint/eslint-plugin": "catalog:",
@@ -51,5 +49,8 @@
     "prettier": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=20.18.1"
   }
 }

@@ -31,9 +31,8 @@ const AGENT_STOP_NOTICE = {
 
 describe("agent.inbox.subscribe v1.3 compatibility", () => {
   it("preserves structured stop-initiator provenance for current clients", () => {
-    const parsed = agentInboxSubscribeServerFrameSchemaV13.parse(
-      AGENT_STOP_NOTICE,
-    );
+    const parsed =
+      agentInboxSubscribeServerFrameSchemaV13.parse(AGENT_STOP_NOTICE);
 
     expect(parsed).toMatchObject({
       notice: {
@@ -47,9 +46,8 @@ describe("agent.inbox.subscribe v1.3 compatibility", () => {
   });
 
   it("keeps the released v1.2 notice tree frozen", () => {
-    const parsed = agentInboxSubscribeServerFrameSchemaV12.parse(
-      AGENT_STOP_NOTICE,
-    );
+    const parsed =
+      agentInboxSubscribeServerFrameSchemaV12.parse(AGENT_STOP_NOTICE);
 
     if (parsed.kind !== "notice") {
       throw new Error("Expected a notice frame.");

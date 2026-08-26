@@ -45,7 +45,12 @@ interface TestTreeNode {
   readonly parentId: string | null;
   readonly title: string;
   readonly type:
-    "spec" | "ticket" | "story" | "review" | "chat" | "terminal-agent";
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review"
+    | "chat"
+    | "terminal-agent";
   readonly status: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;

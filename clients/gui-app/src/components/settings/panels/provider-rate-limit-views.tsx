@@ -74,7 +74,9 @@ import {
  *   the single-provider tab.
  */
 export type RateLimitViewVariant =
-  "settings" | "popover-detail" | "popover-overview";
+  | "settings"
+  | "popover-detail"
+  | "popover-overview";
 
 /**
  * The condensed Overview surface. Fields the single-provider detail keeps but

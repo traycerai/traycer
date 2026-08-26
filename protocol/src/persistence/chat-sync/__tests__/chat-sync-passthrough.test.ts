@@ -213,7 +213,9 @@ describe("chat-shard passthrough", () => {
     expect(assistant.blocks[0].value).not.toBeNull();
     expect(assistant.blocks[2].value).toBeNull();
     // The unknown block's whole subtree survives, at depth.
-    expect(assistant.blocks[2].raw).toEqual(canonicalizeJsonValue(unknownBlock));
+    expect(assistant.blocks[2].raw).toEqual(
+      canonicalizeJsonValue(unknownBlock),
+    );
 
     // The codec-backed block still decodes to its domain form.
     const resume = assistant.blocks[1].value;
@@ -434,7 +436,11 @@ describe("chat-shard __proto__ preservation", () => {
     expect(Object.getOwnPropertyNames(preserved)).toContain("__proto__");
 
     const payload = preserved.payload;
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload)
+    ) {
       throw new Error("expected a preserved payload object");
     }
     expect(Object.getOwnPropertyNames(payload)).toContain("__proto__");
@@ -460,7 +466,10 @@ describe("chat-shard __proto__ preservation", () => {
 describe("chat-shard version pinning", () => {
   it("refuses a payload claiming a version this contract did not write", () => {
     expect(() =>
-      parse({ ...persistedMessageShard, schemaVersion: { major: 99, minor: 77 } }),
+      parse({
+        ...persistedMessageShard,
+        schemaVersion: { major: 99, minor: 77 },
+      }),
     ).toThrow();
   });
 });

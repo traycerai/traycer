@@ -184,9 +184,9 @@ export const chatSchemaPreInReplyTo = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
 });
@@ -212,9 +212,9 @@ export const chatSchemaV14 = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.
@@ -244,9 +244,9 @@ export const chatSchemaV15 = z.object({
   activeSessionChain: activeSessionChainSchemaPreReasonix
     .nullable()
     .default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchemaPreRetryDeadline).default(
-    [],
-  ),
+  claudePendingWakes: z
+    .array(claudePendingWakeSchemaPreRetryDeadline)
+    .default([]),
   // Pre-image freeze (see `messageSchemaPreImage`): this released line must
   // never observe `imageResults`/the image resolution record, which the live
   // `messageSchema` would otherwise silently gain.

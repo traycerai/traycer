@@ -128,6 +128,4 @@ export const restoreResultManifestSchema = z.object({
   restoredAt: z.number(),
   results: z.array(restoreResultEntrySchema),
 });
-export type RestoreResultManifest = z.infer<
-  typeof restoreResultManifestSchema
->;
+export type RestoreResultManifest = z.infer<typeof restoreResultManifestSchema>;

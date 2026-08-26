@@ -62,7 +62,10 @@ export type GithubMentionDisplayState =
 
 /** How much of `host/owner/repo` a row must print to be unambiguous in scope. */
 export type GithubRepositoryQualification =
-  "none" | "repo" | "owner-repo" | "host-owner-repo";
+  | "none"
+  | "repo"
+  | "owner-repo"
+  | "host-owner-repo";
 
 const STATE_ICON: Readonly<Record<GithubMentionDisplayState, LucideIcon>> = {
   open: GitPullRequest,

@@ -1,7 +1,11 @@
 {
   "name": "@traycer/protocol",
-  "license": "MIT",
   "version": "0.1.0",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -27,12 +31,7 @@
     "./utils/yjs-utils/*": "./utils/yjs-utils/*.ts",
     "./utils/text/*": "./utils/text/*.ts"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
   "publishConfig": {
-    "access": "public",
     "types": "./dist/src/index.d.ts",
     "exports": {
       ".": {
@@ -119,14 +118,15 @@
         "types": "./dist/utils/text/*.d.ts",
         "import": "./dist/utils/text/*.js"
       }
-    }
+    },
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/patch-dist-esm-imports.cjs",
     "compile": "tsgo --noEmit --singleThreaded",
     "prepack": "bun run build",
     "test": "vitest run",
-    "lint": "eslint . --cache --fix --max-warnings 0"
+    "lint": "oxlint -c oxlint.config.ts --fix --deny-warnings ."
   },
   "dependencies": {
     "@noble/curves": "^2.3.0",

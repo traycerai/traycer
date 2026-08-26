@@ -24,6 +24,9 @@ repos:
     rev: v0.1.20
     hooks:
       - id: shellcheck
+        # Avoid making the upstream wrapper inspect every tracked file merely
+        # to discover the handful of shell scripts.
+        types: [shell]
 
   - repo: meta
     hooks:
@@ -54,6 +57,7 @@ repos:
             bunfig\.toml|
             nx\.json|
             package\.json|
+            \.oxfmtrc\.json|
             \.pre-commit-config\.yaml|
             tsconfig.*\.json|
             eslint/.*|

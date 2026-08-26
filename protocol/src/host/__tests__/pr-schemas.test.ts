@@ -1494,9 +1494,9 @@ describe("prGetLocalFileDiffRequestSchema", () => {
   it("defaults byteBudget to the 256 KiB per-file budget and accepts null", () => {
     const { byteBudget, ...withoutBudget } = LOCAL_FILE_DIFF_REQUEST_FIXTURE;
     expect(byteBudget).toBe(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET);
-    expect(prGetLocalFileDiffRequestSchema.parse(withoutBudget).byteBudget).toBe(
-      DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
-    );
+    expect(
+      prGetLocalFileDiffRequestSchema.parse(withoutBudget).byteBudget,
+    ).toBe(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET);
     expect(
       prGetLocalFileDiffRequestSchema.parse({
         ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
@@ -1672,7 +1672,14 @@ describe("prLocalDiffSummaryFileV11Schema", () => {
     // Each decodes (forgivingly) to bytes whose canonical encoding differs:
     // missing padding, url-safe alphabet, embedded whitespace, trailing
     // junk, nonzero padding bits, and a plainly non-base64 string.
-    const aliases = ["/w", "_w==", " dG9rZW4=", "dG9rZW4=junk", "Yf==", "not-base64"];
+    const aliases = [
+      "/w",
+      "_w==",
+      " dG9rZW4=",
+      "dG9rZW4=junk",
+      "Yf==",
+      "not-base64",
+    ];
     for (const alias of aliases) {
       expect(
         prLocalDiffSummaryFileV11Schema.safeParse({

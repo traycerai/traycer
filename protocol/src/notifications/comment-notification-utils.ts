@@ -9,10 +9,7 @@ export function extractUserMentionIds(content: JsonContent): string[] {
   const userIds = new Set<string>();
 
   function walk(node: JsonContent): void {
-    if (
-      node.type === "mention" &&
-      node.attrs?.contextType === "user"
-    ) {
+    if (node.type === "mention" && node.attrs?.contextType === "user") {
       const id = node.attrs.id;
       if (typeof id === "string" && id) {
         userIds.add(id);

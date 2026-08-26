@@ -87,24 +87,27 @@ describe("seeded protocol registries", () => {
     expect(Object.keys(persistenceRecordRegistry["chat-head"]).sort()).toEqual([
       "1",
     ]);
-    expect(Object.keys(persistenceRecordRegistry["chat-shard"]).sort()).toEqual([
-      "1",
-    ]);
+    expect(Object.keys(persistenceRecordRegistry["chat-shard"]).sort()).toEqual(
+      ["1"],
+    );
   });
 
   it("registers both chat-sync records on one version line", () => {
     // A shard embeds the sub-schemas the head's core is built from, so every
     // change that moves one moves the other. Bound to the SAME constant object,
     // not two equal literals - see `chat-sync/version.ts`.
-    expect(persistenceRecordRegistry["chat-head"][1].versions[2].contract
-      .schemaVersion).toBe(
+    expect(
+      persistenceRecordRegistry["chat-head"][1].versions[2].contract
+        .schemaVersion,
+    ).toBe(
       persistenceRecordRegistry["chat-shard"][1].versions[2].contract
         .schemaVersion,
     );
   });
 
   it("latest local epic record captures on-disk-only fields", () => {
-    const epicRecordV300 = persistenceRecordRegistry.epic[3].versions[0].contract;
+    const epicRecordV300 =
+      persistenceRecordRegistry.epic[3].versions[0].contract;
     const onDiskEpicKeys = Object.keys(epicRecordV300.schema.shape);
 
     expect(epicRecordV300.schemaVersion).toEqual({ major: 3, minor: 0 });
@@ -129,12 +132,10 @@ describe("seeded protocol registries", () => {
       artifacts: {},
       deletedArtifacts: {},
     };
-    const upgraded = loadRecord(
-      persistenceRecordRegistry,
-      "epic",
-      v200,
-      { major: 2, minor: 0 },
-    );
+    const upgraded = loadRecord(persistenceRecordRegistry, "epic", v200, {
+      major: 2,
+      minor: 0,
+    });
     expect(upgraded).toMatchObject(v200);
     expect(
       downgradeRecordAcrossMajors(
@@ -145,8 +146,8 @@ describe("seeded protocol registries", () => {
       ),
     ).toMatchObject({ ok: true });
 
-    const reasonixEpic = persistenceRecordRegistry.epic[3].versions[0].contract.schema.parse(
-      {
+    const reasonixEpic =
+      persistenceRecordRegistry.epic[3].versions[0].contract.schema.parse({
         ...v200,
         chats: {
           "chat-1": {
@@ -168,8 +169,7 @@ describe("seeded protocol registries", () => {
             },
           },
         },
-      },
-    );
+      });
     expect(
       downgradeRecordAcrossMajors(
         persistenceRecordRegistry.epic,

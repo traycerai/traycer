@@ -107,9 +107,9 @@ describe("Noise NK in-process interop", () => {
   it("binds associated data: a frame decrypted under different AD fails", async () => {
     const { client, host } = await establishSessions();
     const frame = await client.encrypt(enc.encode("bound"), enc.encode("ad-A"));
-    await expect(host.decrypt(frame, enc.encode("ad-B"))).rejects.toBeInstanceOf(
-      NoiseDecryptError,
-    );
+    await expect(
+      host.decrypt(frame, enc.encode("ad-B")),
+    ).rejects.toBeInstanceOf(NoiseDecryptError);
   });
 
   it("fails the handshake when the initiator has the wrong host static key", async () => {

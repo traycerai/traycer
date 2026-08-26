@@ -526,7 +526,11 @@ export function parseSelectionEvidenceReport(
  * this - no surface reads sockets, probe caches, or the cloud DTO directly.
  */
 export type HostLeaseStatus =
-  "connecting" | "ready" | "degraded" | "restarting-expected" | "dead";
+  | "connecting"
+  | "ready"
+  | "degraded"
+  | "restarting-expected"
+  | "dead";
 
 /**
  * Why a lease is dead, as a discriminated union so `incompatible` carries
@@ -724,7 +728,11 @@ export function parseLeaseSnapshot(raw: unknown): HostLeaseSnapshot | null {
  * `failover` (over-narrating beats hiding a move).
  */
 export type SelectionChangeCause =
-  "activate" | "deregister-clear" | "failover" | "recovery" | "fleet-shift";
+  | "activate"
+  | "deregister-clear"
+  | "failover"
+  | "recovery"
+  | "fleet-shift";
 
 /**
  * THE selection event (authority → windows): one composite, revisioned,
@@ -821,7 +829,8 @@ export type ActivateRefusalReason =
 
 /** Result of an Activate request. */
 export type ActivateResult =
-  { ok: true } | { ok: false; reason: ActivateRefusalReason };
+  | { ok: true }
+  | { ok: false; reason: ActivateRefusalReason };
 
 /** Raw-boundary parser for {@link ActivateResult}; malformed → refusal. */
 export function parseActivateResult(raw: unknown): ActivateResult {

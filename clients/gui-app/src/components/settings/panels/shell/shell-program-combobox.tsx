@@ -553,7 +553,8 @@ function ProbeStatus(props: {
   readonly input: string;
   readonly isAbsolute: boolean;
   readonly probe:
-    { readonly exists: boolean; readonly executable: boolean } | undefined;
+    | { readonly exists: boolean; readonly executable: boolean }
+    | undefined;
 }) {
   const { input, isAbsolute, probe } = props;
   let content: { text: string; tone: "muted" | "ok" | "warn" } | null = null;
