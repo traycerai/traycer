@@ -229,6 +229,7 @@ import {
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { ChatSearchHeaderInput } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-search";
@@ -2700,6 +2701,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           },
     [epicId, nodeId, sourceHostId, viewTabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -2707,7 +2709,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: selectionMode || dragData === null,
+    disabled: dragDisabled || selectionMode || dragData === null,
     data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(

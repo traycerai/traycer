@@ -151,7 +151,7 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       unanswerable: [],
       unanswerableBusy: false,
       onAnswer: () => null,
-      onError: () => null,
+      onSkip: () => null,
       onFork: null,
     },
     approvals: {

@@ -9,6 +9,7 @@ import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { type LeftPanelDefinition } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { ChevronRight } from "lucide-react";
@@ -99,6 +100,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
     }),
     [props.panel.id, props.tabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -109,6 +111,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
       getLeftPanelSectionDragId(props.panel.id),
     ),
     data: dragData,
+    disabled: dragDisabled,
   });
   const searchOpen = usePanelHeaderSearchOpen(props.tabId, props.panel.id);
   const bulkSelection = useMaybeSidebarBulkSelection();

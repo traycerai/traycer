@@ -3,7 +3,7 @@ import {
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeV16,
-  chatSubscribeV17,
+  chatSubscribeV18,
   chatSubscribeWindowedClientFrameSchema,
   chatSubscribeWindowedServerFrameSchema,
   chatWindowedSnapshotSchema,
@@ -143,7 +143,7 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
 describe("the chat.subscribe@1.6 freeze", () => {
   it("declares schemaVersion 1.6, and 1.7 declares 1.7", () => {
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
-    expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
+    expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
   });
 
   it("strips an unknown key on the frozen 1.6 chat object (canary: bound to an object schema)", () => {

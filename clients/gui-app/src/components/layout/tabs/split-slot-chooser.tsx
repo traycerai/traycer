@@ -11,7 +11,7 @@ import {
   type FillableSlotDestination,
 } from "@/components/layout/tabs/fillable-slot";
 import { useHostBinding } from "@/lib/host";
-import { isMobileApp } from "@/lib/mobile-app";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { cn } from "@/lib/utils";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { tabResolveIntent, tabSurfaceDescriptor } from "@/stores/tabs/registry";
@@ -51,8 +51,9 @@ export function SplitSlotChooserContent(
   // Store focus can land on this empty side without any DOM focus following
   // it (keyboard "add split", focus-side commands). Mirroring the focused
   // side into the search's focus effect gives typing somewhere to go - which
-  // is worth nothing on the installed mobile app, where there is no typing
-  // until a tap and a raised keyboard would cover the chooser it belongs to.
+  // is worth nothing on a touch pointer, where there is no typing until a tap
+  // and a raised keyboard would cover the chooser it belongs to.
+  const coarsePointer = useCoarsePointer();
   const sideFocused = useTabsStore((state) =>
     state.items.some(
       (item) =>
@@ -225,7 +226,7 @@ export function SplitSlotChooserContent(
               // `&&` into a null-armed ternary, and this prop is strictly
               // boolean - spelling both arms keeps the fixer away and the
               // types exact.
-              autoFocusSearch={sideFocused ? !isMobileApp() : false}
+              autoFocusSearch={sideFocused ? !coarsePointer : false}
             />
           ) : (
             <p className="px-1 py-2 text-ui-sm text-muted-foreground">

@@ -1,4 +1,8 @@
-import { focusManager, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClientProvider,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,6 +38,20 @@ describe("workspace folder resolution cache", () => {
       startsResolved: false,
     });
     const source = workspaceSource(fixture);
+    const unrelatedKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "workspace.resolvePathsByRepoIdentifiers"
+    >(mockLocalHostEntry.hostId, "workspace.resolvePathsByRepoIdentifiers", {
+      repoIdentifiers: [{ owner: "unrelated", repo: "repo" }],
+    });
+    const caseVariantKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "workspace.resolvePathsByRepoIdentifiers"
+    >(mockLocalHostEntry.hostId, "workspace.resolvePathsByRepoIdentifiers", {
+      repoIdentifiers: [{ owner: "TRAYCERAI", repo: "Traycer" }],
+    });
+    fixture.queryClient.setQueryData(unrelatedKey, { mappings: [] });
+    fixture.queryClient.setQueryData(caseVariantKey, { mappings: [] });
     const rendered = renderHook(
       () => ({
         resolved: useResolvedWorkspaceFolders(source, fixture.client, null),
@@ -66,6 +84,12 @@ describe("workspace folder resolution cache", () => {
       ]);
     });
     expect(fixture.resolveRequestCount()).toBe(2);
+    expect(fixture.queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(
+      false,
+    );
+    expect(
+      fixture.queryClient.getQueryState(caseVariantKey)?.isInvalidated,
+    ).toBe(true);
   });
 
   it("supersedes an in-flight stale resolution after preparing the folder", async () => {
@@ -215,6 +239,7 @@ describe("workspace folder resolution cache", () => {
 
 interface WorkspaceFixture {
   readonly client: HostClient<HostRpcRegistry>;
+  readonly queryClient: QueryClient;
   readonly repoIdentifier: { readonly owner: string; readonly repo: string };
   readonly workspacePath: string;
   readonly releaseFirstResolution: () => void;
@@ -336,6 +361,7 @@ function createFixture(options: WorkspaceFixtureOptions): WorkspaceFixture {
   );
   return {
     client,
+    queryClient,
     repoIdentifier,
     workspacePath,
     releaseFirstResolution: () => firstResolution.resolve({ mappings: [] }),

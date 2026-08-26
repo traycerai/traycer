@@ -2,12 +2,19 @@ import {
   chatSubscribeFullSnapshotSchemaVersion,
   chatSubscribeServerFrameSchema,
   chatSubscribeSnapshotServerFrameShallowSchema,
+  chatSubscribeSnapshotServerFrameShallowSchemaV16,
   chatSubscribeWindowedServerFrameSchema,
   type ChatSubscribeClientFrame,
   type ChatSubscribeServerFrame,
   type ChatSubscribeWindowedServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  normalizeInterviewBlocksInShallowSnapshot,
+  projectChatClientFrameForVersion,
+  supportsInterviewSettlementActions,
+  type ProjectedChatSubscribeClientFrame,
+} from "@traycer/protocol/host/agent/gui/chat-frame-compat";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   IStreamSession,
@@ -142,7 +149,7 @@ export interface ChatStreamCallbacks {
   //
   // REQUIRED, not optional, and that is the point. These fire only on a
   // negotiated windowed line, which no released peer has yet - so a consumer
-  // that omitted them would compile today and, the day `chatSubscribeV17` is
+  // that omitted them would compile today and, the day `chatSubscribeV18` is
   // registered, silently drop every hydration response and render a chat that
   // never fills in. A required member turns that into a compile error at the
   // one moment it can still be cheap to fix.
@@ -194,6 +201,17 @@ export interface ChatStreamClientOptions {
 }
 
 /**
+ * The oldest `chat.subscribe@1.x` minor whose server frames carry the LIVE
+ * message/event SHAPE - i.e. every field the current types promise is present
+ * on the wire, with no compatibility default needed to synthesize it.
+ *
+ * `1.6` is that floor: it shipped image support (`imageResolutions`, the
+ * image-bearing `tool_call`) and the turn-tail anchor, and the only difference
+ * between its serverFrame and the live `1.7` one is the harness enum, which
+ * changes no field's presence. Raise this ONLY when a minor adds or removes a
+ * FIELD, not when one merely widens an enum.
+ */
+/**
  * Typed wrapper over `WsStreamClient` for a single host-owned GUI chat.
  *
  * Chat frames are text-only, so outbound action methods always send a null
@@ -224,9 +242,29 @@ export class ChatStreamClient {
     });
   }
 
+  /**
+   * Send an action, ENCODED for the line this session negotiated.
+   *
+   * Callers build the live frame and nothing else; the downgrade is applied
+   * here, once, from the session's own negotiated version. Sending the live
+   * frame verbatim and letting an older host's zod strip the fields it does
+   * not know is not a downgrade mechanism - it is unknown-field parsing
+   * standing in for negotiation, and it fails silently the first time a new
+   * field is not merely ignorable. See `projectChatClientFrameForVersion` for
+   * exactly what a pre-`1.7` peer receives.
+   */
   sendAction(frame: ChatSubscribeClientFrame): void {
     if (this.closed) return;
-    this.session.sendClientFrame(frame, null);
+    let projected: ProjectedChatSubscribeClientFrame;
+    try {
+      projected = projectChatClientFrameForVersion(
+        frame,
+        this.session.getNegotiatedSchemaVersion(),
+      );
+    } catch {
+      return;
+    }
+    this.session.sendClientFrame(projected, null);
   }
 
   /**
@@ -294,6 +332,16 @@ export class ChatStreamClient {
     );
   }
 
+  /**
+   * Whether this chat session can send the settled-interview owner actions
+   * introduced on `chat.subscribe@1.7`.
+   */
+  interviewSettlementActionsProtocolSupported(): boolean {
+    return supportsInterviewSettlementActions(
+      this.session.getNegotiatedSchemaVersion(),
+    );
+  }
+
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -309,15 +357,21 @@ export class ChatStreamClient {
    * its shape, so a legacy snapshot fails the windowed parse and a windowed
    * one fails the legacy parse. Guessing wrong silently drops every snapshot.
    *
-   * `>= 7` mirrors the host's `chatSubscribeSupportsWindowedTranscript` rather
-   * than pinning `1.7` exactly, so the two sides state one rule. Note it can
-   * only ever be true AT `1.7` in this build - negotiation picks the highest
-   * minor both peers know, and this client knows no higher - so a future `1.8`
+   * `>= 8` mirrors the host's `chatSubscribeSupportsWindowedTranscript` rather
+   * than pinning `1.8` exactly, so the two sides state one rule. Note it can
+   * only ever be true AT `1.8` in this build - negotiation picks the highest
+   * minor both peers know, and this client knows no higher - so a future `1.9`
    * with its own union must revisit the parse below, not just this predicate.
+   *
+   * The bound was `>= 7` while this line was drafted as `1.7`. `1.7` shipped as
+   * the interview-settlement line instead - a FULL-snapshot line - so leaving
+   * the bound where it was would route every live snapshot into the windowed
+   * union, where it fails to parse and is dropped in silence. A renumber moves
+   * this predicate, not only the contract.
    */
   private isOnWindowedLine(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
-    return version !== null && version.major === 1 && version.minor >= 7;
+    return version !== null && version.major === 1 && version.minor >= 8;
   }
 
   /**
@@ -464,6 +518,22 @@ export class ChatStreamClient {
     );
   }
 
+  /**
+   * Whether THIS session negotiated `chat.subscribe@1.6` - the one
+   * down-negotiated line that keeps a shallow snapshot path.
+   *
+   * `1.6` is a SHIPPED line (`host-v1.2.0-rc.1`) and the first one with
+   * full-chat-on-subscribe, so its snapshots are the multi-hundred-megabyte
+   * ones. Opening `1.7` above it moved "the live line" but changed nothing
+   * about what a `1.6` host sends, and dropping it to the generic deep parser
+   * would impose seconds of render-thread CPU per snapshot on that whole
+   * cohort for a change they cannot observe.
+   */
+  private isOnV16SchemaLine(): boolean {
+    const version = this.session.getNegotiatedSchemaVersion();
+    return version !== null && version.major === 1 && version.minor === 6;
+  }
+
   private handleServerFrame(
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
@@ -498,6 +568,26 @@ export class ChatStreamClient {
         chatSubscribeSnapshotServerFrameShallowSchema.safeParse(envelope);
       if (shallow.success) {
         this.callbacks.onSnapshot(shallow.data);
+      }
+      return;
+    }
+    if (envelope.kind === "snapshot" && this.isOnV16SchemaLine()) {
+      // Same trade for the shipped `1.6` line - see `isOnV16SchemaLine`. The
+      // envelope is validated deeply against the FROZEN `1.6` shapes, so this
+      // is exact rather than permissive; the histories stay structural.
+      //
+      // The one thing `1.6` genuinely lacks is interview settlement, and it
+      // lives inside the arrays the shallow parse does not walk. The narrow
+      // normalizer below supplies exactly those defaults - the deep schema's
+      // job on this path - so consumers never read `undefined` through a type
+      // that promises a value.
+      const shallowV16 =
+        chatSubscribeSnapshotServerFrameShallowSchemaV16.safeParse(envelope);
+      if (shallowV16.success) {
+        normalizeInterviewBlocksInShallowSnapshot(
+          shallowV16.data.snapshot.chat.messages,
+        );
+        this.callbacks.onSnapshot(shallowV16.data);
       }
       return;
     }

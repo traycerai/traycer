@@ -27,7 +27,7 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
  * These tests pin the sequencing that prevents it.
  *
  * The frames are delivered straight to the store's callbacks. That is not a
- * shortcut around the transport - `chatSubscribeV17` is unregistered, so no
+ * shortcut around the transport - `chatSubscribeV18` is unregistered, so no
  * handshake can negotiate the windowed line at all (the client declares its own
  * canonical minor whenever the host's is newer). The callback surface is where
  * this behaviour lives either way.

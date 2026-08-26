@@ -140,6 +140,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
           <NewTerminalPickerBody
             epicId={epicId}
             surfaceKey={surfaceKey}
+            autoFocusSearch
             onLaunch={handleLaunch}
           />
         ) : null}

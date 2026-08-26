@@ -126,6 +126,48 @@ export const OmpIcon: HarnessIcon = (props) => (
   </svg>
 );
 
+// Reasonix (esengine/DeepSeek-Reasonix) has no lobehub entry and publishes no
+// brand asset, so this is a hand-rolled mark: a premise node fanning out to two
+// conclusion nodes — an inference step, which is what the product is named for.
+//
+// Deliberately NOT DeepSeek's whale, even though `@lobehub/icons` ships one and
+// the upstream repo carries "DeepSeek" in its name. Reasonix is a third-party
+// CLI whose backend is user-configured: its shipped presets cover Kimi, GLM/Z.AI,
+// Qwen, MiniMax, StepFun, LongCat and Nvidia alongside DeepSeek, and Kimi and
+// Qwen are already their own rows here with their own marks. A vendor mark on
+// this row would claim a backend the user may not be running — the same
+// mis-identification hazard the checklist records for reusing a sibling's icon,
+// arriving from the model side instead of the sibling side.
+//
+// Monochrome `currentColor` so it follows `text-foreground` like the other
+// hand-rolled marks; there is no brand accent to keep literal.
+export const ReasonixIcon: HarnessIcon = (props) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    {/* Premise → two conclusions */}
+    <path d="M8 12h3.5l3 -5.5" />
+    <path d="M11.5 12l3 5.5" />
+    <rect
+      x="2.6"
+      y="9.4"
+      width="5.2"
+      height="5.2"
+      rx="1.4"
+      fill="currentColor"
+      stroke="none"
+    />
+    <circle cx="17.6" cy="6" r="2.6" fill="currentColor" stroke="none" />
+    <circle cx="17.6" cy="18" r="2.6" />
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox={TRAYCER_MARK_VIEWBOX} fill="currentColor">

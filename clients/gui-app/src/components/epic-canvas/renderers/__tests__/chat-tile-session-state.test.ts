@@ -907,7 +907,11 @@ function interviewMessage(
       description: null,
       questions: [],
       answers: [],
+      draftAnswers: [],
+      outcome: null,
+      settlement: null,
       error: null,
+      delivery: null,
       forkedWithoutAnswer: false,
     })),
   };

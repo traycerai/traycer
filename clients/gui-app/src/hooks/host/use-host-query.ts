@@ -272,6 +272,11 @@ export interface UseHostMutationOptions<
   readonly mapVariables: (
     variables: TVariables,
   ) => RequestOfMethod<Registry, Method>;
+  /** Runs at the raw-response boundary, before TanStack lifecycle callbacks. */
+  readonly onResponse?: (
+    response: ResponseOfMethod<Registry, Method>,
+    variables: TVariables,
+  ) => void;
 }
 
 /**
@@ -302,13 +307,18 @@ export function useHostMutation<
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, async () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
           );
         }
-        return args.client.request(args.method, args.mapVariables(variables));
+        const response = await args.client.request(
+          args.method,
+          args.mapVariables(variables),
+        );
+        args.onResponse?.(response, variables);
+        return response;
       }),
   });
 }
@@ -345,17 +355,19 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostQueryErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, async () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
           );
         }
-        return args.client.requestWithResponseTimeout(
+        const response = await args.client.requestWithResponseTimeout(
           args.method,
           args.mapVariables(variables),
           args.responseTimeoutMs,
         );
+        args.onResponse?.(response, variables);
+        return response;
       }),
   });
 }

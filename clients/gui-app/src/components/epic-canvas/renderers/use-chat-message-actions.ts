@@ -17,7 +17,10 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { clearChatForkWorkspacesForEpic } from "@/lib/worktree/chat-fork-workspace-staging";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  InterviewDeliveryRetryIdentity,
+} from "@/stores/chats/chat-session-store";
 import type { AuthProfile } from "@/stores/auth/auth-store";
 import type { ChatForkDialogTarget } from "@/components/chat/chat-fork-dialog";
 import type { ChatSurfaceNode } from "./chat-tile-types";
@@ -53,6 +56,7 @@ export interface ChatMessageActionsInput {
   readonly activeInlineEdit: InlineEditState | null;
   readonly canModifyMessages: boolean;
   readonly canAct: boolean;
+  readonly interviewDeliveryRetryProtocolSupported: boolean;
   readonly currentComposerSettings: ChatRunSettings;
   readonly editSettings: ChatRunSettings;
   /**
@@ -79,6 +83,8 @@ export interface ChatMessageActionsInput {
   readonly transcriptWindow: TranscriptWindow | null;
   readonly profile: AuthProfile | null;
   readonly chatActions: ChatActions;
+  readonly pendingActions: ChatSessionState["pendingActions"];
+  readonly acceptedActions: ChatSessionState["acceptedActions"];
   readonly confirmingDeleteMessageId: string | null;
   readonly setForkTarget: (target: ChatForkDialogTarget | null) => void;
   // The source chat's live binding, used to seed the fork dialog's workspace
@@ -150,6 +156,7 @@ export function useChatMessageActions(
     activeInlineEdit,
     canModifyMessages,
     canAct,
+    interviewDeliveryRetryProtocolSupported,
     currentComposerSettings,
     editSettings,
     slashCatalog,
@@ -164,6 +171,8 @@ export function useChatMessageActions(
     transcriptWindow,
     profile,
     chatActions,
+    pendingActions,
+    acceptedActions,
     confirmingDeleteMessageId,
     setForkTarget,
     worktreeBinding,
@@ -381,6 +390,28 @@ export function useChatMessageActions(
 
   const messageActionsFor = useCallback(
     (message: ChatMessageModel): ChatMessageActions | null => {
+      const interviewDeliveryRetry =
+        canAct && interviewDeliveryRetryProtocolSupported
+          ? {
+              isPending: (identity: InterviewDeliveryRetryIdentity): boolean =>
+                [
+                  ...Object.values(pendingActions),
+                  ...Object.values(acceptedActions),
+                ].some((action) => {
+                  const pendingIdentity = action.interviewDeliveryRetry;
+                  return (
+                    pendingIdentity !== null &&
+                    pendingIdentity.blockId === identity.blockId &&
+                    pendingIdentity.settlementId === identity.settlementId &&
+                    pendingIdentity.deliveryId === identity.deliveryId &&
+                    pendingIdentity.generation === identity.generation
+                  );
+                }),
+              onRetry: (identity: InterviewDeliveryRetryIdentity): void => {
+                chatActions.interviewDeliveryRetry(identity);
+              },
+            }
+          : null;
       // A completed assistant message exposes the plain footer fork. A stable
       // message with a resolved interview also exposes its Q&A fork icons while
       // the rest of that assistant turn may still be running.
@@ -410,6 +441,14 @@ export function useChatMessageActions(
                 null,
               ),
           },
+          interviewDeliveryRetry,
+        };
+      }
+      if (message.role === "assistant" && interviewDeliveryRetry !== null) {
+        return {
+          type: "assistant",
+          fork: null,
+          interviewDeliveryRetry,
         };
       }
       const persistentMessageId = editablePersistentMessageId(message);
@@ -476,7 +515,11 @@ export function useChatMessageActions(
       editSettings,
       fallbackToGlobalMentionRoots,
       forkAtAssistantMessage,
+      interviewDeliveryRetryProtocolSupported,
       mentionRoots,
+      pendingActions,
+      acceptedActions,
+      chatActions,
       submitInlineEdit,
       updateInlineEdit,
     ],

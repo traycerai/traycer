@@ -506,7 +506,7 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     unanswerable: [],
     unanswerableBusy: false,
     onAnswer: () => null,
-    onError: () => null,
+    onSkip: () => null,
     onFork: null,
   };
   const approvals: ChatLowerApprovalsState = {

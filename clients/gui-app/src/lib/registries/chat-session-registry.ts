@@ -207,6 +207,8 @@ export function useChatSessionHandle(
         requestTranscriptRange: (request) =>
           result.client.requestTranscriptRange(request),
         requestResnapshot: () => result.client.requestResnapshot(),
+        interviewSettlementActionsProtocolSupported: () =>
+          result.client.interviewSettlementActionsProtocolSupported(),
       };
     };
 
