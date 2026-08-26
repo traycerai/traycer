@@ -2215,9 +2215,9 @@ function ArtifactHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
-        {/* Hidden only when the Epic has NO artifacts - see
-            `useArtifactSearchAvailable` for why emptiness gates this and a size
-            threshold does not. */}
+        {/* Hidden when the Epic has NO artifacts or is open read-only - see
+            `useArtifactSearchAvailable` for why emptiness and write access gate
+            this and a size threshold does not. */}
         {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => openSearch(props.tabId, "artifacts", "")}

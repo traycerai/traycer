@@ -365,12 +365,12 @@ describe("<SharingPanel />", () => {
             {
               identifier: "sharm@gmail.com",
               identifierType: "email",
-              role: "viewer",
+              role: "editor",
             },
             {
               identifier: "asjnfakjsnf",
               identifierType: "github_handle",
-              role: "viewer",
+              role: "editor",
             },
           ],
         }),
@@ -487,7 +487,7 @@ describe("<SharingPanel />", () => {
         input: {
           kind: "team",
           teamId: "team-2",
-          role: "viewer",
+          role: "editor",
         },
       },
       expect.objectContaining({}),
