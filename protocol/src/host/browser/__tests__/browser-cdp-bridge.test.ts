@@ -23,7 +23,7 @@ const COMMANDS: readonly BrowserCdpCommand[] = [
   {
     kind: "cdpCreateIsolatedWorld",
     frameId: "frame-1",
-    worldName: "__aside_utility",
+    worldName: "__traycer_browser_snapshot",
     grantUniversalAccess: true,
   },
   {

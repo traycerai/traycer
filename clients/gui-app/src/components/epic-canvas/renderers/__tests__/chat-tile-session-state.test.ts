@@ -600,10 +600,10 @@ describe("chatActivityIndicator", () => {
           backgroundItems: [
             MONITOR_ITEM,
             {
-              taskId: "t3",
+              taskId: "workflow-task",
               kind: "workflow" as const,
               title: "review-changes",
-              blockId: "t3",
+              blockId: "workflow-task",
               parentTaskId: null,
               phase: null,
               activeLabel: null,
