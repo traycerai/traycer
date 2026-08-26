@@ -59,6 +59,9 @@ export function useArtifactsOpenerItems(
   const append = (nodeId: string, ancestorIds: ReadonlyArray<string>): void => {
     const node = tree.nodeById[nodeId];
     const item = itemByNodeId.get(nodeId);
+    const childIds = Object.hasOwn(tree.childrenByParent, nodeId)
+      ? tree.childrenByParent[nodeId]
+      : [];
     if (
       item !== undefined &&
       node.type !== "chat" &&
@@ -70,13 +73,13 @@ export function useArtifactsOpenerItems(
           nodeId,
           depth: ancestorIds.length,
           ancestorIds,
-          hasChildren: tree.childrenByParent[nodeId].length > 0,
+          hasChildren: childIds.length > 0,
           kind: node.type,
           status: node.status,
         },
       });
     }
-    for (const childId of tree.childrenByParent[nodeId] ?? []) {
+    for (const childId of childIds) {
       append(childId, [...ancestorIds, nodeId]);
     }
   };

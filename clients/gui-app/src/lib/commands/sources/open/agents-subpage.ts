@@ -61,6 +61,9 @@ export function useAgentsOpenerItems(
   const append = (nodeId: string, ancestorIds: ReadonlyArray<string>): void => {
     const node = tree.nodeById[nodeId];
     const item = itemByNodeId.get(nodeId);
+    const childIds = Object.hasOwn(tree.childrenByParent, nodeId)
+      ? tree.childrenByParent[nodeId]
+      : [];
     if (
       item !== undefined &&
       (node.type === "chat" || node.type === "terminal-agent")
@@ -71,13 +74,13 @@ export function useAgentsOpenerItems(
           nodeId,
           depth: ancestorIds.length,
           ancestorIds,
-          hasChildren: tree.childrenByParent[nodeId].length > 0,
+          hasChildren: childIds.length > 0,
           interface: node.type === "chat" ? "chat" : "terminal",
           activity: activity.get(nodeId) ?? "idle",
         },
       });
     }
-    for (const childId of tree.childrenByParent[nodeId] ?? []) {
+    for (const childId of childIds) {
       append(childId, [...ancestorIds, nodeId]);
     }
   };
