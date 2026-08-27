@@ -34,6 +34,24 @@ export const GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE = {
   "--trees-selected-fg-override": "var(--accent-foreground)",
 } as CSSProperties;
 
+/**
+ * Scoped CSS to preserve file names in the workspace file tree when browser zoom exceeds 100%.
+ *
+ * Pierre's content lane defaults to `flex: 0 auto`, which lets adjacent lanes consume its inline
+ * space as text metrics scale. At high zoom, this causes the filename to shrink until only an
+ * ellipsis marker remains. This override gives the content lane an explicit `flex: 1 1 0` basis
+ * and `max-width: none`, so it takes the remaining row width instead of being squeezed out.
+ *
+ * The CSS is intentionally scoped to Pierre's shadow root through the `unsafeCSS` option,
+ * preventing interference with the git-diff tree that shares the same theme constants.
+ */
+export const WORKSPACE_FILE_TREE_UNSAFE_CSS = `
+[data-item-section="content"] {
+  flex: 1 1 0;
+  max-width: none;
+}
+`;
+
 export const GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS = `
 [data-item-type="file"] [data-item-section="icon"] {
   opacity: 0.9;
