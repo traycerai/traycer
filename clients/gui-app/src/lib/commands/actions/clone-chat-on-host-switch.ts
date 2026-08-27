@@ -13,9 +13,13 @@ import {
   type CancelFn,
   type CreateChatCommand,
 } from "@/lib/commands/actions/new-chat";
-import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
+import {
+  resolveClonedChatSettings,
+  type ClonedChatProfileRecoveryRequired,
+} from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
 // `classifyRecoverableForkFailure` - which of the two client-visible ways a
 // latest-checkpoint fork request can fail this flow recovers from, if any -
@@ -94,11 +98,23 @@ export interface CloneChatOnHostSwitchArgs {
    *  target hosts for the `providers.list` profile-identity lookup (never
    *  bound as the active host - see `buildTransientHostClient`). */
   readonly globalClient: HostClient<HostRpcRegistry>;
+  /** An explicit profile picked in the target-host recovery UI. `null` means
+   *  this is the initial identity-mapping attempt; the object wrapper keeps an
+   *  explicit Terminal choice (`profileId: null`) distinct. */
+  readonly explicitTargetProfileId: {
+    readonly profileId: string | null;
+  } | null;
   /** Fired when a non-ambient source profile could not be mapped to an
    *  equivalent on the target host (source unreachable, provider not
    *  logged in there, or no matching `accountUuid`) - the clone still
    *  proceeds, landing on the ambient login instead of failing silently. */
   readonly onProfileFallbackToAmbient: () => void;
+  /** Stops creation before a target-host profile has been explicitly chosen.
+   *  The caller keeps this resolution visible and may retry with
+   *  `explicitTargetProfileId` after selection or re-enablement. */
+  readonly onProfileSelectionRequired: (
+    resolution: ClonedChatProfileRecoveryRequired,
+  ) => void;
   /** Fired right before the settings-only retry fires - the clone still
    *  proceeds, just without history. Two distinct causes, since the right
    *  copy differs: `"no-checkpoint"` names the SOURCE (it has not replied
@@ -227,8 +243,16 @@ export function cloneChatOnHostSwitch(
   };
 
   void resolveSettingsForClone(args)
-    .then((settings) => {
-      openWithForkSource(settings, {
+    .then((resolution) => {
+      if (resolution.status !== "ready") {
+        if (!cancelled) args.onProfileSelectionRequired(resolution);
+        return;
+      }
+      if (cancelled) return;
+      if (resolution.fallenBackToAmbient) {
+        args.onProfileFallbackToAmbient();
+      }
+      openWithForkSource(resolution.settings, {
         boundary: "latest",
         sourceChatId: args.sourceChatId,
         // Ticket 37: whatever owner this surface was ACTUALLY rendering, so the
@@ -263,9 +287,16 @@ export function cloneChatOnHostSwitch(
 
 async function resolveSettingsForClone(
   args: CloneChatOnHostSwitchArgs,
-): Promise<ChatRunSettings | null> {
-  if (args.sourceSettings === null || args.sourceSettings.profileId === null) {
-    return args.sourceSettings;
+): Promise<
+  | {
+      readonly status: "ready";
+      readonly settings: ChatRunSettings | null;
+      readonly fallenBackToAmbient: boolean;
+    }
+  | ClonedChatProfileRecoveryRequired
+> {
+  if (args.sourceSettings === null) {
+    return { status: "ready", settings: null, fallenBackToAmbient: false };
   }
   const targetEntry = args.directory.findById(args.targetHostId);
   const targetClient =
@@ -273,8 +304,15 @@ async function resolveSettingsForClone(
       ? null
       : buildTransientHostClient(args.globalClient, targetEntry);
   if (targetClient === null) {
-    args.onProfileFallbackToAmbient();
-    return { ...args.sourceSettings, profileId: null };
+    const providerId = providerCliIdForHarness(args.sourceSettings.harnessId);
+    if (providerId !== null) {
+      return { status: "catalog-unavailable", providerId };
+    }
+    return {
+      status: "ready",
+      settings: { ...args.sourceSettings, profileId: null },
+      fallenBackToAmbient: args.sourceSettings.profileId !== null,
+    };
   }
   const sourceEntry = args.directory.findById(args.sourceHostId);
   const sourceClient =
@@ -286,9 +324,12 @@ async function resolveSettingsForClone(
     sourceSettings: args.sourceSettings,
     sourceClient,
     targetClient,
+    explicitTargetProfileId: args.explicitTargetProfileId,
   });
-  if (resolved.fallenBackToAmbient) {
-    args.onProfileFallbackToAmbient();
-  }
-  return resolved.settings;
+  if (resolved.status !== "ready") return resolved;
+  return {
+    status: "ready",
+    settings: resolved.settings,
+    fallenBackToAmbient: resolved.fallenBackToAmbient,
+  };
 }

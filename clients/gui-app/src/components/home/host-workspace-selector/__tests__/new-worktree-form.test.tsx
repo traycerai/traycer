@@ -80,7 +80,8 @@ vi.mock("react-virtuoso", async () => {
     readonly initialItemCount?: number;
     readonly computeItemKey?: (index: number, item: unknown) => Key;
     readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
+      | number
+      | { readonly index: number | "LAST" };
     readonly rangeChanged?: (range: {
       readonly startIndex: number;
       readonly endIndex: number;

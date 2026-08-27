@@ -3,8 +3,6 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
-  type ProviderEnablementMode,
-  type ProviderEnablementSource,
 } from "@traycer/protocol/host/provider-schemas";
 import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
@@ -30,6 +28,11 @@ import { ProviderList } from "@/components/providers/provider-list";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import {
+  useProviderProfileEnablementPending,
+  useProvidersSetProfileEnabledForClient,
+} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
@@ -65,7 +68,10 @@ import {
   type FailedProviderProfileAttempt,
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
-import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import {
+  defaultSelectedProfileId,
+  profileCommitId,
+} from "@/components/providers/provider-profile-model";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import {
   providerCanStartProfileOauth,
@@ -211,6 +217,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
   hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
   omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
+  reasonix:
+    "Reasonix - a coding CLI you point at your own model provider; keys live in Reasonix's own store, set up from its terminal wizard.",
 };
 
 function hasPendingProviderProbe(
@@ -835,37 +843,66 @@ function TraycerSubscriptionForProvider({
 
 const ENABLEMENT_FLOOR_HINT = "At least one provider must stay enabled.";
 
+function providerEnablementDisabledReason(input: {
+  readonly enabled: boolean;
+  readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+}): string | null {
+  if (input.enabled && input.enabledProviderCount <= 1) {
+    return ENABLEMENT_FLOOR_HINT;
+  }
+  if (
+    !input.enabled &&
+    input.profileEnablementAvailable &&
+    input.enabledProfileCount === 0
+  ) {
+    return "Enable a profile before enabling this provider.";
+  }
+  return null;
+}
+
 function ProviderEnableSwitch(props: {
   readonly id: string;
   readonly providerId: ProviderCliState["providerId"];
   readonly enabled: boolean;
   readonly isPending: boolean;
   readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+  readonly profileEnablementPending: boolean;
   readonly onSetEnabled: (
     providerId: ProviderCliState["providerId"],
     enabled: boolean,
   ) => void;
 }) {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
-  const disablingLast = enabled && props.enabledProviderCount <= 1;
+  const disabledReason = providerEnablementDisabledReason(props);
   return (
     <TooltipWrapper
-      label={disablingLast ? ENABLEMENT_FLOOR_HINT : null}
+      label={disabledReason}
       side="top"
       sideOffset={undefined}
       align={undefined}
     >
-      {/* Guard span: the Switch is `disabled` in exactly the state this
-          explains, and a disabled control emits no pointer events. */}
+      {/* Guard span: the Switch stays focusable with aria-disabled when a
+          profile is guarded, while pending state disables pointer events. */}
       <span className="inline-flex">
         <Switch
           id={id}
           checked={enabled}
+          aria-disabled={disabledReason !== null || undefined}
           onCheckedChange={(next) => {
-            if (isPending || (!next && disablingLast)) return;
+            if (
+              isPending ||
+              props.profileEnablementPending ||
+              disabledReason !== null
+            ) {
+              return;
+            }
             onSetEnabled(providerId, next);
           }}
-          disabled={isPending || disablingLast}
+          disabled={isPending || props.profileEnablementPending}
         />
       </span>
     </TooltipWrapper>
@@ -873,155 +910,50 @@ function ProviderEnableSwitch(props: {
 }
 
 /**
- * The secondary line under the control while a provider is in Auto: what
- * detection actually decided, and why.
+ * The provider's enable/disable control: one switch, and the label that names
+ * its state.
  *
- * Auto is the only mode whose outcome the control itself does not state - "On"
- * and "Off" ARE their outcome - and without this the user is looking at a
- * provider that says "Auto" and is either usable or not for reasons the screen
- * never mentions. `"sticky"` returns null for that reason rather than
- * restating the selected mode back at them.
- */
-function autoEnablementDetail(
-  source: ProviderEnablementSource | undefined,
-): string | null {
-  if (source === "auto-detected") return "Auto · enabled — account detected";
-  if (source === "auto-undetected") {
-    return "Auto · disabled — no account detected";
-  }
-  return null;
-}
-
-/**
- * The legacy boolean to send alongside an explicit `mode`.
- *
- * `providers.setEnabled@2.2` keeps `enabled` REQUIRED (demoting it would break
- * released 2.1 peers), and the 2.2 -> 1.0 downgrade drops `mode` and forwards
- * this. So it is not filler: it is what a v1.0 host acts on, and it has to be
- * the honest binary reading of the same gesture. `"auto"` has no binary
- * equivalent, so it forwards the effective value the provider has right now -
- * "leave it as it is" - rather than guessing at a verdict only the host can
- * compute.
- */
-function legacyEnabledForMode(
-  mode: ProviderEnablementMode,
-  currentlyEnabled: boolean,
-): boolean {
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  return currentlyEnabled;
-}
-
-const ENABLEMENT_MODE_LABELS: Readonly<Record<ProviderEnablementMode, string>> =
-  {
-    auto: "Auto",
-    on: "On",
-    off: "Off",
-  };
-
-/**
- * The three-way Auto/On/Off control, and the old-host fallback to the binary
- * switch.
- *
- * `enablementMode` absent means the host predates `providers.list@7.1` and has
- * no tri-state to edit - rendering the three-way control there would offer a
- * choice the host cannot store, and "Auto" would silently mean whatever the
- * legacy flag already said. The binary switch is the honest control for that
- * host, which is why the fallback keys on the FIELD rather than on a version
- * number.
- *
- * The one-enabled floor keeps its existing shape: it blocks the explicit
- * disable, measured against the EFFECTIVE set (`state.enabled`), which is what
- * `enabledProviderCount` counts. Switching to Auto is deliberately not gated
- * by it - the outcome is the host's to compute and the client would be
- * guessing - and `traycer` anchors the floor in practice, since its passive
- * verdict is a constant `authenticated`.
+ * A three-way Auto/On/Off control briefly lived here, where "Auto" derived
+ * enablement from whether the host had detected an account. It is gone, and
+ * the reason is worth keeping: nobody could tell what Auto meant from looking
+ * at it, and a provider it enabled could silently switch itself off a few
+ * seconds later when a background probe finally answered - the row a user had
+ * just clicked would disappear from the picker and reappear somewhere else.
+ * Enablement is a choice, so it is a switch, and it stays where it is put.
  */
 function ProviderEnablementControl(props: {
   readonly id: string;
   readonly providerId: ProviderCliState["providerId"];
   readonly enabled: boolean;
-  readonly mode: ProviderEnablementMode | undefined;
-  readonly source: ProviderEnablementSource | undefined;
   readonly isPending: boolean;
   readonly enabledProviderCount: number;
+  readonly profileEnablementAvailable: boolean;
+  readonly enabledProfileCount: number;
+  readonly profileEnablementPending: boolean;
   readonly onSetEnabled: (
     providerId: ProviderCliState["providerId"],
     enabled: boolean,
   ) => void;
-  readonly onSetMode: (
-    providerId: ProviderCliState["providerId"],
-    mode: ProviderEnablementMode,
-  ) => void;
 }) {
-  const { id, providerId, enabled, mode, isPending, onSetMode } = props;
-  if (mode === undefined) {
-    return (
-      <div className="flex shrink-0 items-center gap-2 text-ui-sm">
-        <label htmlFor={id} className="text-muted-foreground">
-          {enabled ? "Enabled" : "Disabled"}
-        </label>
-        <ProviderEnableSwitch
-          id={id}
-          providerId={providerId}
-          enabled={enabled}
-          isPending={isPending}
-          enabledProviderCount={props.enabledProviderCount}
-          onSetEnabled={props.onSetEnabled}
-        />
-      </div>
-    );
-  }
-  const blockingDisable = enabled && props.enabledProviderCount <= 1;
-  const detail = mode === "auto" ? autoEnablementDetail(props.source) : null;
+  const { id, providerId, enabled, isPending } = props;
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
-      <div className="flex items-center gap-2 text-ui-sm">
-        <label htmlFor={id} className="text-muted-foreground">
-          Availability
-        </label>
-        <Select
-          value={mode}
-          onValueChange={(next) => {
-            const chosen = parseEnablementMode(next);
-            if (chosen === null || isPending) return;
-            if (chosen === "off" && blockingDisable) return;
-            onSetMode(providerId, chosen);
-          }}
-          disabled={isPending}
-        >
-          <SelectTrigger id={id} size="sm" className="min-w-0">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">{ENABLEMENT_MODE_LABELS.auto}</SelectItem>
-            <SelectItem value="on">{ENABLEMENT_MODE_LABELS.on}</SelectItem>
-            {/* Disabled rather than hidden: the floor is a rule about the
-                whole set, so a vanishing option would read as this provider
-                not supporting Off at all. */}
-            <SelectItem value="off" disabled={blockingDisable}>
-              {ENABLEMENT_MODE_LABELS.off}
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      {detail === null ? null : (
-        <span className="text-ui-xs text-muted-foreground">{detail}</span>
-      )}
-      {blockingDisable ? (
-        <span className="text-ui-xs text-muted-foreground">
-          {ENABLEMENT_FLOOR_HINT}
-        </span>
-      ) : null}
+    <div className="flex shrink-0 items-center gap-2 text-ui-sm">
+      <label htmlFor={id} className="text-muted-foreground">
+        {enabled ? "Enabled" : "Disabled"}
+      </label>
+      <ProviderEnableSwitch
+        id={id}
+        providerId={providerId}
+        enabled={enabled}
+        isPending={isPending}
+        enabledProviderCount={props.enabledProviderCount}
+        profileEnablementAvailable={props.profileEnablementAvailable}
+        enabledProfileCount={props.enabledProfileCount}
+        profileEnablementPending={props.profileEnablementPending}
+        onSetEnabled={props.onSetEnabled}
+      />
     </div>
   );
-}
-
-/** Narrows a `Select` value back to the mode union - the primitive hands back
- *  a bare string, and this is the only place that widening is undone. */
-function parseEnablementMode(value: string): ProviderEnablementMode | null {
-  if (value === "auto" || value === "on" || value === "off") return value;
-  return null;
 }
 
 function ProviderDetail({
@@ -1081,25 +1013,47 @@ function ProviderDetail({
         : defaultSelectedProfileId(state.profiles),
   );
   const setEnabled = useProvidersSetEnabled();
+  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+    hostClient,
+    providerId,
+  );
+  const profileEnablementPending = useProviderProfileEnablementPending(
+    hostClient,
+    providerId,
+  );
+  const hasManagedProfiles = state.profiles.some(
+    (profile) => profile.kind === "managed",
+  );
+  const supportsProfileEnablement = useHostSupportsMethod(
+    hostId,
+    "providers.setProfileEnabled",
+  );
+  const supportsProfileStatusRefresh = useHostSupportsMethod(
+    hostId,
+    "providers.refreshProfileStatus",
+  );
+  const profileEnablementAvailable =
+    hasManagedProfiles && supportsProfileEnablement;
+  const profileStatusRefreshAvailable =
+    hasManagedProfiles && supportsProfileStatusRefresh;
+  const anyProfileEnablementPending = state.profiles.some((profile) =>
+    profileEnablementPending(profileCommitId(profile)),
+  );
   // Whether the detail pane below the header is inert - the Account and
   // Profiles controls included.
   //
-  // Keyed on the MODE, not on effective `enabled`, and that distinction is the
-  // whole point. Under auto-enablement `enabled: false` has two completely
-  // different causes: the user said Off, or the user said Auto and no account
-  // was detected. Only the first is a refusal. Blanking the pane for the second
-  // disables the very controls that start a sign-in, so a returning user whose
-  // Auto provider went quiet after a sign-out had to first flip the persistent
-  // mode to On just to reach the button that would have made Auto resolve on
-  // its own - and would then be left with a sticky On they never wanted.
+  // Keyed on the effective `enabled` flag, which is now the only thing it could
+  // be keyed on. Not because `false` has a single cause - boot seeding leaves
+  // plenty of providers off that nobody ever touched - but because every cause
+  // is now a STICKY row: seeded once, or set by the user's toggle, and never
+  // re-derived. So the pane is inert precisely when the provider is off, and
+  // turning it on is the one gesture that revives it.
   //
-  // On a host below `providers.list@7.1` there is no mode to read and no
-  // auto-derived disable to distinguish, so it falls back to the effective
-  // boolean, which is exactly today's behavior there.
-  const detailPaneInert =
-    state.enablementMode === undefined
-      ? !state.enabled
-      : state.enablementMode === "off";
+  // Under the retired tri-state that did not hold: an auto-undetected provider
+  // read disabled from a verdict that could flip under the user without anyone
+  // choosing anything, which is why this gate used to read the sticky mode
+  // instead of the effective flag.
+  const detailPaneInert = !state.enabled;
   const canAddProfile = providerCanStartProfileOauth(
     state,
     isSelectedHostLocal,
@@ -1126,6 +1080,15 @@ function ProviderDetail({
     onDismissFailedAttempt: () => setFailedProfileAttempt(null),
     selectedProfileId,
     onSelectedProfileIdChange: setSelectedProfileId,
+    profileEnablementAvailable,
+    profileStatusRefreshAvailable,
+    profileEnablementPending,
+    onSetProfileEnabled: (profileId, enabled) =>
+      setProfileEnabled.mutate({
+        providerId,
+        profileId: profileId ?? "ambient",
+        enabled,
+      }),
   };
 
   return (
@@ -1165,40 +1128,25 @@ function ProviderDetail({
           id={switchId}
           providerId={providerId}
           enabled={state.enabled}
-          mode={state.enablementMode}
-          source={state.enablementSource}
           isPending={setEnabled.isPending}
           enabledProviderCount={enabledProviderCount}
+          profileEnablementAvailable={profileEnablementAvailable}
+          enabledProfileCount={
+            state.profiles.filter((profile) => profile.enabled).length
+          }
+          profileEnablementPending={anyProfileEnablementPending}
           onSetEnabled={(id, enabled) =>
             // Plain enable/disable - never a native mutation or profile
-            // rename/remove/recolor/drift-ack. No `mode`: this arm only runs
-            // on a host that has none, and sending one there would be a field
-            // its contract cannot carry.
+            // rename/remove/recolor/drift-ack.
             setEnabled.mutate({
               providerId: id,
               enabled,
               profileAction: null,
             })
           }
-          onSetMode={(id, mode) =>
-            setEnabled.mutate({
-              providerId: id,
-              // Required on the wire and load-bearing on the downgrade to
-              // v1.0 - see `legacyEnabledForMode`.
-              enabled: legacyEnabledForMode(mode, state.enabled),
-              profileAction: null,
-              mode,
-            })
-          }
         />
       </div>
-      <div
-        className={cn(
-          "flex flex-1 flex-col transition-opacity md:min-h-0",
-          detailPaneInert ? "pointer-events-none opacity-50" : "",
-        )}
-        {...(detailPaneInert ? { inert: true } : {})}
-      >
+      <div className="flex flex-1 flex-col md:min-h-0">
         {/* Nothing renders between the provider header and the tab rail. The
             API-key card used to sit here, above the bar, so a provider's only
             real setting appeared outside the tabs that were supposed to hold
@@ -1301,13 +1249,20 @@ function ProviderDetail({
                     ),
                   }
                 : {})}
-              className="-mx-5 mt-0 px-5 pt-4 pb-5 md:min-h-0 md:overflow-y-auto"
+              className={cn(
+                "-mx-5 mt-0 px-5 pt-4 pb-5 transition-opacity duration-150 md:min-h-0 md:overflow-y-auto",
+                detailPaneInert &&
+                  tab !== "usage" &&
+                  "pointer-events-none opacity-50",
+              )}
+              {...(detailPaneInert && tab !== "usage" ? { inert: true } : {})}
             >
               <ProviderTabBody
                 tab={tab}
                 state={state}
                 providers={providers}
                 hostId={hostId}
+                detailPaneInert={detailPaneInert}
                 profileTab={profileTab}
                 apiKeyDraft={apiKeyDraft}
                 onApiKeyDraftChange={setApiKeyDraft}
@@ -1352,6 +1307,13 @@ interface ProviderProfileTabProps {
   readonly onDismissFailedAttempt: () => void;
   readonly selectedProfileId: string | null;
   readonly onSelectedProfileIdChange: (profileId: string | null) => void;
+  readonly profileEnablementAvailable: boolean;
+  readonly profileStatusRefreshAvailable: boolean;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly onSetProfileEnabled: (
+    profileId: string | null,
+    enabled: boolean,
+  ) => void;
 }
 
 function ProviderTabBody({
@@ -1359,6 +1321,7 @@ function ProviderTabBody({
   state,
   providers,
   hostId,
+  detailPaneInert,
   profileTab,
   apiKeyDraft,
   onApiKeyDraftChange,
@@ -1368,6 +1331,7 @@ function ProviderTabBody({
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
+  readonly detailPaneInert: boolean;
   readonly profileTab: ProviderProfileTabProps;
   readonly apiKeyDraft: string;
   readonly onApiKeyDraftChange: (draft: string) => void;
@@ -1424,22 +1388,30 @@ function ProviderTabBody({
               profileTab.isSelectedHostLocal,
             )}
           />
-          <TraycerSubscriptionForProvider providerId={state.providerId} />
-          {/* The unscoped card is the ZERO-profile shape, which is what
-              `ProviderProfileScopedSection` documents it as. With profiles on
-              this same tab its per-profile limits are already rendered above,
-              scoped to the selected profile - mounting this too would show two
-              near-identical limits blocks and leave the ambient one looking
-              authoritative when the selected profile is what actually runs. */}
-          {state.profiles.length === 0 ? (
-            <ProviderRateLimitForProvider
-              providerId={state.providerId}
-              profileId={null}
-              usageUpdatedAt={null}
-              fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
-              onOpenModelProviders={() => onActiveTabChange("modelProviders")}
-            />
-          ) : null}
+          <div
+            className={cn(
+              "flex flex-col gap-3 transition-opacity duration-150",
+              detailPaneInert && "pointer-events-none opacity-50",
+            )}
+            {...(detailPaneInert ? { inert: true } : {})}
+          >
+            <TraycerSubscriptionForProvider providerId={state.providerId} />
+            {/* The unscoped card is the ZERO-profile shape, which is what
+                `ProviderProfileScopedSection` documents it as. With profiles on
+                this same tab its per-profile limits are already rendered above,
+                scoped to the selected profile - mounting this too would show two
+                near-identical limits blocks and leave the ambient one looking
+                authoritative when the selected profile is what actually runs. */}
+            {state.profiles.length === 0 ? (
+              <ProviderRateLimitForProvider
+                providerId={state.providerId}
+                profileId={null}
+                usageUpdatedAt={null}
+                fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+                onOpenModelProviders={() => onActiveTabChange("modelProviders")}
+              />
+            ) : null}
+          </div>
         </div>
       );
     case "mcp": {

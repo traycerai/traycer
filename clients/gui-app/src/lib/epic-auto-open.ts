@@ -14,7 +14,12 @@ export interface AutoOpenRecord {
 interface AutoOpenTarget {
   readonly id: string;
   readonly type:
-    "chat" | "terminal-agent" | "spec" | "ticket" | "story" | "review";
+    | "chat"
+    | "terminal-agent"
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review";
   readonly name: string;
   readonly hostId: string;
 }

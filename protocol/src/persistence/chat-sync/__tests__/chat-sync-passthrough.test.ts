@@ -154,7 +154,7 @@ const unknownEvent: JsonObject = {
 };
 
 const persistedMessageShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   chatId: "chat-1",
   section: "messages",
   messages: [userMessage, assistantMessage, unknownMessage],
@@ -163,7 +163,7 @@ const persistedMessageShard: JsonObject = {
 };
 
 const persistedEventShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   chatId: "chat-1",
   section: "events",
   messages: [],
@@ -213,7 +213,9 @@ describe("chat-shard passthrough", () => {
     expect(assistant.blocks[0].value).not.toBeNull();
     expect(assistant.blocks[2].value).toBeNull();
     // The unknown block's whole subtree survives, at depth.
-    expect(assistant.blocks[2].raw).toEqual(canonicalizeJsonValue(unknownBlock));
+    expect(assistant.blocks[2].raw).toEqual(
+      canonicalizeJsonValue(unknownBlock),
+    );
 
     // The codec-backed block still decodes to its domain form.
     const resume = assistant.blocks[1].value;
@@ -247,7 +249,7 @@ describe("chat-shard passthrough", () => {
     );
 
     const graduatedHostPrivate: JsonObject = {
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 2 },
       chatId: "chat-1",
       section: "host-private",
       messages: [],
@@ -308,7 +310,7 @@ describe("chat-shard section coherence", () => {
   it("rejects a host-private shard with no envelope", () => {
     expect(() =>
       parse({
-        schemaVersion: { major: 1, minor: 1 },
+        schemaVersion: { major: 1, minor: 2 },
         chatId: "chat-1",
         section: "host-private",
         messages: [],
@@ -434,7 +436,11 @@ describe("chat-shard __proto__ preservation", () => {
     expect(Object.getOwnPropertyNames(preserved)).toContain("__proto__");
 
     const payload = preserved.payload;
-    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload)
+    ) {
       throw new Error("expected a preserved payload object");
     }
     expect(Object.getOwnPropertyNames(payload)).toContain("__proto__");
@@ -460,7 +466,10 @@ describe("chat-shard __proto__ preservation", () => {
 describe("chat-shard version pinning", () => {
   it("refuses a payload claiming a version this contract did not write", () => {
     expect(() =>
-      parse({ ...persistedMessageShard, schemaVersion: { major: 99, minor: 77 } }),
+      parse({
+        ...persistedMessageShard,
+        schemaVersion: { major: 99, minor: 77 },
+      }),
     ).toThrow();
   });
 });

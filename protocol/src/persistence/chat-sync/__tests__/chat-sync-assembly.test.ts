@@ -81,7 +81,9 @@ function fetchInCompletionOrder(
   const fetch: ChatPartFetcher = async (
     request: ChatPartRequest,
   ): Promise<StagedChatPart> => {
-    const index = parts.findIndex((part) => part.sha256 === request.part.sha256);
+    const index = parts.findIndex(
+      (part) => part.sha256 === request.part.sha256,
+    );
     if (index < 0) throw new Error("missing part");
 
     started += 1;
@@ -366,7 +368,8 @@ describe("chat assembly fails closed", () => {
     if (bytes === undefined) throw new Error("missing part");
     const undecodable: StagedChatPart = {
       ...stageFromText(bytes),
-      readText: () => Promise.reject(new TypeError("The encoded data was not valid UTF-8")),
+      readText: () =>
+        Promise.reject(new TypeError("The encoded data was not valid UTF-8")),
     };
 
     const result = await assemble(
@@ -384,7 +387,7 @@ describe("chat assembly fails closed", () => {
     // Content addressing proves the bytes are the ones the head named; this
     // proves they MEAN what the head assumed.
     const foreign = publishShard({
-      schemaVersion: { major: 1, minor: 1 },
+      schemaVersion: { major: 1, minor: 2 },
       chatId: "chat-somewhere-else",
       section: "messages",
       messages: [unknownMessage],
@@ -588,12 +591,16 @@ describe("chat assembly does not wait on unsettled siblings", () => {
   function withinOneTick<T>(work: Promise<T>): Promise<T | "stalled"> {
     return Promise.race([
       work,
-      new Promise<"stalled">((resolve) => setTimeout(() => resolve("stalled"), 50)),
+      new Promise<"stalled">((resolve) =>
+        setTimeout(() => resolve("stalled"), 50),
+      ),
     ]);
   }
 
   /** Part 0 behaves as `first` says; every later part never settles. */
-  function fetchWithHungSibling(first: () => Promise<StagedChatPart>): ChatPartFetcher {
+  function fetchWithHungSibling(
+    first: () => Promise<StagedChatPart>,
+  ): ChatPartFetcher {
     return (request) =>
       request.index === 0 && request.section === "messages"
         ? first()

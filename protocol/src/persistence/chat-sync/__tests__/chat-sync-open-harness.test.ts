@@ -157,7 +157,7 @@ const futureEvent: JsonObject = {
 };
 
 const futureHarnessShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   chatId: "chat-future",
   section: "messages",
   messages: [
@@ -194,11 +194,11 @@ const futureHarnessShard: JsonObject = {
 };
 
 const futureHarnessHead: JsonObject = {
-  schemaVersion: { major: 1, minor: 1 },
+  schemaVersion: { major: 1, minor: 2 },
   parentHeadSha256: null,
   throughRecordSeq: 7,
   capturedAt: 1_700_000_000_000,
-  minReaderVersion: { major: 1, minor: 1 },
+  minReaderVersion: { major: 1, minor: 2 },
   cdc: {
     algorithm: "fastcdc-gear-v1",
     mask: 65_535,
@@ -241,7 +241,9 @@ describe("chat-sync open harness ids", () => {
     expect(head.core.settings?.harnessId).toBe(FUTURE_HARNESS);
     // Every entry is interpreted - not degraded to unknown-variant passthrough,
     // which would lose the rendering entirely.
-    expect(shard.messages.every((message) => message.value !== null)).toBe(true);
+    expect(shard.messages.every((message) => message.value !== null)).toBe(
+      true,
+    );
     expect(head.events?.every((event) => event.value !== null)).toBe(true);
   });
 

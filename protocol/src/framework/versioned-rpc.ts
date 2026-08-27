@@ -840,9 +840,9 @@ function upgradeResponseToVersionInternal<
   let currentResponse: Parameters<
     RuntimeUpgradePath<Registry>["upgradeResponse"]
   >[0] = response;
-  let currentRequest: Parameters<
-    RuntimeUpgradePath<Registry>["upgradeRequest"]
-  >[0] | null = context?.request ?? null;
+  let currentRequest:
+    | Parameters<RuntimeUpgradePath<Registry>["upgradeRequest"]>[0]
+    | null = context?.request ?? null;
 
   for (let index = fromIndex + 1; index <= toIndex; index += 1) {
     const nextVersion = installedVersions[index];

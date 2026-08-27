@@ -105,10 +105,13 @@ export function encodeAesGcmNonce(counter: bigint): Uint8Array {
 
 /** Import a raw 32-byte key as a non-extractable AES-GCM CryptoKey. */
 export async function importAesGcmKey(key: Uint8Array): Promise<CryptoKey> {
-  return subtle.importKey("raw", toArrayBuffer(key), { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
+  return subtle.importKey(
+    "raw",
+    toArrayBuffer(key),
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"],
+  );
 }
 
 /** AES-256-GCM seal. The 16-byte tag is appended to the ciphertext. */

@@ -1,12 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import { ImageOff } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
+import { ExpandedImageDialogContent } from "@/components/chat/expanded-image-dialog";
 import {
   type AttachmentBlobSrcState,
   useChatAttachmentBlobSrc,
@@ -140,35 +136,6 @@ function ImageAttachmentThumb({
     );
   }
 
-  let dialogBody: ReactNode;
-  if (image.status === "loading") {
-    dialogBody = (
-      <div
-        className="aspect-video w-full animate-pulse rounded-lg bg-foreground/10"
-        aria-hidden
-      />
-    );
-  } else if (image.status === "unavailable") {
-    dialogBody = (
-      <div
-        className="flex aspect-video w-full flex-col items-center justify-center gap-2 rounded-lg bg-foreground/5 px-4 py-8 text-center text-muted-foreground"
-        role="status"
-      >
-        <ImageOff className="size-8" aria-hidden />
-        <p className="text-ui-sm">Image unavailable</p>
-      </div>
-    );
-  } else {
-    dialogBody = (
-      <img
-        src={image.src}
-        alt={alt}
-        className="block max-h-[min(90vh,52rem)] w-full rounded-lg object-contain"
-        draggable={false}
-      />
-    );
-  }
-
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -194,13 +161,13 @@ function ImageAttachmentThumb({
           </button>
         </TooltipWrapper>
       </DialogTrigger>
-      <DialogContent
-        className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
-        showCloseButton
-      >
-        <DialogTitle className="sr-only">{alt}</DialogTitle>
-        {dialogBody}
-      </DialogContent>
+      <ExpandedImageDialogContent
+        title={alt}
+        alt={alt}
+        image={image}
+        suggestedName={attachment.name ?? null}
+        onCloseAutoFocus={undefined}
+      />
     </Dialog>
   );
 }

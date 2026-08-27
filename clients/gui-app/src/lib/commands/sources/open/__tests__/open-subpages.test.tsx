@@ -125,11 +125,12 @@ function chat(
   id: string,
   title: string,
   hostId: string | null,
+  parentId: string | null,
 ): ChatProjection {
   return {
     id,
     title,
-    parentId: null,
+    parentId,
     createdAt: 0,
     updatedAt: 0,
     userId: null,
@@ -162,17 +163,23 @@ function agent(id: string, title: string): TuiAgentProjection {
     terminalShellArgs: null,
   };
 }
-function artifact(id: string, title: string): ArtifactProjection {
+function artifact(args: {
+  readonly id: string;
+  readonly title: string;
+  readonly kind: "spec" | "ticket" | "story" | "review";
+  readonly parentId: string | null;
+  readonly status: number | null;
+}): ArtifactProjection {
   return {
-    id,
-    kind: "spec",
-    title,
+    id: args.id,
+    kind: args.kind,
+    title: args.title,
     folderName: "",
-    parentId: null,
+    parentId: args.parentId,
     artifactRoomId: null,
     createdAt: 0,
     updatedAt: 0,
-    status: null,
+    status: args.status,
     createdManually: false,
   };
 }
@@ -180,20 +187,39 @@ function artifact(id: string, title: string): ArtifactProjection {
 const FAKE_PROJECTION: EpicProjectedSlices = {
   ...EMPTY_PROJECTED_SLICES,
   chats: {
-    allIds: ["c1", "c2", "c3"],
+    allIds: ["c1", "c2", "c3", "c:colon"],
     byId: {
       // Lives on a different host than the active one ("default-host") -
       // should carry a host badge.
-      c1: chat("c1", "Chat One", "chat-host"),
+      c1: chat("c1", "Chat One", "chat-host", null),
       // Lives on the active host - no badge.
-      c2: chat("c2", "Chat Two", "default-host"),
+      c2: chat("c2", "Chat Two", "default-host", "c1"),
       // Lives on a directory-listed host whose label is blank - the badge
       // must fall back to the raw hostId, not render an empty chip.
-      c3: chat("c3", "Chat Three", "blank-label-host"),
+      c3: chat("c3", "Chat Three", "blank-label-host", "c1"),
+      "c:colon": chat("c:colon", "Colon Chat", "default-host", null),
     },
   },
   tuiAgents: { allIds: ["a1"], byId: { a1: agent("a1", "Agent One") } },
-  artifacts: { allIds: ["s1"], byId: { s1: artifact("s1", "Spec One") } },
+  artifacts: {
+    allIds: ["s1", "t1"],
+    byId: {
+      s1: artifact({
+        id: "s1",
+        title: "Spec One",
+        kind: "spec",
+        parentId: null,
+        status: null,
+      }),
+      t1: artifact({
+        id: "t1",
+        title: "Ticket One",
+        kind: "ticket",
+        parentId: "s1",
+        status: 1,
+      }),
+    },
+  },
 };
 
 vi.mock("@/lib/commands/actions", () => ({
@@ -457,7 +483,7 @@ afterEach(() => {
 });
 
 describe("Agents opener sub-page", () => {
-  it("leads with both interfaces' creation leaves, then every Agent record", () => {
+  it("leads with creation leaves, then follows the canonical nested Agent tree", () => {
     const items = renderItems(useAgentsOpenerItems);
     // Creation for both interfaces sits at the top; records follow as one list
     // rather than two interface-grouped collections.
@@ -471,6 +497,31 @@ describe("Agents opener sub-page", () => {
     const ids = items.map((i) => i.id);
     expect(ids).toContain("open:chats:c1");
     expect(ids).toContain("open:tui:a1");
+    expect(ids).toContain("open:chats:c:colon");
+    expect(ids.indexOf("open:chats:c2")).toBeGreaterThan(
+      ids.indexOf("open:chats:c1"),
+    );
+    expect(ids.indexOf("open:chats:c3")).toBeGreaterThan(
+      ids.indexOf("open:chats:c1"),
+    );
+    expect(
+      items.find((item) => item.id === "open:chats:c1")?.agentTreeRow,
+    ).toMatchObject({
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: true,
+      interface: "chat",
+      activity: "idle",
+    });
+    expect(
+      items.find((item) => item.id === "open:chats:c2")?.agentTreeRow,
+    ).toMatchObject({
+      depth: 1,
+      ancestorIds: ["c1"],
+      hasChildren: false,
+      interface: "chat",
+      activity: "idle",
+    });
   });
 
   it("preserves the leaf id prefixes the palette keys analytics off", () => {
@@ -910,9 +961,26 @@ describe("Terminals opener sub-page", () => {
 });
 
 describe("Artifacts opener sub-page", () => {
-  it("lists existing artifacts and opens them into the target", () => {
+  it("lists the nested artifact tree with status metadata and opens a node", () => {
     const items = renderItems(useArtifactsOpenerItems);
-    expect(items.map((i) => i.id)).toEqual(["open:artifacts:s1"]);
+    expect(items.map((i) => i.id)).toEqual([
+      "open:artifacts:s1",
+      "open:artifacts:t1",
+    ]);
+    expect(items[0].artifactTreeRow).toMatchObject({
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: true,
+      kind: "spec",
+      status: null,
+    });
+    expect(items[1].artifactTreeRow).toMatchObject({
+      depth: 1,
+      ancestorIds: ["s1"],
+      hasChildren: false,
+      kind: "ticket",
+      status: 1,
+    });
     runById(items, "open:artifacts:s1");
     const opened = lastTileOpen();
     expect(opened.groupId).toBe("group-1");

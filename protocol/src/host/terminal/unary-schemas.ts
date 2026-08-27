@@ -210,6 +210,39 @@ export type CreateTerminalResponseV20 = z.infer<
   typeof createTerminalResponseSchemaV20
 >;
 
+// Spawning client's resolved terminal appearance, carried on
+// `terminal.create@2.1` so the host can answer a TUI's OSC 10/11
+// foreground/background queries (which otherwise time out - no client is
+// subscribed yet when a TUI probes at startup, and the snapshot emulator
+// deliberately never records queries). The hint is a HEURISTIC, not a truth:
+// a session outlives and outspans any single viewer, so the host answers
+// with the spawner's theme and a cross-theme second viewer sees a
+// mismatched-but-readable TUI (the renderer's minimumContrastRatio carries
+// readability). Colors are strict lowercase-or-uppercase `#rrggbb` because
+// the host interpolates them into an escape sequence written to the PTY -
+// nothing wider than a hex literal may cross this boundary.
+export const terminalThemeHintColorSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/);
+export const terminalThemeHintSchema = z.object({
+  appearance: z.enum(["light", "dark"]),
+  foreground: terminalThemeHintColorSchema,
+  background: terminalThemeHintColorSchema,
+});
+export type TerminalThemeHint = z.infer<typeof terminalThemeHintSchema>;
+
+// `terminal.create@2.1` - additive request-side `themeHint`. `null` - the
+// v2.0-upgraded default - means "no spawner theme known" and the host falls
+// back to a fixed dark answer (what a TUI assumes on query timeout anyway).
+// The response is unchanged from `@2.0`.
+export const createTerminalRequestSchemaV21 =
+  createTerminalRequestSchemaV20.extend({
+    themeHint: terminalThemeHintSchema.nullable().default(null),
+  });
+export type CreateTerminalRequestV21 = z.infer<
+  typeof createTerminalRequestSchemaV21
+>;
+
 // `terminal.kill@1.0` - terminates a session and evicts it from the host's
 // in-memory map. Returns `killed: false` only if the session was already
 // missing or had completed its grace period.

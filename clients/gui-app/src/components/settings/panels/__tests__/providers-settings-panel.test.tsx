@@ -132,8 +132,7 @@ type RecolorProfileMutate = (
 ) => void;
 
 // `providers.setEnabled@2.2`'s request shape - typing this mock's calls lets
-// the three-way control's tests read `.mock.calls[0]` without an unsafe `any`
-// destructure.
+// tests read `.mock.calls[0]` without an unsafe `any` destructure.
 type SetEnabledVariables = RequestOfMethod<
   HostRpcRegistry,
   "providers.setEnabled"
@@ -147,12 +146,16 @@ const providerMocks = vi.hoisted(() => ({
     isError: false,
     isFetching: false,
     error: undefined as
-      HostRpcError | { message: string; code: string } | undefined,
+      | HostRpcError
+      | { message: string; code: string }
+      | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
   setEnabledMutate: vi.fn<SetEnabledMutate>(),
+  setProfileEnabledMutate: vi.fn(),
+  refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
   setTerminalAgentArgsMutate: vi.fn(),
@@ -167,7 +170,8 @@ const providerMocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
@@ -306,6 +310,28 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
     isPending: false,
   }),
 }));
+
+// The panel's profile controls use a host-scoped TanStack mutation in
+// production. This legacy panel harness intentionally has no QueryClient;
+// keep its provider-detail coverage focused on rendering and the existing
+// provider mutations while the dedicated hook suite covers cache behavior.
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: providerMocks.setProfileEnabledMutate,
+    isPending: false,
+  }),
+  useProviderProfileEnablementPending: () => () => false,
+}));
+
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      mutateAsync: providerMocks.refreshProfileStatusMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: () => ({
@@ -457,6 +483,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   // host, never a tab) - this harness has no real `<HostRuntimeProvider>`, so
   // stub it the same way every other provider hook here is stubbed.
   return { ...actual, useHostClient: () => null };
+});
+
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return { ...actual, useHostSupportsMethod: () => true };
 });
 
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
@@ -818,10 +852,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { ProviderProfileReauthPanel } from "@/components/settings/panels/provider-profile-reauth-panel";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
-} from "@/components/settings/panels/use-provider-profile-login-flow";
+} from "@/lib/providers/provider-ambient-auth";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -1013,12 +1048,22 @@ function profile(input: TestProfileInput): ProviderProfile {
   return profileWithAccent(input, null);
 }
 
+function legacyAwaitLoginProfile(
+  input: TestProfileInput,
+): Omit<ProviderProfile, "enabled"> {
+  const current = profile(input);
+  const { enabled: _enabled, ...legacy } = current;
+  void _enabled;
+  return legacy;
+}
+
 function profileWithAccent(
   input: TestProfileInput,
   accentColor: ProviderProfileAccentColor | null,
 ): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.label,
@@ -2436,293 +2481,84 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected provider switch to render as a button.");
     }
 
-    expect(switchElement.disabled).toBe(true);
+    expect(switchElement.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
   });
 
-  describe("three-way Auto/On/Off enablement control", () => {
-    function singleProvider(overrides: {
-      readonly enabled: boolean;
-      readonly enablementMode?: "auto" | "on" | "off";
-      readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
-    }): void {
-      providerMocks.listResult.data = {
-        providers: [
-          {
-            ...providerState({
-              providerId: "traycer",
-              selected: { kind: "bundled" },
-              candidates: [],
-              envOverrides: [],
-              nativeCapabilities: FULL_TABS,
-            }),
-            enabled: overrides.enabled,
-            enablementMode: overrides.enablementMode,
-            enablementSource: overrides.enablementSource,
-          },
-        ],
-      };
-    }
+  // The three-way Auto/On/Off enablement control (and the `enablementMode`/
+  // `enablementSource` wire fields, the `mode` param on `providers.setEnabled`,
+  // and the `legacyEnabledForMode` helper that translated a chosen mode into
+  // the legacy `enabled` mirror) are gone. `providers-settings-panel.tsx`'s
+  // own comment on `ProviderEnablementControl` explains why: "nobody could
+  // tell what Auto meant from looking at it, and a provider it enabled could
+  // silently switch itself off a few seconds later when a background probe
+  // finally answered." Every provider row now renders the same binary switch
+  // unconditionally - there is no second rendering path left to contrast it
+  // against, so the "with enablementMode absent" framing this describe block
+  // used to test under is gone too. What survives is the one fact worth
+  // keeping on its own: the switch calls `setEnabled` with the plain
+  // {providerId, enabled, profileAction} shape and no `mode` field.
+  it("clicking the enable switch calls setEnabled with no mode field", () => {
+    // Two enabled providers so the one-enabled floor doesn't block the click.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
 
-    it("with enablementMode present, renders the Auto/On/Off select instead of the binary switch and sends mode on change", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "auto",
-        enablementSource: "auto-detected",
-      });
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
 
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
+    const switchElement = screen.getByRole("switch");
+    fireEvent.click(switchElement);
 
-      expect(screen.queryByRole("switch")).toBeNull();
-      expect(screen.getByRole("button", { name: "Auto" })).toBeDefined();
-      expect(screen.getByRole("button", { name: "On" })).toBeDefined();
-      expect(screen.getByRole("button", { name: "Off" })).toBeDefined();
-
-      fireEvent.click(screen.getByRole("button", { name: "On" }));
-
-      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
-        providerId: "traycer",
-        // legacyEnabledForMode("on", ...) === true, required alongside mode.
-        enabled: true,
-        profileAction: null,
-        mode: "on",
-      });
-    });
-
-    it("with enablementMode absent, renders today's binary switch and sends no mode", () => {
-      // Two enabled providers so the one-enabled floor doesn't block the click.
-      providerMocks.listResult.data = {
-        providers: [
-          providerState({
-            providerId: "traycer",
-            selected: { kind: "bundled" },
-            candidates: [],
-            envOverrides: [],
-            nativeCapabilities: FULL_TABS,
-          }),
-          providerState({
-            providerId: "opencode",
-            selected: { kind: "bundled" },
-            candidates: OPENCODE_CANDIDATES,
-            envOverrides: [],
-            nativeCapabilities: FULL_TABS,
-          }),
-        ],
-      };
-      expect(providerMocks.listResult.data.providers[0]).not.toHaveProperty(
-        "enablementMode",
-      );
-
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-
-      expect(screen.queryByRole("button", { name: "Auto" })).toBeNull();
-      const switchElement = screen.getByRole("switch");
-      fireEvent.click(switchElement);
-
-      expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
-      const variables = firstSetEnabledCall();
-      expect(variables).not.toHaveProperty("mode");
-      // Default-selected provider is whichever ORDERED_PROVIDERS ranks
-      // first (opencode, ahead of traycer) - the row identity isn't the
-      // point of this test, the absent `mode` is.
-      expect(variables).toMatchObject({
-        providerId: "opencode",
-        profileAction: null,
-      });
-    });
-
-    it("shows 'account detected' for auto-detected and 'no account detected' for auto-undetected, and nothing for sticky", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "auto",
-        enablementSource: "auto-detected",
-      });
-      const { unmount } = render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(
-        screen.getByText("Auto · enabled — account detected"),
-      ).toBeDefined();
-      unmount();
-
-      singleProvider({
-        enabled: false,
-        enablementMode: "auto",
-        enablementSource: "auto-undetected",
-      });
-      const { unmount: unmount2 } = render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(
-        screen.getByText("Auto · disabled — no account detected"),
-      ).toBeDefined();
-      unmount2();
-
-      singleProvider({
-        enabled: true,
-        enablementMode: "on",
-        enablementSource: "sticky",
-      });
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(screen.queryByText(/account detected/)).toBeNull();
-    });
-
-    it("blocks choosing Off for the last effectively-enabled provider - the floor applies to the tri-state control too", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "on",
-        enablementSource: "sticky",
-      });
-
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-
-      const offButton = screen.getByRole("button", { name: "Off" });
-      if (!(offButton instanceof HTMLButtonElement)) {
-        throw new Error("Expected the Off option to render as a button.");
-      }
-      expect(offButton.disabled).toBe(true);
-      fireEvent.click(offButton);
-      expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
-      // ...and the floor hint renders alongside it, same copy as the binary
-      // switch's tooltip.
-      expect(
-        screen.getByText("At least one provider must stay enabled."),
-      ).toBeDefined();
-    });
-
-    it("does NOT gate switching to Auto by the one-enabled floor - the outcome is the host's to compute", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "on",
-        enablementSource: "sticky",
-      });
-
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-
-      fireEvent.click(screen.getByRole("button", { name: "Auto" }));
-      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
-        providerId: "traycer",
-        // legacyEnabledForMode("auto", currentlyEnabled) === currentlyEnabled.
-        enabled: true,
-        profileAction: null,
-        mode: "auto",
-      });
-    });
-
-    it("legacyEnabledForMode: on -> true regardless of current effective value", () => {
-      singleProvider({
-        enabled: false,
-        enablementMode: "off",
-        enablementSource: "sticky",
-      });
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      fireEvent.click(screen.getByRole("button", { name: "On" }));
-      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith(
-        expect.objectContaining({ mode: "on", enabled: true }),
-      );
-    });
-
-    it("legacyEnabledForMode: off -> false regardless of current effective value", () => {
-      // Two providers so the floor doesn't block reaching Off on the second.
-      providerMocks.listResult.data = {
-        providers: [
-          {
-            ...providerState({
-              providerId: "traycer",
-              selected: { kind: "bundled" },
-              candidates: [],
-              envOverrides: [],
-              nativeCapabilities: FULL_TABS,
-            }),
-            enabled: true,
-            enablementMode: "on" as const,
-            enablementSource: "sticky" as const,
-          },
-          {
-            ...providerState({
-              providerId: "opencode",
-              selected: { kind: "bundled" },
-              candidates: OPENCODE_CANDIDATES,
-              envOverrides: [],
-              nativeCapabilities: FULL_TABS,
-            }),
-            enabled: true,
-            enablementMode: "on" as const,
-            enablementSource: "sticky" as const,
-          },
-        ],
-      };
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      // Default-selected provider is whichever ORDERED_PROVIDERS ranks first
-      // (opencode, ahead of traycer).
-      fireEvent.click(screen.getByRole("button", { name: "Off" }));
-      expect(providerMocks.setEnabledMutate).toHaveBeenCalledWith({
-        providerId: "opencode",
-        enabled: false,
-        profileAction: null,
-        mode: "off",
-      });
-    });
-
-    it("legacyEnabledForMode: auto -> forwards the CURRENT effective value, not a guess", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "on",
-        enablementSource: "sticky",
-      });
-      render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Auto" }));
-      const variables = firstSetEnabledCall();
-      expect(variables).toMatchObject({ mode: "auto", enabled: true });
+    expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
+    const variables = firstSetEnabledCall();
+    expect(variables).not.toHaveProperty("mode");
+    // Default-selected provider is whichever ORDERED_PROVIDERS ranks
+    // first (opencode, ahead of traycer) - the row identity isn't the
+    // point of this test, the absent `mode` is.
+    //
+    // `enabled: false` is asserted alongside it because the absence of `mode`
+    // is only half the contract: with the tri-state gone, this boolean is the
+    // ENTIRE payload's worth of intent, so a switch that sent the unflipped
+    // value would satisfy every other assertion here. The row starts enabled
+    // (see the two-provider fixture above), so the click must request off.
+    expect(variables).toMatchObject({
+      providerId: "opencode",
+      enabled: false,
+      profileAction: null,
     });
   });
 
-  describe("detail pane inert gate: mode, not effective enabled", () => {
-    function singleProvider(overrides: {
-      readonly enabled: boolean;
-      readonly enablementMode?: "auto" | "on" | "off";
-      readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
-    }): void {
+  // The detail pane's inert gate used to be keyed on the sticky MODE rather
+  // than the effective `enabled` boolean, specifically so an auto-undetected
+  // provider (`enabled: false` with no explicit off) stayed reachable for its
+  // sign-in CTA. That distinction is gone along with the mode: `enabled: false`
+  // now has exactly one cause - the user turned the provider off - so
+  // `providers-settings-panel.tsx` keys the gate on `!state.enabled` directly
+  // (see its comment on `detailPaneInert`), and there is no longer a case
+  // where a disabled provider's pane stays reachable.
+  describe("detail pane inert gate", () => {
+    function singleProvider(overrides: { readonly enabled: boolean }): void {
       providerMocks.listResult.data = {
         providers: [
           {
@@ -2734,58 +2570,12 @@ describe("<ProvidersSettingsPanel />", () => {
               nativeCapabilities: FULL_TABS,
             }),
             enabled: overrides.enabled,
-            enablementMode: overrides.enablementMode,
-            enablementSource: overrides.enablementSource,
           },
         ],
       };
     }
 
-    // Load-bearing: an `auto` provider with no detected account is
-    // `enabled: false` too. Gating the pane on `!state.enabled` instead of
-    // the mode would re-inert exactly this row, blocking the sign-in control
-    // that is the only way out of "no account detected".
-    it("leaves the pane reachable for an auto-undetected provider even though enabled is false", () => {
-      singleProvider({
-        enabled: false,
-        enablementMode: "auto",
-        enablementSource: "auto-undetected",
-      });
-      const { container } = render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(container.querySelector("[inert]")).toBeNull();
-      expect(container.querySelector(".pointer-events-none")).toBeNull();
-    });
-
-    it("makes the pane inert when the mode is explicitly Off", () => {
-      singleProvider({ enabled: false, enablementMode: "off" });
-      const { container } = render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(container.querySelector("[inert]")).not.toBeNull();
-      expect(container.querySelector(".pointer-events-none")).not.toBeNull();
-    });
-
-    it("leaves the pane reachable when the mode is On", () => {
-      singleProvider({
-        enabled: true,
-        enablementMode: "on",
-        enablementSource: "sticky",
-      });
-      const { container } = render(
-        <TooltipProvider>
-          <ProvidersSettingsPanel />
-        </TooltipProvider>,
-      );
-      expect(container.querySelector("[inert]")).toBeNull();
-    });
-
-    it("falls back to !enabled on an old host with no enablementMode", () => {
+    it("is inert exactly when the provider is disabled", () => {
       singleProvider({ enabled: false });
       const { container, unmount } = render(
         <TooltipProvider>
@@ -3426,6 +3216,72 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows a copyable CLI command for a managed profile", () => {
+    const command =
+      "CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/profiles/ambient' codex";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            {
+              ...profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              launchCommand: { command, shell: "posix" },
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByText("Open from terminal")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Run this command on this host to open Codex with this profile.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByLabelText("Codex profile launch command").textContent,
+    ).toBe(command);
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Copy Codex profile launch command",
+      }),
+    ).toBeDefined();
+  });
+
   it("resets the edit draft when reopening the same or a different profile", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const workColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
@@ -3577,6 +3433,10 @@ describe("<ProvidersSettingsPanel />", () => {
           onDismissFailedAttempt={vi.fn()}
           selectedProfileId={null}
           onSelectedProfileIdChange={vi.fn()}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={vi.fn()}
         />
       </TooltipProvider>
     );
@@ -3789,6 +3649,65 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
     ).toHaveLength(1);
+  });
+
+  it("selects a disabled managed profile for Settings management", () => {
+    const disabledProfile = {
+      ...profile({
+        profileId: "managed-disabled",
+        kind: "managed",
+        label: "Disabled profile",
+        email: "disabled@example.test",
+        tier: "Pro",
+        authStatus: "authenticated",
+        duplicateOfProfileId: null,
+        ambientDriftNotice: null,
+      }),
+      enabled: false,
+    };
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            disabledProfile,
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Disabled profile, Disabled",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Disabled profile",
+    );
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -4527,6 +4446,73 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Signed in as")).toBeDefined();
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes an omitted enabled field on the Settings awaitLogin flow row", async () => {
+    const returnedProfiles: ProviderProfile[] = [];
+    const entryProfile = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      tier: "Pro",
+      authStatus: "unauthenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProviderProfileReauthPanel
+          state={codePasteReauthProviderState()}
+          profile={entryProfile}
+          onSameAccountReconnected={(returnedProfile) =>
+            returnedProfiles.push(returnedProfile)
+          }
+          onCancel={vi.fn()}
+          onDone={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        existingProfileId: null,
+        state: {
+          profiles: [
+            legacyAwaitLoginProfile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(returnedProfiles).toHaveLength(1);
+    });
+    expect(returnedProfiles[0]?.enabled).toBe(true);
   });
 
   it("re-polls awaitLogin instead of failing when the ambient row is still authPending after the login completes (terminal-account switch)", async () => {
@@ -7147,6 +7133,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profiles: [
             {
               profileId: "managed-1",
+              enabled: true,
               kind: "managed",
               authType: "oauth",
               label: "Work",
@@ -7462,12 +7449,10 @@ describe("<ProvidersSettingsPanel />", () => {
 
 // Radix Select opens from a click on the trigger, and the trigger is named by
 // its `aria-label` - which is what tells it apart from the PROVIDER select one
-// row above it. Not "the only other combobox on this screen" any more: a
-// provider whose `enablementMode` is set (the three-way Auto/On/Off control)
-// renders a THIRD one, labelled "Availability" via its `<label htmlFor>`. No
-// fixture in this describe block sets `enablementMode`, so that one never
-// mounts here - but a query by name is what keeps this helper correct if a
-// future fixture in this file does.
+// row above it. (The three-way Auto/On/Off enablement control used to render
+// a THIRD combobox, labelled "Availability", when a provider's `enablementMode`
+// was set - that control is gone, so querying by name is now belt-and-braces
+// rather than load-bearing, and is kept for that reason.)
 function openSectionPicker(): void {
   fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
 }

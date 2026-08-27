@@ -26,7 +26,9 @@
     "dist-binary",
     "../shared/**/__tests__/**",
     "../shared/**/*.test.ts",
+    "../shared/oxlint.config.ts",
     "../../protocol/**/__tests__/**",
-    "../../protocol/**/*.test.ts"
+    "../../protocol/**/*.test.ts",
+    "../../protocol/oxlint.config.ts"
   ]
 }

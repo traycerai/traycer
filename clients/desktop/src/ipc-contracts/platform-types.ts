@@ -46,7 +46,11 @@ export type Vibrancy =
   | "under-page";
 
 export type BackgroundMaterial =
-  "auto" | "none" | "mica" | "acrylic" | "tabbed";
+  | "auto"
+  | "none"
+  | "mica"
+  | "acrylic"
+  | "tabbed";
 
 export interface PendingCertificateError {
   readonly id: string;
@@ -79,6 +83,17 @@ export interface FileSaveInput {
   readonly name: string;
   readonly type: string;
   readonly bytes: ArrayBuffer;
+}
+
+/**
+ * What `fileSave` hands back once the bytes are on disk. `name` is the base
+ * name the user settled on in the save dialog (display copy for the toast);
+ * `path` is the absolute location, which is the only thing `fileOpenSaved`
+ * accepts - the renderer never composes or edits it.
+ */
+export interface FileSaveResult {
+  readonly name: string;
+  readonly path: string;
 }
 
 export interface TrustedCertificateEntry {

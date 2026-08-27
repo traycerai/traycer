@@ -81,7 +81,7 @@ type SharingPanelAction =
 
 const INITIAL_SHARING_PANEL_STATE: SharingPanelState = {
   inviteInput: "",
-  selectedRole: "viewer",
+  selectedRole: "editor",
   queuedInvites: [],
   teamRolesById: {},
   revokeTarget: null,
@@ -288,7 +288,7 @@ export function useEpicSharingPanelController(
   const handleShareTeam = (team: TeamRow) => {
     if (!isOwner) return;
     if (team.kind !== "unshared") return;
-    const role = state.teamRolesById[team.teamId] ?? "viewer";
+    const role = state.teamRolesById[team.teamId] ?? "editor";
     dispatch({
       type: "set-pending-action",
       pendingAction: {

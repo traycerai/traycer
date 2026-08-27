@@ -98,10 +98,8 @@ export function missingMethodDetail(
   theirCanonical: SchemaVersion | null,
   missing: "mine" | "theirs",
 ): IncompatibleMethodDetails {
-  const clientCanonical =
-    selfRole === "client" ? myCanonical : theirCanonical;
-  const hostCanonical =
-    selfRole === "host" ? myCanonical : theirCanonical;
+  const clientCanonical = selfRole === "client" ? myCanonical : theirCanonical;
+  const hostCanonical = selfRole === "host" ? myCanonical : theirCanonical;
   const blocking: IncompatibleMethodBlocking =
     missing === "mine"
       ? selfRole === "client"
@@ -119,10 +117,8 @@ export function noBridgeDetail(
   myCanonical: SchemaVersion,
   theirCanonical: SchemaVersion,
 ): IncompatibleMethodDetails {
-  const clientCanonical =
-    selfRole === "client" ? myCanonical : theirCanonical;
-  const hostCanonical =
-    selfRole === "host" ? myCanonical : theirCanonical;
+  const clientCanonical = selfRole === "client" ? myCanonical : theirCanonical;
+  const hostCanonical = selfRole === "host" ? myCanonical : theirCanonical;
   return {
     method,
     clientCanonical,

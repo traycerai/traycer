@@ -274,10 +274,18 @@ export function collectPayloadRefs(
   if (known.type === "file_change") {
     const refs: ChatPayloadRef[] = [];
     if (known.beforeHash !== null) {
-      refs.push({ kind: "file-snapshot", side: "before", hash: known.beforeHash });
+      refs.push({
+        kind: "file-snapshot",
+        side: "before",
+        hash: known.beforeHash,
+      });
     }
     if (known.afterHash !== null) {
-      refs.push({ kind: "file-snapshot", side: "after", hash: known.afterHash });
+      refs.push({
+        kind: "file-snapshot",
+        side: "after",
+        hash: known.afterHash,
+      });
     }
     return refs;
   }
@@ -335,7 +343,11 @@ export function describeUnknownVariant(
   variant: string,
 ): string {
   const noun =
-    domain === "message" ? "message" : domain === "block" ? "content" : "activity";
+    domain === "message"
+      ? "message"
+      : domain === "block"
+        ? "content"
+        : "activity";
   return variant.length === 0
     ? `Unsupported ${noun} — this chat needs a newer version of Traycer`
     : `Unsupported ${noun} (${variant}) — this chat needs a newer version of Traycer`;

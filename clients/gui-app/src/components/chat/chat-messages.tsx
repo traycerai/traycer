@@ -322,7 +322,12 @@ function isDemonstrablyPastIssuedFreeRestoreTarget(
 }
 
 type ChatKeyboardScrollAction =
-  "page-up" | "page-down" | "line-up" | "line-down" | "top" | "bottom";
+  | "page-up"
+  | "page-down"
+  | "line-up"
+  | "line-down"
+  | "top"
+  | "bottom";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
@@ -2350,19 +2355,29 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     });
   }, [cancelTimelineLiveFollowForUserNavigation, identity]);
 
-  const { onRenderedDataChange: onChatFindRenderedDataChange } =
-    useChatFindController({
-      instanceId,
-      messages,
-      messagesRef,
-      backgroundToolBlockIds,
-      backgroundToolBlockIdsRef,
-      messageIndexByIdRef,
-      getScroller,
-      scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
-      cancelManualNavigation: cancelManualNavigationForFind,
-      setScrolledActiveUserMessageIdIfChanged,
-    });
+  const {
+    onRenderedDataChange: onChatFindRenderedDataChange,
+    scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
+  } = useChatFindController({
+    instanceId,
+    messages,
+    messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
+    messageIndexByIdRef,
+    getScroller,
+    scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
+    cancelManualNavigation: cancelManualNavigationForFind,
+    setScrolledActiveUserMessageIdIfChanged,
+  });
+
+  const onChatTimelineItemSizeChanged = useCallback((): void => {
+    onTimelineItemSizeChanged();
+  }, [onTimelineItemSizeChanged]);
+
+  const onChatTimelineRowMount = useCallback((): void => {
+    scheduleChatFindMountedHighlightSync();
+  }, [scheduleChatFindMountedHighlightSync]);
 
   // The controller does not diff message arrays to decide scrolling - append,
   // prepend, reorder/weave, in-place update, and suffix replacement all flow
@@ -2511,7 +2526,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
-            onItemSizeChanged={onTimelineItemSizeChanged}
+            onItemSizeChanged={onChatTimelineItemSizeChanged}
+            onRowMount={onChatTimelineRowMount}
             onListMetricsChange={onListMetricsChange}
             data-testid="chat-messages-scroll"
             data-scroll-mode={scrollMode}

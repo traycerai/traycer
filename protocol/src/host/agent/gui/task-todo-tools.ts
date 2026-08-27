@@ -115,7 +115,10 @@ export function parseTaskTodoToolPayloads(
     });
   }
 
-  const parsed = parseTaskTodoRecords(action, recordsForParsing(input.payloads));
+  const parsed = parseTaskTodoRecords(
+    action,
+    recordsForParsing(input.payloads),
+  );
   return parsed === null ? [] : [parsed];
 }
 
@@ -160,7 +163,7 @@ export function applyParsedTaskTodoItems(
     const existingByTool =
       previousId === null
         ? null
-        : state.taskTodoItemsById.get(previousId) ?? null;
+        : (state.taskTodoItemsById.get(previousId) ?? null);
     const id =
       parsed.id ?? previousId ?? taskTodoFallbackItemId(toolUseId, index);
     const existing = state.taskTodoItemsById.get(id) ?? existingByTool;

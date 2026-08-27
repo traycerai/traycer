@@ -1,6 +1,9 @@
 import { ipcRenderer, webUtils } from "electron";
 import { RunnerHostInvoke } from "../ipc-contracts/ipc-channels";
-import type { FileSaveInput } from "../ipc-contracts/platform-types";
+import type {
+  FileSaveInput,
+  FileSaveResult,
+} from "../ipc-contracts/platform-types";
 
 export interface FileDropWriteTemporaryInput {
   readonly name: string;
@@ -13,7 +16,9 @@ export interface FileDropsBridgeSurface {
   writeTemporaryFile(input: FileDropWriteTemporaryInput): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<string | null>;
+  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
+  /** Open a file a prior `saveFile` wrote, with the OS default application. */
+  openSavedFile(path: string): Promise<void>;
 }
 
 export const NATIVE_CLIPBOARD_PASTE_WINDOW_MS = 2_000;
@@ -66,8 +71,11 @@ export function buildFileDropsBridge(
           ) as Promise<readonly string[]>)
         : Promise.resolve([]),
     saveFile: (input) =>
-      ipcRenderer.invoke(RunnerHostInvoke.fileSave, input) as Promise<
-        string | null
-      >,
+      ipcRenderer.invoke(
+        RunnerHostInvoke.fileSave,
+        input,
+      ) as Promise<FileSaveResult | null>,
+    openSavedFile: (path) =>
+      ipcRenderer.invoke(RunnerHostInvoke.fileOpenSaved, path) as Promise<void>,
   };
 }

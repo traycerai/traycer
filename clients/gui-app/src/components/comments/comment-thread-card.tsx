@@ -167,6 +167,11 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
     >
       <button
         type="button"
+        // The card's expand/collapse control. Named as a slot because it is not
+        // a `ui/button` and the coarse-pointer hit-slop rules address controls
+        // by slot; its own box is a single line of meta text on a thread with no
+        // quoted snapshot, well under the 44px touch target.
+        data-slot="comment-thread-toggle"
         onClick={handleHeaderClick}
         aria-expanded={isExpanded}
         aria-controls={`comment-thread-body-${thread.threadId}`}

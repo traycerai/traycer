@@ -28,29 +28,9 @@ import {
  * live schemas instead of aliased to them (see the freeze comment on
  * `providerCliStateBaseShapeV70Preimage` in `provider-schemas.ts`).
  *
- * TWO different kinds of shape share this file, and the names now say which is
- * which. The `*V70Preimage` exports BACK NO CONTRACT and never did: they were
- * frozen when the version-manager fields opened a v8.0 above an unreleased
- * v7.0, so that growing the live shape could not reach the v7.0 contract. The
- * release collapsed those two tree-only majors back into one, so v7.0 is the
- * head again and points at the canonical schemas - the shape those exports
- * capture was negotiated by no peer, ever.
- *
- * `providersListRequestSchemaV70` is the other kind. The collapse moved only
- * the response, so the frozen request still equals what v7.0 serializes: a real
- * freeze, which is why it keeps a bare `V70` name. The equality is asserted
- * below rather than assumed, because nothing else enforces it.
- *
- * What makes the pre-image worth pinning is that the v6 -> v7 bridge re-parses
- * every upgraded row through it and the provider compat suites share it, while
- * parts of it (`providerCliStateBaseShapeV70Preimage`) still reference live
- * sub-schemas. A pin is what stops live growth from silently redefining what
- * those callers assert.
- *
- * The PRE-SHIP freeze this file used to provide for v7.0 now lives in
- * `__tests__/__fixtures__/frozen-catalog-lines.ts`, which dumps the live shape
- * deeply under the `providers.list@7.0` key: any growth of the head line goes
- * red there and forces v8.0 to be opened for real.
+ * `*V70Preimage` backs no contract, but remains part of the v6 -> v7 upgrade.
+ * Bare `V70` exports are the released v7 contract; the live exports now back
+ * v8.0 and may grow without widening v7.0.
  */
 
 function providerState(providerId: string) {
@@ -170,39 +150,54 @@ describe("providers.list@7.0 key-set pin (literal, not derived)", () => {
 describe("the v7-era schemas are distinct objects from the canonical live ones", () => {
   it("providersListRequestSchemaV70 / ResponseSchemaV70 are not the canonical exports", () => {
     expect(providersListRequestSchemaV70).not.toBe(providersListRequestSchema);
-    expect(providersListResponseSchemaV70Preimage).not.toBe(
+    expect(providersListResponseSchemaV70).not.toBe(
       providersListResponseSchema,
     );
   });
 
-  it("v7.1 is the head and names the canonical response; v7.0 names its freeze", () => {
-    // This assertion has now flipped twice, and the flips ARE the judgement the
-    // freeze rule exists to force. While an unreleased v8.0 sat above v7.0,
-    // v7.0 was pinned; collapsing that major made v7.0 the head and it tracked
-    // live again; opening v7.1 for the auth-aware enablement fields made it a
-    // non-head line once more, so it is pinned again - this time to the REAL
-    // v7.0 freeze (`providersListResponseSchemaV70`), not to the pre-image,
-    // which still backs no contract and remains the v6 -> v7 bridge's
-    // first-pass target.
+  it("v8.0 is the head and names the canonical response; 7.0 names its freeze", () => {
+    // This assertion has now flipped four times, and the flips ARE the
+    // judgement the freeze rule exists to force. While an unreleased v8.0 sat
+    // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
+    // it tracked live again; opening a v7.1 for the auth-aware enablement
+    // fields pinned v7.0 to the REAL freeze
+    // (`providersListResponseSchemaV70`); and removing those two fields removed
+    // that minor with them - they were its entire delta - so v7.0 is once again
+    // the only frozen line under a real v8.0.
+    //
+    // The v7.0 PIN survived all four flips, which is the point: what freezes a
+    // line is another line opening above it, not which one. v8.0 is above it
+    // now, and 7.0 must not drift back onto live just because the line
+    // immediately above it went away.
     //
     // "A line that has STOPPED being the head still points at live" is the
     // defect being guarded, so both halves are asserted: the head names live,
     // and the line below it does not.
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
-    const v71 = hostRpcRegistry["providers.list"][7].versions[1].contract;
-    expect(v71.responseSchema).toBe(providersListResponseSchema);
+    const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
+    expect(v80.responseSchema).toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
-    // The REQUEST side did not move: the freeze covered only the response, so
-    // both minors still bind the live request and `providersListRequestSchemaV70`
-    // remains the hand-copy held equal to it by the pin above.
+    // Major 7 has exactly ONE minor again. Asserted directly so a future
+    // reader cannot mistake the single-entry table above for an oversight,
+    // and so re-opening a 7.1 has to come here and say why.
+    expect(hostRpcRegistry["providers.list"][7].latestMinor).toBe(0);
+    expect(Object.keys(hostRpcRegistry["providers.list"][7].versions)).toEqual([
+      "0",
+    ]);
+    // The REQUEST side did not move: the freezes covered only the response, so
+    // both lines still bind the live request and
+    // `providersListRequestSchemaV70` remains the hand-copy held equal to it by
+    // the pin above. Request-side enum growth is advisory (a released client
+    // never emits a new value), which is why it is allowed to track live here
+    // while the response is not.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
-    expect(v71.requestSchema).toBe(providersListRequestSchema);
+    expect(v80.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 
-  it("providerIdSchemaV70 includes huggingface, the sole v7.0-only provider id", () => {
+  it("providerIdSchemaV70 includes huggingface, the newest id major 7 can carry", () => {
     expect(providerIdSchemaV70.options).toContain("huggingface");
   });
 
@@ -216,10 +211,25 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
   // represent. The point is that it must be a DECISION. Adding a harness now
   // fails here until someone states, in this file, which side the new id
   // belongs on.
-  it("the live and frozen provider id sets have not drifted apart", () => {
+  it("every live provider id is either in the v7.0 set or a stated post-v7.0 id", () => {
+    // THE STATED DECISION, which is what this test is for. `reasonix` is the
+    // first id added since the v1.2.0 tags shipped `providers.list@7.0`, and it
+    // belongs on the LIVE side only: a major-7 caller cannot represent it, so
+    // `providersListDowngradeV8ToV7` filters its row out and that caller simply
+    // does not see the provider. Dropping is the right answer here - the
+    // alternative, letting the id ride a released line, is the omp/huggingface
+    // incident - but it has to be a decision recorded here, not a diff nobody
+    // read.
+    //
+    // Add the next id to this list at the same time you add it to
+    // `providerIdSchema`, and only after deciding it cannot ride major 7.
+    const POST_V70_PROVIDER_IDS = ["reasonix"] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
-      [...providerIdSchemaV70.options].sort(),
+      [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
     );
+    for (const id of POST_V70_PROVIDER_IDS) {
+      expect(providerIdSchemaV70.options).not.toContain(id);
+    }
   });
 });
 
@@ -410,10 +420,16 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     // must round-trip untouched.
     const { modelProviders: _modelProviders, ...liveCapabilities } =
       viaLive.providers[0].nativeCapabilities;
+    const { enabled: _enabled, ...liveProfile } =
+      viaLive.providers[0].profiles[0];
     expect(viaFrozen).toEqual({
       ...viaLive,
       providers: [
-        { ...viaLive.providers[0], nativeCapabilities: liveCapabilities },
+        {
+          ...viaLive.providers[0],
+          profiles: [liveProfile],
+          nativeCapabilities: liveCapabilities,
+        },
       ],
     });
     expect(viaFrozen.providers[0].providerId).toBe("huggingface");
@@ -469,7 +485,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     (target) => {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [state],
@@ -489,7 +505,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
       });
       const downgraded = downgradeRequestAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         canonical,
       );
@@ -506,7 +522,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
     for (const target of [6, 5, 4, 3, 2, 1] as const) {
       const downgraded = downgradeResponseAcrossMajors(
         hostRpcRegistry["providers.list"],
-        7,
+        8,
         target,
         providersListResponseSchema.parse({
           providers: [huggingfaceState],

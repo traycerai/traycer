@@ -72,6 +72,32 @@ function v21Echo(
   };
 }
 
+function legacyV21Profile(): ProviderMutationCliStateV21["profiles"][number] {
+  return {
+    profileId: "managed-1",
+    kind: "managed",
+    authType: "oauth",
+    label: "Work",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: "work@example.test",
+      tier: "Pro",
+      accountUuid: null,
+    },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
 function seededProvidersList(): ProvidersListResponse {
   return {
     native: null,
@@ -149,9 +175,25 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       "providers.list",
       { native: null },
     );
-    queryClient.setQueryData(listKey, seededProvidersList());
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        profiles: [
+          {
+            ...legacyV21Profile(),
+            enabled: false,
+            launchCommand: {
+              command: "copilot --profile work",
+              shell: "posix" as const,
+            },
+          },
+        ],
+      })),
+    });
     mocks.requestWithResponseTimeout.mockResolvedValue({
-      state: v21Echo({}),
+      state: v21Echo({ profiles: [legacyV21Profile()] }),
       existingProfileId: null,
       codeRejected: false,
     });
@@ -167,6 +209,11 @@ describe("useProvidersAwaitLogin overlay merge", () => {
       (p: ProviderListEntry) => p.providerId === "copilot",
     );
     expect(copilot?.loginCapability?.terminalLogin).toEqual({});
+    expect(copilot?.profiles[0]?.enabled).toBe(false);
+    expect(copilot?.profiles[0]?.launchCommand).toEqual({
+      command: "copilot --profile work",
+      shell: "posix",
+    });
     // The missing direction: `terminalLogin` staying `{}` is also what a
     // no-op merge (one that dropped the WHOLE echo, not just its
     // `loginCapability`) would produce, since the seeded cache already has
@@ -213,12 +260,12 @@ describe("useProvidersAwaitLogin overlay merge", () => {
 });
 
 // The echo is pinned to `providerMutationCliStateSchemaV21`, whose field set
-// is the hand-frozen `providerCliStateBaseShapeV40` - structurally incapable
-// of carrying `enablementMode` / `enablementSource`, which exist only on the
-// live `providers.list@7.1` shape. So the overlay in the suite above can
-// never correct those two fields; invalidating `providers.list` here is not
-// belt-and-braces on top of the overlay, it is the ONLY way they are ever
-// refreshed after a login completes.
+// is the hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+// the live `providers.list` row, and a login is exactly when the rest of that
+// row moves too (the profile list gains the new account, its ambient identity
+// resolves). So the overlay in the suite above cannot be the last word;
+// invalidating `providers.list` here is not belt-and-braces on top of it, it
+// is the only way those fields are ever refreshed after a login completes.
 describe("useProvidersAwaitLogin providers.list invalidation", () => {
   beforeEach(() => {
     mocks.tabHostId.mockReturnValue(HOST_ID);

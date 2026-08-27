@@ -17,7 +17,8 @@ export interface InstalledFontsBridge {
 
 interface RunnerHostWindowShape {
   readonly platform:
-    { readonly fonts: InstalledFontsBridge | undefined } | undefined;
+    | { readonly fonts: InstalledFontsBridge | undefined }
+    | undefined;
 }
 
 export function getInstalledFontsBridge(): InstalledFontsBridge | null {

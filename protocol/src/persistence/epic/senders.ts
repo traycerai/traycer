@@ -1,5 +1,8 @@
 import { sessionWorkspaceSnapshotSchema } from "@traycer/protocol/common/workspace-association";
-import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
+import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreReasonix,
+} from "@traycer/protocol/persistence/epic/foundation";
 import { z } from "zod";
 
 /**
@@ -81,7 +84,9 @@ export type AssistantMessageSender = z.infer<typeof agentSenderSchema>;
  */
 export const agentSenderSchemaPreInReplyTo = z.object({
   type: z.literal("agent"),
-  harnessId: guiHarnessIdSchema,
+  // Pre-Reasonix pin: this copy is bound only to released `1.0–1.3`, so it
+  // carries the enum freeze as well as the `inReplyTo` freeze.
+  harnessId: guiHarnessIdSchemaPreReasonix,
   agentId: z.string(),
   displayName: z.string().nullable(),
   reply: z
@@ -101,6 +106,42 @@ export const userMessageSenderSchemaPreInReplyTo = z.discriminatedUnion(
   "type",
   [userSenderSchema, agentSenderSchemaPreInReplyTo],
 );
+
+/**
+ * Wire-freeze copy of the LIVE {@link agentSenderSchema} (it keeps `inReplyTo`)
+ * with `harnessId` pinned to the pre-Reasonix enum. Bound to the released
+ * `chat.subscribe@1.4`/`@1.5` lines, which shipped after `inReplyTo` but before
+ * Reasonix; `1.0–1.3` get the same pin on `agentSenderSchemaPreInReplyTo` above.
+ *
+ * This is the single highest-traffic leak of the harness enum: the host stamps
+ * every assistant row's sender straight off the chat's settings, so a Reasonix
+ * chat's persisted tree carries `harnessId: "reasonix"` on every assistant
+ * message, every chat event actor, every queue-item sender and every steer
+ * block. Field-for-field hand copy, NOT `.extend()` off the live shape.
+ */
+export const agentSenderSchemaPreReasonix = z.object({
+  type: z.literal("agent"),
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  agentId: z.string(),
+  displayName: z.string().nullable(),
+  reply: z
+    .discriminatedUnion("expectsReply", [
+      z.object({
+        expectsReply: z.literal(true),
+        responseId: z.string(),
+      }),
+      z.object({
+        expectsReply: z.literal(false),
+      }),
+    ])
+    .default({ expectsReply: false }),
+  inReplyTo: z.string().nullable().default(null),
+});
+
+export const userMessageSenderSchemaPreReasonix = z.discriminatedUnion("type", [
+  userSenderSchema,
+  agentSenderSchemaPreReasonix,
+]);
 
 export const activeSessionChainSchema = z.object({
   harnessId: guiHarnessIdSchema,
@@ -124,6 +165,24 @@ export const activeSessionChainSchema = z.object({
   profileId: z.string().nullable().default(null),
 });
 export type ActiveChain = z.infer<typeof activeSessionChainSchema>;
+
+/**
+ * Wire-freeze copy of {@link activeSessionChainSchema} with `harnessId` pinned
+ * to the pre-Reasonix enum, bound to the frozen chat records for released
+ * `chat.subscribe@1.0–1.5`.
+ *
+ * Like the assistant sender and unlike `activeTurn`, this is PERMANENT rather
+ * than transient: it is set for every live session on a Reasonix chat and rides
+ * the snapshot frame, which is the first thing a subscriber receives.
+ * Field-for-field hand copy, NOT `.extend()` off the live shape.
+ */
+export const activeSessionChainSchemaPreReasonix = z.object({
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  coveredUntilMessageId: z.string().nullable().default(null),
+  profileId: z.string().nullable().default(null),
+});
 
 // `coveredUntilMessageId` (on every anchor below) records the last chat message
 // covered by the fake-context seed file written when this session's lineage root
@@ -447,6 +506,23 @@ export type HuggingFaceChatSessionAnchor = z.infer<
   typeof huggingFaceChatSessionAnchorSchema
 >;
 
+// Reasonix (`reasonix acp`) resumes at session granularity only — `session/load`
+// reloads the whole ACP session and there is no per-message truncation/fork
+// point (`session/fork` is genuinely absent: it answers `-32601`) — so the
+// anchor carries just the ACP session id. `sessionId` is that ACP session id.
+export const reasonixChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("reasonix"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type ReasonixChatSessionAnchor = z.infer<
+  typeof reasonixChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -467,8 +543,39 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   hermesChatSessionAnchorSchema,
   ompChatSessionAnchorSchema,
   huggingFaceChatSessionAnchorSchema,
+  reasonixChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
+
+// Wire-freeze copy of the LIVE anchor union minus the Reasonix variant, bound
+// to `chat.subscribe@1.6`. `1.0–1.5` take `chatSessionAnchorSchemaPreTurnTail`
+// below, which predates Reasonix for a different reason; this copy keeps every
+// live anchor field (including the Claude `turnTailUuid`) and drops only the
+// discriminant a released `1.6` client cannot decode.
+export const chatSessionAnchorSchemaPreReasonix = z.discriminatedUnion(
+  "harnessId",
+  [
+    claudeChatSessionAnchorSchema,
+    codexChatSessionAnchorSchema,
+    openCodeChatSessionAnchorSchema,
+    cursorChatSessionAnchorSchema,
+    traycerChatSessionAnchorSchema,
+    openRouterChatSessionAnchorSchema,
+    grokChatSessionAnchorSchema,
+    qwenChatSessionAnchorSchema,
+    kiroChatSessionAnchorSchema,
+    droidChatSessionAnchorSchema,
+    kimiChatSessionAnchorSchema,
+    copilotChatSessionAnchorSchema,
+    kilocodeChatSessionAnchorSchema,
+    ampChatSessionAnchorSchema,
+    devinChatSessionAnchorSchema,
+    piChatSessionAnchorSchema,
+    hermesChatSessionAnchorSchema,
+    ompChatSessionAnchorSchema,
+    huggingFaceChatSessionAnchorSchema,
+  ],
+);
 
 // ── Wire-freeze variant (pre-turnTailUuid) ──────────────────────────────────
 // Hand-frozen copy of the claude anchor from before `turnTailUuid` existed.

@@ -78,6 +78,11 @@ export const RunnerHostInvoke = {
   fileDropReadNativeClipboardPaths:
     "runnerHost:fileDrops:readNativeClipboardPaths",
   fileSave: "runnerHost:file:save",
+  // Opens a file `fileSave` wrote earlier in this process lifetime with the
+  // OS default app (the "Open file" action on the saved toast). Main keeps
+  // the allowlist of paths it saved, so the renderer can only ever open what
+  // the user just chose in the native save dialog - never an arbitrary path.
+  fileOpenSaved: "runnerHost:file:openSaved",
   clipboardWriteImage: "runnerHost:clipboard:writeImage",
   requestHostRespawn: "runnerHost:host:requestRespawn",
   // The `hostId` in `pid.json`, read as a pure structural parse with no

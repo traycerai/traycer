@@ -34,7 +34,8 @@ export type CliInstallSource =
   | "manual";
 
 export type CliPendingUpgradeReason =
-  "binary-locked" | "awaiting-service-restart";
+  | "binary-locked"
+  | "awaiting-service-restart";
 
 export interface CliPendingUpgrade {
   readonly version: string;

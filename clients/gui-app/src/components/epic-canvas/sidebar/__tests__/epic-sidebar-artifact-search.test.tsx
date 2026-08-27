@@ -106,6 +106,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   epicNodeRefForNodeId: () => harness.epicNodeRef,
+  // Writable role: the availability gate withholds search from viewers, and
+  // this suite covers the shell/box behaviour, not the role gate (that lives
+  // in artifact-search-availability.test.tsx).
+  useEpicPermissionRole: () => "editor",
 }));
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (s: unknown) => unknown) =>

@@ -6,7 +6,10 @@ import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
-  "file-tree" | "git-diff" | "pull-requests" | "sharing";
+  | "file-tree"
+  | "git-diff"
+  | "pull-requests"
+  | "sharing";
 
 interface SwitcherPanelEmbedProps {
   readonly category: SwitcherEmbedCategory;
@@ -19,8 +22,12 @@ interface SwitcherPanelEmbedProps {
  * lists these are not row-per-item surfaces: they embed the EXACT desktop panel
  * bodies - already click-driven and Pierre-rendered - rather than being rebuilt.
  * All four mount cleanly here: the app-shell `RootDndProvider` supplies the
- * dnd-kit context the file-tree drag bridge needs (it only activates on pointer
- * drag, never a tap), the canvas-side `SnapshotLoadingProvider` satisfies the
+ * dnd-kit context the file-tree drag bridge needs, and a finger never drags the
+ * tree either way: a touch-primary device attaches no pointer listener at all
+ * (`useDragSourceDisabled`), and a hybrid one - fine-primary with a touchscreen
+ * - keeps the listener but has the touch press vetoed in
+ * `EpicCanvasPointerSensor`, so the tree scrolls rather than picking up a row;
+ * the canvas-side `SnapshotLoadingProvider` satisfies the
  * file-tree `SnapshotGate`, the PR body's row click opens its detail tile
  * through the same `useEpicTileNavigation` path desktop uses, and the sharing
  * panel reads and writes through the Epic session's host client, which the

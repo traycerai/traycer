@@ -1,12 +1,12 @@
 import { useCallback, type ReactNode } from "react";
-import { CircleHelp, Pencil } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import * as m from "motion/react-m";
 import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
@@ -14,36 +14,29 @@ import { QUESTION_TRANSITION } from "./use-interview-card";
 
 const OTHER_LABEL = "Other";
 
+function interviewOptionKey(
+  options: ReadonlyArray<InterviewQuestionOption>,
+  option: InterviewQuestionOption,
+  index: number,
+): string {
+  const fingerprint = [
+    option.label,
+    option.description ?? "",
+    option.preview ?? "",
+  ].join("\u0000");
+  const occurrence = options.slice(0, index).filter((candidate) => {
+    const candidateFingerprint = [
+      candidate.label,
+      candidate.description ?? "",
+      candidate.preview ?? "",
+    ].join("\u0000");
+    return candidateFingerprint === fingerprint;
+  }).length;
+  return `${fingerprint}\u0000${occurrence}`;
+}
+
 const ANSWER_TEXTAREA_CLASS =
   "w-full resize-none rounded-md border border-input bg-background/70 px-2.5 py-2 text-ui-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
-
-interface DetailItem {
-  readonly label: string;
-  readonly value: string;
-}
-
-function normalizedText(value: string | null): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function detailItem(label: string, value: string | null): DetailItem | null {
-  const text = normalizedText(value);
-  return text === null ? null : { label, value: text };
-}
-
-function compactDetails(items: ReadonlyArray<DetailItem | null>) {
-  return items.filter((item): item is DetailItem => item !== null);
-}
-
-function optionDetails(
-  option: InterviewQuestionOption,
-): ReadonlyArray<DetailItem> {
-  return compactDetails([
-    detailItem("Details", option.description),
-    detailItem("Preview", option.preview),
-  ]);
-}
 
 interface QuestionPageProps {
   question: InterviewQuestion;
@@ -56,8 +49,8 @@ interface QuestionPageProps {
   // tech - callbacks already reject while busy, but the controls must also
   // look and behave disabled.
   disabled: boolean;
-  pendingLabel: string | null;
-  onToggleOption: (label: string) => void;
+  pendingOptionIndex: number | null;
+  onToggleOption: (optionIndex: number) => void;
   onToggleOther: () => void;
   onOtherTextChange: (text: string) => void;
   onFreeTextChange: (text: string) => void;
@@ -69,7 +62,7 @@ export function QuestionPage(props: QuestionPageProps) {
     draft,
     isActive,
     disabled,
-    pendingLabel,
+    pendingOptionIndex,
     onToggleOption,
     onToggleOther,
     onOtherTextChange,
@@ -122,20 +115,20 @@ export function QuestionPage(props: QuestionPageProps) {
     <div className="flex flex-col gap-1.5">
       <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
         {question.options.map((option, index) => {
-          const selected = draft.selected.has(option.label);
+          const selected = draft.selected.has(index);
           return (
-            <li key={option.label}>
+            <li key={interviewOptionKey(question.options, option, index)}>
               <OptionRow
                 label={option.label}
                 ariaLabel={`${index + 1}. ${option.label}`}
-                details={optionDetails(option)}
+                option={option}
                 selected={selected}
-                pending={pendingLabel === option.label}
+                pending={pendingOptionIndex === index}
                 disabled={disabled}
                 badge={
                   <OptionNumberBadge index={index + 1} selected={selected} />
                 }
-                onToggle={() => onToggleOption(option.label)}
+                onToggle={() => onToggleOption(index)}
               />
             </li>
           );
@@ -190,7 +183,7 @@ function OtherRow(props: OtherRowProps) {
     <OptionRow
       label={OTHER_LABEL}
       ariaLabel={OTHER_LABEL}
-      details={[]}
+      option={null}
       selected={false}
       pending={false}
       disabled={disabled}
@@ -221,7 +214,7 @@ function OtherIconBadge(props: { selected: boolean }) {
 interface OptionRowProps {
   label: string;
   ariaLabel: string;
-  details: ReadonlyArray<DetailItem>;
+  option: InterviewQuestionOption | null;
   selected: boolean;
   pending: boolean;
   disabled: boolean;
@@ -233,7 +226,7 @@ function OptionRow(props: OptionRowProps) {
   const {
     label,
     ariaLabel,
-    details,
+    option,
     selected,
     pending,
     disabled,
@@ -257,8 +250,8 @@ function OptionRow(props: OptionRowProps) {
             : "text-muted-foreground",
           // `hover:*` matches an ancestor whenever ANY hit-tested descendant
           // is hovered - including through this row's own `pointer-events:
-          // none` state, since `InfoHint` deliberately keeps `pointer-events-
-          // auto` so its tooltip stays usable. So hovering the info icon
+          // none` state, since the shared details button deliberately keeps
+          // `pointer-events-auto` so its tooltip stays usable. So hovering it
           // alone would still light up the row unless these classes are
           // omitted outright while disabled; `pointer-events-none` here
           // can't suppress that.
@@ -282,11 +275,14 @@ function OptionRow(props: OptionRowProps) {
         <span className="pointer-events-none relative z-10 min-w-0 truncate font-medium text-foreground/90">
           {label}
         </span>
-        <InfoHint
-          ariaLabel={`${label} details`}
-          details={details}
-          className="pointer-events-auto relative z-20 self-center"
-        />
+        {option === null ? null : (
+          <InterviewOptionDetailsButton
+            label={label}
+            option={option}
+            className="pointer-events-auto relative z-20 self-center"
+            pinnedDetailRegionId={null}
+          />
+        )}
         <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
@@ -309,49 +305,5 @@ function OptionNumberBadge(props: { index: number; selected: boolean }) {
     >
       {props.index}
     </span>
-  );
-}
-
-interface InfoHintProps {
-  readonly ariaLabel: string;
-  readonly details: ReadonlyArray<DetailItem>;
-  readonly className: string | null;
-}
-
-function InfoHint(props: InfoHintProps) {
-  if (props.details.length === 0) return null;
-  return (
-    <TooltipWrapper
-      label={<DetailsTooltip details={props.details} />}
-      side="top"
-      sideOffset={6}
-      align="center"
-    >
-      <button
-        type="button"
-        aria-label={props.ariaLabel}
-        className={cn(
-          "inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-foreground/8 hover:text-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
-          props.className,
-        )}
-      >
-        <CircleHelp className="size-3.5" aria-hidden />
-      </button>
-    </TooltipWrapper>
-  );
-}
-
-function DetailsTooltip(props: {
-  readonly details: ReadonlyArray<DetailItem>;
-}) {
-  return (
-    <div className="flex max-w-[min(80vw,20rem)] flex-col gap-2 text-ui-xs">
-      {props.details.map((detail) => (
-        <div key={detail.label} className="flex flex-col gap-0.5">
-          <span className="font-medium text-background/70">{detail.label}</span>
-          <span className="text-background">{detail.value}</span>
-        </div>
-      ))}
-    </div>
   );
 }

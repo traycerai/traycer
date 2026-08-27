@@ -151,9 +151,9 @@ describe("chat-head lineage", () => {
     expect(parse(wireHead).parentHeadSha256).toBeNull();
 
     const parent = "c".repeat(64);
-    expect(parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256).toBe(
-      parent,
-    );
+    expect(
+      parse({ ...wireHead, parentHeadSha256: parent }).parentHeadSha256,
+    ).toBe(parent);
   });
 
   it("chains a head to the digest of the head it superseded", () => {
@@ -355,9 +355,9 @@ describe("chat-head canonical encoding", () => {
       },
     };
 
-    expect(canonicalJsonStringify(encodeChatHead(parse(withFutureFields)))).toBe(
-      canonicalJsonStringify(withFutureFields),
-    );
+    expect(
+      canonicalJsonStringify(encodeChatHead(parse(withFutureFields))),
+    ).toBe(canonicalJsonStringify(withFutureFields));
   });
 
   /**
@@ -402,7 +402,7 @@ describe("chat-head canonical encoding", () => {
     // This fixture states a deliberate floor, so it survives the round trip
     // verbatim; the DEFAULT (absent -> null, on the writer as on the reader) is
     // pinned in the coherence and null-floor describes.
-    expect(once.minReaderVersion).toEqual({ major: 1, minor: 1 });
+    expect(once.minReaderVersion).toEqual(CHAT_SYNC_SCHEMA_VERSION);
 
     // Idempotent from there on - so the digest the next head chains to does not
     // move under a reader that merely opened and re-published the chat.

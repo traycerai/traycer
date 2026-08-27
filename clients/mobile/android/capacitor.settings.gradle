@@ -2,8 +2,17 @@
 include ':capacitor-android'
 project(':capacitor-android').projectDir = new File('../../../node_modules/.bun/@capacitor+android@8.4.2+f68449e264960a74/node_modules/@capacitor/android/capacitor')
 
+include ':capacitor-app'
+project(':capacitor-app').projectDir = new File('../../../node_modules/.bun/@capacitor+app@8.1.1+f68449e264960a74/node_modules/@capacitor/app/android')
+
 include ':capacitor-app-launcher'
 project(':capacitor-app-launcher').projectDir = new File('../../../node_modules/.bun/@capacitor+app-launcher@8.0.1+f68449e264960a74/node_modules/@capacitor/app-launcher/android')
+
+include ':capacitor-barcode-scanner'
+project(':capacitor-barcode-scanner').projectDir = new File('../../../node_modules/.bun/@capacitor+barcode-scanner@3.1.0+f68449e264960a74/node_modules/@capacitor/barcode-scanner/android')
+
+include ':capacitor-device'
+project(':capacitor-device').projectDir = new File('../../../node_modules/.bun/@capacitor+device@8.0.0+f68449e264960a74/node_modules/@capacitor/device/android')
 
 include ':capacitor-keyboard'
 project(':capacitor-keyboard').projectDir = new File('../../../node_modules/.bun/@capacitor+keyboard@8.0.5+f68449e264960a74/node_modules/@capacitor/keyboard/android')

@@ -60,9 +60,11 @@ export interface MockCodecOptions {
   readonly supportsWebP: boolean | (() => Promise<boolean>) | undefined;
   readonly close: (() => void) | undefined;
   readonly encode:
-    ((args: EncodeArgs) => Promise<ImageBytes | null>) | undefined;
+    | ((args: EncodeArgs) => Promise<ImageBytes | null>)
+    | undefined;
   readonly decode:
-    ((args: DecodeArgs) => Promise<PromptStashDecodedImage>) | undefined;
+    | ((args: DecodeArgs) => Promise<PromptStashDecodedImage>)
+    | undefined;
 }
 
 export interface MockCodecBundle {

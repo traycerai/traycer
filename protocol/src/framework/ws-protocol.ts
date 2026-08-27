@@ -6,6 +6,10 @@ import {
   type ClientCompatibilityRequirement,
   type ClientHandshakeIdentity,
 } from "@traycer/protocol/framework/client-identity";
+import {
+  worktreeBusyHoldersWireFieldSchema,
+  type WorktreeBusyHolder,
+} from "./worktree-busy-holders";
 
 /**
  * Wire-level frame types for the per-request WebSocket RPC protocol.
@@ -40,7 +44,9 @@ export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
  *   between the two canonicals using its installed upgrade/downgrade paths.
  */
 export type IncompatibleMethodBlocking =
-  "client-missing-method" | "host-missing-method" | "no-bridge";
+  | "client-missing-method"
+  | "host-missing-method"
+  | "no-bridge";
 
 /**
  * Per-method incompatibility record carried on a fatal error frame. Either
@@ -213,7 +219,9 @@ export type ClientFatalErrorFrame = {
  * connection.
  */
 export type ClientFrame =
-  ClientOpenFrame | ClientRequestFrame | ClientFatalErrorFrame;
+  | ClientOpenFrame
+  | ClientRequestFrame
+  | ClientFatalErrorFrame;
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
@@ -237,7 +245,11 @@ export type HostResponseFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly result: unknown | null;
-  readonly error: { readonly code: string; readonly message: string } | null;
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    readonly holders?: readonly WorktreeBusyHolder[];
+  } | null;
 };
 
 /**
@@ -254,7 +266,9 @@ export type HostFatalErrorFrame = {
  * connection.
  */
 export type HostFrame =
-  HostOpenAckFrame | HostResponseFrame | HostFatalErrorFrame;
+  | HostOpenAckFrame
+  | HostResponseFrame
+  | HostFatalErrorFrame;
 
 // ---- Canonical Zod schemas -------------------------------------------- //
 
@@ -332,7 +346,8 @@ export const fatalErrorDetailsSchema = z.object({
   // the compatibility-epoch gate, and stripped by every client that does -
   // which is exactly the population this rejection is aimed at, so the
   // envelope's `reason` carries the whole remedy on its own.
-  clientCompatibilityRequirement: clientCompatibilityRequirementSchema.optional(),
+  clientCompatibilityRequirement:
+    clientCompatibilityRequirementSchema.optional(),
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -390,6 +405,10 @@ export const hostOpenAckFrameSchema = z.object({
 export const hostResponseErrorSchema = z.object({
   code: z.string(),
   message: z.string(),
+  // Typed `WORKTREE_BUSY` inventory. Malformed values are sanitized to
+  // absent rather than rejecting the envelope — adding this optional
+  // field must never fail a `{ code, message }` that parsed before it.
+  holders: worktreeBusyHoldersWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

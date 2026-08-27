@@ -58,6 +58,7 @@ const REDACTED_EMAIL = "w•••@e…";
 function managedProfile(): ProviderCliState["profiles"][number] {
   return {
     profileId: "profile-managed",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label: "Work account",
@@ -129,6 +130,10 @@ function renderSection(
           onDismissFailedAttempt={() => undefined}
           selectedProfileId="profile-managed"
           onSelectedProfileIdChange={() => undefined}
+          profileEnablementAvailable
+          profileStatusRefreshAvailable
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={() => undefined}
           {...overrides}
         />
       </TooltipProvider>

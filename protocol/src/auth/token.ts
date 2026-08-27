@@ -10,7 +10,4 @@
  * from "@traycer/protocol/auth/registry"`. This module re-exports them
  * for backward compatibility but adds no new declarations.
  */
-export type {
-  ExchangeTokenResponse,
-  RefreshTokenResponse,
-} from "./registry";
+export type { ExchangeTokenResponse, RefreshTokenResponse } from "./registry";

@@ -6,6 +6,7 @@ import {
 import {
   workspaceBrowseFoldersRequestSchema,
   workspaceBrowseFoldersResponseSchema,
+  workspaceBrowseFoldersResponseSchemaV11,
   workspaceFileMentionSuggestionsResponseSchema,
   workspaceFolderMentionSuggestionsResponseSchema,
   workspaceGitBranchMentionSuggestionsResponseSchema,
@@ -19,8 +20,12 @@ import {
   workspacePathMentionSuggestionsRequestSchema,
   workspacePrepareFoldersRequestSchemaV11,
   workspacePrepareFoldersRequestSchemaV12,
+  workspacePrepareFoldersRequestSchemaV13,
+  workspacePrepareFoldersRequestSchemaV14,
   workspacePrepareFoldersResponseSchemaV11,
   workspacePrepareFoldersResponseSchemaV12,
+  workspacePrepareFoldersResponseSchemaV13,
+  workspacePrepareFoldersResponseSchemaV14,
   workspaceReadFileRequestSchema,
   workspaceReadFileResponseSchema,
   workspaceWriteFileRequestSchema,
@@ -57,6 +62,20 @@ export const workspacePrepareFoldersV12 = defineRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: workspacePrepareFoldersRequestSchemaV12,
   responseSchema: workspacePrepareFoldersResponseSchemaV12,
+});
+
+export const workspacePrepareFoldersV13 = defineRpcContract({
+  method: "workspace.prepareFolders",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: workspacePrepareFoldersRequestSchemaV13,
+  responseSchema: workspacePrepareFoldersResponseSchemaV13,
+});
+
+export const workspacePrepareFoldersV14 = defineRpcContract({
+  method: "workspace.prepareFolders",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: workspacePrepareFoldersRequestSchemaV14,
+  responseSchema: workspacePrepareFoldersResponseSchemaV14,
 });
 
 export const workspaceMentionFilesV10 = defineRpcContract({
@@ -136,6 +155,14 @@ export const workspaceBrowseFoldersV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceBrowseFoldersRequestSchema,
   responseSchema: workspaceBrowseFoldersResponseSchema,
+});
+
+// v1.1 normalizes the host OS's hidden-folder semantics for renderer filtering.
+export const workspaceBrowseFoldersV11 = defineRpcContract({
+  method: "workspace.browseFolders",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: workspaceBrowseFoldersRequestSchema,
+  responseSchema: workspaceBrowseFoldersResponseSchemaV11,
 });
 
 export const workspaceReadFileV10 = defineRpcContract({

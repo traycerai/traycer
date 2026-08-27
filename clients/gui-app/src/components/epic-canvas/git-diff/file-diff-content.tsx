@@ -21,7 +21,8 @@ interface FileDiffContentProps {
   readonly onLoadFull: () => void;
   readonly sizing: "fill" | "content";
   readonly scrollContainerRef:
-    ((element: HTMLDivElement | null) => void) | null;
+    | ((element: HTMLDivElement | null) => void)
+    | null;
   readonly onScroll: ((event: UIEvent<HTMLDivElement>) => void) | null;
   readonly editStatus?: ReactNode;
   readonly editAdapter?: DiffClickToEditAdapter;

@@ -25,7 +25,11 @@ export type SurfaceHostSelection = string | null;
  * keeps - see `useEpicConversationPlacement`.
  */
 export type SurfaceKind =
-  "git-diff" | "file-tree" | "new-terminal" | "composer" | "new-conversation";
+  | "git-diff"
+  | "file-tree"
+  | "new-terminal"
+  | "composer"
+  | "new-conversation";
 
 const SURFACE_KEY_SEP = "\u001f";
 

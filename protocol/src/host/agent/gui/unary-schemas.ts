@@ -9,10 +9,7 @@ import {
   guiHarnessIdSchemaV60,
   guiHarnessIdSchemaV70,
 } from "@traycer/protocol/host/agent/shared";
-import {
-  PROVIDER_AUTH_STATUS_SCHEMA,
-  providerEnablementModeSchema,
-} from "@traycer/protocol/host/provider-schemas";
+import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
   ALL_PERMISSION_MODES,
   permissionModeSchema,
@@ -86,10 +83,14 @@ export const guiHarnessOptionSchema = z.object({
   // Reuses `providers.list`'s auth-status enum so both surfaces classify off
   // one vocabulary. Consumers must keep the send gate's DEFINITIVE-only
   // reading - only `unauthenticated` is a signed-out verdict; `unknown` /
-  // `unavailable` are read errors that fail OPEN. Widening that predicate
-  // would also widen row VISIBILITY (the rail ORs degraded into visible), so a
-  // sticky-enabled provider with no CLI installed would get a permanently dead
-  // tab.
+  // `unavailable` are read errors that fail OPEN, because dimming a working
+  // provider over a transient read error is the worse mistake.
+  //
+  // PRESENTATION ONLY. This field must never feed row VISIBILITY or the
+  // `enabled` flag: what the picker shows is the user's sticky choice, full
+  // stop. A verdict that lands a few seconds after first paint may DIM a row;
+  // it may never add or remove one, which is the mid-session movement this
+  // catalog is deliberately free of.
   //
   // `.optional()` rather than a default: an old host omits the key entirely
   // and the client falls back to its `providers.list`-derived classification,
@@ -102,14 +103,6 @@ export const guiHarnessOptionSchema = z.object({
   // the old-host path it already supports. See the fuller note on the same pair
   // in `provider-schemas.ts`.
   authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
-  // Tri-state enablement intent behind `enabled`: sticky `"on"`/`"off"` (an
-  // explicit user choice that ignores detection) or `"auto"` (enablement
-  // derives from whether the host passively detected an account). `enabled`
-  // stays the strict boolean EFFECTIVE value, so a client that ignores this
-  // field behaves exactly as before. Absent on hosts that predate auto
-  // enablement - the client then renders its binary switch. `.catch(undefined)`
-  // for the same reason as `authStatus` above.
-  enablementMode: providerEnablementModeSchema.optional().catch(undefined),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
 
@@ -265,10 +258,10 @@ export const listGuiHarnessesResponseSchemaV20 = z.object({
 // Every one of those lines used to be spelled `guiHarnessOptionSchema.extend({
 // id: <pinned enum> })`, i.e. a pinned id over the LIVE body. That pins only
 // half a row: the id could not drift, but a field added to the live body
-// widened all six SHIPPED lines at once. `authStatus` / `enablementMode` are
-// the first fields to actually test that, so the body is hand-frozen here and
-// the released lines below now differ from one another ONLY by their id enum -
-// which is what their comments always claimed.
+// widened all six SHIPPED lines at once. `authStatus` was the first field to
+// actually test that, so the body is hand-frozen here and the released lines
+// below now differ from one another ONLY by their id enum - which is what
+// their comments always claimed.
 //
 // Byte-identical to the live body at the freeze cut, so the committed
 // `frozen-catalog-lines` snapshots for 2.1-6.0 are unchanged by the freeze.
@@ -363,20 +356,20 @@ export const listGuiHarnessesResponseSchemaV60 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV60),
 });
 
-// ── Frozen protocol-v7.0 catalog row + response (pre auth-aware enablement) ─
+// ── Frozen protocol-v7.0 catalog row + response (pre-`authStatus`) ─────────
 // v7.0 shipped Hugging Face and, in `cli-v1.2.0-rc.1` / `host-v1.2.0-rc.1`
-// (both tagged 2026-08-19), shipped to real peers. v7.1 adds `authStatus` /
-// `enablementMode` to the live row, so v7.0 stops being the head line here and
-// is frozen at what those rc peers negotiate: a 7.0 caller receives the row
-// without the two new keys, re-parsed through this shape by the contract.
+// (both tagged 2026-08-19), shipped to real peers. v7.1 adds `authStatus` to
+// the live row, so v7.0 stops being the head line here and is frozen at what
+// those rc peers negotiate: a 7.0 caller receives the row without that key,
+// re-parsed through this shape by the contract.
 //
-// This freeze is why the new fields ride a MINOR rather than widening 7.0 in
+// This freeze is why the new field rides a MINOR rather than widening 7.0 in
 // place, which is what `registry.ts`'s "an unreleased line widens in place"
 // note would otherwise license (rc tags are outside `support-floor.json`'s
 // protected set). Two different shapes under one version number are
 // undetectable by negotiation, and these schemas strict-parse - an rc peer at
-// 7.0 handed 7.1 keys can reject the response outright. Negotiating 7.1 and
-// letting the downgrade strip the keys is the honest wire.
+// 7.0 handed a 7.1 key can reject the response outright. Negotiating 7.1 and
+// letting the downgrade strip the key is the honest wire.
 export const guiHarnessOptionSchemaV70 = z.object({
   id: guiHarnessIdSchemaV70,
   ...guiHarnessOptionBaseShapeV70,
@@ -387,6 +380,40 @@ export const listGuiHarnessesResponseSchemaV70 = z.object({
 export type ListGuiHarnessesResponseV70 = z.infer<
   typeof listGuiHarnessesResponseSchemaV70
 >;
+
+// ── Frozen protocol-v7.1 catalog row + response (pre-Reasonix) ─────────────
+// 7.1 is where `authStatus` formally enters the major-7 line.
+// It is frozen here at the v7.0 ID SET even though no tag has shipped 7.1 yet,
+// which is the part worth stating: a minor may not GROW A RESPONSE ENUM over
+// its predecessor (`versioned-rpc.ts`'s projection-feasibility check refuses
+// it), and 7.0 IS released, so no minor of major 7 can ever carry a harness id
+// 7.0 does not. Reasonix therefore opens 8.0 rather than riding 7.1, exactly as
+// it would if 7.1 were released.
+//
+// That refusal is the whole safety property here. A 7.0 peer receives a 7.1
+// response through a within-major re-parse, which STRIPS unknown keys but
+// REJECTS an unknown enum value - so a Reasonix row on 7.1 would not degrade,
+// it would fail the entire `listHarnesses` response and empty that peer's
+// picker. Only a cross-major bridge can filter rows.
+//
+// Do NOT add fields or ids here; add fields to `guiHarnessOptionSchema` above,
+// which only v8.0 (the head line) binds.
+const guiHarnessOptionBaseShapeV71 = {
+  ...guiHarnessOptionBaseShapeV70,
+  authStatus: PROVIDER_AUTH_STATUS_SCHEMA.optional().catch(undefined),
+};
+
+export const guiHarnessOptionSchemaV71 = z.object({
+  id: guiHarnessIdSchemaV70,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV71 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV71),
+});
+export type ListGuiHarnessesResponseV71 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV71
+>;
+
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema
 >;

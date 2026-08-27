@@ -92,10 +92,19 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
       // mobile-shell-touch-targets.css) to an exact fit.
       //
       // Every override here has to spell its modifier the way `ui/tabs` spells
-      // its own, or tailwind-merge sees two unrelated utilities and keeps
-      // BOTH - the base height wins and the spill is back. That coupling is
-      // what `switcher-category-tabs.test.tsx` derives from the primitive
-      // rather than restates.
+      // its own, and the reason is not style. tailwind-merge only drops the
+      // base utility when both sides carry the IDENTICAL modifier chain; spell
+      // them differently and both ship, at which point the cascade decides -
+      // and the bare shadcn variants (`data-horizontal:`, `data-active:`,
+      // registered in `shadcn/tailwind.css`) compile `:where()`-wrapped, so
+      // they carry ZERO specificity while the `data-[…]` form carries a real
+      // attribute. A bare-variant override is therefore safe only while it is
+      // the sole rule for that property, and loses outright the moment the
+      // primitive states the same property with real specificity. Matching the
+      // spelling is what keeps the base out of the class list entirely, which
+      // is the only version of this that does not depend on winning a fight.
+      // `switcher-category-tabs.test.tsx` derives that coupling from the
+      // primitive rather than restating it.
       className={cn(
         "no-scrollbar w-full justify-start gap-1 overflow-x-auto px-2 group-data-[orientation=horizontal]/tabs:h-auto",
         fadeClassForEdges(edges),
@@ -112,12 +121,15 @@ export function SwitcherCategoryTabs(props: SwitcherCategoryTabsProps) {
             // so a rem-based `11` is 41.25px and would leave the 44px hit-slop
             // `::after` spilling out of the list's exact fit.
             //
-            // `data-[state=active]:bg-transparent`: force the line-variant
-            // active state fill-less (the `:where()`-neutralised line override
-            // can't out-specify the base `data-[state=active]:bg-*`; same prefix
-            // here, so tailwind-merge drops it) - otherwise it paints a box
-            // wherever the active `--background` differs from the sheet surface,
-            // e.g. a white box in a light portal.
+            // `data-[state=active]:bg-transparent`: force the active state
+            // fill-less, so it paints no box where the active `--background`
+            // differs from the sheet surface - e.g. a white box in a light
+            // portal. `ui/tabs`' line variant already answers this for a
+            // `variant="line"` list, but it answers it by out-specifying the
+            // default fill rather than removing it, so the guarantee lasts only
+            // as long as this list stays on that variant. Stated here in the
+            // primitive's own spelling, tailwind-merge drops the default fill
+            // outright and the outcome stops depending on which rule wins.
             //
             // The active indicator is a `::before` underline, NOT ui/tabs'
             // `::after` one: the mobile-shell hit-slop

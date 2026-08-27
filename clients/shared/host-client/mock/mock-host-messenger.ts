@@ -279,6 +279,7 @@ function restampHostRpcError(
     requestId,
     method,
     fatalDetails: cause.fatalDetails,
+    holders: cause.holders,
   };
   if (cause instanceof RetryableTransportError) {
     return new RetryableTransportError(details);
