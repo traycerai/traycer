@@ -19,6 +19,7 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
   isAmbientAuthVerdictPending,
+  isProviderAmbientAuthenticated,
 } from "@/lib/providers/provider-ambient-auth";
 import {
   orderProvidersByEnablement,
@@ -175,11 +176,26 @@ function accountDescription(state: ProviderCliState | undefined): ReactNode {
  *
  * The INSTALL gate is what keeps this from becoming noise. Seeded defaults
  * leave most of a dozen-plus rows off, and offering to sign a user in to a CLI
- * they have never installed is an invitation to a failure. It is also not a
- * proxy for auth: a disabled provider's credentials are never probed
+ * they have never installed is an invitation to a failure.
+ *
+ * "Off" is not itself evidence of a missing account, though, and the two
+ * directions are not symmetric. NEGATIVE evidence is genuinely unavailable
+ * here - a disabled provider's credentials are never probed
  * (`resolveAuthState` short-circuits it rather than spawning its CLI), so the
  * row cannot report a signed-out verdict to key on, and the sign-in itself is
- * what discovers whether there was an account to find.
+ * what discovers whether there was an account to find. POSITIVE evidence needs
+ * no probe and is therefore honoured: a configured API key is stored config,
+ * and an already-`authenticated` ambient verdict is a real answer that
+ * outlived whatever switched the provider off. Both mean the row is one
+ * TOGGLE away from working, and the switch beside this affordance is that
+ * toggle - so offering a login would send the user through an OAuth round trip
+ * to arrive where they already were.
+ *
+ * The API-key case is the one that was actively wrong rather than merely
+ * redundant. An API-key-only provider ships no `oauthArgs`, so it fell to
+ * `providerSignInUnavailableHint`'s first branch and rendered the affordance's
+ * "Not signed in" fallback over a key the user had already set, under a hint
+ * telling them to go set one.
  */
 function providerNeedsSignInToEnable(
   state: ProviderCliState,
@@ -191,6 +207,8 @@ function providerNeedsSignInToEnable(
   // render the sign-in affordance's "Not signed in" fallback, which is
   // exactly backwards for the one provider that is always signed in.
   if (state.providerId === "traycer") return false;
+  if (state.apiKey.configured) return false;
+  if (isProviderAmbientAuthenticated(state)) return false;
   return !state.enabled && installDetected;
 }
 
@@ -296,10 +314,22 @@ function SignInToEnableButton(props: {
   // would end pending having never called `awaitLogin`, and the row would
   // render "did not start" and "did not complete" together - the second one
   // describing an attempt the user had already moved on from.
-  const notAuthenticated =
-    !isPending &&
+  //
+  // Both phases below read ONE verdict rather than each testing the status
+  // itself, so they cannot stop being exact complements.
+  //
+  // As two independent comparisons they only agreed while both spelled the
+  // check the same way. The ambient verdict is true in cases a top-level
+  // `=== "authenticated"` is not, so changing one and not the other makes
+  // "did not complete" and "awaiting enable" simultaneously true - a failure
+  // message on a button that is in fact about to retry the enable. Deriving
+  // both from `attemptAuthenticated` removes the second copy that could drift.
+  const attemptAuthenticated =
     awaitLogin.isSuccess &&
-    awaitLogin.data.state?.auth.status !== "authenticated";
+    awaitLogin.data.state !== null &&
+    isProviderAmbientAuthenticated(awaitLogin.data.state);
+  const notAuthenticated =
+    !isPending && awaitLogin.isSuccess && !attemptAuthenticated;
   // This attempt DID authenticate, and the row is still off - so the enable was
   // the half that failed (this button only renders while `!state.enabled`).
   //
@@ -312,9 +342,7 @@ function SignInToEnableButton(props: {
   // Derived rather than latched: `awaitLogin` already holds this attempt's
   // verdict, and `onSignIn` resets it, so the phase begins and ends with the
   // attempt it describes.
-  const authenticatedAwaitingEnable =
-    awaitLogin.isSuccess &&
-    awaitLogin.data.state?.auth.status === "authenticated";
+  const authenticatedAwaitingEnable = attemptAuthenticated;
   const onSignIn = (providerId: ProviderId): void => {
     // Scope the await result to THIS attempt. `startLogin.mutate` resets its
     // own result and so clears `declined` on its own; `awaitLogin` is a
@@ -370,7 +398,17 @@ function SignInToEnableButton(props: {
             completion: ProvidersAwaitLoginResponse,
           ): void => {
             if (unmountedRef.current) return;
-            if (completion.state?.auth.status === "authenticated") {
+            // The verdict is the SHARED ambient one, not the top-level status
+            // alone. Those two signals reflect the same login and converge at
+            // different times, so reading only the summary is wrong in both
+            // directions: an ambient row that authenticates first would burn
+            // the whole re-poll budget and leave the provider off, and a stale
+            // top-level `authenticated` would enable a provider whose ambient
+            // row definitively says `unauthenticated`.
+            if (
+              completion.state !== null &&
+              isProviderAmbientAuthenticated(completion.state)
+            ) {
               setSettling(false);
               onEnable(providerId);
               return;

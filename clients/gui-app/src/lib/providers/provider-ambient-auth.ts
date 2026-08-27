@@ -1,9 +1,34 @@
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import type {
   ProviderAuthStatus,
-  ProviderCliState,
   ProviderMutationCliStateV21,
+  ProviderProfileKind,
 } from "@traycer/protocol/host/provider-schemas";
+
+/**
+ * The two fields the ambient verdict below actually reads, named structurally
+ * rather than as one concrete state type.
+ *
+ * Both shapes that carry an ambient verdict satisfy this: `ProviderCliState`
+ * (a `providers.list` row) and `ProviderMutationCliStateV21` (what a mutation
+ * response - `awaitLogin` included - hands back). They are not related by
+ * assignability in either direction, but they share `PROVIDER_AUTH_SCHEMA_V20`
+ * for `auth` and build `profiles` from the same `providerProfileShapeV70`, so
+ * the sources this reconciles are byte-identical across the two.
+ *
+ * Typed this way because the alternative is what F3 of the review caught: a
+ * caller holding the mutation shape cannot call a `ProviderCliState` predicate,
+ * so it open-codes `state.auth.status === "authenticated"` instead and silently
+ * drops the profile half of the verdict. The same idiom `isProfileEnabled`
+ * already uses in `provider-schemas.ts`.
+ */
+type AmbientAuthSources = {
+  readonly auth: { readonly status: ProviderAuthStatus };
+  readonly profiles: readonly {
+    readonly kind: ProviderProfileKind;
+    readonly auth: { readonly status: ProviderAuthStatus };
+  }[];
+};
 
 /**
  * The terminal/ambient account's effective sign-in verdict for a provider,
@@ -29,7 +54,7 @@ import type {
  * branch).
  */
 function ambientProfileAuthStatus(
-  provider: ProviderCliState,
+  provider: AmbientAuthSources,
 ): ProviderAuthStatus | null {
   return (
     provider.profiles.find((profile) => profile.kind === "ambient")?.auth
@@ -44,7 +69,7 @@ function ambientProfileAuthStatus(
  * definitive `unauthenticated`.
  */
 export function isProviderAmbientSignedOut(
-  provider: ProviderCliState,
+  provider: AmbientAuthSources,
 ): boolean {
   return (
     provider.auth.status === "unauthenticated" ||
@@ -144,9 +169,15 @@ export const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
  * still clears the latch. A definitive `unauthenticated` on either source wins
  * (returns false) so a half-converged reconnect never phantom-clears while the
  * account is still signed out.
+ *
+ * Onboarding's "Sign in to enable" spends this on an `awaitLogin` completion
+ * for the same reason, and gets both halves of that rule: an ambient row that
+ * lands first no longer burns the re-poll budget waiting for the summary, and
+ * a stale top-level `authenticated` can no longer enable a provider whose
+ * ambient row definitively says otherwise.
  */
 export function isProviderAmbientAuthenticated(
-  provider: ProviderCliState,
+  provider: AmbientAuthSources,
 ): boolean {
   if (isProviderAmbientSignedOut(provider)) return false;
   return (

@@ -35,6 +35,17 @@ type AwaitLoginCompletion = {
     // The host's "my auth probe has not answered yet" flag. Carried here
     // because the button's decision depends on it, not just on `status`.
     readonly authPending: boolean;
+    // REQUIRED, exactly as on the wire: `providerCliStateBaseShapeV40` gives
+    // `profiles` a `.catch([])`, so a parsed response always carries an array,
+    // and the hook that consumes this response already maps over it
+    // unguarded. Optional here would let a fixture omit the ambient ROW that
+    // the button's verdict reconciles against the top-level status - the
+    // divergence between these two signals is the whole subject of the
+    // `isProviderAmbientAuthenticated` tests below.
+    readonly profiles: readonly {
+      readonly kind: string;
+      readonly auth: { readonly status: string };
+    }[];
   } | null;
 };
 type AwaitLoginOptions = {
@@ -320,6 +331,56 @@ describe("OnboardingDetectedAgents", () => {
       screen.getByRole("switch", { name: "Enable Traycer Inference" }),
     ).toBeTruthy();
   });
+
+  // "Off" is not evidence that an account is missing. These two rows carry
+  // POSITIVE evidence of credentials that needs no probe, so the sign-in
+  // affordance is wrong on both - the row is one toggle away from working.
+  it("shows only the toggle for a disabled provider whose API key is already configured", () => {
+    // The actively wrong case, not merely the redundant one. An API-key-only
+    // provider ships no `oauthArgs`, so it fell to
+    // `providerSignInUnavailableHint`'s first branch and rendered a muted "Not
+    // signed in" over a key the user had already set - under a hint telling
+    // them to go set one.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        loginCapability: null,
+        apiKey: { supported: true, configured: true, source: "stored" },
+      },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    expect(
+      screen.queryByRole("button", { name: /sign in to enable/i }),
+    ).toBeNull();
+    expect(screen.queryByText("Not signed in")).toBeNull();
+    expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
+  });
+
+  it("shows only the toggle for a disabled provider that is already signed in", () => {
+    // A provider the user deliberately switched off keeps its account. Offering
+    // a login here sends them through an OAuth round trip to arrive exactly
+    // where they already were - and a CLI that refuses to start a login while
+    // signed in answers `started: false`, so the button would report a failure
+    // for a state that is not one.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    expect(
+      screen.queryByRole("button", { name: /sign in to enable/i }),
+    ).toBeNull();
+    expect(screen.getByRole("switch", { name: /^Enable / })).toBeTruthy();
+  });
 });
 
 // Regression coverage for the declined-sign-in path: the GUI rules
@@ -396,14 +457,22 @@ describe("SignInToEnableButton declined sign-in", () => {
     act(() => {
       awaitOptions.onSuccess({ state: null });
       awaitOptions.onSuccess({
-        state: { auth: { status: "unauthenticated" }, authPending: false },
+        state: {
+          auth: { status: "unauthenticated" },
+          authPending: false,
+          profiles: [],
+        },
       });
     });
     expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
 
     act(() => {
       awaitOptions.onSuccess({
-        state: { auth: { status: "authenticated" }, authPending: false },
+        state: {
+          auth: { status: "authenticated" },
+          authPending: false,
+          profiles: [],
+        },
       });
     });
     expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
@@ -489,7 +558,11 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
 
       act(() => {
         latestAwaitLoginOptions().onSuccess({
-          state: { auth: { status: "unknown" }, authPending: true },
+          state: {
+            auth: { status: "unknown" },
+            authPending: true,
+            profiles: [],
+          },
         });
       });
       expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
@@ -505,7 +578,11 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
 
       act(() => {
         latestAwaitLoginOptions().onSuccess({
-          state: { auth: { status: "authenticated" }, authPending: false },
+          state: {
+            auth: { status: "authenticated" },
+            authPending: false,
+            profiles: [],
+          },
         });
       });
       expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
@@ -531,7 +608,11 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
       ) {
         act(() => {
           latestAwaitLoginOptions().onSuccess({
-            state: { auth: { status: "unknown" }, authPending: true },
+            state: {
+              auth: { status: "unknown" },
+              authPending: true,
+              profiles: [],
+            },
           });
         });
         act(() => {
@@ -560,7 +641,11 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
       startSignInAttempt(false);
       act(() => {
         latestAwaitLoginOptions().onSuccess({
-          state: { auth: { status: "unauthenticated" }, authPending: true },
+          state: {
+            auth: { status: "unauthenticated" },
+            authPending: true,
+            profiles: [],
+          },
         });
       });
       act(() => {
@@ -595,7 +680,11 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     {
       label: "a settled unauthenticated verdict",
       completion: {
-        state: { auth: { status: "unauthenticated" }, authPending: false },
+        state: {
+          auth: { status: "unauthenticated" },
+          authPending: false,
+          profiles: [],
+        },
       },
     },
   ];
@@ -636,7 +725,11 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
 
   it("says nothing when the sign-in DID authenticate", () => {
     settleWith(startSignInAttempt(false), {
-      state: { auth: { status: "authenticated" }, authPending: false },
+      state: {
+        auth: { status: "authenticated" },
+        authPending: false,
+        profiles: [],
+      },
     });
 
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
@@ -652,7 +745,11 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
     // do what it advertises.
     const view = startSignInAttempt(false);
     settleWith(view, {
-      state: { auth: { status: "authenticated" }, authPending: false },
+      state: {
+        auth: { status: "authenticated" },
+        authPending: false,
+        profiles: [],
+      },
     });
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
 
@@ -707,6 +804,64 @@ describe("SignInToEnableButton unauthenticated outcome", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  // The completion carries TWO views of the same ambient login - the top-level
+  // summary and the ambient profile ROW - and they converge at different
+  // times. Deciding on the summary alone is wrong in both directions, so both
+  // directions are pinned here.
+  it("enables on an ambient PROFILE row that authenticates before the summary does", () => {
+    // Summary still lagging at a non-definitive `unavailable`, and no probe in
+    // flight (`authPending: false`), so nothing re-polls. Reading only the
+    // top-level status calls a successful sign-in a failure and states "did not
+    // complete" over an account that is in fact signed in.
+    settleWith(startSignInAttempt(false), {
+      state: {
+        auth: { status: "unavailable" },
+        authPending: false,
+        profiles: [{ kind: "ambient", auth: { status: "authenticated" } }],
+      },
+    });
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    // The complement half: both phases derive from ONE verdict, so a
+    // completion that enables can never also render the failure message.
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("refuses to enable when the ambient row definitively contradicts a stale top-level authenticated", () => {
+    // Signed-out wins. The auth poison and the probe-less `providers.list`
+    // path stamp a definitive `unauthenticated` on the ambient ROW the instant
+    // a credential fails, while the summary can still be carrying the previous
+    // `authenticated`. Enabling on the stale half hands the user a provider
+    // whose next turn cannot run.
+    settleWith(startSignInAttempt(false), {
+      state: {
+        auth: { status: "authenticated" },
+        authPending: false,
+        profiles: [{ kind: "ambient", auth: { status: "unauthenticated" } }],
+      },
+    });
+
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+  });
+
+  it("reads the AMBIENT row only - a managed profile is not the terminal account", () => {
+    // This button always signs in ambiently (`profileId: null`), so a healthy
+    // MANAGED profile says nothing about whether the terminal account got an
+    // account. A verdict that scanned every row would enable here on the
+    // strength of a login this attempt never performed.
+    settleWith(startSignInAttempt(false), {
+      state: {
+        auth: { status: "unauthenticated" },
+        authPending: false,
+        profiles: [{ kind: "managed", auth: { status: "authenticated" } }],
+      },
+    });
+
+    expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+  });
 });
 
 // Two ways the button can look done while it is not: an unmount latch that
@@ -725,7 +880,11 @@ describe("SignInToEnableButton pending lifecycle", () => {
 
     act(() => {
       latestAwaitLoginOptions().onSuccess({
-        state: { auth: { status: "authenticated" }, authPending: false },
+        state: {
+          auth: { status: "authenticated" },
+          authPending: false,
+          profiles: [],
+        },
       });
     });
 
@@ -745,7 +904,11 @@ describe("SignInToEnableButton pending lifecycle", () => {
 
     act(() => {
       latestAwaitLoginOptions().onSuccess({
-        state: { auth: { status: "authenticated" }, authPending: false },
+        state: {
+          auth: { status: "authenticated" },
+          authPending: false,
+          profiles: [],
+        },
       });
     });
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
