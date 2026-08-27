@@ -165,6 +165,8 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       authnBaseUrl,
       auth,
       userId: requestContextUserId,
+      // The app-wide epic stream: snapshot-shaped, replay-safe.
+      proactiveWakeEligible: true,
       // Never eager-start: this acquire is guaranteed exactly one matching
       // release (unlike the old memo-based build), but the connect-on-first-
       // subscribe laziness is an independent, unchanged behavior.

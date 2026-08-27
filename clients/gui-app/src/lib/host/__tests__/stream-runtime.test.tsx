@@ -446,6 +446,7 @@ function installRemoteTransport(sessionsByKey: {
           authRecovery: "revalidate",
           authEpoch: FIXTURE_AUTH_EPOCH,
         },
+        { proactiveWakeEligible: true },
         () => sessionsByKey[options.hostPublicKey] ?? fakeRemoteSession(),
       );
       return {

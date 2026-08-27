@@ -107,12 +107,7 @@ import {
 } from "@traycer/protocol/host-transport/chunking";
 import { InboundCreditTracker, PriorityScheduler } from "./scheduler";
 import { NoiseChannel } from "./noise-channel";
-import {
-  RelaySocket,
-  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE,
-  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
-  type RelayKillReason,
-} from "./relay-socket";
+import { RelaySocket, type RelayKillReason } from "./relay-socket";
 import type { AttachGrantProvider } from "./grant-client";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 
@@ -707,15 +702,19 @@ export class RemoteSession<
    */
   private backoffCollapsed = false;
   /**
-   * Whether the wake probe currently riding the socket was armed by a caller
-   * whose evidence earns a FAILED probe an immediate redial (a foregrounded
-   * mobile resume - see {@link WakeProbeTuning.immediateRedialOnFailure}).
-   * Consumed by the socket-close handler when the loss is that probe's own
-   * timeout; cleared on every connection drop, so it cannot outlive the
-   * socket it was armed against and a much-later unrelated loss never
-   * inherits it.
+   * The connect generation a {@link forceReconnect} arrived DURING, when that
+   * generation's dial was already in flight and could be neither dropped
+   * (nothing attached yet) nor hurried (its own phase timers bound it). The
+   * intent is scoped to exactly that generation: if generation G fails into
+   * the loss funnel, the funnel arms its normal backoff (accounting and
+   * evidence preserved) and then spends this intent by pulling that one wait
+   * to zero; if G reaches ready, the force is satisfied and the intent is
+   * consumed unspent. A newer generation never inherits it - `beginConnect`
+   * clears any stale value when it allocates - and terminal close clears it,
+   * so callback ordering around an iOS unfreeze (resume task vs overdue
+   * phase timer) cannot strand the session on its old rung either way.
    */
-  private wakeProbeImmediateRedial = false;
+  private pendingForceGeneration: number | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /**
@@ -1272,20 +1271,15 @@ export class RemoteSession<
       // A socket that merely looks alive is left connected and answers the
       // poke's probe on its own deadline.
       //
-      // The latch belongs to the poke that ARMED the probe, exactly as the
-      // deadline does - `pokeKeepalive` reports that. A wake that merely joins
-      // an in-flight probe must not rewrite the policy that probe was started
-      // under (a default-tuned `wake-online` landing mid-burst would otherwise
-      // retract a mobile resume's immediate redial), and a poke whose
-      // staleness check failed the socket synchronously armed nothing - its
-      // own drop has already cleared the latch, and it stays cleared.
-      const armedProbe = this.connection.relaySocket.pokeKeepalive(
+      // Deadline and failure policy travel INTO the socket together: the arm
+      // merges concurrent pokes monotonically (earlier deadline wins, the
+      // immediate-redial policy can be raised but never lowered), so mixed
+      // wake bursts - a measured mobile resume beside a generic online edge,
+      // in either order - always keep the stronger evidence.
+      this.connection.relaySocket.pokeKeepalive(
         probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
+        probe !== null && probe.immediateRedialOnFailure,
       );
-      if (armedProbe) {
-        this.wakeProbeImmediateRedial =
-          probe !== null && probe.immediateRedialOnFailure;
-      }
     }
     this.collapseBackoff(reason);
   }
@@ -1311,11 +1305,17 @@ export class RemoteSession<
     }
     if (this.phase === "reconnecting" && this.backoffTimer !== null) {
       this.pullRedialToNow(reason);
+      return;
     }
-    // connecting/handshaking (and reconnecting with a dial in flight): an
-    // attach is already running, bounded by its own phase timers - which fire
-    // immediately on unfreeze if the runtime slept through them. Nothing to
-    // hurry, nothing worth killing.
+    // connecting/handshaking, or reconnecting with a dial already in flight:
+    // an attach is running, bounded by its own phase timers - which fire
+    // immediately on unfreeze if the runtime slept through them. It is not
+    // interrupted (one dial owner at a time), but the demand is NOT dropped
+    // either: record it against this exact generation, so if this attempt
+    // fails its loss redials immediately instead of arming the rung the
+    // caller was trying to skip. Success consumes the intent - a fresh
+    // attach is everything a force could have bought.
+    this.pendingForceGeneration = this.connectGeneration;
   }
 
   /** See {@link IRemoteSession.onClosed}. */
@@ -1358,6 +1358,7 @@ export class RemoteSession<
     }
     this.dialFailures.recordAbandoned();
     this.phase = "closed";
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
@@ -1497,6 +1498,11 @@ export class RemoteSession<
       return;
     }
     const generation = ++this.connectGeneration;
+    // Any intent recorded against an earlier generation is stale by
+    // construction: that dial ended (its failure spent the intent, or a path
+    // that never consults it retired the attempt), and this fresh dial must
+    // not inherit a demand nobody made of it.
+    this.pendingForceGeneration = null;
     this.phase = "connecting";
     this.clearPhaseTimer();
     this.reattachMarks = {
@@ -1594,23 +1600,23 @@ export class RemoteSession<
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
         onClose: (info) => {
-          // Read BEFORE the loss funnel runs: `dropConnection` clears the
-          // latch on every drop. Matched by the close event's structured
-          // identity, so only the wake probe's own timeout - never a
-          // concurrent genuine close - can spend it.
+          // The socket's own verdict on the current wake-probe arm, read at
+          // the one moment it matters: this close IS the arm's negative
+          // ending, whatever delivered it - the arm's own deadline, an
+          // OS-delivered error close, missed pongs. An answered arm reads
+          // false here forever, so a loss after proven liveness stays an
+          // ordinary loss. Each connection owns its socket object, so this
+          // cannot leak across dials.
           const immediateRedialEarned =
-            this.wakeProbeImmediateRedial &&
-            info.code === RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE &&
-            info.reason === RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON;
+            relaySocket.hasUnansweredImmediateRedialProbe();
           this.handleConnectionLost(
             generation,
             describeSocketClose(this.phase, info),
             "host-transport-plane",
           );
           if (immediateRedialEarned) {
-            // The probe just PROVED the socket dead to a user who is looking
-            // at the screen; sleeping out the backoff rung the funnel armed
-            // would be pure added outage.
+            // A user is watching this recovery happen; sleeping out the
+            // backoff rung the funnel armed would be pure added outage.
             this.pullRedialToNow("wake-probe-failed");
           }
         },
@@ -2458,6 +2464,15 @@ export class RemoteSession<
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnect();
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
+    if (this.pendingForceGeneration === generation) {
+      // A force arrived while THIS generation's dial was in flight. The rung
+      // above was armed first, so attempt accounting and the failure log see
+      // the ordinary schedule - and only then is the recorded demand spent,
+      // by pulling this one wait to zero. Generation-scoped on both sides:
+      // a newer dial's loss can never spend an older intent.
+      this.pendingForceGeneration = null;
+      this.pullRedialToNow("pending-forced-redial");
+    }
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
     // site in the remote loop that observes the HOST rather than the cloud, so
@@ -2510,10 +2525,6 @@ export class RemoteSession<
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
-    // Any drop retires the wake-probe latch: whatever this loss was, the probe
-    // context it was armed in ends with the socket. The close handler that
-    // wants to honour it has already read it by the time this runs.
-    this.wakeProbeImmediateRedial = false;
     // Guarded internally to once per outage, so a failed redial arriving here
     // again does not restart the clock.
     this.noteConnectionLost();
@@ -3385,6 +3396,10 @@ export class RemoteSession<
       }
     }
     this.readyBoundaryGeneration = this.connectGeneration;
+    // A force recorded against this generation is satisfied by reaching
+    // ready: a fresh attach is everything it could have bought. Consumed
+    // unspent, so it cannot leak onto a later, unrelated loss.
+    this.pendingForceGeneration = null;
     this.armStableResetTimer();
     // Order matters: the breakdown reads `hasReachedReadyOnce` to decide
     // whether this was a REATTACH at all, so the flag is raised after it.

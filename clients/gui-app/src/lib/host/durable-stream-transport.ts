@@ -93,6 +93,9 @@ export function openDurableStreamTransport(params: {
     authnBaseUrl: params.runnerHost.authnBaseUrl,
     auth: params.auth,
     userId: params.userId,
+    // Durable warm session: its streams re-snapshot on replay, so the
+    // process-wide sweep may probe or force-drop it freely.
+    proactiveWakeEligible: true,
     // Owned-lifetime transport: eager warm-connect is correct here.
     autoStart: true,
   });

@@ -686,6 +686,40 @@ class FakeRelayHost {
     const openIndex = this.openBearers.length;
     this.openBearers.push(bearer);
     this.openIdentities.push(message.json?.clientIdentity);
+    if (this.stallOpens) {
+      // Freeze this attempt mid-flight (the session sits in its opening
+      // phase, its own phase timer pending) until the test releases it -
+      // the window the forced-intent ordering tests need to aim into.
+      this.stalledOpens.push({ connection, bearer, openIndex });
+      return;
+    }
+    await this.respondToOpen(connection, bearer, openIndex);
+  }
+
+  /**
+   * When true, `open` frames are recorded but not answered until
+   * {@link releaseStalledOpens} runs - the in-flight-attach window.
+   */
+  stallOpens = false;
+  private readonly stalledOpens: Array<{
+    connection: FakeConnection;
+    bearer: string;
+    openIndex: number;
+  }> = [];
+
+  /** Answers every stalled open, in arrival order, with `decideOpen`'s verdict. */
+  async releaseStalledOpens(): Promise<void> {
+    const stalled = this.stalledOpens.splice(0);
+    for (const open of stalled) {
+      await this.respondToOpen(open.connection, open.bearer, open.openIndex);
+    }
+  }
+
+  private async respondToOpen(
+    connection: FakeConnection,
+    bearer: string,
+    openIndex: number,
+  ): Promise<void> {
     const decision = this.decideOpen(bearer, openIndex);
     if (decision.kind === "ack") {
       await this.sendMux(connection, {
@@ -3081,6 +3115,169 @@ describe("RemoteSession wake", () => {
     }
   }, 15_000);
 
+  it("a stronger poke UPGRADES an in-flight default arm - reverse order of the joined-burst case", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      relay.answerPings = false;
+      // The online edge arms first: 10s deadline, no immediate redial. The
+      // measured resume lands second with STRONGER evidence - under
+      // first-poke-owns it would be discarded and the user would sit out the
+      // 10s arm; monotonic merge shortens the deadline and raises the policy.
+      session.wake("network-online", null);
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: true,
+      });
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 900,
+        interval: 25,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("an answered arm retires its policy - the next arm starts from its own arguments", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      // First arm: immediate-redial policy, and the relay ANSWERS it.
+      const pingsBefore = relay.pingCount;
+      session.wake("app-resumed", {
+        timeoutMs: 3_000,
+        immediateRedialOnFailure: true,
+      });
+      await vi.waitFor(
+        () => expect(relay.pingCount).toBe(pingsBefore + 1),
+        WAIT,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Second arm, after the answer: NO immediate-redial policy, and this
+      // one fails. If retirement leaked the first arm's policy, the redial
+      // would land inside the rung's jittered floor - the exact leak the
+      // raise-only alternative to arm-scoped ownership would have had.
+      relay.answerPings = false;
+      session.wake("app-resumed-again", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: false,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(relay.openBearers).toHaveLength(3);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(4);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("an ordinary server drop while the arm is unanswered inherits its immediate-redial policy", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      relay.answerPings = false;
+      session.wake("app-resumed", {
+        timeoutMs: 3_000,
+        immediateRedialOnFailure: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // The socket dies with an ORDINARY close (1006 server-drop), before
+      // the arm's own deadline. That close is negative wake-probe evidence
+      // all the same - the user is still watching - so it inherits the arm's
+      // policy rather than being reserved for the synthetic timeout tuple.
+      relay.dropCurrentConnection();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 900,
+        interval: 25,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("an ordinary server drop AFTER the arm was answered follows the normal rung", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      const pingsBefore = relay.pingCount;
+      session.wake("app-resumed", {
+        timeoutMs: 3_000,
+        immediateRedialOnFailure: true,
+      });
+      await vi.waitFor(
+        () => expect(relay.pingCount).toBe(pingsBefore + 1),
+        WAIT,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Liveness was proven; the arm is retired. A drop now is an ordinary
+      // loss and waits out its rung - the discriminating arm against the
+      // inherit-on-unanswered case above.
+      relay.dropCurrentConnection();
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(relay.openBearers).toHaveLength(3);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(4);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
   it("a failed probe WITHOUT immediateRedialOnFailure keeps the armed backoff rung", async () => {
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
@@ -3419,7 +3616,11 @@ describe("RemoteSession wake", () => {
       authRecovery: "revalidate",
       authEpoch: "epoch-1",
     };
-    const view = acquireRemoteSession(identity, () => session);
+    const view = acquireRemoteSession(
+      identity,
+      { proactiveWakeEligible: true },
+      () => session,
+    );
     const streamClient = new RemoteStreamClient(view);
     try {
       view.start();
@@ -3546,6 +3747,136 @@ describe("RemoteSession forceReconnect", () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(relay.openBearers).toHaveLength(dialsBefore);
       expect(session.isClosed()).toBe(true);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a force during an in-flight attach is retained and spent on THAT attempt's failure", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex === 0
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      // The iOS-unfreeze ordering: the resume/network event runs while the
+      // pre-suspend attach is still nominally in flight. The force can
+      // neither drop (nothing attached) nor hurry it - but it must not
+      // evaporate either.
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      const releasedAt = Date.now();
+      await relay.releaseStalledOpens();
+      // The stalled attempt fails; without the retained intent the loss
+      // would arm the first rung (jittered floor 500ms). The retained force
+      // pulls exactly that wait to zero.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      expect(Date.now() - releasedAt).toBeLessThan(400);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("without a force, the same stalled-attach failure waits its rung - the discriminating arm", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex === 0
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      // Still one open: a never-ready session's first failure arms the
+      // jittered initial rung (floor 500ms), which the forced arm above
+      // provably beat.
+      expect(relay.openBearers).toHaveLength(1);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("reaching ready consumes an in-flight force - no later loss inherits it", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex === 1
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      // The forced generation SUCCEEDS - the intent is satisfied and consumed.
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      // A later ordinary outage: the drop redials immediately (recovery
+      // rung), that redial fails, and the NEXT wait must be the ladder's -
+      // a stale surviving intent would zero it.
+      relay.dropCurrentConnection();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+      const failedAt = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(relay.openBearers).toHaveLength(2);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      expect(Date.now() - failedAt).toBeGreaterThanOrEqual(400);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("reports a forced drop as indeterminate, never as a host refusal", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("valid-token", "user-1");
+    const recorder = new RecordingEvidence();
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      evidence: recorder,
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      const refusalsBefore = recorder.callsNamed("reportDialRefusal").length;
+
+      session.forceReconnect("user-retry");
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toHaveLength(2);
+
+      // The teardown was OUR decision, not host evidence: it must land as
+      // indeterminate and must not advance the confirmed-death streak. The
+      // provenance mutation (client-initiated -> host-transport-plane) turns
+      // exactly this assertion red.
+      expect(
+        recorder.callsNamed("reportDialIndeterminate").length,
+      ).toBeGreaterThan(0);
+      expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(
+        refusalsBefore,
+      );
     } finally {
       session.close();
     }

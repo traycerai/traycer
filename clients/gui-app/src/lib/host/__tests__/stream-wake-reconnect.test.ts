@@ -47,6 +47,9 @@ function makeClient() {
     bearer: () => null,
     authnBaseUrl: "http://localhost:5005",
     auth: null,
+    // Local (plain-WS) target: sweep eligibility only gates the remote-session
+    // cache, so this is inert here.
+    proactiveWakeEligible: true,
     // Local (plain-WS) target: `autoStart` only gates the remote session, so
     // this stays inert either way.
     autoStart: false,

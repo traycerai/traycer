@@ -1183,25 +1183,42 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * fire on an app switch: the network never went anywhere, only this runtime
  * did.
  *
- * TWO sources feed one edge: DOM `visibilitychange` AND the App plugin's
- * `appStateChange`. Neither subsumes the other. `visibilitychange` also fires
- * for in-WebView backgrounding the native app-state event does not describe -
- * but it is raised by the suspended WebView itself, so an edge can be
- * delivered late or (observed in practice) not at all around a suspend, which
- * left every wake consumer blind until a keepalive tick noticed the dead
- * socket. `appStateChange` is the OS's own statement, delivered through the
- * native bridge - and it can LAG the WebView's edge in either direction, so
- * it supplements rather than replaces. Both fire on an ordinary app switch;
- * the shared background/foreground state machine below is the dedupe (the
- * second source to report an edge finds the state already transitioned and
- * does nothing), so subscribers see one resume per real suspend.
+ * TWO sources feed one edge, with very different authority:
  *
- * Backgrounding STAMPS a wall-clock time, and the resume event carries the
- * measured dwell (`SystemResumeEvent.backgroundedForMs`). That number is what
- * lets the wake policy distinguish a quick app switch (the socket may have
- * survived - probe it fast) from a long one (iOS has torn the socket down -
- * redial without asking). A resume whose background edge was never seen
- * reports `null` and keeps the conservative default.
+ *  - Capacitor `pause`/`resume` (UIKit did-enter-background /
+ *    will-enter-foreground) are the OS's own statement that the app REALLY
+ *    left and returned. They are the only events allowed to stamp measured
+ *    background time. The App plugin's `appStateChange(false)` is
+ *    deliberately NOT used: on iOS it maps to will-resign-active, which also
+ *    fires for focus-stealing overlays - Control Center, Face ID, permission
+ *    prompts - where the app never backgrounds and its sockets never die;
+ *    counting that dwell would force-drop a healthy mux under a passcode
+ *    sheet.
+ *  - DOM `visibilitychange` is the fallback: raised by the WebView itself, it
+ *    also covers a suspend whose native lifecycle events were missed - but a
+ *    hidden WebView proves only invisibility, not real backgrounding, so an
+ *    epoch it opens alone reports an UNKNOWN dwell (`null`), never a
+ *    fabricated one.
+ *
+ * Either source can lag the other in both directions, so the dedupe is not a
+ * boolean but an EPOCH: one background episode = one epoch, opened by the
+ * first source to report background, joined by the other, and completed AT
+ * MOST ONCE - by its owning source's foreground report (native `resume` for a
+ * native-backed epoch, DOM visible for a DOM-only one). Completion is what
+ * fires the handlers, so crossed orderings, duplicate foreground reports, and
+ * a one-source-missing episode all still produce exactly one resume per
+ * completed epoch. A source's lagging BACKGROUND callback from an
+ * already-completed epoch (a queued event replayed after the app is provably
+ * active again, its own foreground never seen since) is rejected rather than
+ * allowed to reopen the episode - without that, a replayed `hidden` would
+ * strand the tracker in background and suppress network recovery for good.
+ *
+ * The resume event carries the measured dwell
+ * (`SystemResumeEvent.backgroundedForMs`) - what lets the wake policy
+ * distinguish a quick app switch (the socket may have survived - probe it
+ * fast) from a long one (iOS has torn the socket down - redial without
+ * asking). Only a native `pause` stamp produces a number; every other epoch
+ * reports `null` and keeps the conservative default downstream.
  *
  * The shell's plugin set is kept SMALL rather than fixed at a number, and each
  * member earns its place by being the only way to reach an OS capability:
@@ -1209,32 +1226,46 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * native-settings, device, barcode-scanner, network, and app. `@capacitor/app`
  * first earned its place because a URL the OS opens (a QR scanned by the
  * system camera) has no other route into JS (see `link-login-deep-links.ts`);
- * its app-state event is the second capability it is the only route to.
- *
- * Fires ONLY on the background -> foreground edge, deliberately with no
- * debounce timer: the edge filter is the dedupe (a repeat needs a real
- * background in between, which is a real suspend), and every consumer
- * downstream is idempotent and rate-limits itself - the remote session's
- * `wake` can only pull one redial forward per armed backoff, and the auth
- * scheduler coalesces on its own. A timer here would only add latency to the
- * recovery this exists to make fast.
+ * its `pause`/`resume` lifecycle pair is the second capability it is the only
+ * route to.
  */
 class MobileSystemResume {
   private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
-  private background = false;
-  private backgroundEnteredAt: number | null = null;
   private listening = false;
+  /** Per-source current state, each updated only by its own events. */
+  private domHidden = false;
+  private nativePaused = false;
+  /**
+   * The open background episode, or `null` while the app is (believed)
+   * foreground. `enteredAt` is stamped only by native `pause` evidence.
+   */
+  private currentEpoch: {
+    token: number;
+    enteredAt: number | null;
+    nativeBacked: boolean;
+    domBacked: boolean;
+  } | null = null;
+  private nextEpochToken = 1;
+  /** The token of the most recently COMPLETED epoch, for stale rejection. */
+  private lastCompletedToken: number | null = null;
+  /** Which epoch each source last contributed background evidence to. */
+  private domLastBackgroundToken: number | null = null;
+  private nativeLastBackgroundToken: number | null = null;
+  /** Whether each source has reported foreground since the last completion. */
+  private domForegroundSinceCompletion = true;
+  private nativeForegroundSinceCompletion = true;
+
   private readonly onVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
-      this.noteBackgrounded();
+      this.noteBackground("dom");
     } else {
-      this.noteForegrounded();
+      this.noteForeground("dom");
     }
   };
 
-  /** Whether the app is currently backgrounded, per the merged two-source state. */
+  /** Whether a background episode is currently open. */
   isBackgrounded(): boolean {
-    return this.background;
+    return this.currentEpoch !== null;
   }
 
   subscribe(handler: (event: SystemResumeEvent) => void): Disposable {
@@ -1247,27 +1278,100 @@ class MobileSystemResume {
     };
   }
 
-  private noteBackgrounded(): void {
-    if (this.background) {
+  private noteBackground(source: "dom" | "native"): void {
+    const alreadyBackground =
+      source === "dom" ? this.domHidden : this.nativePaused;
+    if (alreadyBackground) {
+      // A duplicate from a source already in background says nothing new.
       return;
     }
-    this.background = true;
-    this.backgroundEnteredAt = Date.now();
+    // Stale rejection: this source already contributed background to the
+    // epoch that most recently COMPLETED, and has not reported foreground
+    // since - so this callback is that episode's own event, replayed late by
+    // the bridge/event queue after the owning source proved the app active.
+    // Honouring it would reopen a finished episode; if the matching late
+    // foreground never arrives, the tracker would strand in background.
+    const lastToken =
+      source === "dom"
+        ? this.domLastBackgroundToken
+        : this.nativeLastBackgroundToken;
+    const foregroundSince =
+      source === "dom"
+        ? this.domForegroundSinceCompletion
+        : this.nativeForegroundSinceCompletion;
+    if (
+      this.currentEpoch === null &&
+      this.lastCompletedToken !== null &&
+      lastToken === this.lastCompletedToken &&
+      !foregroundSince
+    ) {
+      return;
+    }
+    if (source === "dom") {
+      this.domHidden = true;
+    } else {
+      this.nativePaused = true;
+    }
+    if (this.currentEpoch === null) {
+      this.currentEpoch = {
+        token: this.nextEpochToken,
+        enteredAt: source === "native" ? Date.now() : null,
+        nativeBacked: source === "native",
+        domBacked: source === "dom",
+      };
+      this.nextEpochToken += 1;
+      return;
+    }
+    // Join the open epoch. The FIRST native evidence stamps the real
+    // background entry - a DOM-opened epoch upgrades to a measured one the
+    // moment the OS confirms the app actually left.
+    if (source === "native") {
+      this.currentEpoch.nativeBacked = true;
+      if (this.currentEpoch.enteredAt === null) {
+        this.currentEpoch.enteredAt = Date.now();
+      }
+    } else {
+      this.currentEpoch.domBacked = true;
+    }
   }
 
-  private noteForegrounded(): void {
-    if (!this.background) {
-      // The dedupe: whichever source reported this foreground first already
-      // consumed the edge (or the app was never seen backgrounded at all -
-      // e.g. the native active event on a cold start).
+  private noteForeground(source: "dom" | "native"): void {
+    if (source === "dom") {
+      this.domHidden = false;
+      this.domForegroundSinceCompletion = true;
+    } else {
+      this.nativePaused = false;
+      this.nativeForegroundSinceCompletion = true;
+    }
+    const epoch = this.currentEpoch;
+    if (epoch === null) {
+      // Duplicate foreground, or a cold start's first active report - the
+      // completed/never-opened episode cannot complete again.
       return;
     }
-    this.background = false;
-    const enteredAt = this.backgroundEnteredAt;
-    this.backgroundEnteredAt = null;
+    // Owning-source completion: only the strongest evidence that OPENED the
+    // episode may close it. A native-backed epoch waits for the OS's own
+    // `resume` - a DOM `visible` alone could be the WebView repainting under
+    // an overlay - while a DOM-only epoch has only DOM evidence to wait for.
+    const owns = epoch.nativeBacked ? source === "native" : source === "dom";
+    if (!owns) {
+      return;
+    }
+    this.currentEpoch = null;
+    this.lastCompletedToken = epoch.token;
+    if (epoch.domBacked) {
+      this.domLastBackgroundToken = epoch.token;
+      this.domForegroundSinceCompletion = source === "dom";
+    }
+    if (epoch.nativeBacked) {
+      this.nativeLastBackgroundToken = epoch.token;
+      this.nativeForegroundSinceCompletion = source === "native";
+    }
     const event: SystemResumeEvent = {
       backgroundedForMs:
-        enteredAt === null ? null : Math.max(0, Date.now() - enteredAt),
+        epoch.enteredAt === null
+          ? null
+          : Math.max(0, Date.now() - epoch.enteredAt),
     };
     for (const handler of Array.from(this.handlers)) {
       try {
@@ -1280,15 +1384,14 @@ class MobileSystemResume {
   }
 
   /**
-   * Installs both listeners on first subscription and keeps them: this object
-   * lives as long as the shell, and the background/foreground state has to
-   * stay tracked across a window with no subscribers or the next resume edge
-   * is read against a stale baseline. Seeding from the CURRENT DOM state here
-   * (rather than at construction) is what keeps a cold start from counting as
-   * a resume - a shell that boots hidden has not woken up yet, and one that
-   * boots visible has nothing to resume from. A boot-time seed to `hidden`
-   * carries no entry stamp, so a resume measured against it honestly reports
-   * `null` rather than counting time before the listener existed.
+   * Installs the listeners on first subscription and keeps them: this object
+   * lives as long as the shell, and the epoch state has to stay tracked
+   * across a window with no subscribers or the next resume edge is read
+   * against a stale baseline. Seeding from the CURRENT DOM state here (rather
+   * than at construction) is what keeps a cold start from counting as a
+   * resume - and a boot-hidden seed opens a DOM-only epoch with no entry
+   * stamp, so a resume measured against it honestly reports `null` rather
+   * than counting time before the listener existed.
    *
    * Public (not folded into `subscribe`) because the network watcher reads
    * `isBackgrounded()` without ever subscribing to resumes, and that read is
@@ -1301,20 +1404,23 @@ class MobileSystemResume {
       return;
     }
     this.listening = true;
-    this.background = document.visibilityState === "hidden";
+    if (document.visibilityState === "hidden") {
+      this.noteBackground("dom");
+    }
     document.addEventListener("visibilitychange", this.onVisibilityChange);
-    // The native edge arrives through the plugin bridge; registration is
+    // The native edges arrive through the plugin bridge; registration is
     // async and can reject where no bridge exists (the dev web entry). The
     // DOM listener above is already installed either way, so a shell without
-    // the plugin degrades to exactly the old single-source behavior.
-    void App.addListener("appStateChange", (state) => {
-      if (state.isActive) {
-        this.noteForegrounded();
-      } else {
-        this.noteBackgrounded();
-      }
+    // the plugin degrades to DOM-only epochs with unknown dwell.
+    void App.addListener("pause", () => {
+      this.noteBackground("native");
     }).catch((error: unknown) => {
-      console.warn("[mobile] appStateChange listener unavailable", error);
+      console.warn("[mobile] pause listener unavailable", error);
+    });
+    void App.addListener("resume", () => {
+      this.noteForeground("native");
+    }).catch((error: unknown) => {
+      console.warn("[mobile] resume listener unavailable", error);
     });
   }
 }
@@ -1339,13 +1445,22 @@ class MobileSystemResume {
  * that happened mid-background is not replayed as a stale edge on the next
  * foreground change.
  *
- * The `null` -> first-status transition never fires: the seed read and the
- * first listener callback describe the network the app booted on, not a
- * change.
+ * The `null` -> first-status transition never fires: the seed read is the
+ * baseline, describing the network the app booted on, not a change. Change
+ * callbacks that race the seed read are BUFFERED until it settles and then
+ * replayed in arrival order against it - without that, a real transition
+ * landing before `getStatus()` resolved would be silently consumed as the
+ * baseline itself and the edge lost.
  */
 class MobileNetworkPathWatcher {
   private readonly handlers = new Set<() => void>();
   private lastStatus: ConnectionStatus | null = null;
+  /**
+   * Change callbacks that arrived before the `getStatus()` baseline settled;
+   * `null` once seeding is complete (resolved OR rejected) and callbacks flow
+   * straight through.
+   */
+  private preSeedStatuses: ConnectionStatus[] | null = [];
   private listening = false;
 
   constructor(private readonly systemResume: MobileSystemResume) {}
@@ -1401,18 +1516,38 @@ class MobileNetworkPathWatcher {
     // no-op degradation the IRunnerHost contract names.
     void Network.getStatus()
       .then((status) => {
-        if (this.lastStatus === null) {
-          this.lastStatus = status;
-        }
+        this.lastStatus = status;
+        this.flushPreSeedStatuses();
       })
       .catch((error: unknown) => {
         console.warn("[mobile] network status read unavailable", error);
+        // No baseline is coming. Fall back to the first buffered callback
+        // (if any) seeding the baseline, exactly as an unbuffered listener
+        // would have.
+        this.flushPreSeedStatuses();
       });
     void Network.addListener("networkStatusChange", (status) => {
+      if (this.preSeedStatuses !== null) {
+        // The baseline read has not settled - hold the change so it is
+        // compared against the true boot status instead of BECOMING it.
+        this.preSeedStatuses.push(status);
+        return;
+      }
       this.noteStatus(status);
     }).catch((error: unknown) => {
       console.warn("[mobile] networkStatusChange listener unavailable", error);
     });
+  }
+
+  private flushPreSeedStatuses(): void {
+    const buffered = this.preSeedStatuses;
+    this.preSeedStatuses = null;
+    if (buffered === null) {
+      return;
+    }
+    for (const status of buffered) {
+      this.noteStatus(status);
+    }
   }
 }
 
