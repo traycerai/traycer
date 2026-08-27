@@ -81,7 +81,7 @@ import {
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
-  providersListResponseSchemaV71,
+  providersListResponseSchemaV70,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full structural
@@ -883,7 +883,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     });
 
     // Major 7 keeps Hugging Face and loses only Reasonix; the bridge lands on
-    // 7.1, major 7's latest installed minor.
+    // 7.0, major 7's only (and therefore latest) installed minor.
     const toV7 = providersListDowngradeV8ToV7.downgradeResponse(v8Response);
     expect(toV7.ok).toBe(true);
     if (!toV7.ok) return;
@@ -891,7 +891,7 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
       ["cursor", "amp", "devin", "pi", "hermes", "omp", "huggingface"],
     );
     expect(() =>
-      providersListResponseSchemaV71.parse(toV7.value),
+      providersListResponseSchemaV70.parse(toV7.value),
     ).not.toThrow();
 
     const toV6 = providersListDowngradeV8ToV6.downgradeResponse(v8Response);
