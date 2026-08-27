@@ -25,12 +25,32 @@ import type { FleetUpdateRecordObservation } from "@/lib/host/fleet-update/fleet
  *
  * ## `null` is the fail-closed answer, and it has three causes
  *
- * Absent facts, an unrecognised phase, and a TERMINAL phase all return `null`,
- * which projects the ordinary `unknown`. The terminal case is the one worth
- * naming: a completed, failed or superseded attempt is finished, and carrying
- * its phase into a host-down window would render "last seen complete" for a
- * host that is simply off — describing history as if it were the current
- * situation.
+ * Absent facts, an unrecognised phase, and a terminal phase that is NOT
+ * `failed` all return `null`, which projects the ordinary `unknown`.
+ *
+ * ## Why `failed` is the exception
+ *
+ * This originally dropped every terminal phase, on the reasoning that carrying
+ * one into a host-down window renders history as if it were current. That holds
+ * for `complete` and `superseded` and does not hold for `failed`, and the live
+ * path already says so: it maps `failed` → `failed` and only collapses
+ * `superseded` → `idle`. So the one phase the live path considers worth showing
+ * was the one this dropped — precisely when the host is unreachable and this
+ * record is the ONLY evidence that exists. Packaged-macOS activation failing
+ * after bootout is exactly that case: no live `host.status` can ever report it.
+ *
+ * It is not rendered as a live phase. The projector's record arm returns
+ * `kind: "unknown"` with `lastKnownKind` carrying the phase, and surfaces
+ * qualify that ("last seen …"), so the objection above is answered by the
+ * channel rather than by discarding the fact. Nothing new is introduced here:
+ * this function only stops suppressing the observation, and the existing
+ * retained-phase projection does the rest.
+ *
+ * The memorial is BOUNDED, which is what makes it honest. A terminal record is
+ * pruned once it passes `TERMINAL_ATTEMPT_RETENTION_MS` (seven days), enforced
+ * at attempt-store open, so "a failure stays discoverable until it is
+ * superseded or ages out" is a real guarantee rather than "forever" — which is
+ * what the unconditional drop was implicitly defending against.
  */
 export function recordObservationFromLocalAttempt(input: {
   readonly hostId: string;
@@ -44,7 +64,11 @@ export function recordObservationFromLocalAttempt(input: {
   // render. Refusing beats guessing, and a newer host writing a newer
   // vocabulary is exactly when guessing would be confident and wrong.
   if (phase === null) return null;
-  if (isTerminalPhase(phase)) return null;
+  // `failed` survives; `complete` and `superseded` do not. A completed update
+  // needs no host-down memorial, and `superseded` already projects `idle` even
+  // on the live path — a newer attempt replaced it, and that attempt is what
+  // the record now describes.
+  if (isTerminalPhase(phase) && phase !== "failed") return null;
   return {
     hostId: input.hostId,
     source: "durable-record",

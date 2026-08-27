@@ -3962,3 +3962,98 @@ describe("runHostStart - per-attempt setup failures stay inside the budget", () 
     );
   });
 });
+
+describe("runHostStart - a SERVICE launch refused as busy exits non-zero so it is retried", () => {
+  // Codex round 3, P1 (download-stage). `host download` holds the update-attempt
+  // execution segment across its whole transfer, and mutual exclusion on that
+  // lock is unconditional on admission - decided before `dispositionFor` is
+  // consulted. So a host child that crashes mid-transfer gets its relaunch
+  // refused `busy` at `waitMs: 0`.
+  //
+  // The launchd half is the load-bearing part, and it is not hypothetical here:
+  // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`, which means
+  // a non-zero exit IS relaunched and a clean one deliberately is NOT. This
+  // suite already documents the same mechanism from the other side ("exited 69,
+  // which `KeepAlive.SuccessfulExit = false` treats as restartable, so launchd
+  // relaunched the job into a throttled crash loop"). Exiting 0 on a busy
+  // service refusal therefore left the host down with nothing to bring it back,
+  // because `host download` only promotes staged bytes and never restarts the
+  // service.
+  const exec = "/opt/traycer/host/install/traycer-host";
+  const busy = { kind: "busy" as const, holder: null };
+
+  it("service-manager launch + busy -> exit 76 (launchd relaunches a non-zero exit)", async () => {
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(76);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("INTERACTIVE launch + busy -> still exit 0, unchanged", async () => {
+    // The scoping half. An interactive or Desktop-driven start has a caller
+    // watching that can decide for itself, so its exit semantics must not move;
+    // turning every busy refusal non-zero was the fleet-wide change this was
+    // deliberately narrowed away from.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => busy,
+    };
+
+    await runUntilExit(
+      () => runHostStart({ environment: "production", cwd: null }, refused),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("service launch refused for a NON-busy reason -> still exit 0", async () => {
+    // Only `busy` is transient. `lock-not-live`, `nonterminal-attempt`,
+    // `record-fail-closed` and `held-in-process` are states a relaunch cannot
+    // clear, so retrying them would be a throttled crash loop rather than a
+    // recovery - the exact failure this suite already records for exit 69.
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const refused: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async () => ({
+        kind: "lock-not-live" as const,
+        verdict: { kind: "lost" as const, observed: null },
+      }),
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          {
+            environment: "production",
+            cwd: null,
+            serviceLabel: "ai.traycer.host.agent",
+          },
+          refused,
+        ),
+      recorded,
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+});

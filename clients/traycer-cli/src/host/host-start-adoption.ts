@@ -245,6 +245,39 @@ export async function consumeHostStartAdoption(
   if (pending.kind === "malformed") {
     return { kind: "refused", reason: "host-start adoption is malformed" };
   }
+  // An EXPIRED proof is not an outstanding grant on THIS path either, and the
+  // age bound has to be applied BEFORE the label and nonce checks below.
+  //
+  // The standalone branch above got this bound first, and the comment there
+  // named the other two readers that already had it — without noticing that
+  // the labelled consume path is a THIRD reader that did not. The gap is not
+  // theoretical, because expiry is exactly what steers a launch onto it:
+  // `readHostStartAdoptionNonce` applies the age bound and returns null for an
+  // expired proof, so `host adoption-nonce` yields nothing and the generated
+  // launcher re-execs `host start --service-label <label>` with NO
+  // `--adoption-nonce` (see the emitted launcher in
+  // desktop/scripts/prepack/inject-host-launch-agent.cjs). That lands here with
+  // `expectedNonce === null` against a pending read that is still "valid" —
+  // `readPendingAdoption` deliberately does no age filtering — so the nonce
+  // check below refuses it. Nothing on this path reaches the post-claim expiry
+  // check, which sits after the claim the nonce check never lets us make, so
+  // the refusal repeats on every service-manager retry, forever, on the
+  // authority of a grant nobody can still use.
+  //
+  // Ordered ahead of the label-binding check on purpose: an expired proof bound
+  // to a DIFFERENT label would otherwise wedge that launcher the same way, for
+  // the same reason. Expiry is not a routing question.
+  //
+  // Treated as ABSENT rather than removed, for the reason `removeAdoptionIfNonce`
+  // documents: a read-then-remove by a party that has not matched the nonce lets
+  // a stale reader erase a NEWER publisher's proof. Expiry is enough to unblock
+  // admission; erasing stays the job of the paths that hold the nonce.
+  if (
+    pending.kind === "valid" &&
+    Date.now() - pending.file.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS
+  ) {
+    return { kind: "absent" };
+  }
   if (pending.kind === "valid" && pending.file.serviceLabel !== serviceLabel) {
     return {
       kind: "refused",

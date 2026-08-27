@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { FLEET_ACTIVE_POLL_MS } from "@/lib/host/fleet-update/fleet-poll-policy";
 import {
@@ -43,6 +43,77 @@ import {
  * synthetic infinite freshness was removed, so it now runs this too: the
  * deadline and the poll that is supposed to beat it come from one place.
  */
+interface AcceleratorEntry {
+  count: number;
+  readonly timer: ReturnType<typeof setInterval>;
+}
+
+/**
+ * One timer per (query client, host) — NOT per mounted consumer.
+ *
+ * The acceleration is a property of the HOST's operation, but the hook runs
+ * once per surface observing it, and this hook has more than one caller by
+ * design (see the note above about the Overview adopting it). With a timer per
+ * instance, the landing page mounted behind the Settings modal and an Overview
+ * scoped to the same host each invalidated the same `host.status` key on
+ * independently-phased intervals, roughly doubling the RPC cadence for the
+ * whole length of a download — and it scaled with the number of surfaces, so
+ * adding a third observer would have made it worse with no code change.
+ *
+ * Ref-counted rather than last-one-wins: consumers mount and unmount
+ * independently, so the timer must survive any one of them leaving and stop
+ * only when the last does. Same shape as the borrow accounting in
+ * `active-remote-sessions.ts`, for the same reason.
+ *
+ * Keyed by the query client FIRST, so a second client (a test, a re-provided
+ * provider) never adopts a timer holding a closure over a different client's
+ * cache. A `WeakMap` means a discarded client's bucket is collectable rather
+ * than a leak keyed by an object nobody holds anymore.
+ */
+const acceleratorsByClient = new WeakMap<
+  QueryClient,
+  Map<string, AcceleratorEntry>
+>();
+
+function acquireAccelerator(
+  queryClient: QueryClient,
+  hostId: string,
+): () => void {
+  let byHost = acceleratorsByClient.get(queryClient);
+  if (byHost === undefined) {
+    byHost = new Map<string, AcceleratorEntry>();
+    acceleratorsByClient.set(queryClient, byHost);
+  }
+  const hosts = byHost;
+  const existing = hosts.get(hostId);
+  if (existing !== undefined) {
+    existing.count += 1;
+  } else {
+    hosts.set(hostId, {
+      count: 1,
+      timer: setInterval(() => {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(hostId, "host.status"),
+        });
+      }, FLEET_ACTIVE_POLL_MS),
+    });
+  }
+  let released = false;
+  return () => {
+    // Idempotent: React can invoke a cleanup more than once (StrictMode's
+    // mount/unmount/remount), and a second decrement would retire a timer other
+    // consumers are still relying on.
+    if (released) return;
+    released = true;
+    const entry = hosts.get(hostId);
+    if (entry === undefined) return;
+    entry.count -= 1;
+    if (entry.count > 0) return;
+    clearInterval(entry.timer);
+    hosts.delete(hostId);
+  };
+}
+
 export function useActiveUpdatePollAccelerator(input: {
   readonly hostId: string | null;
   readonly view: FleetUpdateView;
@@ -52,13 +123,14 @@ export function useActiveUpdatePollAccelerator(input: {
   const fast = warrantsFastPoll(input.view);
   useEffect(() => {
     if (hostId === null || !fast) return;
-    const timer = setInterval(() => {
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(hostId, "host.status"),
-      });
-    }, FLEET_ACTIVE_POLL_MS);
-    return () => {
-      clearInterval(timer);
-    };
+    return acquireAccelerator(queryClient, hostId);
   }, [hostId, fast, queryClient]);
+}
+
+/** Test-only: how many consumers currently hold this host's accelerator. */
+export function activeUpdateAcceleratorCountForTest(
+  queryClient: QueryClient,
+  hostId: string,
+): number {
+  return acceleratorsByClient.get(queryClient)?.get(hostId)?.count ?? 0;
 }

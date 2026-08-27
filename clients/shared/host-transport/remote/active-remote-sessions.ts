@@ -835,7 +835,29 @@ export function tryAcquireReadyRemoteSession<
           new Error("borrowed remote session identity was superseded"),
         );
       }
-      return session.sendUnary(method, params, abortSignal, responseTimeoutMs);
+      // The check above is a SNAPSHOT, and on its own it only narrows the
+      // window rather than closing it. Sign-out, an auth-epoch change, or a
+      // host-key/relay rotation can supersede this entry while the unary is
+      // already in flight; the pre-send check has passed by then, so the
+      // retired session's response comes back and
+      // `readUpdateStatusOverBorrowedSession` timestamps it as a fresh current
+      // observation — the stale-value-presented-as-live outcome the pre-send
+      // arm exists to prevent, arriving through the one path it cannot see.
+      //
+      // Recheck the CAPTURED entry on resolution, never a key relookup, for the
+      // same reason `release` captures it: a successor may already occupy the
+      // key, and this response's identity is the one it was sent under.
+      // Refusing matches the pre-send arm exactly — the caller is a status
+      // poll, so a refused read renders `unknown`, never failure and never a
+      // retired value shown as live.
+      return session
+        .sendUnary(method, params, abortSignal, responseTimeoutMs)
+        .then((result) => {
+          if (entry.superseded) {
+            throw new Error("borrowed remote session identity was superseded");
+          }
+          return result;
+        });
     },
     release: () => {
       if (released) {

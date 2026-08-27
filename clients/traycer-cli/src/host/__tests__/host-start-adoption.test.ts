@@ -574,3 +574,100 @@ describe("consumeHostStartAdoption — the nonce-less path applies the age bound
     });
   });
 });
+
+describe("consumeHostStartAdoption — the LABELLED path applies the age bound too", () => {
+  // Codex round 3. The follow-up to the block above, and a class member the
+  // first fix missed: the age bound went onto the nonce-less STANDALONE path
+  // while the labelled path was left without it. The comment written there even
+  // enumerated the readers that already had the bound, and the labelled consume
+  // path — a third reader — was not among them and was not checked.
+  //
+  // Expiry is what steers a launch onto this path, which is why the gap is
+  // reachable rather than theoretical. `readHostStartAdoptionNonce` applies the
+  // age bound, so an expired proof makes `host adoption-nonce` yield nothing,
+  // and the emitted launcher re-execs `host start --service-label <label>` with
+  // no `--adoption-nonce` at all. That arrives here as (labelled, nonce=null)
+  // against a pending read that is still "valid", because `readPendingAdoption`
+  // does no age filtering — and the nonce check refused it, on every
+  // service-manager retry, with no path to the post-claim expiry check.
+  const LABEL = "ai.traycer.host.agent";
+
+  async function publishThenAge(ageMs: number, label: string): Promise<string> {
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-labelled-expiry-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(capability, options(hostHomeDir), label);
+      },
+    );
+    if (ageMs > 0) {
+      const path = join(hostHomeDir, ".host-start-adoption.json");
+      // Age the REAL proof rather than hand-rolling one, so every other field
+      // stays exactly what the publisher wrote — a fabricated proof could trip
+      // an earlier guard and pass this test for the wrong reason.
+      const proof = JSON.parse(await readFile(path, "utf8")) as {
+        issuedAtMs: number;
+      };
+      await writeFile(
+        path,
+        JSON.stringify({ ...proof, issuedAtMs: Date.now() - ageMs }),
+        "utf8",
+      );
+    }
+    return hostHomeDir;
+  }
+
+  it("an EXPIRED proof no longer refuses a labelled, nonce-less start", async () => {
+    await publishThenAge(120_000, LABEL);
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("an EXPIRED proof bound to a DIFFERENT label also admits, not refuses", async () => {
+    // Why the bound is ordered ahead of the label-binding check: an expired
+    // proof left by some other label would otherwise wedge THIS launcher with
+    // "bound to a different service label" on every retry, which is the same
+    // indefinite refusal wearing a different reason string.
+    await publishThenAge(120_000, "ai.traycer.host.other");
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("a FRESH proof still refuses a labelled start with NO nonce — the capability discipline is intact", async () => {
+    // The load-bearing negative. The age bound must not become a way to launch
+    // without presenting the nonce: while the grant is still live, a labelled
+    // start that cannot produce the nonce is exactly the case the proof exists
+    // to refuse. If this ever goes green alongside the first test, the fix has
+    // turned into a nonce bypass.
+    await publishThenAge(0, LABEL);
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "refused",
+      reason:
+        "host-start adoption nonce did not match the pending service launch",
+    });
+  });
+
+  it("a FRESH proof bound to a different label still refuses — the label check is not skipped", async () => {
+    // The other negative direction: moving the age bound ahead of the
+    // label-binding check must not stop that check from firing for proofs that
+    // are still live.
+    await publishThenAge(0, "ai.traycer.host.other");
+
+    expect(await consumeHostStartAdoption("production", LABEL, null)).toEqual({
+      kind: "refused",
+      reason: "host-start adoption is bound to a different service label",
+    });
+  });
+});

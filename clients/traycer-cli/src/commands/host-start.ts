@@ -237,6 +237,20 @@ const FORWARDED_SHUTDOWN_SIGNALS = [
   "SIGHUP",
 ] as const satisfies readonly NodeJS.Signals[];
 
+/**
+ * Exit code for a SERVICE launch refused because another update execution
+ * segment owns the restart boundary. See the `retryableServiceRefusal` branch
+ * for why this arm alone must not exit 0.
+ *
+ * The value only has to be non-zero and unambiguous: launchd assigns no meaning
+ * to particular codes, and with `KeepAlive.SuccessfulExit = false` any non-zero
+ * exit is what triggers the relaunch. Distinct from the codes already in use
+ * (notably 75, `EXIT_RESTART_INTO_REFRESHED_SLOT`) so a log or a crash report
+ * can tell "deferred, retry me" apart from every other way this supervisor
+ * ends.
+ */
+const SERVICE_RELAUNCH_BUSY_EXIT_CODE = 76;
+
 export interface ResolveHostStartTargetDeps {
   readonly readInstallRecord: (
     environment: Environment,
@@ -1367,7 +1381,45 @@ export async function runHostStart(
           ),
         );
         await deps.closeLogFd(logFd);
-        return exitSupervisor(0);
+        // A SERVICE launch refused as `busy` is the one arm here that must not
+        // exit 0, and the reason is entirely about who is listening.
+        //
+        // `host download` holds the update-attempt execution segment across its
+        // whole transfer (documented in CONTENDER_INVENTORY.md; the inner
+        // cli-lock is already narrow). If the host child crashes during that
+        // window, the supervisor's relaunch takes `waitMs: 0` and is refused
+        // `busy` - mutual exclusion on the attempt lock is unconditional on
+        // admission, decided before `dispositionFor` is ever consulted. Exiting
+        // 0 then tells the service manager the job finished successfully, and
+        // the shipped LaunchAgent sets `KeepAlive.SuccessfulExit = false`
+        // (inject-host-launch-agent.cjs), which means launchd relaunches on a
+        // NON-zero exit and deliberately does not on a clean one. So a clean
+        // exit here is not "we gave up politely" - it is the host staying down
+        // with nothing left to bring it back, because `host download` only
+        // promotes staged bytes and never restarts the service.
+        //
+        // Scoped to exactly this branch on purpose. `serviceStarted` (not a
+        // bare `serviceLabel` test - see its derivation) names the case with no
+        // caller listening; an interactive or Desktop-driven start keeps exit 0
+        // because its caller sees the refusal and can decide for itself. And
+        // only `busy` retries: `held-in-process`, `nonterminal-attempt`,
+        // `record-fail-closed` and `lock-not-live` are all states a relaunch
+        // cannot clear, so retrying them would be a crash-loop, not a recovery.
+        //
+        // This bounds the outage to the transfer's length rather than removing
+        // it; `ThrottleInterval: 10` in the same plist paces the retries. The
+        // permanent wedge is what this fixes.
+        const retryableServiceRefusal =
+          serviceStarted && admission.kind === "busy";
+        if (retryableServiceRefusal) {
+          logger.warn(
+            "Host supervisor exiting non-zero so the service manager retries",
+            { environment: opts.environment, attemptId, reason },
+          );
+        }
+        return exitSupervisor(
+          retryableServiceRefusal ? SERVICE_RELAUNCH_BUSY_EXIT_CODE : 0,
+        );
       }
       child = admission.result;
     } catch (cause) {

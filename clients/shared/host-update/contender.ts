@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   commitAttemptMutation,
   commitExecutorOnlyAttemptMutation,
+  pruneTerminalAttemptRecord,
   readUpdateAttemptRecord,
   type AttemptCommitOutcome,
   type AttemptMutationIntent,
@@ -804,6 +805,38 @@ async function withUpdateContenderInternal<T>(
       record.kind === "valid" && record.value.execution !== "terminal"
         ? record.value
         : null;
+    // Retention cleanup runs HERE, at attempt-store open, and this is the only
+    // place it can run. `pruneTerminalAttemptRecord` is handle-bound by design,
+    // and a handle exists at a lock acquisition and nowhere on the read paths -
+    // so `host.status`, which is what surfaces the stale record, is structurally
+    // unable to expire it. Without this call `TERMINAL_ATTEMPT_RETENTION_MS` was
+    // dead policy: a terminal attempt that no newer attempt replaced projected
+    // forever, and the Overview kept showing an old failure with no expiry.
+    //
+    // Per acquisition rather than on a timer: bounded, deterministic, and it
+    // adds no scheduling to a module whose whole contract is explicit
+    // lock-scoped mutation. A terminal record cannot be an `activeAttempt`
+    // (that requires `execution !== "terminal"`), so this never interacts with
+    // the disposition gate below.
+    //
+    // The expiry decision is deliberately NOT made here. `prune` re-reads under
+    // its own lease and applies `isTerminalRetentionExpired` itself; this
+    // caller supplies only observation time, which is the boundary
+    // `PruneTerminalAttemptRecordOptions` documents ("the caller controls only
+    // observation time, never retention policy"). Gating on `terminal` alone is
+    // a cheap read of data already in hand and keeps policy in one place.
+    //
+    // Best-effort by intent: a rejection - lost ownership, a racing writer, a
+    // record that changed under the lease - must never fail an admission that
+    // was otherwise granted. The record simply survives to the next
+    // acquisition, which is the same eventual outcome one tick later.
+    if (record.kind === "valid" && record.value.execution === "terminal") {
+      await pruneTerminalAttemptRecord({
+        handle: acquisition.handle,
+        expected: attemptIdentityOf(record.value),
+        nowMs: Date.now(),
+      });
+    }
     if (activeAttempt !== null) {
       const disposition = dispositionFor(options.admission);
       // Update state is not a global host-action mutex. A direct, confirmed

@@ -16,6 +16,7 @@ import {
   isUpdateAttemptLockHeldInProcess,
 } from "../lock";
 import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
+import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
 import type { HostUpdateAttemptRecord } from "../record";
 import { __setBeforeRecordRenameHookForTest } from "../store";
 import {
@@ -685,10 +686,17 @@ describe("withUpdateContender - canonical first-run boundary", () => {
 
   it("preserves the callback for a retained terminal record without selecting a schema-v2 executor", async () => {
     const hostHomeDir = await freshHome();
+    // `completedAt` must be INSIDE `TERMINAL_ATTEMPT_RETENTION_MS` for this
+    // record to be "retained" at all, which is what the test name claims. It
+    // was previously a fixed `2026-01-01`, i.e. months past a seven-day
+    // retention - harmless only for as long as `pruneTerminalAttemptRecord` had
+    // no production caller. Now that attempt-store open prunes, an expired
+    // fixture would be legitimately deleted and the survival assertion below
+    // would be asserting that retention does NOT work.
     const terminal = record({
       phase: "complete",
       execution: "terminal",
-      completedAt: "2026-01-01T00:10:00.000Z",
+      completedAt: new Date().toISOString(),
     });
     await writeRecord(hostHomeDir, terminal);
 
@@ -701,6 +709,88 @@ describe("withUpdateContender - canonical first-run boundary", () => {
     await expect(
       readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
     ).resolves.toBe(`${JSON.stringify(terminal)}\n`);
+  });
+
+  describe("terminal-attempt retention is enforced at attempt-store open", () => {
+    // Codex round 3, P2. `pruneTerminalAttemptRecord` had no production caller,
+    // so `TERMINAL_ATTEMPT_RETENTION_MS` was dead policy: a terminal attempt
+    // that no newer attempt replaced survived forever and `host.status` kept
+    // projecting it, so the Overview could show an old failure indefinitely.
+    //
+    // Wired at lock acquisition because that is the ONLY place it can go: prune
+    // is handle-bound, and a handle exists here and on no read path - the very
+    // surface that exposes the stale record is structurally unable to expire
+    // it.
+    const EXPIRED_MS = TERMINAL_ATTEMPT_RETENTION_MS + 60_000;
+
+    it("removes a terminal record older than the retention window", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "complete",
+          execution: "terminal",
+          completedAt: new Date(Date.now() - EXPIRED_MS).toISOString(),
+        }),
+      );
+
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, "legacy-update-shadow"),
+        async () => "ran",
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "ran" });
+      // Gone from disk is exactly what stops `host.status` projecting it: the
+      // status read decodes this file, so an absent record is an absent
+      // projection.
+      await expect(
+        stat(updateAttemptRecordPath(hostHomeDir)),
+      ).rejects.toThrow();
+    });
+
+    it("keeps a terminal record that is still INSIDE the retention window", async () => {
+      // The paired direction, and the one that matters: retention must expire
+      // old records without becoming "delete every terminal record", which
+      // would erase a just-completed failure before anyone could read it.
+      const hostHomeDir = await freshHome();
+      const fresh = record({
+        phase: "complete",
+        execution: "terminal",
+        completedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await writeRecord(hostHomeDir, fresh);
+
+      await withUpdateContender(
+        options(hostHomeDir, "legacy-update-shadow"),
+        async () => "ran",
+      );
+
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(fresh)}\n`);
+    });
+
+    it("leaves a NON-terminal record alone however old it is", async () => {
+      // Retention is scoped to terminal records. An active attempt that has
+      // been running a long time is not garbage, and pruning it would delete
+      // live state - so age alone must never be sufficient.
+      const hostHomeDir = await freshHome();
+      const active = record({
+        phase: "downloading",
+        execution: "active",
+        updatedAt: new Date(Date.now() - EXPIRED_MS).toISOString(),
+      });
+      await writeRecord(hostHomeDir, active);
+
+      await withUpdateContender(
+        options(hostHomeDir, "recovery-maintenance"),
+        async () => "ran",
+      );
+
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(active)}\n`);
+    });
   });
 
   it("lets first-run maintenance proceed without manufacturing schema-v2 evidence", async () => {

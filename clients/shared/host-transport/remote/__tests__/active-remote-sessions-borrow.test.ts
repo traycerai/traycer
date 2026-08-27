@@ -226,6 +226,102 @@ describe("tryAcquireReadyRemoteSession", () => {
     owner.close();
   });
 
+  // (4) covers supersession observed BEFORE the send. This is the window it
+  // cannot see: the pre-send check is a snapshot, so a retirement that lands
+  // while the unary is in flight has already passed that guard, and the retired
+  // session's response is handed back — where the status reader timestamps it
+  // as a fresh current observation. That is the same stale-value-as-live
+  // outcome (4) exists to prevent, arriving by the one path it does not watch.
+  it("(4c) refuses a response that RESOLVED after the identity was superseded mid-flight", async () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    session.ready = true;
+    const owner = acquireRemoteSession(identity, () => session);
+
+    const borrow = tryAcquireReadyRemoteSession(identity.hostId);
+    if (borrow === null) throw new Error("expected a borrow");
+
+    // Hold the unary open so supersession lands strictly between the pre-send
+    // check and the resolution, which is the ordering the bug needs.
+    //
+    // Assigned directly rather than via `mockImplementationOnce`: `FakeSession`
+    // types `sendUnary` as the plain call signature, so the mock API is not
+    // visible on it and only vitest's runtime would have accepted that - a
+    // green test the type-checker rejects. The settle handle lives on an object
+    // because a bare `let` assigned inside this callback narrows to `never` at
+    // the read below.
+    const gate: { settle: (() => void) | null } = { settle: null };
+    session.sendUnary = vi.fn(
+      () =>
+        // `Promise<never>` (not a bare `new Promise`, which infers
+        // `Promise<unknown>`) so this is assignable to `sendUnary`'s generic
+        // response type - the same reason `fakeSession` writes `({}) as never`.
+        new Promise<never>((resolve) => {
+          gate.settle = () => resolve({} as never);
+        }),
+    );
+
+    const pending = borrow.sendUnary(
+      "host.status" as never,
+      {} as never,
+      null,
+      undefined,
+    );
+    // It really did dispatch: this is not the pre-send arm firing early, which
+    // would make the assertion below pass for the wrong reason.
+    expect(session.sendUnary).toHaveBeenCalledTimes(1);
+
+    retireAllRemoteSessions();
+    if (gate.settle === null)
+      throw new Error("expected the unary to be pending");
+    gate.settle();
+
+    await expect(pending).rejects.toThrow(/superseded/);
+
+    borrow.release();
+    owner.close();
+  });
+
+  // The positive control for (4c), and the one that matters most: the
+  // post-resolution recheck must not reject responses that were never
+  // superseded. Without this, a recheck that always threw would satisfy (4c)
+  // and break every real status poll.
+  it("(4d) a response that resolves while still current is returned unchanged", async () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    session.ready = true;
+    const owner = acquireRemoteSession(identity, () => session);
+
+    const borrow = tryAcquireReadyRemoteSession(identity.hostId);
+    if (borrow === null) throw new Error("expected a borrow");
+
+    const gate: { settle: (() => void) | null } = { settle: null };
+    session.sendUnary = vi.fn(
+      () =>
+        // `Promise<never>` (not a bare `new Promise`, which infers
+        // `Promise<unknown>`) so this is assignable to `sendUnary`'s generic
+        // response type - the same reason `fakeSession` writes `({}) as never`.
+        new Promise<never>((resolve) => {
+          gate.settle = () => resolve({} as never);
+        }),
+    );
+
+    const pending = borrow.sendUnary(
+      "host.status" as never,
+      {} as never,
+      null,
+      undefined,
+    );
+    if (gate.settle === null)
+      throw new Error("expected the unary to be pending");
+    gate.settle();
+
+    await expect(pending).resolves.toEqual({});
+
+    borrow.release();
+    owner.close();
+  });
+
   it("a borrowed handle exposes no close() and no subscribe() - a borrower cannot tear down or open streams on a session it does not own", () => {
     const identity = freshIdentity();
     const session = fakeSession();

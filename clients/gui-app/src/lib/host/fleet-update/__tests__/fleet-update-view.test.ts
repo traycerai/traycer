@@ -3,6 +3,7 @@ import type {
   HostStatusUpdateOperation,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
+import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/record-attempt-observation";
 import {
   holdsLifecycleGate,
   offersForceRestart,
@@ -718,6 +719,52 @@ function recordObservation(
 }
 
 describe("projectFleetUpdateView — the durable-record arm (host-down window)", () => {
+  it("a FAILED record projects unknown + lastKnownKind:'failed', never a live failure", () => {
+    // Codex round 3, end to end. The read boundary now lets `failed` through
+    // (it used to be dropped with every terminal phase), and this asserts what
+    // it becomes: the retained-phase channel, not a live `kind`.
+    //
+    // Both halves matter. `kind` must stay `unknown` because every gate and
+    // cadence decision reads it, so a host we cannot reach must hold no gate
+    // and earn no active poll; `lastKnownKind` must be `failed` so a surface
+    // can say "last seen failed" instead of rendering a blank offline badge for
+    // the one outcome a person needs to act on.
+    // Composed through the REAL read boundary, not a hand-built observation
+    // literal. Building the observation directly would bypass
+    // `recordObservationFromLocalAttempt` entirely, so the assertion would hold
+    // whether or not `failed` is admitted there - which is exactly what an
+    // ablation caught this test doing on its first draft.
+    const observed = recordObservationFromLocalAttempt({
+      hostId: "host-1",
+      localAttempt: {
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+        targetVersion: "2.0.0",
+        phase: "failed",
+        continuation: null,
+        updatedAt: "2026-08-27T00:00:00.000Z",
+      },
+      observedAtMs: NOW_MS,
+    });
+    if (observed === null) {
+      throw new Error("the read boundary dropped a failed record");
+    }
+    const view = projectFleetUpdateView({
+      observation: observed,
+      nowMs: NOW_MS,
+      connected: true,
+    });
+
+    expect(view.kind).toBe("unknown");
+    expect(view.lastKnownKind).toBe("failed");
+    // The invariant the retained-phase field documents.
+    expect(view.lastKnownKind !== null && view.kind === "unknown").toBe(true);
+    // It must not earn the acceleration or hold a lifecycle gate.
+    expect(warrantsFastPoll(view)).toBe(false);
+    expect(holdsLifecycleGate(view)).toBe(false);
+  });
+
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
     // The §5.2.7 requirement, asserted directly rather than inferred from the
     // shape. Same phase, two evidence sources, two different renderings.

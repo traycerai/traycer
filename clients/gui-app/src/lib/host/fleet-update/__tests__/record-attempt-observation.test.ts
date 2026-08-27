@@ -49,8 +49,8 @@ describe("recordObservationFromLocalAttempt", () => {
     ).toBeNull();
   });
 
-  it.each(["complete", "failed", "superseded"] as const)(
-    "a TERMINAL phase (%s) -> null — a finished attempt is not the host-down window",
+  it.each(["complete", "superseded"] as const)(
+    "a terminal phase with nothing to act on (%s) -> null",
     (phase) => {
       expect(
         recordObservationFromLocalAttempt({
@@ -61,6 +61,31 @@ describe("recordObservationFromLocalAttempt", () => {
       ).toBeNull();
     },
   );
+
+  // Codex round 3. `failed` used to be dropped with the other two, which meant
+  // the one terminal phase the LIVE path renders (it maps `failed` -> `failed`
+  // and only collapses `superseded` -> `idle`) was discarded exactly when the
+  // host is unreachable and this record is the only evidence there is -
+  // packaged-macOS activation failing after bootout being the concrete case.
+  //
+  // It is carried as FACTS here; the projector renders it as `kind: "unknown"`
+  // with `lastKnownKind: "failed"`, so no surface can present it as current.
+  it("a FAILED phase carries the facts — the host-down window is when it matters most", () => {
+    expect(
+      recordObservationFromLocalAttempt({
+        hostId: HOST_ID,
+        localAttempt: facts({ phase: "failed", attemptId: "attempt-failed" }),
+        observedAtMs: OBSERVED_AT_MS,
+      }),
+    ).toEqual({
+      hostId: HOST_ID,
+      source: "durable-record",
+      observedAtMs: OBSERVED_AT_MS,
+      attemptId: "attempt-failed",
+      targetVersion: "2.1.0",
+      phase: "failed",
+    });
+  });
 
   it.each([
     "downloading",
