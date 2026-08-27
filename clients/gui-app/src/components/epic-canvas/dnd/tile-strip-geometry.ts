@@ -57,15 +57,22 @@ export function readTileStripGroupIds(): ReadonlyArray<string> {
 }
 
 /** The group whose strip row contains this point, or null. */
-export function tileStripGroupAtPoint(point: {
-  readonly x: number;
-  readonly y: number;
-}): string | null {
-  for (const groupId of readTileStripGroupIds()) {
-    const rect = readTileStripRect(groupId);
+export function tileStripGroupAtPoint(
+  point: { readonly x: number; readonly y: number },
+  viewTabId: string,
+): string | null {
+  for (const strip of document.querySelectorAll<HTMLElement>(
+    '[data-testid="tab-strip"][data-group-id][data-view-tab-id]',
+  )) {
+    if (strip.dataset.viewTabId !== viewTabId) continue;
+    const groupId = strip.dataset.groupId;
+    if (groupId === undefined || groupId.length === 0) continue;
+    const rect = strip
+      .querySelector<HTMLElement>('[data-testid="tab-strip-end"]')
+      ?.getBoundingClientRect();
     // A collapsed or unmeasured strip has a zero-size rect, which would
     // otherwise "contain" the origin and capture every pointer at (0,0).
-    if (rect === null || rect.width <= 0 || rect.height <= 0) continue;
+    if (rect === undefined || rect.width <= 0 || rect.height <= 0) continue;
     if (
       point.x >= rect.left &&
       point.x <= rect.right &&
@@ -81,11 +88,14 @@ export function tileStripGroupAtPoint(point: {
 /**
  * Slots for one tile strip, measured from live rects.
  *
- * Tile frames carry an explicit x transform while a drag is in flight, so a
- * mid-drag re-measure would read displaced positions. Callers measure at drag
- * start, when every offset is 0.
+ * Tile frames carry an explicit x transform while a drag is in flight. The
+ * caller supplies the currently applied model offsets so measurements can be
+ * restored to layout-space before a mid-drag item-list remap.
  */
-export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
+export function readTileStripSlots(
+  groupId: string,
+  offsets: ReadonlyMap<string, number>,
+): ReadonlyArray<StripSlot> {
   const el = stripScrollElement(groupId);
   if (el === null) return [];
   const originX = el.getBoundingClientRect().left - el.scrollLeft;
@@ -99,7 +109,7 @@ export function readTileStripSlots(groupId: string): ReadonlyArray<StripSlot> {
       {
         itemId,
         width: rect.width,
-        contentLeft: rect.left - originX,
+        contentLeft: rect.left - originX - (offsets.get(itemId) ?? 0),
         // Tile strips have no pair-into-split gesture, so no tile is ever a
         // merge target. This - not the zero band width - is what makes the
         // model's merge branch unreachable here.
@@ -131,7 +141,7 @@ export function measureTileStripGeometry(input: {
 }): StripDragGeometry | null {
   const el = stripScrollElement(input.groupId);
   if (el === null) return null;
-  const slots = readTileStripSlots(input.groupId);
+  const slots = readTileStripSlots(input.groupId, new Map());
   const sourceIndex = slots.findIndex(
     (slot) => slot.itemId === input.tileItemId,
   );
@@ -165,5 +175,8 @@ export function measureForeignTileStrip(groupId: string): {
 } | null {
   const originX = readTileStripContentOriginX(groupId);
   if (originX === null) return null;
-  return { slots: readTileStripSlots(groupId), contentOriginX: originX };
+  return {
+    slots: readTileStripSlots(groupId, new Map()),
+    contentOriginX: originX,
+  };
 }

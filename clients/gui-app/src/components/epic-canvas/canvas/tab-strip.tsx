@@ -287,6 +287,7 @@ export function TabStrip(props: TabStripProps) {
         ref={stripRef}
         data-testid="tab-strip"
         data-group-id={groupId}
+        data-view-tab-id={tabId}
         className={cn(
           "relative flex h-9 shrink-0 items-stretch border-b border-canvas-border/70 bg-canvas",
         )}

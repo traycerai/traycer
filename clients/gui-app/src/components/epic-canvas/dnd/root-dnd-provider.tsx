@@ -119,6 +119,7 @@ import {
   insertionIndexFromPointer,
   insertionOffsetsFor,
   overlayLeftForPointer,
+  remapGeometryToSlots,
   resolveStripDragState,
   stripOffsetsFor,
   type StripDragGeometry,
@@ -143,6 +144,7 @@ import {
 import {
   measureForeignTileStrip,
   measureTileStripGeometry,
+  readTileStripSlots,
   readTileStripContentOriginX,
   tileStripGroupAtPoint,
 } from "@/components/epic-canvas/dnd/tile-strip-geometry";
@@ -315,6 +317,18 @@ function isUnarmedPaneBodyTransit(
   return !updatePaneBodyArm(target.groupId, point, performance.now());
 }
 
+function resetPaneBodyDwellOutsideTarget(
+  source: EpicCanvasDragSourceData,
+  target: EpicCanvasDropTargetData | null,
+): void {
+  if (
+    source.kind === ARTIFACT_TAB_DND_TYPE &&
+    target?.kind !== "artifact-tab-group-body"
+  ) {
+    paneBodyDwell().reset();
+  }
+}
+
 function trackPointerX(event: PointerEvent): void {
   latestPointerX = event.clientX;
 }
@@ -473,9 +487,7 @@ function updateCanvasSourcePreview(
   // Not over a sidebar target (or not a sidebar-node source): clear any reparent
   // highlight so switching from a row hover back to canvas works.
   clearSidebarReparentPreview(refs);
-  if (source.kind === ARTIFACT_TAB_DND_TYPE) {
-    if (updateTileStripPreview(source, point, refs)) return;
-  }
+  if (updateArtifactTileStripPreview(source, point, refs)) return;
   if (updateHeaderStripTearOffPreview(source, event, point, refs)) return;
   dndStore.headerStripDropIndexChanged(null);
   const targetAtPoint = compatibleCanvasTarget(
@@ -483,6 +495,7 @@ function updateCanvasSourcePreview(
     over === null ? null : readEpicCanvasDropTargetData(overData),
     point,
   );
+  resetPaneBodyDwellOutsideTarget(source, targetAtPoint?.target ?? null);
   if (targetAtPoint === null) {
     refs.lastResolved.current = null;
     dndStore.dropPreviewChanged(null);
@@ -518,6 +531,17 @@ function updateCanvasSourcePreview(
   }
   refs.lastResolved.current = { source, target, preview };
   dndStore.dropPreviewChanged(preview);
+}
+
+function updateArtifactTileStripPreview(
+  source: EpicCanvasDragSourceData,
+  point: PointLike | null,
+  refs: ReparentRefs,
+): boolean {
+  return (
+    source.kind === ARTIFACT_TAB_DND_TYPE &&
+    updateTileStripPreview(source, point, refs)
+  );
 }
 
 /**
@@ -569,7 +593,7 @@ function updateTileStripPreview(
   const dndStore = useEpicDndStore.getState();
   const drag = activeTileDrag;
   if (drag === null || point === null) return false;
-  const groupId = tileStripGroupAtPoint(point);
+  const groupId = tileStripGroupAtPoint(point, source.viewTabId);
   if (groupId === null) return false;
   // Over a strip: the body gesture is not a candidate this frame.
   paneBodyDwell().reset();
@@ -579,19 +603,22 @@ function updateTileStripPreview(
   if (groupId === drag.groupId) {
     const contentOriginX = readTileStripContentOriginX(groupId);
     if (contentOriginX === null) return false;
+    const currentOffsets =
+      dndStore.tileStripOffsets.get(groupId) ?? new Map<string, number>();
+    const slots = readTileStripSlots(groupId, currentOffsets);
+    const geometry = remapGeometryToSlots(drag.geometry, slots);
+    if (geometry === null) return false;
+    activeTileDrag = { ...drag, geometry };
     const next = resolveStripDragState({
-      geometry: drag.geometry,
+      geometry,
       contentOriginX,
       pointerX: point.x,
       previous: dndStore.headerStripDragState,
       nowMs: performance.now(),
     });
     dndStore.headerStripDragStateChanged(next);
-    index = insertionIndexForTarget(
-      drag.geometry.sourceIndex,
-      next.targetIndex,
-    );
-    offsets.set(groupId, stripOffsetsFor(drag.geometry, next.targetIndex));
+    index = insertionIndexForTarget(geometry.sourceIndex, next.targetIndex);
+    offsets.set(groupId, stripOffsetsFor(geometry, next.targetIndex));
   } else {
     const foreign = measureForeignTileStrip(groupId);
     if (foreign === null) return false;
@@ -657,6 +684,7 @@ function updateHeaderTabSourcePreview(input: {
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     if (validDrop.target.kind === "top-level-fillable-slot") {
       edgeDwell.reset();
+      dndStore.topLevelStripPairPreviewChanged(null);
       return;
     }
     edgeDwell.setTargetValidator(
@@ -1027,7 +1055,7 @@ function resolveTearOff(input: {
   }
   const source = readActiveDragSource(event.active);
   if (source?.kind !== ARTIFACT_TAB_DND_TYPE) return null;
-  if (!outsideViewport && !isAtViewportEdge(point) && event.over !== null) {
+  if (!outsideViewport && !isAtViewportEdge(point)) {
     return null;
   }
   return (
@@ -1139,14 +1167,6 @@ export function RootDndProvider(props: RootDndProviderProps) {
       lastPointerDownX = null;
     };
   }, []);
-  useEffect(
-    () => () => {
-      clearSpringLoad(springLoadRef);
-      edgeDwell.reset();
-      clearMergeDwellTimer();
-    },
-    [clearMergeDwellTimer, edgeDwell],
-  );
   useEffect(() => {
     // A coordinator transaction fires a mid-transaction notify while
     // suppressionDepth is still 1 (before the layout write lands), for which
@@ -1359,6 +1379,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
     useEpicDndStore.getState().dragEnded();
   }, [clearMergeDwellTimer, edgeDwell]);
 
+  useEffect(() => () => endGesture(), [endGesture]);
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const detach = resolveTearOff({
@@ -1367,8 +1389,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
       });
       const source = readActiveDragSource(event.active);
       const detachRequest = resolveDetachRequest(detach);
-      if (detachRequest !== null) {
-        detachRequest.handler.requestOpen(detachRequest.tab);
+      if (detach !== null) {
+        detachRequest?.handler.requestOpen(detachRequest.tab);
         endGesture();
         return;
       }
