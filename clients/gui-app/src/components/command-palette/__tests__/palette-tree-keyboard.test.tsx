@@ -168,3 +168,52 @@ it("scopes tree arrows to the command surface receiving the key", () => {
   fireEvent.keyDown(firstInput, { key: "ArrowRight" });
   expect(screen.getAllByText("Grandchild")).toHaveLength(1);
 });
+
+it("expands an actionable path branch from the command input", () => {
+  const parent = {
+    ...baseItem("parent", "Spec"),
+    pathTreeRow: {
+      treeId: "artifacts",
+      nodeId: "parent",
+      depth: 0,
+      ancestorIds: [],
+      hasChildren: true,
+      kind: "file" as const,
+      path: "parent",
+      displayPath: "Spec",
+    },
+  };
+  const child = {
+    ...baseItem("child", "Ticket"),
+    pathTreeRow: {
+      treeId: "artifacts",
+      nodeId: "child",
+      depth: 1,
+      ancestorIds: ["parent"],
+      hasChildren: false,
+      kind: "file" as const,
+      path: "parent/child",
+      displayPath: "Spec / Ticket",
+    },
+  };
+  const subpage: CommandSubpage = {
+    id: "open:files:artifacts",
+    title: "Artifacts",
+    useItems: () => [parent, child],
+  };
+  render(
+    <Command>
+      <CommandInput />
+      <CommandList>
+        <SubpageView
+          subpage={subpage}
+          ctx={context}
+          onSelect={() => undefined}
+        />
+      </CommandList>
+    </Command>,
+  );
+  expect(screen.queryByText("Ticket")).toBeNull();
+  fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowRight" });
+  expect(screen.getByText("Ticket")).toBeTruthy();
+});

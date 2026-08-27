@@ -187,7 +187,7 @@ function artifact(args: {
 const FAKE_PROJECTION: EpicProjectedSlices = {
   ...EMPTY_PROJECTED_SLICES,
   chats: {
-    allIds: ["c1", "c2", "c3"],
+    allIds: ["c1", "c2", "c3", "c:colon"],
     byId: {
       // Lives on a different host than the active one ("default-host") -
       // should carry a host badge.
@@ -197,6 +197,7 @@ const FAKE_PROJECTION: EpicProjectedSlices = {
       // Lives on a directory-listed host whose label is blank - the badge
       // must fall back to the raw hostId, not render an empty chip.
       c3: chat("c3", "Chat Three", "blank-label-host", "c1"),
+      "c:colon": chat("c:colon", "Colon Chat", "default-host", null),
     },
   },
   tuiAgents: { allIds: ["a1"], byId: { a1: agent("a1", "Agent One") } },
@@ -496,6 +497,7 @@ describe("Agents opener sub-page", () => {
     const ids = items.map((i) => i.id);
     expect(ids).toContain("open:chats:c1");
     expect(ids).toContain("open:tui:a1");
+    expect(ids).toContain("open:chats:c:colon");
     expect(ids.indexOf("open:chats:c2")).toBeGreaterThan(
       ids.indexOf("open:chats:c1"),
     );

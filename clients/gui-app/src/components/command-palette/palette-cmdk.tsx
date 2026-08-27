@@ -509,6 +509,8 @@ function PathSubpageRows(props: {
   const expandedPaths = useOpenerFileTreeExpandedPaths(treeId);
   const togglePath = useOpenerFileTreeStore((state) => state.toggle);
   const search = useCommandState((state) => state.search);
+  const selectedValue = useCommandState((state) => state.value);
+  const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["pathTreeRow"]>) =>
     expandedPaths.includes(`${row.path}/`);
   const rowByNodeId = new Map(
@@ -521,6 +523,35 @@ function PathSubpageRows(props: {
   const toggle = (row: NonNullable<CommandItemShape["pathTreeRow"]>) => {
     togglePath(row.treeId, `${row.path}/`);
   };
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
+      if (
+        !(event.target instanceof Element) ||
+        ownerRoot === null ||
+        ownerRoot === undefined ||
+        event.target.closest("[cmdk-root]") !== ownerRoot
+      ) {
+        return;
+      }
+      const item = props.items.find(
+        (candidate) => buildCmdkValue(candidate) === selectedValue,
+      );
+      const row = item?.pathTreeRow;
+      if (row?.hasChildren !== true) return;
+      const expanded = isExpanded(row);
+      if (
+        (event.key === "ArrowRight" && !expanded) ||
+        (event.key === "ArrowLeft" && expanded)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggle(row);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  });
   const visibleItems =
     search.length > 0
       ? props.items
@@ -532,7 +563,7 @@ function PathSubpageRows(props: {
               return ancestor !== undefined && isExpanded(ancestor);
             }),
         );
-  return visibleItems.map((item) => {
+  const rows = visibleItems.map((item) => {
     const row = item.pathTreeRow;
     const expanded = row !== undefined && isExpanded(row);
     return (
@@ -562,6 +593,12 @@ function PathSubpageRows(props: {
       </PaletteItemRow>
     );
   });
+  return (
+    <>
+      <span ref={ownerMarkerRef} className="hidden" />
+      {rows}
+    </>
+  );
 }
 
 function RowStatusBadge({ children }: { readonly children: string }) {
@@ -685,36 +722,39 @@ function OpenerDeepRows(props: OpenerDeepRowsProps) {
     <>
       {items
         .filter((item) => item.pathTreeRow?.kind !== "directory")
-        .map((item) => (
-          <Fragment key={item.id}>
-            <PaletteItemRow
-              value={buildCmdkValue(item)}
-              keywords={[
-                ...item.keywords,
-                ...path.map((segment) => segment.toLowerCase()),
-              ]}
-              aria-label={deepRowName(path, item.label, item.statusBadge)}
-              disabled={item.disabled === true}
-              onSelect={() => onSelect(item)}
-            >
-              <DeepPathLabel
-                path={path}
-                label={item.pathTreeRow?.displayPath ?? item.label}
-              />
-              {item.statusBadge !== undefined ? (
-                <RowStatusBadge>{item.statusBadge}</RowStatusBadge>
+        .map((item) => {
+          const rowIdentity = `${subpage.id}:${item.id}`;
+          return (
+            <Fragment key={rowIdentity}>
+              <PaletteItemRow
+                value={`${rowIdentity} ${buildCmdkValue(item)}`}
+                keywords={[
+                  ...item.keywords,
+                  ...path.map((segment) => segment.toLowerCase()),
+                ]}
+                aria-label={deepRowName(path, item.label, item.statusBadge)}
+                disabled={item.disabled === true}
+                onSelect={() => onSelect(item)}
+              >
+                <DeepPathLabel
+                  path={path}
+                  label={item.pathTreeRow?.displayPath ?? item.label}
+                />
+                {item.statusBadge !== undefined ? (
+                  <RowStatusBadge>{item.statusBadge}</RowStatusBadge>
+                ) : null}
+              </PaletteItemRow>
+              {item.subpage !== null && path.length < OPENER_DEEP_MAX_DEPTH ? (
+                <OpenerDeepRows
+                  subpage={item.subpage}
+                  ctx={ctx}
+                  path={[...path, item.label]}
+                  onSelect={onSelect}
+                />
               ) : null}
-            </PaletteItemRow>
-            {item.subpage !== null && path.length < OPENER_DEEP_MAX_DEPTH ? (
-              <OpenerDeepRows
-                subpage={item.subpage}
-                ctx={ctx}
-                path={[...path, item.label]}
-                onSelect={onSelect}
-              />
-            ) : null}
-          </Fragment>
-        ))}
+            </Fragment>
+          );
+        })}
     </>
   );
 }

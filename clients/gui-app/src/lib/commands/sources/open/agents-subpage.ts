@@ -54,7 +54,10 @@ export function useAgentsOpenerItems(
   );
   const itemByNodeId = new Map<string, CommandItem>();
   for (const item of [...chat.existing, ...terminal.existing]) {
-    const nodeId = item.id.slice(item.id.lastIndexOf(":") + 1);
+    const prefix = item.id.startsWith("open:chats:")
+      ? "open:chats:"
+      : "open:tui:";
+    const nodeId = item.id.slice(prefix.length);
     itemByNodeId.set(nodeId, item);
   }
   const existing: CommandItem[] = [];
