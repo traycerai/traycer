@@ -600,6 +600,8 @@ import {
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
   worktreeDeleteResponseSchema,
+  worktreeListHoldersRequestSchema,
+  worktreeListHoldersResponseSchema,
   worktreeListAllForHostRequestSchema,
   worktreeListAllForHostResponseSchema,
   worktreeListAllForHostRequestSchemaV11,
@@ -1123,6 +1125,19 @@ export const worktreeDeleteUpgradeV10ToV11 = defineUpgradePath<
     stopOwners: false,
   }),
   upgradeResponse: (response) => response,
+});
+
+/**
+ * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES`),
+ * registered with `degrade: { kind: "unsupported" }`: an old host simply
+ * lacks it, and callers get per-call upgrade guidance instead of a fatal
+ * handshake mismatch. Old clients never call it.
+ */
+export const worktreeListHoldersV10 = defineRpcContract({
+  method: "worktree.listHolders",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: worktreeListHoldersRequestSchema,
+  responseSchema: worktreeListHoldersResponseSchema,
 });
 
 // Host-wide worktree surface for Settings ▸ Worktrees. `listAllForHost`
@@ -7109,6 +7124,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: worktreeDeleteV11,
           upgradeFromPreviousVersion: worktreeDeleteUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "worktree.listHolders": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeListHoldersV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
