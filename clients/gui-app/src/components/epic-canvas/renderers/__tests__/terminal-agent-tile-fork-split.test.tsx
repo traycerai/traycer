@@ -89,7 +89,7 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
             id: "agent-1",
             title: "Claude agent",
             surface: "tui",
-            active: true,
+            activity: "turn",
             hostId: "host-test",
           },
           descendants: [
@@ -97,7 +97,7 @@ vi.mock("@/hooks/agent/use-agent-stop-controls", () => ({
               id: "agent-child",
               title: "Child agent",
               surface: "gui",
-              active: true,
+              activity: "turn",
               hostId: "host-test",
             },
           ],
