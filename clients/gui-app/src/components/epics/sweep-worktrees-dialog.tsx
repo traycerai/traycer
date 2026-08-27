@@ -47,9 +47,12 @@ const SWEEP_WORKTREES_REFRESH_TIMEOUT_MS = 20_000;
  * Generic stop consequence when an in-use row has no named holder inventory
  * (production until T7's `listHolders` provider). Loud, through the same
  * disclosure surface as a working holder — never silent authorization.
+ * `worktreeIdentity` is the row's branch (or path if detached) so two
+ * unknown worktrees never render identical lines.
  */
-export const UNKNOWN_IN_USE_STOP_LABEL =
-  "Background work on this worktree will be stopped (details unavailable on this host)";
+function unknownInUseStopLabel(worktreeIdentity: string): string {
+  return `Background work in ${worktreeIdentity} will be stopped (details unavailable on this host)`;
+}
 
 interface SweepWorktreesDialogProps {
   /**
@@ -158,12 +161,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setCheckOverrides(new Map());
     setPreviousInUseByPath(new Map());
   }
-  const inUseTransition = takeInUseFalseToTrueTransition(
+  const inUseTransition = takeInUseFalseToTrueTransition({
     previousInUseByPath,
     rows,
+    checkOverrides,
     isPending,
     selectionRetargeted,
-  );
+  });
   if (inUseTransition !== null) {
     setPreviousInUseByPath(inUseTransition.nextInUseByPath);
     if (inUseTransition.droppedForcePaths.length > 0) {
@@ -397,25 +401,41 @@ function inUseByPathEqual(
   return true;
 }
 
-function takeInUseFalseToTrueTransition(
-  previousInUseByPath: ReadonlyMap<string, boolean>,
-  rows: ReadonlyArray<EpicSweepWorktreeRow>,
-  isPending: boolean,
-  selectionRetargeted: boolean,
-): {
+function takeInUseFalseToTrueTransition(input: {
+  readonly previousInUseByPath: ReadonlyMap<string, boolean>;
+  readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
+  readonly checkOverrides: ReadonlyMap<string, boolean>;
+  readonly isPending: boolean;
+  readonly selectionRetargeted: boolean;
+}): {
   readonly nextInUseByPath: ReadonlyMap<string, boolean>;
   readonly droppedForcePaths: readonly string[];
 } | null {
   // Skip in-flight empty snapshots so a later inUse false→true still
   // compares against the last proven idle value, not "path unseen".
-  if (selectionRetargeted || isPending) return null;
-  const nextInUseByPath = inUseByPathFromRows(rows);
-  if (inUseByPathEqual(previousInUseByPath, nextInUseByPath)) return null;
+  // Completed empty/error results are real: merge (absent paths keep
+  // their last proven inUse) and drop overrides for vanished paths so
+  // a reappearance is a new object, not inherited consent.
+  if (input.selectionRetargeted || input.isPending) return null;
+  const seenInUseByPath = inUseByPathFromRows(input.rows);
+  const nextInUseByPath = new Map(input.previousInUseByPath);
   const droppedForcePaths: string[] = [];
-  for (const [path, inUse] of nextInUseByPath) {
-    if (inUse && previousInUseByPath.get(path) === false) {
+  for (const path of input.previousInUseByPath.keys()) {
+    if (!seenInUseByPath.has(path) && input.checkOverrides.has(path)) {
       droppedForcePaths.push(path);
     }
+  }
+  for (const [path, inUse] of seenInUseByPath) {
+    nextInUseByPath.set(path, inUse);
+    if (inUse && input.previousInUseByPath.get(path) === false) {
+      droppedForcePaths.push(path);
+    }
+  }
+  if (
+    droppedForcePaths.length === 0 &&
+    inUseByPathEqual(input.previousInUseByPath, nextInUseByPath)
+  ) {
+    return null;
   }
   return { nextInUseByPath, droppedForcePaths };
 }
@@ -432,6 +452,10 @@ function withoutOverridePaths(
   return changed ? next : overrides;
 }
 
+function unknownInUseIdentity(row: EpicSweepWorktreeRow): string {
+  return row.entry.branch ?? row.entry.worktreePath;
+}
+
 function unknownInUseHolder(row: EpicSweepWorktreeRow): WorktreeBusyHolder {
   return {
     ownerRef: {
@@ -441,7 +465,7 @@ function unknownInUseHolder(row: EpicSweepWorktreeRow): WorktreeBusyHolder {
     },
     holdKind: "active-run-cwd",
     activity: "working",
-    label: UNKNOWN_IN_USE_STOP_LABEL,
+    label: unknownInUseStopLabel(unknownInUseIdentity(row)),
   };
 }
 
