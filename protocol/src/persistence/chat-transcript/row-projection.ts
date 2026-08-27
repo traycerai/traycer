@@ -140,6 +140,20 @@ export type TranscriptRowSource =
       readonly kind: "stopped-turn";
       readonly turnKey: string;
       readonly eventId: string;
+      /**
+       * The user record whose Stop this row reports.
+       *
+       * The row renders through `renderStoppedTurnsWithoutAssistantRecords`,
+       * which emits NOTHING unless the referenced message is present - so a
+       * hydration that served only the event reports success and draws no row,
+       * while the span still counts it hydrated and `transcriptListRows`
+       * suppresses its ordinal rather than leaving a placeholder.
+       *
+       * Never null: the row is synthesized only for a stop whose `messageId` is
+       * both set and retained (see `stoppedTurnsWithoutRecords`), which is the
+       * same condition the renderer re-checks.
+       */
+      readonly triggeringMessageId: string;
     }
   | { readonly kind: "forked-chat-link"; readonly eventId: string }
   | { readonly kind: "notification-anchor"; readonly eventId: string }
@@ -476,25 +490,91 @@ const TURN_DECORATING_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
 ]);
 
 /**
+ * The pause lifecycle, which decorates a turn but cannot be keyed on `turnId`.
+ *
+ * `buildTurnPauseAccounting` subtracts the human's wait from a turn's elapsed
+ * time by pairing a request with its resolution: the OPEN carries the turn, and
+ * the CLOSE is matched back to it by `approvalId` / `blockId` rather than by a
+ * turn of its own. These events materialize no row, so neither a range nor the
+ * inline tail can supply them any other way.
+ *
+ * Keying them on `event.turnId` like the rest would ship the open WITHOUT its
+ * close, because the host stamps a resolution with
+ * `this.activeTurn?.turnId ?? null` and a resolution landing after its turn
+ * settled therefore carries `null`. An unclosed request that is not
+ * live-pending is then dropped by the fold entirely - leaving exactly the
+ * overcounted elapsed the association exists to prevent. So a close is
+ * attributed to the turn its OPEN named.
+ */
+const PAUSE_OPEN_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+  "approval.requested",
+  "interview.requested",
+]);
+const PAUSE_CLOSE_EVENT_TYPES: ReadonlySet<ChatEvent["type"]> = new Set([
+  "approval.resolved",
+  "approval.denied",
+  "approval.abandoned",
+  "interview.resolved",
+  "interview.errored",
+]);
+
+/**
+ * What a pause request and its resolution are paired on.
+ *
+ * The two families use different correlation fields, and an event carrying
+ * neither is unpairable - `buildTurnPauseAccounting` skips those on both sides,
+ * so associating them with a row would ship bytes the fold discards.
+ */
+function pauseCorrelationKey(event: ChatEvent): string | null {
+  if (event.type.startsWith("interview.")) {
+    return event.blockId === null ? null : `interview:${event.blockId}`;
+  }
+  return event.approvalId === null ? null : `approval:${event.approvalId}`;
+}
+
+/**
  * Decorating event ids per turn, in event order.
  *
  * Keyed on `turnId` because that is what the renderer's folds key on. An event
  * with no `turnId` decorates nothing and is skipped - it is chat-level state,
- * and chat-level state rides the snapshot rather than a row.
+ * and chat-level state rides the snapshot rather than a row. The pause
+ * lifecycle is the one exception, and it is correlated rather than keyed; see
+ * {@link PAUSE_OPEN_EVENT_TYPES}.
  */
 export function decoratingEventIdsByTurn(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, readonly string[]> {
   const out = new Map<string, string[]>();
-  for (const event of events) {
-    if (event.turnId === null) continue;
-    if (!TURN_DECORATING_EVENT_TYPES.has(event.type)) continue;
-    const held = out.get(event.turnId);
+  const turnByPauseKey = new Map<string, string>();
+  const associate = (turnId: string, eventId: string): void => {
+    const held = out.get(turnId);
     if (held === undefined) {
-      out.set(event.turnId, [event.eventId]);
+      out.set(turnId, [eventId]);
+      return;
+    }
+    held.push(eventId);
+  };
+  for (const event of events) {
+    if (PAUSE_OPEN_EVENT_TYPES.has(event.type)) {
+      // The open is what carries the turn. Without one there is nothing to
+      // subtract the wait from, so an orphaned close is left unassociated.
+      const key = pauseCorrelationKey(event);
+      if (key === null || event.turnId === null) continue;
+      turnByPauseKey.set(key, event.turnId);
+      associate(event.turnId, event.eventId);
       continue;
     }
-    held.push(event.eventId);
+    if (PAUSE_CLOSE_EVENT_TYPES.has(event.type)) {
+      const key = pauseCorrelationKey(event);
+      if (key === null) continue;
+      const turnId = turnByPauseKey.get(key) ?? event.turnId;
+      if (turnId === null) continue;
+      associate(turnId, event.eventId);
+      continue;
+    }
+    if (event.turnId === null) continue;
+    if (!TURN_DECORATING_EVENT_TYPES.has(event.type)) continue;
+    associate(event.turnId, event.eventId);
   }
   return out;
 }
@@ -536,14 +616,24 @@ function stoppedTurnsWithoutRecords(input: {
   readonly retainedTurnKeys: ReadonlySet<string>;
   readonly retainedUserMessageIds: ReadonlySet<string>;
   readonly activeTurnId: string | null;
-}): readonly { readonly turnKey: string; readonly stopped: TurnStoppedInfo }[] {
-  const out: { turnKey: string; stopped: TurnStoppedInfo }[] = [];
+}): readonly {
+  readonly turnKey: string;
+  readonly stopped: TurnStoppedInfo;
+  /** `stopped.messageId`, narrowed by the guards below. */
+  readonly triggeringMessageId: string;
+}[] {
+  const out: {
+    turnKey: string;
+    stopped: TurnStoppedInfo;
+    triggeringMessageId: string;
+  }[] = [];
   for (const [turnKey, stopped] of input.stoppedByTurnKey) {
     if (turnKey === input.activeTurnId) continue;
     if (input.retainedTurnKeys.has(turnKey)) continue;
-    if (stopped.messageId === null) continue;
-    if (!input.retainedUserMessageIds.has(stopped.messageId)) continue;
-    out.push({ turnKey, stopped });
+    const triggeringMessageId = stopped.messageId;
+    if (triggeringMessageId === null) continue;
+    if (!input.retainedUserMessageIds.has(triggeringMessageId)) continue;
+    out.push({ turnKey, stopped, triggeringMessageId });
   }
   return out;
 }
@@ -622,6 +712,7 @@ export function projectTranscriptRows(
         kind: "stopped-turn",
         turnKey: entry.turnKey,
         eventId: entry.stopped.eventId,
+        triggeringMessageId: entry.triggeringMessageId,
       },
     });
   }

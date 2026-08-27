@@ -146,6 +146,47 @@ function setupEvent(fields: {
   });
 }
 
+function pauseEvent(fields: {
+  eventId: string;
+  type: ChatEvent["type"];
+  timestamp: number;
+  turnId: string | null;
+  approvalId: string | null;
+  blockId: string | null;
+}): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: fields.type,
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: fields.turnId,
+    messageId: null,
+    queueItemId: null,
+    approvalId: fields.approvalId,
+    blockId: fields.blockId,
+    severity: "info",
+    metadata: null,
+  });
+}
+
+function decoratingIdsOf(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): readonly string[] {
+  const row = projectTranscriptRows({
+    messages,
+    events,
+    activeTurnId: null,
+    chatId: "chat-1",
+  }).find((candidate) => candidate.source.kind === "assistant-slice");
+  if (row === undefined || row.source.kind !== "assistant-slice") {
+    throw new Error("no assistant row projected");
+  }
+  return row.source.decoratingEventIds;
+}
+
 function project(
   messages: readonly Message[],
   events: readonly ChatEvent[],
@@ -637,5 +678,130 @@ describe("event rows", () => {
     const user = userMessage({ messageId: "m-1", timestamp: 10 });
 
     expect(project([user], [started], null)).toEqual(["m-1"]);
+  });
+});
+
+/**
+ * A hydrated turn is only as good as the context that travels with it. These
+ * pin the two ways a row under-reported what it needs - both of which surface
+ * as a hydration that REPORTS SUCCESS and renders something poorer than the
+ * legacy line drew, which is the quietest failure this system has.
+ */
+describe("what travels with a hydrated turn", () => {
+  it("carries the pause lifecycle, including a resolution stamped with NO turn", () => {
+    // `buildTurnPauseAccounting` subtracts the human's wait by pairing a
+    // request with its resolution. The host stamps a resolution with
+    // `activeTurn?.turnId ?? null`, so one landing after its turn settled
+    // carries null - and an association keyed on `turnId` would ship the OPEN
+    // without its CLOSE. The fold then drops the unclosed request entirely and
+    // counts the whole human wait as agent execution time.
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1)],
+    });
+    const requested = pauseEvent({
+      eventId: "e-open",
+      type: "approval.requested",
+      timestamp: 2,
+      turnId: "t-1",
+      approvalId: "a-1",
+      blockId: null,
+    });
+    const resolved = pauseEvent({
+      eventId: "e-close",
+      type: "approval.resolved",
+      timestamp: 9,
+      turnId: null,
+      approvalId: "a-1",
+      blockId: null,
+    });
+
+    expect(decoratingIdsOf([turn], [requested, resolved])).toEqual([
+      "e-open",
+      "e-close",
+    ]);
+  });
+
+  it("carries an interview pause, which correlates on blockId rather than approvalId", () => {
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1)],
+    });
+    const requested = pauseEvent({
+      eventId: "e-open",
+      type: "interview.requested",
+      timestamp: 2,
+      turnId: "t-1",
+      approvalId: null,
+      blockId: "blk-1",
+    });
+    const errored = pauseEvent({
+      eventId: "e-close",
+      type: "interview.errored",
+      timestamp: 9,
+      turnId: null,
+      approvalId: null,
+      blockId: "blk-1",
+    });
+
+    expect(decoratingIdsOf([turn], [requested, errored])).toEqual([
+      "e-open",
+      "e-close",
+    ]);
+  });
+
+  it("leaves an orphaned resolution unassociated rather than guessing a turn", () => {
+    // No open means nothing to subtract the wait from. Associating it with the
+    // turn that happens to be running would attribute another turn's wait.
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [textBlock("b-1", 1)],
+    });
+    const orphan = pauseEvent({
+      eventId: "e-close",
+      type: "approval.resolved",
+      timestamp: 9,
+      turnId: null,
+      approvalId: "a-1",
+      blockId: null,
+    });
+
+    expect(decoratingIdsOf([turn], [orphan])).toEqual([]);
+  });
+
+  it("names the user record a synthesized stopped row renders from", () => {
+    // `renderStoppedTurnsWithoutAssistantRecords` emits NO model unless the
+    // referenced message is present. A row served without it hydrates
+    // "successfully" and draws nothing, while the span still counts it
+    // hydrated - so the list suppresses its ordinal instead of leaving the
+    // placeholder that would be retried.
+    const user = userMessage({ messageId: "m-1", timestamp: 10 });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 11,
+      messageId: "m-1",
+    });
+
+    const row = projectTranscriptRows({
+      messages: [user],
+      events: [stopped],
+      activeTurnId: null,
+      chatId: "chat-1",
+    }).find((candidate) => candidate.source.kind === "stopped-turn");
+    if (row === undefined || row.source.kind !== "stopped-turn") {
+      throw new Error("no stopped-turn row projected");
+    }
+
+    expect(row.source.triggeringMessageId).toBe("m-1");
   });
 });

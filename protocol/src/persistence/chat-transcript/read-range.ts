@@ -186,7 +186,15 @@ export function rowRecordIds(source: TranscriptRowSource): RowRecordIds {
         eventIds: NO_IDS,
       };
     case "stopped-turn":
-      return { messageIds: NO_IDS, eventIds: [source.eventId] };
+      // The event alone is not enough. `renderStoppedTurnsWithoutAssistantRecords`
+      // emits no model unless the triggering user record is present, so serving
+      // only the event is a hydration that reports success and draws nothing -
+      // and the span counts the row hydrated either way, so the list suppresses
+      // its ordinal instead of leaving the placeholder that would get retried.
+      return {
+        messageIds: [source.triggeringMessageId],
+        eventIds: [source.eventId],
+      };
     case "forked-chat-link":
     case "notification-anchor":
       return { messageIds: NO_IDS, eventIds: [source.eventId] };

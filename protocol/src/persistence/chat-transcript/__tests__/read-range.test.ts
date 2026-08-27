@@ -758,3 +758,60 @@ describe("assistant rows carry the events that decorate them", () => {
     ]);
   });
 });
+
+/**
+ * A row that under-reports the records it needs is the failure `rowRecordIds`
+ * exists to prevent: hydration reports success and the row renders blank, and
+ * nothing retries because the span says the ordinal is hydrated.
+ */
+describe("a row's records are enumerated, not inferred", () => {
+  it("serves the triggering user record with a synthesized stopped row", () => {
+    const user = makeUserMessage({ messageId: "m-1", timestamp: 10 });
+    const stopped = makeEvent({ eventId: "e-1", timestamp: 11 });
+    const row: TranscriptRowDescriptor = {
+      rowId: "assistant:t-1",
+      createdAt: 11,
+      source: {
+        kind: "stopped-turn",
+        turnKey: "t-1",
+        eventId: "e-1",
+        triggeringMessageId: "m-1",
+      },
+    };
+
+    const slice = sliceTranscriptRange(
+      [row],
+      buildTranscriptRecordLookup([user], [stopped]),
+      { fromOrdinal: 0, toOrdinal: 0, maxBytes: TRANSCRIPT_RANGE_MAX_BYTES },
+    );
+
+    expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.events.map((event) => event.eventId)).toEqual(["e-1"]);
+    expect(slice.messages.map((message) => message.messageId)).toEqual(["m-1"]);
+  });
+
+  it("still serves the row when the triggering record was branched away", () => {
+    // A row naming a record the authority no longer holds is served without it
+    // rather than dropped - a hole in the ids would shift every later ordinal.
+    const stopped = makeEvent({ eventId: "e-1", timestamp: 11 });
+    const row: TranscriptRowDescriptor = {
+      rowId: "assistant:t-1",
+      createdAt: 11,
+      source: {
+        kind: "stopped-turn",
+        turnKey: "t-1",
+        eventId: "e-1",
+        triggeringMessageId: "m-gone",
+      },
+    };
+
+    const slice = sliceTranscriptRange(
+      [row],
+      buildTranscriptRecordLookup([], [stopped]),
+      { fromOrdinal: 0, toOrdinal: 0, maxBytes: TRANSCRIPT_RANGE_MAX_BYTES },
+    );
+
+    expect(slice.rowIds).toEqual(["assistant:t-1"]);
+    expect(slice.messages).toEqual([]);
+  });
+});
