@@ -455,7 +455,10 @@ export async function importTaggedProviderSchemas(
     );
 
     // Link zod from the monorepo so the tagged module can import it.
-    const protocolRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const protocolRoot = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      "..",
+    );
     const traycerRoot = findGitRoot(protocolRoot);
     const zodCandidates = [
       join(traycerRoot, "node_modules", "zod"),
@@ -571,9 +574,7 @@ export async function buildHostV115MutationV20Fixtures(
     );
   }
   if (listV20ProviderIds.includes("amp")) {
-    throw new Error(
-      `host-v1.1.5 providerIdSchemaV20 unexpectedly includes amp`,
-    );
+    throw new Error(`host-v1.1.5 providerIdSchemaV20 unexpectedly includes amp`);
   }
 
   const mutationMethods =
@@ -629,8 +630,7 @@ export async function buildHostV115MutationV20Fixtures(
       sourceSha256,
       registryPath: HOST_V115_MUTATION_V20_REGISTRY_PATH,
       registrySha256,
-      derivedBy:
-        "protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts",
+      derivedBy: "protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts",
       regenerateCommand:
         "bun run protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts > protocol/src/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20.ts",
     },

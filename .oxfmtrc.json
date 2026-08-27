@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "semi": true,
+  "tabWidth": 2,
+  "trailingComma": "all",
+  "ignorePatterns": [
+    "clients/desktop/src/electron-main/browser-view/browser-annotation-overlay-guest.generated.ts",
+    "protocol/**/__fixtures__/**",
+    "protocol/**/snapshot-*.ts"
+  ]
+}
