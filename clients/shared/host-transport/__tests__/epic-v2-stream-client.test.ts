@@ -388,5 +388,19 @@ describe("EpicV2StreamClient", () => {
     h.client.close();
     expect(h.session.sent).toEqual([]);
     expect(h.session.close).toHaveBeenCalledTimes(1);
+
+    // The RECEIVE half of the same contract: the session can still deliver a
+    // frame already in flight after `close()`, and the store callbacks must
+    // not hear it.
+    h.session.emitFrame(
+      {
+        kind: "epicMetaChanged",
+        epicMeta: { title: "Late", updatedAt: 9 },
+        streamEpoch: STREAM_EPOCH,
+        hasBinaryPayload: false,
+      },
+      null,
+    );
+    expect(h.callbacks.onEpicMetaChanged).not.toHaveBeenCalled();
   });
 });

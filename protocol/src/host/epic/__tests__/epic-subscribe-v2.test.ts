@@ -577,6 +577,12 @@ describe("epic.subscribe@2 peer combinations", () => {
     ).toBe(1);
   });
 
+  // `newClientManifest` advertises every installed major, while the
+  // PRODUCTION client advertises `[1]` (`CLIENT_SERVED_STREAM_MAJORS` in
+  // `clients/shared`) until `EpicV2StreamClient` is wired into the session
+  // factory - so this asserts the negotiation machinery, not a pairing that
+  // occurs today. Removing that restriction is the wiring change, not a
+  // conclusion to draw from this test.
   it("new client × new host selects @2", () => {
     const selected = selectConnectionManifestForPeer(
       hostStreamRpcRegistry,

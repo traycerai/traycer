@@ -48,13 +48,10 @@
  * how "row wins" is detected. See {@link resolvePendingChain}.
  */
 import type {
-  ArtifactProjection,
   ArtifactsSlice,
-  ChatProjection,
   ChatsSlice,
   EpicHeader,
   TerminalAgentsSlice,
-  TuiAgentProjection,
 } from "./types";
 
 /**
@@ -286,20 +283,33 @@ function nodesWithMutations(
   return ids;
 }
 
+/** The row fields the overlay patches, shared by all three slices. */
+interface OverlayPatchableRow {
+  readonly title: string;
+  readonly parentId: string | null;
+}
+
+interface OverlayPatchableSlice<Row extends OverlayPatchableRow> {
+  readonly byId: Readonly<Record<string, Row>>;
+  readonly allIds: readonly string[];
+}
+
 /**
- * `artifacts` with pending renames and reparents applied.
+ * One applier for all three slices - artifacts, chats and terminal agents
+ * patch the same two fields under the same chain rules, and three
+ * hand-copied bodies is how the rules drift apart.
  *
  * Returns the input BY REFERENCE when nothing is pending, or when every
  * pending mutation has been superseded by the authoritative row - so an epic
  * with no mutation in flight keeps the exact slice identity the projector
  * produced and costs no downstream re-render.
  */
-export function applyPendingOverlayToArtifacts(
-  artifacts: ArtifactsSlice,
+function applyPendingOverlayToSlice<Row extends OverlayPatchableRow>(
+  slice: OverlayPatchableSlice<Row>,
   overlay: PendingMetadataOverlay,
-): ArtifactsSlice {
-  if (overlay.size === 0) return artifacts;
-  let byId: Record<string, ArtifactProjection> | null = null;
+): OverlayPatchableSlice<Row> {
+  if (overlay.size === 0) return slice;
+  let byId: Record<string, Row> | null = null;
   const touched = new Set<string>([
     ...nodesWithMutations(overlay, "rename"),
     ...nodesWithMutations(overlay, "reparent"),
@@ -309,8 +319,8 @@ export function applyPendingOverlayToArtifacts(
     // `Record`, so the index signature types the read as always-present and
     // the null check lints as impossible. Same idiom as
     // `pending-chat-creations.ts`.
-    if (!Object.hasOwn(artifacts.byId, id)) continue;
-    const row = artifacts.byId[id];
+    if (!Object.hasOwn(slice.byId, id)) continue;
+    const row = slice.byId[id];
     const title = resolvePendingChain(
       row.title,
       chainFor(overlay, "rename", id),
@@ -320,49 +330,33 @@ export function applyPendingOverlayToArtifacts(
       chainFor(overlay, "reparent", id),
     );
     if (!title.changed && !parent.changed) continue;
-    byId ??= { ...artifacts.byId };
-    byId[id] = {
-      ...row,
+    byId ??= { ...slice.byId };
+    // `Object.assign` rather than an object spread: spreading a generic
+    // `Row` and overriding two properties types as a fresh object literal,
+    // not as `Row`, while the assign form's intersection stays assignable.
+    byId[id] = Object.assign({}, row, {
       title: title.changed && title.value !== null ? title.value : row.title,
       parentId: parent.changed ? parent.value : row.parentId,
-    };
+    });
   }
-  if (byId === null) return artifacts;
-  return { byId, allIds: artifacts.allIds };
+  if (byId === null) return slice;
+  return { byId, allIds: slice.allIds };
 }
 
-/** `chats` with pending renames and reparents applied. See the artifact twin. */
+/** `artifacts` with pending renames and reparents applied. */
+export function applyPendingOverlayToArtifacts(
+  artifacts: ArtifactsSlice,
+  overlay: PendingMetadataOverlay,
+): ArtifactsSlice {
+  return applyPendingOverlayToSlice(artifacts, overlay);
+}
+
+/** `chats` with pending renames and reparents applied. */
 export function applyPendingOverlayToChats(
   chats: ChatsSlice,
   overlay: PendingMetadataOverlay,
 ): ChatsSlice {
-  if (overlay.size === 0) return chats;
-  let byId: Record<string, ChatProjection> | null = null;
-  const touched = new Set<string>([
-    ...nodesWithMutations(overlay, "rename"),
-    ...nodesWithMutations(overlay, "reparent"),
-  ]);
-  for (const id of touched) {
-    if (!Object.hasOwn(chats.byId, id)) continue;
-    const row = chats.byId[id];
-    const title = resolvePendingChain(
-      row.title,
-      chainFor(overlay, "rename", id),
-    );
-    const parent = resolvePendingChain(
-      row.parentId,
-      chainFor(overlay, "reparent", id),
-    );
-    if (!title.changed && !parent.changed) continue;
-    byId ??= { ...chats.byId };
-    byId[id] = {
-      ...row,
-      title: title.changed && title.value !== null ? title.value : row.title,
-      parentId: parent.changed ? parent.value : row.parentId,
-    };
-  }
-  if (byId === null) return chats;
-  return { byId, allIds: chats.allIds };
+  return applyPendingOverlayToSlice(chats, overlay);
 }
 
 /** `tuiAgents` with pending renames and reparents applied. */
@@ -370,33 +364,7 @@ export function applyPendingOverlayToTuiAgents(
   tuiAgents: TerminalAgentsSlice,
   overlay: PendingMetadataOverlay,
 ): TerminalAgentsSlice {
-  if (overlay.size === 0) return tuiAgents;
-  let byId: Record<string, TuiAgentProjection> | null = null;
-  const touched = new Set<string>([
-    ...nodesWithMutations(overlay, "rename"),
-    ...nodesWithMutations(overlay, "reparent"),
-  ]);
-  for (const id of touched) {
-    if (!Object.hasOwn(tuiAgents.byId, id)) continue;
-    const row = tuiAgents.byId[id];
-    const title = resolvePendingChain(
-      row.title,
-      chainFor(overlay, "rename", id),
-    );
-    const parent = resolvePendingChain(
-      row.parentId,
-      chainFor(overlay, "reparent", id),
-    );
-    if (!title.changed && !parent.changed) continue;
-    byId ??= { ...tuiAgents.byId };
-    byId[id] = {
-      ...row,
-      title: title.changed && title.value !== null ? title.value : row.title,
-      parentId: parent.changed ? parent.value : row.parentId,
-    };
-  }
-  if (byId === null) return tuiAgents;
-  return { byId, allIds: tuiAgents.allIds };
+  return applyPendingOverlayToSlice(tuiAgents, overlay);
 }
 
 /** The epic header with a pending title change applied. */
