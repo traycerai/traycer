@@ -325,6 +325,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
               activeTerminalAgents: 0,
               busyTerminals: 2,
             },
+            updateOperation: null,
+            updateTransaction: null,
           };
         },
       },
