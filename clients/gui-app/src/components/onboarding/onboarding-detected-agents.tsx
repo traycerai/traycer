@@ -272,6 +272,29 @@ function SignInToEnableButton(props: {
   // it at the next attempt, so the message clears itself on retry instead of
   // needing an effect to.
   const declined = startLogin.isSuccess && !startLogin.data.started;
+  // The counterpart to `declined`, for a login that STARTED and then did not
+  // produce an authenticated account: a cancelled browser login, a settled
+  // "not authenticated", or a re-poll budget spent without a verdict. All three
+  // used to end the attempt by simply stopping the spinner - the row kept its
+  // previous appearance and the button re-armed, so the one thing the user
+  // needed to know (this provider is still off) was left to be inferred from a
+  // switch that had not moved. On a screen whose button promises "sign in TO
+  // ENABLE", the enable silently not happening is the outcome that most needs
+  // saying.
+  //
+  // DERIVED, for the same reason `declined` is: `awaitLogin.data` already holds
+  // the last completion, so there is no second copy of this state to keep in
+  // step and nothing to reset on the next attempt. Gated on `!isPending` so a
+  // fresh press hides the previous verdict while the new attempt runs -
+  // `startLogin.mutate` does not touch `awaitLogin`, so its `data` would
+  // otherwise linger across the retry it is no longer about.
+  //
+  // Mutually exclusive with `declined` by construction: a login that never
+  // started never reaches `awaitLogin`, so only one of the two can be true.
+  const notAuthenticated =
+    !isPending &&
+    awaitLogin.isSuccess &&
+    awaitLogin.data.state?.auth.status !== "authenticated";
   const onSignIn = (providerId: ProviderId): void => {
     // Start, then await the honest completion edge, then ENABLE.
     //
@@ -376,6 +399,11 @@ function SignInToEnableButton(props: {
       {declined ? (
         <span className="text-ui-xs text-destructive" role="alert">
           Sign-in did not start. Try again when ready.
+        </span>
+      ) : null}
+      {notAuthenticated ? (
+        <span className="text-ui-xs text-destructive" role="alert">
+          Sign-in did not complete. This provider is still off.
         </span>
       ) : null}
       <Button

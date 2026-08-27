@@ -1042,10 +1042,13 @@ function ProviderDetail({
   // Whether the detail pane below the header is inert - the Account and
   // Profiles controls included.
   //
-  // Keyed on the MODE, not on effective `enabled`, and that distinction is the
-  // whole point. `enabled: false` now has exactly one cause - somebody turned
-  // this provider off - so the pane is inert precisely when it is off, and
-  // turning it back on is the one gesture that revives it.
+  // Keyed on the effective `enabled` flag, which is now the only thing it
+  // could be keyed on: `enabled: false` has exactly one cause - somebody
+  // turned this provider off - so the pane is inert precisely when it is off,
+  // and turning it back on is the one gesture that revives it. Under the
+  // retired tri-state that was not true (an auto-undetected provider read
+  // disabled without anyone having chosen it), which is why this gate used to
+  // read the sticky mode instead.
   const detailPaneInert = !state.enabled;
   const canAddProfile = providerCanStartProfileOauth(
     state,

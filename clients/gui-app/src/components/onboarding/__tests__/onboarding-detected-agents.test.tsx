@@ -112,6 +112,13 @@ const fixtures = vi.hoisted(() => {
     startLoginSuccess: false,
     startLoginData: undefined as StartLoginData | undefined,
     awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+    // Modelled for the same reason `startLogin`'s are: the component derives
+    // its "did not authenticate" row message from the mutation RESULT rather
+    // than from local state, so a mock that carried only `mutate` would leave
+    // that message permanently unrenderable - and the test asserting it
+    // permanently vacuous.
+    awaitLoginSuccess: false,
+    awaitLoginData: undefined as AwaitLoginCompletion | undefined,
     setEnabledMutate: vi.fn<SetEnabledMutate>(),
     setEnabledPending: false,
     toastError: vi.fn(),
@@ -147,6 +154,8 @@ vi.mock("@/hooks/providers/use-providers-await-login-mutation", () => ({
   useHostScopedProvidersAwaitLogin: () => ({
     mutate: fixtures.awaitLoginMutate,
     isPending: false,
+    isSuccess: fixtures.awaitLoginSuccess,
+    data: fixtures.awaitLoginData,
   }),
 }));
 
@@ -203,6 +212,8 @@ function resetFixtures(): void {
   fixtures.startLoginSuccess = false;
   fixtures.startLoginData = undefined;
   fixtures.awaitLoginMutate.mockReset();
+  fixtures.awaitLoginSuccess = false;
+  fixtures.awaitLoginData = undefined;
   fixtures.setEnabledMutate.mockReset();
   fixtures.setEnabledPending = false;
   fixtures.toastError.mockReset();
@@ -554,6 +565,88 @@ describe("SignInToEnableButton unsettled auth verdict", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The attempt that ends without an account used to end SILENTLY: the spinner
+// stopped, the switch had not moved, and nothing said the enable this button
+// promises had not happened.
+describe("SignInToEnableButton unauthenticated outcome", () => {
+  afterEach(resetFixtures);
+
+  const FAILED_OUTCOMES: readonly {
+    readonly label: string;
+    readonly completion: AwaitLoginCompletion;
+  }[] = [
+    {
+      label: "a cancelled login the host has no outcome for",
+      completion: { state: null },
+    },
+    {
+      label: "a settled unauthenticated verdict",
+      completion: {
+        state: { auth: { status: "unauthenticated" }, authPending: false },
+      },
+    },
+  ];
+
+  /**
+   * Settle the attempt and re-render.
+   *
+   * The mock has to advance the way the real hook does - `isSuccess`/`data`
+   * carry the completion once the mutation resolves, and the message is DERIVED
+   * from them. The explicit re-render is not ceremony: `handleCompletion` ends
+   * these paths with `setSettling(false)` while `settling` is ALREADY false, so
+   * React bails out and nothing re-reads the fixtures on its own.
+   */
+  function settleWith(
+    view: RenderResult,
+    completion: AwaitLoginCompletion,
+  ): void {
+    act(() => {
+      latestAwaitLoginOptions().onSuccess(completion);
+    });
+    fixtures.awaitLoginSuccess = true;
+    fixtures.awaitLoginData = completion;
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+  }
+
+  for (const { label, completion } of FAILED_OUTCOMES) {
+    it(`states the outcome in the row after ${label}`, () => {
+      settleWith(startSignInAttempt(false), completion);
+
+      expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+      const alert = screen.getByRole("alert");
+      expect(alert.textContent).toContain("did not complete");
+      expect(alert.textContent).toContain("still off");
+    });
+  }
+
+  it("says nothing when the sign-in DID authenticate", () => {
+    settleWith(startSignInAttempt(false), {
+      state: { auth: { status: "authenticated" }, authPending: false },
+    });
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("hides the previous verdict while a fresh attempt is running", () => {
+    // `startLogin.mutate` does not touch `awaitLogin`, so its `data` survives
+    // into the retry it is no longer about. Without the pending gate the row
+    // would accuse the attempt that is currently spinning.
+    const view = startSignInAttempt(false);
+    settleWith(view, { state: null });
+    expect(screen.getByRole("alert").textContent).toContain("did not complete");
+
+    fixtures.startLoginPending = true;
+    act(() => {
+      view.rerender(<OnboardingDetectedAgents />);
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

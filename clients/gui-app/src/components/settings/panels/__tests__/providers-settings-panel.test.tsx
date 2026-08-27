@@ -2536,8 +2536,15 @@ describe("<ProvidersSettingsPanel />", () => {
     // Default-selected provider is whichever ORDERED_PROVIDERS ranks
     // first (opencode, ahead of traycer) - the row identity isn't the
     // point of this test, the absent `mode` is.
+    //
+    // `enabled: false` is asserted alongside it because the absence of `mode`
+    // is only half the contract: with the tri-state gone, this boolean is the
+    // ENTIRE payload's worth of intent, so a switch that sent the unflipped
+    // value would satisfy every other assertion here. The row starts enabled
+    // (see the two-provider fixture above), so the click must request off.
     expect(variables).toMatchObject({
       providerId: "opencode",
+      enabled: false,
       profileAction: null,
     });
   });
