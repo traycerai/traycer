@@ -493,3 +493,84 @@ describe("host-start parent adoption", () => {
     );
   });
 });
+
+describe("consumeHostStartAdoption — the nonce-less path applies the age bound", () => {
+  // Codex #1. The refutation first, because it changes what the fix is: the
+  // reported cause ("a proof is not removed when validation returns false
+  // after publisher death") does NOT hold — the labelled path's `!parentLive`
+  // branch calls `abandon()`, which removes the claimed proof.
+  //
+  // The real hole is narrower and is here: `HOST_START_ADOPTION_MAX_AGE_MS` is
+  // applied on the claimed-candidate check and in `readHostStartAdoptionNonce`,
+  // and was NOT applied on the nonce-less refusal path. A publisher that dies
+  // between publish and consume leaves a proof behind; the labelled path erases
+  // an expired one on its next attempt, but a bare `host start` never takes
+  // that path — so a standalone crash-loop is refused on every iteration by a
+  // grant nobody can still use.
+  it("an EXPIRED proof no longer refuses a standalone start", async () => {
+    const hostHomeDir = await freshHome();
+    const serviceLabel = "ai.traycer.host.agent";
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-expiry-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          serviceLabel,
+        );
+      },
+    );
+    const path = join(hostHomeDir, ".host-start-adoption.json");
+    // Age the REAL proof rather than hand-rolling one, so every other field
+    // stays exactly what the publisher wrote.
+    const proof = JSON.parse(await readFile(path, "utf8")) as {
+      issuedAtMs: number;
+    };
+    await writeFile(
+      path,
+      JSON.stringify({ ...proof, issuedAtMs: Date.now() - 120_000 }),
+      "utf8",
+    );
+
+    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
+      kind: "absent",
+    });
+  });
+
+  it("a FRESH proof still refuses a standalone start — the fail-closed arm is intact", async () => {
+    // The paired direction. The age bound must not become a way to bypass the
+    // grant: an outstanding, still-valid proof is reserved for the
+    // service-labelled child, and letting a bare start through would recreate
+    // the parent-lock/child-lock cycle the proof exists to avoid.
+    const hostHomeDir = await freshHome();
+    homeRef.current = hostHomeDir;
+    await withUpdateContender(
+      {
+        hostHomeDir,
+        reason: "host-start-adoption-fresh-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "recovery-maintenance",
+      },
+      async (capability) => {
+        await publishHostStartAdoption(
+          capability,
+          options(hostHomeDir),
+          "ai.traycer.host.agent",
+        );
+      },
+    );
+
+    expect(await consumeHostStartAdoption("production", null, null)).toEqual({
+      kind: "refused",
+      reason: "host-start adoption is reserved for a service-labelled launch",
+    });
+  });
+});

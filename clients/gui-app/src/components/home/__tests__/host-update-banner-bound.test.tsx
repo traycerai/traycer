@@ -1042,4 +1042,179 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     // Never the attempt-driven copy - the unbound arm has no attempt to read.
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
   });
+
+  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
+  //
+  // The projector's record arm always returns `kind: "unknown"` carrying
+  // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`
+  // outright — so every record-backed view was suppressed here and the landing
+  // page went blank while a local update sat half-finished behind an
+  // unreachable host. These drive the REAL leg: `host.status` fails (the host
+  // is not answering) and Desktop's controller status carries the durable
+  // facts, exactly as production composes them.
+  describe("host-down window — retained phase on the landing banner", () => {
+    const HOST_DOWN_STATUS: HostControllerStatus = {
+      ...UP_TO_DATE_STATUS,
+      reachable: false,
+      localAttempt: {
+        attemptId: "attempt-down-1",
+        generation: 1,
+        sequence: 4,
+        targetVersion: "2.1.0",
+        phase: "preparing",
+        continuation: null,
+        updatedAt: "2026-05-15T00:00:00Z",
+      },
+    };
+
+    function bindUnreachableHost(): void {
+      bindLocalHost({
+        "host.status": () => {
+          throw new Error("host is not answering");
+        },
+      });
+    }
+
+    function renderWithControllerStatus(
+      status: HostControllerStatus,
+    ): QueryClient {
+      return renderBanner(
+        createFakeRunnerHost({
+          hostManagement: {
+            ...makeManagement(),
+            getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+          },
+        }),
+      );
+    }
+
+    it("renders the retained phase when the host is unreachable and the controller has nothing concrete", async () => {
+      bindUnreachableHost();
+      renderWithControllerStatus(HOST_DOWN_STATUS);
+      // `Last seen: …` — the sentence `primarySentence` has always been able to
+      // build and this surface could never reach.
+      await waitFor(async () => {
+        expect(await findPhaseText()).toBe(
+          "Last seen: Preparing update to v2.1.0",
+        );
+      });
+      // Qualified INLINE, so no second marker: the assertion that this is the
+      // retained-phase rendering and not a live one.
+      expect(screen.queryByTestId("host-update-banner-qualified")).toBeNull();
+      // A remembered phase holds no lifecycle affordance.
+      expect(
+        screen.queryByTestId("host-update-banner-operation-retry"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("host-update-banner-force-restart"),
+      ).toBeNull();
+      expect(
+        (await screen.findByTestId("host-update-banner")).getAttribute(
+          "aria-live",
+        ),
+      ).toBe("polite");
+    });
+
+    it("does NOT displace a concrete controller fact — a ready stage still wins", async () => {
+      bindUnreachableHost();
+      renderWithControllerStatus({
+        ...HOST_DOWN_STATUS,
+        latestVersion: "1.4.2",
+        stagedVersion: "1.4.2",
+        updateReady: true,
+      });
+      await screen.findByRole("status", {
+        name: /Traycer host update available: 1\.4\.2/i,
+      });
+      expect(screen.queryByTestId("host-update-banner-phase")).toBeNull();
+    });
+
+    it("a BARE unknown still loses — no record, nothing rendered", async () => {
+      bindUnreachableHost();
+      // Same unreachable host, but no durable attempt: `lastKnownKind` is null
+      // and there is nothing to say. This is the arm the predicate must keep
+      // rejecting, and it is what stops the widening from turning every
+      // unreadable poll into an "Update state unknown" banner.
+      renderWithControllerStatus({ ...HOST_DOWN_STATUS, localAttempt: null });
+      await waitFor(() => {
+        expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      });
+    });
+  });
+
+  // 10. Operation-lane Retry routes on intent like every other retry here.
+  describe("operation Retry routing", () => {
+    function failedAttemptWithControllerStatus(status: HostControllerStatus): {
+      readonly applyStaged: ReturnType<typeof vi.fn>;
+      readonly activateInstalled: ReturnType<typeof vi.fn>;
+    } {
+      const applyStaged = vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { appliedVersion: "2.1.0", runningActivated: true },
+        }),
+      );
+      const activateInstalled = vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { activated: true },
+        }),
+      );
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({ phase: "downloading", liveness: "interrupted" }),
+          ),
+      });
+      renderBanner(
+        createFakeRunnerHost({
+          hostManagement: {
+            ...makeManagement(),
+            getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+            applyStaged,
+            activateInstalled,
+          },
+        }),
+      );
+      return { applyStaged, activateInstalled };
+    }
+
+    it("retries a failed attempt by ACTIVATING when the machine is in activation debt", async () => {
+      const { applyStaged, activateInstalled } =
+        failedAttemptWithControllerStatus({
+          ...UP_TO_DATE_STATUS,
+          updateReady: false,
+          activation: "pendingActivation",
+        });
+      await findPhaseText();
+      fireEvent.click(
+        await screen.findByTestId("host-update-banner-operation-retry"),
+      );
+      await waitFor(() => {
+        expect(activateInstalled).toHaveBeenCalledTimes(1);
+      });
+      // The whole point: re-applying here asks the host for a stage the failed
+      // attempt already consumed.
+      expect(applyStaged).not.toHaveBeenCalled();
+    });
+
+    it("still retries by APPLYING when a stage is genuinely ready (update-over-debt priority)", async () => {
+      const { applyStaged, activateInstalled } =
+        failedAttemptWithControllerStatus({
+          ...UP_TO_DATE_STATUS,
+          latestVersion: "2.1.0",
+          stagedVersion: "2.1.0",
+          updateReady: true,
+          activation: "pendingActivation",
+        });
+      await findPhaseText();
+      fireEvent.click(
+        await screen.findByTestId("host-update-banner-operation-retry"),
+      );
+      await waitFor(() => {
+        expect(applyStaged).toHaveBeenCalledTimes(1);
+      });
+      expect(activateInstalled).not.toHaveBeenCalled();
+    });
+  });
 });

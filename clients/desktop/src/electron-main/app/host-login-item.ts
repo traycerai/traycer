@@ -954,9 +954,9 @@ async function unregisterHostLoginItemUnserialized(
   revalidateBeforeMutation: (() => Promise<boolean>) | undefined,
 ): Promise<boolean> {
   const priorRegistration = await snapshotLoginItemRegistration();
-  if (!(await canBeginDestructiveRegistration(priorRegistration))) {
+  if (!(await canBeginRegistrationRemoval(priorRegistration))) {
     log.warn(
-      "[host-login-item] unregister parked: prior registration cannot be restored exactly",
+      "[host-login-item] unregister parked: prior registration is not in a removable state",
     );
     return false;
   }
@@ -1062,6 +1062,43 @@ async function canBeginDestructiveRegistration(
     // A readable manifest - present OR absent - may enter. `present` is the
     // work; `unreadable` is the only disqualifier, because we cannot retire
     // what we cannot see and must not register a second label beside it.
+    snapshot.legacyManifest !== "unreadable"
+  );
+}
+
+/**
+ * The entry guard for REMOVAL, which is a different question from the one
+ * {@link canBeginDestructiveRegistration} answers.
+ *
+ * Registration is destructive-then-restorative: it boots out and re-registers,
+ * so it must refuse any prior state it could not put back. `requires-approval`
+ * is disqualifying there for exactly that reason — we have no primitive that
+ * recreates a BTM approval state — and that refusal stays untouched.
+ *
+ * Removal has nothing to restore. `requires-approval` means REGISTERED with the
+ * user's toggle off (`pollRegisterStatusUntilSettled` says so in as many
+ * words: "both terminal: register succeeded; the only difference is whether the
+ * user has the toggle on"). Sharing the registration guard here meant an
+ * explicit deregister parked on precisely the state it exists to clear, and a
+ * user who had toggled the login item off could never remove it — the
+ * registration outlived the uninstall.
+ *
+ * Every other refusal is preserved deliberately: `not-found` and
+ * `not-supported` mean there is no registration to act on or no API to act
+ * with, and an `unreadable` legacy manifest still disqualifies because we
+ * cannot retire what we cannot see.
+ */
+async function canBeginRegistrationRemoval(
+  snapshot: LoginItemRegistrationSnapshot,
+): Promise<boolean> {
+  // `null` (no readable status) stays refused, exactly as before.
+  const removable = (status: HostLoginItemStatus | null): boolean =>
+    status === "not-registered" ||
+    status === "enabled" ||
+    status === "requires-approval";
+  return (
+    removable(snapshot.primary) &&
+    removable(snapshot.legacy) &&
     snapshot.legacyManifest !== "unreadable"
   );
 }

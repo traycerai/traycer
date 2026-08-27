@@ -168,6 +168,19 @@ describe("tryAcquireReadyRemoteSession", () => {
     // exactly the "still held" branch `closeSupersededIdentities` documents.
     expect(session.closeCalls).toBe(0);
 
+    // BEFORE the give-back, and this is the window the balance assertions
+    // below cannot see. The entry is marked but deliberately still OPEN,
+    // because the owner holds it - so nothing had closed the session and the
+    // borrow's only guard, `released`, was still false. It kept polling over
+    // an identity the sign-out retired, under the retired credential, for as
+    // long as the owner held on. The handle must refuse on its own.
+    await expect(
+      borrow.sendUnary("host.status" as never, {} as never, null, undefined),
+    ).rejects.toThrow(/superseded/);
+    expect(session.sendUnary).not.toHaveBeenCalled();
+    // Refusing does not disturb the accounting the rest of this test asserts.
+    expect(remoteSessionBorrowCountForTest(identity)).toBe(1);
+
     expect(() => borrow.release()).not.toThrow();
     expect(() => borrow.release()).not.toThrow(); // idempotent give-back
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
@@ -188,6 +201,29 @@ describe("tryAcquireReadyRemoteSession", () => {
     const successor = acquireRemoteSession(identity, () => successorSession);
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     successor.close();
+  });
+
+  // The positive control for (4)'s supersession refusal. Without it, a
+  // `sendUnary` that rejected unconditionally would pass that assertion and
+  // silently break every real status poll.
+  it("(4b) an UNsuperseded borrow still dispatches to the underlying session", async () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    session.ready = true;
+    const owner = acquireRemoteSession(identity, () => session);
+
+    const borrow = tryAcquireReadyRemoteSession(identity.hostId);
+    if (borrow === null) throw new Error("expected a borrow");
+    await borrow.sendUnary(
+      "host.status" as never,
+      {} as never,
+      null,
+      undefined,
+    );
+    expect(session.sendUnary).toHaveBeenCalledTimes(1);
+
+    borrow.release();
+    owner.close();
   });
 
   it("a borrowed handle exposes no close() and no subscribe() - a borrower cannot tear down or open streams on a session it does not own", () => {

@@ -246,8 +246,10 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
   );
   useLandingCompletionCollapse(localUpdate.view);
   const showOperation =
-    operationSupersedesControllerStatus(localUpdate.view) &&
-    !isLandingDismissed(localUpdate.view, dismissedAttemptIds);
+    operationSupersedesControllerStatus(
+      localUpdate.view,
+      showUpdate || showDebt,
+    ) && !isLandingDismissed(localUpdate.view, dismissedAttemptIds);
   const shouldShow = useMemo(
     () =>
       showOperation ||
@@ -380,11 +382,32 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
             setForceRestartRequested(true);
           }}
           onOperationRetry={() => {
-            // The same action the controller lane's Retry takes. A rich failed
-            // attempt is a failed update, and applying the staged bytes is how
-            // this client asks for another one; if nothing is staged the
-            // mutation says so through the terminal-outcome branch, which is a
-            // truthful answer rather than a dead button.
+            // The same action the controller lane takes, ROUTED THE SAME WAY —
+            // which is the part that was missing. Every other retry in this
+            // file picks its mutation from the intent (`onTerminalRetry` off
+            // `terminalOutcome.intent`, `onAction` off `showUpdate`,
+            // `resolveForceAction` off `busy`); this one hard-coded apply.
+            //
+            // A `failed` view does not carry the phase it failed in — the
+            // projection's `failed` arms set `lastKnownKind: null` — so the
+            // attempt itself cannot say whether bytes still need applying or
+            // only activating. The controller lane can, and already does: an
+            // attempt that got as far as installing leaves the machine in
+            // activation debt, and re-running `applyStaged` there asks the host
+            // to apply a stage the failed attempt already consumed.
+            //
+            // `showDebt` is defined as `!updateReady && <debt>`, so this keeps
+            // the update-over-debt priority intact: a genuinely ready stage
+            // still routes to apply.
+            //
+            // The fallback is unchanged and still the reason this is safe: if
+            // nothing is staged the mutation says so through the
+            // terminal-outcome branch, which is a truthful answer rather than a
+            // dead button.
+            if (showDebt) {
+              runActivate(false);
+              return;
+            }
             runApply(false);
           }}
           onDiagnostics={() => {
@@ -427,17 +450,44 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * Whether the durable attempt has something to say that outranks the two-lane
  * controller status.
  *
- * `idle` and `unknown` are the two that do NOT, for opposite reasons: `idle`
- * means the host looked and there is no attempt, so the controller's "a stage
- * is ready" / "activation debt" answer is the more useful one; `unknown` means
- * we could not establish anything, and an unknown must never displace a
- * concrete local fact the controller does know.
+ * `idle` does NOT: the host looked and there is no attempt, so the controller's
+ * "a stage is ready" / "activation debt" answer is the more useful one.
  *
- * Everything else wins — including `unavailable`, whose whole point is to stay
- * visible rather than read as a quiet host.
+ * Everything concrete wins — including `unavailable`, whose whole point is to
+ * stay visible rather than read as a quiet host.
+ *
+ * `unknown` SPLITS, and used to be rejected outright.
+ *
+ * A BARE unknown (`lastKnownKind === null`) still loses: we could not establish
+ * anything, and an unknown must never displace a concrete local fact the
+ * controller does know.
+ *
+ * A RETAINED-PHASE unknown does not lose, because it is not the absence of
+ * knowledge — and rejecting it made the host-down window (Ticket 07 §5.2.7)
+ * unrenderable on this surface. The projection's record arm ALWAYS returns
+ * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
+ * "an attempt exists and the host is unreachable", chosen so the view holds no
+ * lifecycle gate and earns no active poll. The blanket `kind !== "unknown"`
+ * test therefore suppressed 100% of record-backed views, and the landing banner
+ * showed nothing at all while a local update sat half-finished behind a host
+ * that was not answering. The two modules downstream of this one were already
+ * built for the case — `primarySentence` has a "Last seen: …" arm and
+ * `showsProgressBar` an `unknown`-with-progress arm — and neither could ever be
+ * reached from here.
+ *
+ * It still may not DISPLACE a concrete controller fact, which is the original
+ * rule kept verbatim: a ready stage or activation debt is something the user
+ * can act on now, and it outranks a phase we are only remembering.
  */
-function operationSupersedesControllerStatus(view: FleetUpdateView): boolean {
-  return view.kind !== "idle" && view.kind !== "unknown";
+function operationSupersedesControllerStatus(
+  view: FleetUpdateView,
+  controllerHasConcreteFact: boolean,
+): boolean {
+  if (view.kind === "idle") return false;
+  if (view.kind === "unknown") {
+    return view.lastKnownKind !== null && !controllerHasConcreteFact;
+  }
+  return true;
 }
 
 /** Which of the three bodies is on screen. See where it is computed. */

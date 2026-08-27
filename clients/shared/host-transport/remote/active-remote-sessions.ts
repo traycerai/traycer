@@ -809,6 +809,32 @@ export function tryAcquireReadyRemoteSession<
           new Error("borrowed remote session was already released"),
         );
       }
+      // SUPERSESSION IS RE-READ ON EVERY SEND, not sampled when the borrow was
+      // taken. `findBorrowableEntry` bars a marked entry from being borrowed,
+      // but an entry can be marked AFTER a borrow is outstanding, and this
+      // closure had no other way to notice.
+      //
+      // Usually that resolves itself: `closeSupersededIdentities` closes the
+      // entries that are free at that moment, and a closed session fails the
+      // request — the designed outcome for a status read. The gap is the entry
+      // that is NOT free, because a real consumer still holds it. That one is
+      // marked and deliberately left open, carrying the verdict forward until
+      // its consumer releases. Its `refCount` guard belongs to that consumer;
+      // the borrower had none, so it kept polling over a session whose identity
+      // was retired — which, when the supersession came from a retired
+      // credential lease or a signed-out user, means requests under a retired
+      // credential for as long as the real consumer holds on.
+      //
+      // Refusing is the safe answer rather than a degradation: this handle's
+      // one caller is a status poll, and a status read that cannot complete
+      // renders `unknown` — never failure, and never a stale value presented as
+      // live. That is the same contract the doc comment above already relies on
+      // for a borrowed entry that dies underneath its borrower.
+      if (entry.superseded) {
+        return Promise.reject(
+          new Error("borrowed remote session identity was superseded"),
+        );
+      }
       return session.sendUnary(method, params, abortSignal, responseTimeoutMs);
     },
     release: () => {

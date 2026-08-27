@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import {
   rebindUpdateMutationCapabilityLiveness,
@@ -99,11 +101,51 @@ type LeaseResponse =
       readonly message: string;
     };
 
+/**
+ * Refuse unless this process's own path helpers resolve to the SAME account
+ * the caller sealed into the target.
+ *
+ * `--host-home` and `TRAYCER_ROOT_MAINTENANCE_HOME` name the target account
+ * explicitly, and the v2 protocol fields honour them — but `executeAction`'s
+ * `host-uninstall-all` reaches `uninstallHost`, whose paths all descend from
+ * `store/paths.ts`'s module-level `join(homedir(), ".traycer")`. Nothing
+ * threads the target through that. The root script binds it by setting `HOME`
+ * on the child's environment, which works on POSIX because Node's
+ * `os.homedir()` prefers `$HOME` there — and does NOT work on win32, where
+ * `os.homedir()` reads the OS profile API and ignores `HOME` entirely.
+ *
+ * So the binding is real but implicit, and its failure mode is silent and
+ * severe: sweeping a different account's `.traycer` tree while reporting
+ * success. Rather than re-thread a module constant, assert the binding held
+ * and fail closed when it did not — the same posture the parent takes when it
+ * cannot canonicalize the target home.
+ */
+function assertPathHelpersBoundToTarget(): void {
+  const sealed = process.env.TRAYCER_ROOT_MAINTENANCE_HOME;
+  if (typeof sealed !== "string" || sealed.length === 0) return;
+  let resolvedSealed: string;
+  let resolvedActual: string;
+  try {
+    resolvedSealed = realpathSync(sealed);
+    resolvedActual = realpathSync(homedir());
+  } catch {
+    throw new Error(
+      "maintenance lease could not confirm its target home directory",
+    );
+  }
+  if (resolvedSealed !== resolvedActual) {
+    throw new Error(
+      "maintenance lease path helpers are bound to a different account than its sealed target",
+    );
+  }
+}
+
 export async function runHostMaintenanceLease(
   environment: Environment,
   admission: HostMaintenanceLeaseAdmission,
   target: HostMaintenanceLeaseTarget,
 ): Promise<void> {
+  assertPathHelpersBoundToTarget();
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment,
     hostHomeDir: target.hostHomeDir,
@@ -248,7 +290,20 @@ async function superviseRootMaintenanceExecutor(
   await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
   return new Promise((resolve, reject) => {
     let settled = false;
-    let completedValue: unknown | undefined;
+    // A BOX, not the value itself. `undefined` was doing double duty as "no
+    // completion frame has arrived", which made an actuator that legitimately
+    // completes with `undefined` indistinguishable from one that never
+    // completed at all — and `JSON.stringify({ value: undefined })` drops the
+    // key outright, so that is exactly what an executor returning nothing
+    // sends. The exit handler would then take the failure path on a clean
+    // exit 0 and report `maintenance executor exited (0, none)` for a
+    // successful operation.
+    //
+    // `null` is not usable as the sentinel either: it is a legitimate actuator
+    // result with its own meaning (the Linux platform install returns it for
+    // "left for the developer to install by hand"). Only a wrapper can say
+    // "completed" without also claiming something about the value.
+    let completed: { readonly value: unknown } | null = null;
     let buffer = "";
     let actuatorGroupId: number | null = null;
     const refuse = (message: string): void => {
@@ -257,8 +312,8 @@ async function superviseRootMaintenanceExecutor(
       }
     };
     const finish = (value: unknown): void => {
-      if (settled || completedValue !== undefined) return;
-      completedValue = value;
+      if (settled || completed !== null) return;
+      completed = { value };
     };
     const restoreHolder = async (): Promise<void> => {
       await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {});
@@ -285,14 +340,15 @@ async function superviseRootMaintenanceExecutor(
     });
     child.once("exit", (code, signal) => {
       if (settled) return;
-      if (completedValue !== undefined && code === 0) {
+      const completion: { readonly value: unknown } | null = completed;
+      if (completion !== null && code === 0) {
         settled = true;
         void (async () => {
           if (actuatorGroupId !== null && process.platform !== "win32") {
             await waitForProcessGroupExit(actuatorGroupId);
           }
           await restoreHolder();
-          resolve(completedValue);
+          resolve(completion.value);
         })().catch(reject);
         return;
       }

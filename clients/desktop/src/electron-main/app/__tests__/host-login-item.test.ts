@@ -1468,3 +1468,65 @@ describe("retireCompetingCliRegistrationAtLaunch", () => {
     expect(order).toEqual(["cycle:start", "cycle:end", "repair"]);
   });
 });
+
+// Codex #2. `requires-approval` means REGISTERED with the user's toggle off —
+// `pollRegisterStatusUntilSettled` says so in as many words. Removal shared its
+// entry guard with REGISTRATION, which refuses that state for a reason that
+// does not apply to removal: registration boots out and re-registers, so it
+// must refuse any prior state it could not put back. Removal has nothing to
+// put back.
+//
+// The consequence was that a user who had toggled the login item off could
+// never remove it: an explicit deregister parked on exactly the state it exists
+// to clear, and the registration outlived the uninstall.
+describe("unregisterHostLoginItemGuarded - removable-state entry guard", () => {
+  it("REMOVES a registered-but-disabled (requires-approval) login item", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "requires-approval" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+
+    // Not merely "returned true": the SMAppService record was actually cleared.
+    expect(setLoginItemSettings).toHaveBeenCalled();
+  });
+
+  it("REMOVES it on the legacy label too", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "requires-approval" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(true);
+    expect(setLoginItemSettings).toHaveBeenCalled();
+  });
+
+  it("STILL refuses not-found — the fail-closed arms are intact", async () => {
+    // The paired direction. Widening the guard must not turn it into "always
+    // proceed": `not-found` means the in-bundle plist is not where
+    // SMAppService looks, so there is no registration to act on and no
+    // mutation should be attempted.
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-found" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("STILL refuses not-supported", async () => {
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-supported" }); // snapshot: legacy
+
+    await expect(
+      unregisterHostLoginItemGuarded(async () => true),
+    ).resolves.toBe(false);
+    expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+});

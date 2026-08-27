@@ -208,6 +208,28 @@ export async function consumeHostStartAdoption(
     if (pending.kind === "unreadable") {
       return { kind: "error", reason: "host-start adoption could not be read" };
     }
+    // An EXPIRED proof is not an outstanding grant, and must not refuse a
+    // standalone start forever.
+    //
+    // The age bound is applied on the other two paths that read this file (the
+    // claimed-candidate check below, and `readHostStartAdoptionNonce`) and was
+    // missing here. That gap is reachable: a publisher that dies between
+    // publishing and consuming leaves the proof behind, and while the labelled
+    // path erases an expired one on its next attempt, a bare `host start`
+    // never takes that path — so a crash-loop with no service label is refused
+    // on every iteration, indefinitely, by a grant nobody can still use.
+    //
+    // Treated as ABSENT rather than removed here on purpose. This caller holds
+    // no service-label capability, and `removeAdoptionIfNonce`'s comment states
+    // the discipline: a read-then-remove by a party without the nonce lets an
+    // old lease erase a NEWER publisher's proof. Expiry is enough to unblock
+    // admission; erasing is the labelled path's job, which already does it.
+    if (
+      pending.kind === "valid" &&
+      Date.now() - pending.file.issuedAtMs > HOST_START_ADOPTION_MAX_AGE_MS
+    ) {
+      return { kind: "absent" };
+    }
     return {
       kind: "refused",
       reason:
