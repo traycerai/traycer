@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { STATUS_DOT_CLASSES } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 
 interface FixtureRecord {
   readonly id: string;
@@ -38,6 +39,7 @@ interface Holder {
   /** What `useEpicNodeHostId` answers - the row's OWN owner host. */
   ownerHostIdByNodeId: Record<string, string>;
   indicators: IndicatorFixture;
+  search: ArtifactSearchResults;
 }
 
 interface IndicatorFlags {
@@ -65,6 +67,15 @@ const holder = vi.hoisted((): Holder => ({
   indicatorChatIdCalls: [],
   ownerHostIdByNodeId: {},
   indicators: { epics: {}, chats: {} },
+  search: {
+    searchActive: false,
+    results: [],
+    response: null,
+    isUnsupported: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => {},
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -105,6 +116,16 @@ vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
 // the same source the sidebar filters - and the real hook throws outside an
 // epic session. Empty is the right answer here: these cases assert row
 // rendering and editor gating with no filter set, where the map is not read.
+// The artifact search RPC needs a QueryClient this suite has no reason to
+// provide; the request logic is covered where it lives. Keep the real status
+// message so any surface wording stays under test.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-artifact-search-results",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    useArtifactSearchResults: () => holder.search,
+  }),
+);
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({ artifacts: { allIds: [], byId: {} } }),

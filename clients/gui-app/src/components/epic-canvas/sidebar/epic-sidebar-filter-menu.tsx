@@ -295,9 +295,13 @@ export function ChatFilterMenu(props: {
     base: "Filter agents",
     filterCount,
     sort,
-    visibilityLabel: archiveVisibilityChanged
-      ? archiveVisibilityLabel(archiveVisibility)
-      : null,
+    // Gated on `canArchive` alongside the Show detail itself: a stored
+    // preference outlives the permission that set it, and announcing a setting
+    // the menu can no longer expose names something the user cannot go change.
+    visibilityLabel:
+      props.canArchive && archiveVisibilityChanged
+        ? archiveVisibilityLabel(archiveVisibility)
+        : null,
   });
 
   return (

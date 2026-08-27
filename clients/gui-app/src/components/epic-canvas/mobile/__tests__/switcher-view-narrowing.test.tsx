@@ -8,6 +8,7 @@ import {
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
 import { SORT_DIRECTION, SORT_FIELD } from "@/lib/epic-sort";
+import type { ArtifactSearchResults } from "@/components/epic-canvas/sidebar/use-artifact-search-results";
 
 /**
  * The switcher's Agents and Artifacts lists narrow and order through the SAME
@@ -43,12 +44,32 @@ interface TestHolder {
     readonly byId: Readonly<Record<string, TestArtifact>>;
   };
   role: string;
+  search: ArtifactSearchResults;
 }
+
+const INACTIVE_SEARCH: ArtifactSearchResults = {
+  searchActive: false,
+  results: [],
+  response: null,
+  isUnsupported: false,
+  isError: false,
+  isFetching: false,
+  refetch: () => {},
+};
 
 const holder = vi.hoisted((): TestHolder => ({
   records: [],
   artifacts: { allIds: [], byId: {} },
   role: "owner",
+  search: {
+    searchActive: false,
+    results: [],
+    response: null,
+    isUnsupported: false,
+    isError: false,
+    isFetching: false,
+    refetch: () => {},
+  },
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
@@ -80,6 +101,16 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 // The artifact filter reads the epic's authoritative artifact map, the same
 // source the sidebar filters; outside an epic session the real hook throws.
+// The artifact search RPC needs a QueryClient this suite has no reason to
+// provide; the request logic is covered where it lives. Keep the real status
+// message so any surface wording stays under test.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-artifact-search-results",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    useArtifactSearchResults: () => holder.search,
+  }),
+);
 vi.mock("@/hooks/use-epic-store", () => ({
   useEpicStore: (selector: (state: unknown) => unknown) =>
     selector({ artifacts: holder.artifacts }),
@@ -155,6 +186,7 @@ beforeEach(() => {
   holder.records = [];
   holder.artifacts = { allIds: [], byId: {} };
   holder.role = "owner";
+  holder.search = INACTIVE_SEARCH;
   // The store is persisted and app-wide; a view left set by one case would
   // narrow the next one's list for reasons that case never states.
   useLeftPanelStore.setState({
@@ -235,12 +267,12 @@ describe("switcher Agents narrowing", () => {
     render(<SwitcherAgentsList {...PROPS} />);
     expect(renderedAgentNames()).toHaveLength(2);
 
-    fireEvent.change(screen.getByTestId("switcher-agents-search"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
       target: { value: "parser" },
     });
     expect(renderedAgentNames()).toEqual(["Refactor the parser"]);
 
-    fireEvent.click(screen.getByTestId("switcher-agents-search-clear"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear agent search" }));
     expect(renderedAgentNames()).toHaveLength(2);
   });
 
@@ -254,13 +286,13 @@ describe("switcher Agents narrowing", () => {
     expect(renderedAgentNames()).toEqual(["Release build"]);
 
     // Matches both titles; only the row surviving the Interface filter stays.
-    fireEvent.change(screen.getByTestId("switcher-agents-search"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
       target: { value: "Release" },
     });
     expect(renderedAgentNames()).toEqual(["Release build"]);
 
     // Matches only the row the filter excludes, so nothing survives.
-    fireEvent.change(screen.getByTestId("switcher-agents-search"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
       target: { value: "notes" },
     });
     expect(renderedAgentNames()).toEqual([]);
@@ -282,7 +314,7 @@ describe("switcher Agents narrowing", () => {
     // A query that matches nothing is reported as a SEARCH failure even under
     // an active filter - blaming the filter would aim the user at the wrong
     // control - and the filter is named only as a possible second cause.
-    fireEvent.change(screen.getByTestId("switcher-agents-search"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Search agents" }), {
       target: { value: "zzzz" },
     });
     expect(screen.getByText("No agents match your search.")).toBeDefined();
@@ -364,5 +396,126 @@ describe("switcher Artifacts narrowing", () => {
     useLeftPanelStore.getState().toggleArtifactSortDirection(EPIC_ID);
     view.rerender(<SwitcherArtifactsList {...PROPS} />);
     expect(renderedArtifactNames()).toEqual(["Alpha", "Bravo"]);
+  });
+});
+
+describe("switcher Artifacts search", () => {
+  const SEEDED = [
+    { id: "a-1", kind: "spec", status: null, updatedAt: 1 },
+    { id: "a-2", kind: "ticket", status: 0, updatedAt: 2 },
+  ];
+
+  function seedTwoArtifacts(): void {
+    holder.records = [
+      artifactRecord("a-1", "Alpha spec", "spec", null),
+      artifactRecord("a-2", "Bravo ticket", "ticket", 0),
+    ];
+    seedArtifacts(SEEDED);
+  }
+
+  // Built from a FIXED base, never from `holder.search`: these cases set one
+  // state after another, and inheriting the previous one would leave an earlier
+  // flag set - an "error" case still rendering the unsupported branch.
+  /**
+   * A hit as the host actually returns one. The fields beyond `artifactId` are
+   * what the ranking and snippet rendering read; a stub with only the id would
+   * typecheck nowhere and would quietly stop representing the producer.
+   */
+  function hit(artifactId: string, title: string, kind: "spec" | "ticket") {
+    return {
+      artifactId,
+      kind,
+      title,
+      status: null,
+      relativePath: `${artifactId}.md`,
+      breadcrumb: [],
+      sources: ["title" as const],
+      score: 1,
+      snippets: [],
+    };
+  }
+
+  function searchState(
+    overrides: Partial<ArtifactSearchResults>,
+  ): ArtifactSearchResults {
+    return { ...INACTIVE_SEARCH, searchActive: true, ...overrides };
+  }
+
+  it("offers the field only on an epic that has artifacts to match", () => {
+    render(<SwitcherArtifactsList {...PROPS} />);
+    // Emptiness, not size: an epic with nothing to match gets no dead control.
+    expect(
+      screen.queryByRole("textbox", { name: "Search artifacts" }),
+    ).toBeNull();
+
+    cleanup();
+    seedTwoArtifacts();
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(
+      screen.getByRole("textbox", { name: "Search artifacts" }),
+    ).toBeDefined();
+  });
+
+  it("renders the host's hits as rows, in the order it ranked them", () => {
+    seedTwoArtifacts();
+    // Reverse of the list's own sort, so the assertion can only pass if the
+    // HOST's ranking is what renders.
+    holder.search = searchState({
+      results: [
+        hit("a-1", "Alpha spec", "spec"),
+        hit("a-2", "Bravo ticket", "ticket"),
+      ],
+      response: { results: [], outcome: "ready", truncated: false },
+    });
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(renderedArtifactNames()).toEqual(["Alpha spec", "Bravo ticket"]);
+  });
+
+  it("drops a hit the projection cannot resolve, so every row opens", () => {
+    seedTwoArtifacts();
+    holder.search = searchState({
+      results: [hit("a-1", "Alpha spec", "spec"), hit("gone", "Gone", "spec")],
+      response: { results: [], outcome: "ready", truncated: false },
+    });
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(renderedArtifactNames()).toEqual(["Alpha spec"]);
+  });
+
+  it("tells an unsupported host apart from a failure and from no matches", () => {
+    seedTwoArtifacts();
+
+    holder.search = searchState({ isUnsupported: true });
+    const view = render(<SwitcherArtifactsList {...PROPS} />);
+    expect(
+      screen.getByText("Search isn't available on this host."),
+    ).toBeDefined();
+
+    holder.search = searchState({ isError: true });
+    view.rerender(<SwitcherArtifactsList {...PROPS} />);
+    // Twice on purpose: once in the live region for a screen reader, once
+    // visibly. A failure a sighted user can see and a blind one cannot is
+    // the reason the status line exists.
+    expect(screen.getAllByText("Artifact search failed.")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+
+    holder.search = searchState({
+      response: {
+        results: [],
+        outcome: "mirror-unavailable",
+        truncated: false,
+      },
+    });
+    view.rerender(<SwitcherArtifactsList {...PROPS} />);
+    expect(
+      screen.getAllByText("Artifact search isn't ready yet."),
+    ).toHaveLength(2);
+
+    holder.search = searchState({
+      response: { results: [], outcome: "ready", truncated: false },
+    });
+    view.rerender(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.getAllByText("No artifacts match your search.")).toHaveLength(
+      2,
+    );
   });
 });

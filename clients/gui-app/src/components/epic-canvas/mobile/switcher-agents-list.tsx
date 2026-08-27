@@ -131,8 +131,10 @@ export function SwitcherAgentsList(props: SwitcherListProps) {
             <SwitcherSearchField
               value={searchQuery}
               onValueChange={setSearchQuery}
-              placeholder="Search agents"
-              testId="switcher-agents-search"
+              placeholder="Search agents…"
+              label="Search agents"
+              clearLabel="Clear agent search"
+              testIdPrefix="switcher-agents-search"
             />
           }
           action={null}
