@@ -116,6 +116,64 @@ export function resolveSnapshotSegmentHashes(
 }
 
 /**
+ * The endpoints a segment tile's CAPTURE should be rewritten to, or `null`.
+ *
+ * ## The bug this closes
+ *
+ * The capture on the payload is taken once, when the tile is opened, and is
+ * never rewritten. That is invisible while the source blocks are still in the
+ * window, because they win over it - but it is exactly wrong for the case the
+ * capture exists to serve. Open a tile on an edit that is still STREAMING and
+ * the capture records a half-written `afterHash`; when the row later goes cold
+ * and the blocks stop resolving, the tile falls back to that click-time hash
+ * and shows a frozen prefix of the edit, permanently, with nothing on screen
+ * saying so. The tile's identity excludes the hashes, so reopening the same
+ * edit dedupes onto the same node and does not refresh it either.
+ *
+ * So the capture is refreshed from the blocks while they are still there.
+ *
+ * ## Settled, and settled means the block says so
+ *
+ * A half-written edit must not become durable - that would replace a
+ * recoverable staleness with a permanent one. The signal is the block's own
+ * completion state, never elapsed time: a timer would make durability a race
+ * against the harness's write rate, and a slow edit that paused mid-write is
+ * indistinguishable from a finished one by clock alone.
+ *
+ * BOTH endpoints must be settled, not just the moving one. `beforeHash` comes
+ * from the first source block and `afterHash` from the last, and those are the
+ * two blocks whose hashes are read - so those are the two whose status has to
+ * be terminal. `errored`, `interrupted` and `superseded` count as settled
+ * alongside `completed`: each is a terminal outcome whose hashes are the final
+ * word on that edit, and refusing them would leave precisely the interrupted
+ * turns - the ones most likely to be scrolled back to - pinned to their
+ * click-time capture forever.
+ *
+ * `null` means "nothing to write": no live blocks to read, an edit still in
+ * flight, or a capture that already says this.
+ */
+export function settledSnapshotSegmentCapture(
+  payload: SnapshotSegmentDiffTilePayload,
+  source: SnapshotDiffSource,
+): ResolvedSnapshotSegmentHashes | null {
+  const blocks = fileChangeBlocksById(source);
+  const first = blocks.get(firstSnapshotSourceBlockId(payload.sourceBlockIds));
+  const last = blocks.get(lastSnapshotSourceBlockId(payload.sourceBlockIds));
+  if (first === undefined || last === undefined) return null;
+  if (first.status === "streaming" || last.status === "streaming") return null;
+  const settled: ResolvedSnapshotSegmentHashes = {
+    filePath: last.filePath,
+    beforeHash: first.beforeHash,
+    afterHash: last.afterHash,
+  };
+  const unchanged =
+    settled.filePath === payload.filePath &&
+    settled.beforeHash === payload.beforeHash &&
+    settled.afterHash === payload.afterHash;
+  return unchanged ? null : settled;
+}
+
+/**
  * Resolve the content-addressed endpoints of whichever diff kind addresses its
  * content by hash: `snapshot-segment` reads first/last `file_change` blocks;
  * `snapshot-hash` carries the hashes inline (artifact edits). The other kinds

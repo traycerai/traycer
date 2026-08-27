@@ -305,7 +305,10 @@ import {
 } from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import { chatForkGetV10 } from "@traycer/protocol/host/chat-fork/contracts";
-import { chatReadAccumulatedFileChangeV10 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import {
+  chatLocateRowV10,
+  chatReadAccumulatedFileChangeV10,
+} from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -4814,6 +4817,21 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: chatReadAccumulatedFileChangeV10,
           upgradeFromPreviousVersion: null,
         },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Where a cross-tile jump target sits, for the two target kinds a client
+  // identifies by walking rendered models - which a COLD row does not have.
+  // Off-floor for the same reason as the read above: a GUI meeting an older
+  // host degrades to waiting for the row, which on a non-windowed host always
+  // arrives because that host serves the whole transcript.
+  "chat.locateRow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: chatLocateRowV10, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

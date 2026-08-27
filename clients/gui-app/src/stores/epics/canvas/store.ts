@@ -90,6 +90,7 @@ import {
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
+  updateSnapshotDiffTilePayload,
   updatePrDiffTileView,
   togglePrDiffFileCollapsed,
 } from "@/stores/epics/canvas/actions";
@@ -115,6 +116,7 @@ import {
   type EpicViewTab,
   type GitDiffTileViewState,
   type PrDiffTileViewState,
+  type SnapshotDiffTilePayload,
   type SplitDirection,
   type TilesByInstanceId,
 } from "@/stores/epics/canvas/types";
@@ -532,6 +534,17 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: GitDiffTileViewState,
+  ) => void;
+  /**
+   * Rewrite a snapshot-diff tile's payload. Today's one caller refreshes a
+   * segment tile's captured endpoints once the edit behind it settles, so a
+   * tile opened mid-stream does not keep a half-written capture as its durable
+   * fallback. See `updateSnapshotDiffTilePayload`.
+   */
+  updateSnapshotDiffTilePayloadInTab: (
+    tabId: string,
+    tileId: string,
+    diff: SnapshotDiffTilePayload,
   ) => void;
   updateCommGraphTileViewInTab: (
     tabId: string,
@@ -2095,6 +2108,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateSnapshotDiffTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateSnapshotDiffTilePayloadInTab: (tabId, tileId, diff) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateSnapshotDiffTilePayload(canvas, tileId, diff),
             ),
           );
         },

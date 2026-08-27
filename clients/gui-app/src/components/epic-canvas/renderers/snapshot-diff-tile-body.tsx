@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -15,6 +15,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { DiffViewerPreferences } from "@/lib/diff/diff-viewer-preferences";
 import {
   resolveHashBackedEndpoints,
+  settledSnapshotSegmentCapture,
   type ResolvedSnapshotDiff,
   type SnapshotDiffSource,
 } from "@/lib/chat/resolve-snapshot-diff-content";
@@ -276,6 +277,41 @@ function SnapshotDiffTileResolved(props: {
       }),
     [accumulatedFileChanges, liveAssistantBlocks, messages, node.diff],
   );
+  // Keep the tile's DURABLE capture in step with the blocks while they are
+  // still readable. `segmentHashes` above prefers the blocks, so a stale
+  // capture is invisible right up until the row is evicted - and then the tile
+  // silently falls back to whatever the edit looked like at click time. If the
+  // tile was opened mid-stream that is a half-written diff, kept forever.
+  //
+  // `settledSnapshotSegmentCapture` returns non-null only when the source
+  // blocks say the edit is finished AND the capture disagrees with them, so
+  // this settles after one write rather than looping: the write makes the
+  // payload match, the next render recomputes `null`, and the effect stops.
+  const settledCapture = useMemo(
+    () =>
+      node.diff.kind === "snapshot-segment"
+        ? settledSnapshotSegmentCapture(node.diff, {
+            messages,
+            liveAssistantBlocks,
+            accumulatedFileChanges,
+          })
+        : null,
+    [accumulatedFileChanges, liveAssistantBlocks, messages, node.diff],
+  );
+  const updatePayload = useEpicCanvasStore(
+    (s) => s.updateSnapshotDiffTilePayloadInTab,
+  );
+  useEffect(() => {
+    if (settledCapture === null) return;
+    if (node.diff.kind !== "snapshot-segment") return;
+    updatePayload(viewTabId, node.id, {
+      ...node.diff,
+      filePath: settledCapture.filePath,
+      beforeHash: settledCapture.beforeHash,
+      afterHash: settledCapture.afterHash,
+    });
+  }, [node.diff, node.id, settledCapture, updatePayload, viewTabId]);
+
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
     // same host its `useChatSessionHandle` above is keyed by (D15).

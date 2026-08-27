@@ -132,6 +132,8 @@ import {
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOwnedByViewer } from "@/hooks/chats/use-owned-by-viewer";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import type { TranscriptRowLocator } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { useHostBinding } from "@/lib/host";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -994,14 +996,60 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     viewHandle.store,
     (s) => s.requestTranscriptOrdinal,
   );
-  // The ordinal a cold jump target sits at, when it is one this client can
-  // identify without the host. `null` means "nothing to ask for", which is both
-  // the legacy line and the target kinds whose row id needs rendered models.
+  // A jump target this client cannot place on its own, once it is clear it
+  // cannot. `block` and `sent-message` anchors are both found by walking
+  // RENDERED models, so a cold row offers nothing to match against - and unlike
+  // every other kind, failing to match does not mean "not delivered yet", it
+  // means "not hydrated, and hydration is exactly what the jump is blocked on".
+  // So the host is asked where the row is.
+  //
+  // Scoped to the windowed line: with `transcriptWindow === null` the client
+  // holds the whole transcript, so an unmatched anchor genuinely is absent and
+  // there is nothing for the host to find that the client has not already
+  // looked at.
+  const hostLocatorTarget = useMemo<TranscriptRowLocator | null>(() => {
+    if (transcriptJump === undefined) return null;
+    if (!view.snapshotLoaded) return null;
+    if (view.transcriptWindow === null) return null;
+    const target = transcriptJump.target;
+    if (target.kind === "block") {
+      return messageIdForBlock(view.messages, target.blockId) === null
+        ? { kind: "block", blockId: target.blockId }
+        : null;
+    }
+    if (target.kind === "sent-message") {
+      return sentMessageAnchorId(view.messages, target) === null
+        ? {
+            kind: "sent-message",
+            receiverAgentId: target.receiverAgentId,
+            messageText: target.messageText,
+            timestamp: target.timestamp,
+          }
+        : null;
+    }
+    return null;
+  }, [
+    transcriptJump,
+    view.messages,
+    view.snapshotLoaded,
+    view.transcriptWindow,
+  ]);
+  const hostLocatedOrdinal = useChatLocateRow({
+    client: attachmentHostClient,
+    epicId: view.currentEpicId,
+    chatId: view.node.id,
+    target: hostLocatorTarget,
+  });
+  // The ordinal a cold jump target sits at. `null` means "nothing to ask for":
+  // the legacy line, or a host-locatable target whose answer has not landed.
   const coldJumpOrdinal = (
     transcriptWindow: TranscriptWindow | null,
     target: ChatTranscriptJumpTarget,
   ): number | null => {
     if (transcriptWindow === null) return null;
+    if (target.kind === "block" || target.kind === "sent-message") {
+      return hostLocatedOrdinal;
+    }
     const rowId =
       target.kind === "message"
         ? target.messageId
@@ -1108,6 +1156,10 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   }, [
     consumeTranscriptJump,
     hostId,
+    // The host's answer arrives asynchronously, so it is the retry signal for
+    // the two target kinds that need it - exactly as `view.messages` is for
+    // every other kind.
+    hostLocatedOrdinal,
     props.node.id,
     requestTranscriptOrdinal,
     scrollToBlock,

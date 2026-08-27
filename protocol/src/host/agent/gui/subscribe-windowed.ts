@@ -25,6 +25,11 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/interview-answerability";
 import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
 import {
+  LOCATOR_MESSAGE_TEXT_MAX_CHARS,
+  transcriptRowLocatorSchema,
+  type TranscriptRowLocator,
+} from "@traycer/protocol/persistence/chat-transcript/locate-row";
+import {
   restorableSetupInterruptionSchema,
   selectRestorableSetupInterruption,
   type RestorableSetupInterruption,
@@ -299,6 +304,82 @@ export const chatReadAccumulatedFileChangeV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: chatReadAccumulatedFileChangeRequestSchema,
   responseSchema: chatReadAccumulatedFileChangeResponseSchema,
+});
+
+/**
+ * The locator shape a `chat.locateRow` request carries, and its search.
+ *
+ * Re-exported here for the same reason the setup interruption is: a producer
+ * reads the windowed line's payloads from this module alone. Both live in
+ * `persistence/chat-transcript/locate-row.ts`, beside the row projection whose
+ * enumeration defines what an ordinal MEANS.
+ */
+export {
+  transcriptRowLocatorSchema,
+  type TranscriptRowLocator,
+  LOCATOR_MESSAGE_TEXT_MAX_CHARS,
+};
+
+/**
+ * Where a jump target sits in the transcript - `chat.locateRow`.
+ *
+ * The windowed line's other half of a cross-tile jump. A client resolves most
+ * targets itself and reads the ordinal off the skeleton it holds, but a `block`
+ * and a `sent-message` anchor are identified by walking RENDERED models, which a
+ * cold row has none of. Without this the jump deadlocks rather than degrading:
+ * the scroll drives hydration and the scroll is what is being held back, so the
+ * target is never requested and the request parks forever.
+ */
+export const chatLocateRowRequestSchema = z.object({
+  /**
+   * Present for the same reason it is on
+   * {@link chatReadAccumulatedFileChangeRequestSchema}: a chat id alone does not
+   * address a chat on this host - sessions are keyed by `(epicId, chatId)`.
+   */
+  epicId: z.string(),
+  chatId: z.string(),
+  target: transcriptRowLocatorSchema,
+});
+export type ChatLocateRowRequest = z.infer<typeof chatLocateRowRequestSchema>;
+
+/**
+ * The ordinal, or the one opaque refusal.
+ *
+ * `found: false` answers all of "no live session", "no row matches this
+ * target", and "you may not read this chat" - deliberately, and for the reason
+ * spelled out on `ChatSessionManager.readAccumulatedFileChange`. Splitting them
+ * would rebuild the liveness oracle that method closed: a caller holding chat
+ * ids it may not read could sort them by which ones threw. A legitimate caller
+ * loses nothing, because a chat it cannot read has no row for it to jump to.
+ *
+ * The ordinal is an index into the row enumeration the skeleton publishes, so
+ * the client feeds it straight to its hydration planner. No row id rides along:
+ * once the row is hydrated the client resolves the anchor through its own
+ * rendered models exactly as it does for a warm target, and a second identifier
+ * on the wire with no reader is the shape of defect this PR already fixed once.
+ */
+export const chatLocateRowResponseSchema = z.discriminatedUnion("found", [
+  z.object({
+    found: z.literal(true),
+    ordinal: z.number().int().nonnegative(),
+  }),
+  z.object({ found: z.literal(false) }),
+]);
+export type ChatLocateRowResponse = z.infer<typeof chatLocateRowResponseSchema>;
+
+/**
+ * Registered `degrade: { kind: "unsupported" }`, like the accumulated-change
+ * read beside it: a GUI meeting an older host falls back to waiting for the
+ * target to arrive on its own, which is the pre-windowed behavior and correct
+ * there, because that host serves the whole transcript and the row is never
+ * cold. A unary method flips no negotiation, so registering it cannot disturb a
+ * client that never calls it.
+ */
+export const chatLocateRowV10 = defineRpcContract({
+  method: "chat.locateRow",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: chatLocateRowRequestSchema,
+  responseSchema: chatLocateRowResponseSchema,
 });
 
 /**
