@@ -15,6 +15,10 @@ import { A2A_PERMISSION_MODE_INSTRUCTION } from "@traycer/protocol/agent/agent-s
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
 import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
+import {
+  assertCommandAllowedOnSurface,
+  resolveAgentCliSurface,
+} from "./agent-surface";
 import { resolveCliVersion } from "./cli-version";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
@@ -153,6 +157,24 @@ function parsePortArg(value: string): number | null {
   return parsed !== null && parsed <= 65_535 ? parsed : null;
 }
 
+/**
+ * The invoked command's path under the root program, space-joined
+ * (`agent role claim`). Built from Commander's own parent chain rather than the
+ * argv the user typed, so an alias or an abbreviated path still resolves to the
+ * canonical name the capability table is keyed by.
+ */
+export function commanderCommandPath(command: CommanderCommand): string {
+  const segments: string[] = [];
+  let cursor: CommanderCommand | null = command;
+  // Stop at the root program: it contributes the binary name, not a path
+  // segment (`traycer agent create` is keyed as `agent create`).
+  while (cursor !== null && cursor.parent !== null) {
+    segments.unshift(cursor.name());
+    cursor = cursor.parent;
+  }
+  return segments.join(" ");
+}
+
 function withRunner(
   cmd: CommanderCommand,
   build: (
@@ -164,8 +186,35 @@ function withRunner(
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const positionals = extractActionPositionals(actionArgs);
     const optsBag = command.optsWithGlobals() as Record<string, unknown>;
-    const fn = build(optsBag, positionals);
-    await runCommand(fn, extractRunnerFlags(optsBag));
+    const commandPath = commanderCommandPath(command);
+    // THE capability check for every runner-backed command (CLI-019).
+    //
+    // It runs here, once, rather than in each mutating handler: hiding a
+    // command on the readonly surface is presentation only - Commander still
+    // runs the action when the subcommand is typed explicitly - and a
+    // per-handler guard is a check every new command has to remember. Keyed by
+    // command path off `READONLY_REFUSED_COMMANDS`, so no Commander route to a
+    // gated action skips it.
+    //
+    // A rail, not an authorization boundary: the surface is a variable in the
+    // caller's own environment, so this constrains a cooperative caller, not
+    // one that clears it. See `AgentCliSurface` in `agent-surface.ts`.
+    //
+    // The surface is read at invocation (not at registration) so it reflects
+    // the environment this process was actually launched with, and the check
+    // is wrapped INSIDE the CommandFn so a refusal renders through the runner's
+    // normal error path: NDJSON envelope under `--json`, stderr otherwise, and
+    // a non-zero exit either way. Building `fn` lazily keeps the refusal ahead
+    // of any argument parsing the builder does, so a readonly session is told
+    // it may not do this rather than which flag it also got wrong.
+    const guarded: CommandFn = async (ctx) => {
+      assertCommandAllowedOnSurface(
+        commandPath,
+        resolveAgentCliSurface(readonlyEnv()),
+      );
+      return build(optsBag, positionals)(ctx);
+    };
+    await runCommand(guarded, extractRunnerFlags(optsBag));
   });
 }
 
@@ -194,13 +243,15 @@ export function isTraycerCliEntrypoint(argv1: string | undefined): boolean {
 // existing caller and test looks for them.
 export { LOCAL_CLI_VERSION, resolveCliVersion } from "./cli-version";
 
-export type AgentCliSurface = "full" | "readonly";
-
-export function resolveAgentCliSurface(
-  env: Readonly<Record<string, string | undefined>>,
-): AgentCliSurface {
-  return env.TRAYCER_AGENT_CLI_SURFACE === "readonly" ? "readonly" : "full";
-}
+// The surface type, its resolver, and the readonly capability table live in
+// the leaf `agent-surface.ts` so a command can import the policy without
+// importing this module (which builds the whole program and would close a
+// cycle). Re-exported here because this is where existing callers look.
+export {
+  READONLY_REFUSED_COMMANDS,
+  resolveAgentCliSurface,
+  type AgentCliSurface,
+} from "./agent-surface";
 
 // Construct the full commander program. Exported as a builder so tests
 // can assert command registration (subject of the
@@ -1724,11 +1775,14 @@ function registerCommentsCommands(program: Command): void {
 function registerWorktreeCommands(program: Command): void {
   // `worktree delete` mutates on-disk state, so it is a capability boundary in
   // the readonly agent surface: hidden from help (like `agent create`) AND
-  // guarded at runtime, because Commander's `hidden` flag still runs the action
-  // when the subcommand is typed explicitly. `worktree list` is a read and
-  // stays available in both surfaces.
-  const readonlySurface = resolveAgentCliSurface(readonlyEnv()) === "readonly";
-  const deleteHidden = { hidden: readonlySurface };
+  // refused at runtime, because Commander's `hidden` flag still runs the action
+  // when the subcommand is typed explicitly. The refusal is the shared one -
+  // `worktree delete` is a `READONLY_REFUSED_COMMANDS` entry that `withRunner`
+  // enforces - so only the hiding is decided here. `worktree list` is a read
+  // and stays available in both surfaces.
+  const deleteHidden = {
+    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+  };
   const worktree = program
     .command("worktree")
     .description("Create, inspect, and remove Git worktree paths");
@@ -1769,7 +1823,6 @@ function registerWorktreeCommands(program: Command): void {
     (opts) =>
       buildWorktreeDeleteCommand({
         worktreePath: typeof opts.path === "string" ? opts.path : "",
-        readonlySurface,
       }),
   );
 
@@ -1811,8 +1864,15 @@ function registerAgentCommands(
   program: Command,
   agentRolesEnabled: boolean,
 ): void {
-  const cliSurface = resolveAgentCliSurface(readonlyEnv());
-  const readonlyHidden = { hidden: cliSurface === "readonly" };
+  // Presentation only, and a WIDER set than the capability boundary: the
+  // readonly surface hides the whole agent-to-agent surface, reads included, so
+  // a session that cannot act is not offered the vocabulary to try. What a
+  // readonly session may not RUN is decided by `READONLY_REFUSED_COMMANDS` and
+  // enforced in `withRunner`, so the hidden reads below stay runnable and the
+  // hidden mutations are refused whether or not they were ever listed.
+  const readonlyHidden = {
+    hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
+  };
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
   // Deliberately spells out what OMITTING the option does: omission is its own
   // selection (the remembered last-used profile), not a synonym for 'ambient'.
@@ -2102,7 +2162,7 @@ function registerAgentCommands(
     agent
       .command("archive", readonlyHidden)
       .description(
-        "Archive or unarchive a GUI chat or terminal agent. Archived agents stay addressable - any later message to them auto-unarchives the record. Archiving a still-working agent is refused; stop it first with 'traycer agent stop', or wait for it to settle. Unarchiving is never gated.",
+        "Archive or unarchive a GUI chat or terminal agent. Archived agents stay addressable - any later message to them auto-unarchives the record. Archiving a still-working agent is refused; stop it first with 'traycer agent stop', or wait for it to settle. That busy check never blocks unarchiving.",
       )
       .requiredOption(
         "--agent-id <id>",
@@ -2363,13 +2423,30 @@ function registerAgentCommands(
 // spawns. Like `host start` it owns its own lifecycle and does NOT go
 // through the shared NDJSON runner - `addRunnerFlags` is applied only so
 // the shared globals still parse if present.
+//
+// Because it bypasses the runner, it also bypasses the readonly capability
+// check `withRunner` applies - and it is absent from
+// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
+// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
+// reach: this is a registered command an agent can type, with its own
+// `--agent-id`, so leaving it open does leave a mutation reachable. It is
+// granted because refusing it would break inbox delivery for any session the
+// host spawns a monitor for, and would buy little against a caller who can
+// clear the surface variable anyway. It stays hidden on the readonly surface,
+// as before.
+//
+// It is not read-only, and the description now says so: printing a message
+// durably acknowledges it, and the process maintains this machine's stored
+// credentials for as long as it runs.
 function registerMonitorCommand(program: Command): void {
   addRunnerFlags(
     program
       .command("monitor", {
         hidden: resolveAgentCliSurface(readonlyEnv()) === "readonly",
       })
-      .description("Stream this agent's inter-agent inbox messages to stdout.")
+      .description(
+        "Stream this agent's inter-agent inbox messages to stdout. Long-running: each message it prints is acknowledged as delivered on the host, and it refreshes this machine's stored Traycer credentials (and provisions a host credential if one is missing) while it runs.",
+      )
       .option(
         "--agent-id <id>",
         "Agent to monitor (defaults to $TRAYCER_AGENT_ID)",

@@ -59,7 +59,10 @@ import {
   useWorkspaceFolderActionsForClient,
 } from "@/hooks/workspace/use-workspace-folder-actions";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
-import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  type LandingDraftWorkspaceSnapshot,
+} from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { locateReplaceBoundFolder } from "./locate-replace-bound-folder";
 import {
@@ -496,7 +499,22 @@ export function ActiveHostWorkspaceControls(
     // Writes THIS surface's pin and nothing else. Before P1.2 this called
     // `binding.directory.selectById(hostId)` - moving the whole app to place
     // one chat, which is the defect the surface-pin model exists to end.
-    composerPin.setSelection(hostId);
+    // Restore the target host's remembered workspace BEFORE publishing the
+    // new pin. That makes the host gesture atomic at the submit boundary and,
+    // unlike an effect keyed by `resolvedHostId`, does not overwrite another
+    // draft on mount or react to lease-driven automatic failover.
+    if (
+      (hostId !== activeHostId || composerPin.selection !== hostId) &&
+      props.stagingKey.surface === "landing" &&
+      props.stagingKey.draftId !== null
+    ) {
+      useLandingDraftStore
+        .getState()
+        .restoreDraftWorkspaceForHost(props.stagingKey.draftId, hostId);
+    }
+    if (composerPin.selection !== hostId) {
+      composerPin.setSelection(hostId);
+    }
   };
 
   if (props.layout === "stacked") {
