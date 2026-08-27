@@ -36,6 +36,9 @@ describe("TeardownCommitDialog", () => {
     expect(onImmediate).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("teardown-commit-defer"));
     expect(onDefer).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("teardown-commit-defer").textContent).toBe(
+      "Apply on next Update",
+    );
   });
 
   it("pivots a blocked envelope into apply-on-next-message only", () => {
@@ -67,5 +70,26 @@ describe("TeardownCommitDialog", () => {
     expect(screen.getByTestId("teardown-commit-immediate")).toBeTruthy();
     expect(screen.getByTestId("teardown-commit-cancel")).toBeTruthy();
     expect(screen.queryByTestId("teardown-commit-defer")).toBeNull();
+    expect(screen.getByTestId("teardown-commit-immediate").textContent).toBe(
+      "Stop and remove now",
+    );
+    expect(screen.getByText(/if you remove it/)).toBeTruthy();
+  });
+
+  it("labels terminal-agent defer as apply on next Update", () => {
+    render(
+      <TeardownCommitDialog
+        open
+        choice="blocked"
+        holders={[]}
+        deferContext="update"
+        onImmediate={vi.fn()}
+        onDefer={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("teardown-commit-defer").textContent).toBe(
+      "Apply on next Update",
+    );
   });
 });

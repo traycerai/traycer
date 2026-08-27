@@ -11,6 +11,7 @@ import {
   snapshotOwnerTeardown,
   snapshotOwnerTeardownHolders,
   teardownHolderKey,
+  teardownHolderSetDrifted,
   type OwnerTeardownSnapshotInput,
 } from "../owner-teardown-snapshot";
 
@@ -68,7 +69,7 @@ describe("snapshotOwnerTeardownHolders", () => {
   it("names a working chat turn and the agent.stop consequence", () => {
     expect(
       snapshotOwnerTeardownHolders(input({ hasActiveTurn: true })),
-    ).toEqual([
+    ).toMatchObject([
       {
         ownerRef: OWNER,
         holdKind: "chat-turn",
@@ -80,14 +81,16 @@ describe("snapshotOwnerTeardownHolders", () => {
   });
 
   it("discloses a live PTY as a restart, not a loss", () => {
-    expect(snapshotOwnerTeardownHolders(input({ ptyLive: true }))).toEqual([
-      {
-        ownerRef: OWNER,
-        holdKind: "terminal-agent-pty",
-        activity: "working",
-        label: "Planner will restart in the new folder",
-      },
-    ]);
+    expect(snapshotOwnerTeardownHolders(input({ ptyLive: true }))).toMatchObject(
+      [
+        {
+          ownerRef: OWNER,
+          holdKind: "terminal-agent-pty",
+          activity: "working",
+          label: "Planner will restart in the new folder",
+        },
+      ],
+    );
   });
 
   it("names a live shell on a dropped path by its command", () => {
@@ -112,7 +115,7 @@ describe("snapshotOwnerTeardownHolders", () => {
         ],
       }),
     );
-    expect(holders).toEqual([
+    expect(holders).toMatchObject([
       {
         ownerRef: OWNER,
         holdKind: "supervised-shell",
@@ -179,12 +182,15 @@ describe("snapshotOwnerTeardownHolders", () => {
       {
         kind: "supervised-shell",
         commandId: "sh-1",
-        holderKey: teardownHolderKey({
-          ownerRef: OWNER,
-          holdKind: "supervised-shell",
-          activity: "working",
-          label: "npm run dev",
-        }),
+        holderKey: teardownHolderKey(
+          {
+            ownerRef: OWNER,
+            holdKind: "supervised-shell",
+            activity: "working",
+            label: "npm run dev",
+          },
+          "sh-1",
+        ),
       },
     ]);
   });
@@ -267,6 +273,68 @@ describe("snapshotOwnerTeardownHolders", () => {
     ]);
   });
 
+  it("gives each same-label shell a distinct holder key", () => {
+    const snapshot = snapshotOwnerTeardown(
+      input({
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-1",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old",
+            live: true,
+          },
+          {
+            id: "sh-2",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old/apps",
+            live: true,
+          },
+        ],
+      }),
+    );
+    const keys = snapshot.holders.map((holder) => holder.holderKey);
+    expect(new Set(keys).size).toBe(2);
+    expect(snapshot.stopTargets.map((target) => target.holderKey)).toEqual(
+      keys,
+    );
+  });
+
+  it("includes a live Windows-cwd shell on a dropped Windows run directory", () => {
+    const snapshot = snapshotOwnerTeardown(
+      input({
+        droppedRunDirectories: ["C:\\wt\\old"],
+        shells: [
+          {
+            id: "sh-win",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "C:\\wt\\old\\apps",
+            live: true,
+          },
+        ],
+      }),
+    );
+    expect(snapshot.holders).toHaveLength(1);
+    expect(snapshot.stopTargets).toEqual([
+      {
+        kind: "supervised-shell",
+        commandId: "sh-win",
+        holderKey: teardownHolderKey(
+          {
+            ownerRef: OWNER,
+            holdKind: "supervised-shell",
+            activity: "working",
+            label: "npm run dev",
+          },
+          "sh-win",
+        ),
+      },
+    ]);
+  });
+
   it("names queued work on the chat-turn row when evidence exists", () => {
     expect(
       snapshotOwnerTeardownHolders(
@@ -300,7 +368,7 @@ describe("snapshotOwnerTeardownHolders", () => {
           ],
         }),
       ),
-    ).toEqual([
+    ).toMatchObject([
       {
         ownerRef: OWNER,
         holdKind: "supervised-shell",
@@ -308,6 +376,48 @@ describe("snapshotOwnerTeardownHolders", () => {
         label: "npm run dev",
       },
     ]);
+  });
+});
+
+describe("teardownHolderSetDrifted", () => {
+  it("detects a holder appearing after disclosure", () => {
+    const disclosed = snapshotOwnerTeardown(
+      input({
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-1",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old",
+            live: true,
+          },
+        ],
+      }),
+    ).holders;
+    const live = snapshotOwnerTeardown(
+      input({
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-1",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old",
+            live: true,
+          },
+          {
+            id: "sh-2",
+            description: "watch",
+            command: "sleep 1",
+            cwd: "/wt/old",
+            live: true,
+          },
+        ],
+      }),
+    ).holders;
+    expect(teardownHolderSetDrifted(disclosed, disclosed)).toBe(false);
+    expect(teardownHolderSetDrifted(disclosed, live)).toBe(true);
   });
 });
 
@@ -359,5 +469,19 @@ describe("pathContainsDirectory", () => {
     expect(pathContainsDirectory("/wt/a", "/wt/a")).toBe(true);
     expect(pathContainsDirectory("/wt/a", "/wt/a/src")).toBe(true);
     expect(pathContainsDirectory("/wt/a", "/wt/ab")).toBe(false);
+  });
+
+  it("contains Windows-separator descendants after normalizing drive case and trailing seps", () => {
+    expect(pathContainsDirectory("C:\\wt\\old", "C:\\wt\\old\\apps")).toBe(
+      true,
+    );
+    expect(pathContainsDirectory("C:\\wt\\old\\", "C:\\wt\\old")).toBe(true);
+    expect(pathContainsDirectory("c:\\wt\\old", "C:\\wt\\old\\apps")).toBe(
+      true,
+    );
+    expect(pathContainsDirectory("C:\\wt\\old", "C:\\wt\\other")).toBe(false);
+    expect(
+      pathContainsDirectory("C:\\wt\\old", "C:\\wt\\old\\..\\other"),
+    ).toBe(false);
   });
 });

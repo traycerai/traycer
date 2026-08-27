@@ -63,7 +63,10 @@ import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-di
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
 import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
-import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
+import {
+  droppedRunDirectoriesFromDraft,
+  teardownHolderSetDrifted,
+} from "@/lib/worktree/owner-teardown-snapshot";
 import {
   takeArmedTeardownSubmit,
   worktreeCommitCaptureIsStale,
@@ -1965,6 +1968,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   } | null>(null);
   const pendingSubmitRef =
     useRef<ArmedTeardownSubmit<ChatComposerSubmitInput> | null>(null);
+  const [teardownOwnerId, setTeardownOwnerId] = useState(node.id);
+  if (node.id !== teardownOwnerId) {
+    setTeardownOwnerId(node.id);
+    setTeardownDialog(null);
+  }
+  useEffect(() => {
+    pendingSubmitRef.current = null;
+  }, [node.id]);
 
   const dispatchUserSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
@@ -2065,7 +2076,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         stopTargets: snapshot.stopTargets,
       };
       if (snapshot.holders.length > 0) {
-        pendingSubmitRef.current = { input, capture };
+        pendingSubmitRef.current = {
+          input,
+          capture,
+          ownerId: node.id,
+        };
         setTeardownDialog({ holders: snapshot.holders });
         return false;
       }
@@ -2618,6 +2633,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         }
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
         if (armed === null) return;
+        if (armed.ownerId !== node.id) {
+          setTeardownDialog(null);
+          return;
+        }
         const stagedKey: WorktreeStagingKey = {
           surface: "owner",
           hostId: activeHostId,
@@ -2639,12 +2658,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           removedWorkspacePaths: [],
           stopTargets: liveSnapshot.stopTargets,
         };
-        if (worktreeCommitCaptureIsStale(armed.capture, live)) {
-          if (liveSnapshot.holders.length > 0) {
-            pendingSubmitRef.current = { input: armed.input, capture: live };
-            setTeardownDialog({ holders: liveSnapshot.holders });
-            return;
-          }
+        const disclosedHolders = teardownDialog?.holders ?? [];
+        const drifted =
+          worktreeCommitCaptureIsStale(armed.capture, live) ||
+          teardownHolderSetDrifted(disclosedHolders, liveSnapshot.holders);
+        if (drifted && liveSnapshot.holders.length > 0) {
+          pendingSubmitRef.current = {
+            input: armed.input,
+            capture: live,
+            ownerId: node.id,
+          };
+          setTeardownDialog({ holders: liveSnapshot.holders });
+          return;
         }
         setTeardownDialog(null);
         dispatchUserSend(armed.input);

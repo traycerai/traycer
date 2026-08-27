@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
+import { teardownHolderKey } from "@/lib/worktree/owner-teardown-snapshot";
 
 const OWNER: WorktreeBusyHolder["ownerRef"] = {
   epicId: "epic-1",
@@ -93,13 +94,54 @@ describe("TeardownDisclosure", () => {
       <TeardownDisclosure
         holders={[shell]}
         failures={{
-          "terminal-agent:tui-1:supervised-shell:npm run dev":
-            "shell still running",
+          [teardownHolderKey(shell)]: "shell still running",
         }}
       />,
     );
     expect(screen.getByTestId("teardown-holder-failure").textContent).toBe(
       "shell still running",
     );
+  });
+
+  it("paints a stop failure only on the matching same-label shell", () => {
+    const first = {
+      ...holder({
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: "npm run dev",
+      }),
+      holderKey: teardownHolderKey(
+        holder({
+          holdKind: "supervised-shell",
+          activity: "working",
+          label: "npm run dev",
+        }),
+        "sh-1",
+      ),
+    };
+    const second = {
+      ...holder({
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: "npm run dev",
+      }),
+      holderKey: teardownHolderKey(
+        holder({
+          holdKind: "supervised-shell",
+          activity: "working",
+          label: "npm run dev",
+        }),
+        "sh-2",
+      ),
+    };
+    render(
+      <TeardownDisclosure
+        holders={[first, second]}
+        failures={{ [first.holderKey]: "shell still running" }}
+      />,
+    );
+    const rows = screen.getAllByText("npm run dev");
+    expect(rows).toHaveLength(2);
+    expect(screen.getAllByTestId("teardown-holder-failure")).toHaveLength(1);
   });
 });

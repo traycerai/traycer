@@ -747,19 +747,33 @@ it("commits the disclosed TUI draft when staging is unchanged", async () => {
   expect(createArg.entries[0]?.branch?.name).toBe("feat-a");
 });
 
+function deferredValue(): {
+  readonly promise: Promise<unknown>;
+  readonly resolve: (value: unknown) => void;
+} {
+  let resolve!: (value: unknown) => void;
+  const promise = new Promise((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function drainMicrotasks(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 8; i += 1) {
+      await Promise.resolve();
+    }
+  });
+}
+
 it("awaits a disclosed shell stop before worktree.create", async () => {
   seedResolvedBindingMetadata();
   teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
-  let releaseStop: ((value: unknown) => void) | null = null;
-  teardownStopMocks.stopShell.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        releaseStop = resolve;
-      }),
-  );
+  const stop = deferredValue();
+  teardownStopMocks.stopShell.mockImplementation(() => stop.promise);
 
   await openTerminalFolderPopover();
   fireEvent.click(await screen.findByRole("button", { name: "Update" }));
@@ -775,7 +789,7 @@ it("awaits a disclosed shell stop before worktree.create", async () => {
   expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
 
   act(() => {
-    releaseStop?.({});
+    stop.resolve({});
   });
   await waitFor(() => {
     expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
@@ -928,13 +942,11 @@ it("does not apply a cancelled teardown after a newer confirm starts", async () 
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
-  const stopResolvers: Array<(value: unknown) => void> = [];
-  teardownStopMocks.stopShell.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        stopResolvers.push(resolve);
-      }),
-  );
+  const firstStop = deferredValue();
+  const secondStop = deferredValue();
+  teardownStopMocks.stopShell
+    .mockImplementationOnce(() => firstStop.promise)
+    .mockImplementationOnce(() => secondStop.promise);
 
   await openTerminalFolderPopover();
   fireEvent.click(await screen.findByRole("button", { name: "Update" }));
@@ -957,14 +969,14 @@ it("does not apply a cancelled teardown after a newer confirm starts", async () 
     expect(teardownStopMocks.stopShell).toHaveBeenCalledTimes(2);
   });
 
-  await act(async () => {
-    stopResolvers[0]?.({});
-    await Promise.resolve();
+  act(() => {
+    firstStop.resolve({});
   });
+  await drainMicrotasks();
   expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
 
   act(() => {
-    stopResolvers[1]?.({});
+    secondStop.resolve({});
   });
   await waitFor(() => {
     expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
@@ -977,19 +989,36 @@ it("does not apply a cancelled teardown after a newer confirm starts", async () 
   expect(createArg.entries[0]?.branch?.name).toBe("feat-b");
 });
 
+it("does not stop holders when a staged create cannot apply after confirm", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  act(() => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setSuspendedWorkspacePaths(TERMINAL_STAGING_KEY, ["/repo/alpha"]);
+  });
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  expect(await screen.findByTestId("teardown-commit-refusal")).toBeTruthy();
+  expect(teardownStopMocks.stopShell).not.toHaveBeenCalled();
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+});
+
 it("does not apply remove or create if the user cancels during in-flight teardown", async () => {
   seedResolvedBindingMetadata();
   teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
-  let releaseStop: ((value: unknown) => void) | null = null;
-  teardownStopMocks.stopShell.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        releaseStop = resolve;
-      }),
-  );
+  const stop = deferredValue();
+  teardownStopMocks.stopShell.mockImplementation(() => stop.promise);
 
   await openTerminalFolderPopover();
   fireEvent.click(await screen.findByRole("button", { name: "Update" }));
@@ -999,9 +1028,9 @@ it("does not apply remove or create if the user cancels during in-flight teardow
   });
   fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
   act(() => {
-    releaseStop?.({});
+    stop.resolve({});
   });
-  await Promise.resolve();
+  await drainMicrotasks();
   expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
   expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
   expect(

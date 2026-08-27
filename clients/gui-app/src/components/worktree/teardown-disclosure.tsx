@@ -1,6 +1,6 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { cn } from "@/lib/utils";
-import { teardownHolderKey } from "@/lib/worktree/owner-teardown-snapshot";
+import { teardownHolderRowKey } from "@/lib/worktree/owner-teardown-snapshot";
 
 /**
  * Renders a T2 holder list as "what will be stopped". Source-agnostic: the
@@ -67,7 +67,7 @@ function HolderGroup(props: {
       </p>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
         {props.holders.map((holder) => {
-          const key = teardownHolderKey(holder);
+          const key = teardownHolderRowKey(holder);
           const failure = props.failures?.[key];
           return (
             <li

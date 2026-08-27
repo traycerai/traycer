@@ -921,7 +921,11 @@ function renderSwitchableChatTile() {
   };
 }
 
-function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
+function chatTileTestTree(
+  queryClient: QueryClient,
+  chatVisible: boolean,
+  node: typeof CHAT_ARTIFACT = CHAT_ARTIFACT,
+) {
   return (
     <TestRouterProvider>
       <QueryClientProvider client={queryClient}>
@@ -942,11 +946,7 @@ function chatTileTestTree(queryClient: QueryClient, chatVisible: boolean) {
             <TestEpicSessionWrapper epicId={EPIC_ID}>
               <TabHostProvider hostId={CHAT_ARTIFACT.hostId}>
                 {chatVisible ? (
-                  <ChatTile
-                    node={CHAT_ARTIFACT}
-                    viewTabId="tab-test"
-                    isActive
-                  />
+                  <ChatTile node={node} viewTabId="tab-test" isActive />
                 ) : null}
               </TabHostProvider>
             </TestEpicSessionWrapper>
@@ -3483,6 +3483,75 @@ describe("<ChatTile />", () => {
       kind: "import",
       worktreePath: "/wt/b",
     });
+  });
+
+  it("drops an armed send when the tile repoints to another chat", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const rendered = render(chatTileTestTree(queryClient, true));
+    await waitForChatTileLoaded();
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [runningShellOnProject()],
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    rendered.rerender(
+      chatTileTestTree(queryClient, true, {
+        ...CHAT_ARTIFACT,
+        id: "chat-2",
+        instanceId: "inst-chat-2",
+        name: "Chat 2",
+      }),
+    );
+    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(chatHarness.sent).toHaveLength(0);
+  });
+
+  it("re-discloses when the holder set changes under an armed chat send", async () => {
+    stageChatWorktreeDraft("/wt/a");
+    await loadChatWithDroppedShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage()],
+        activeTurn: null,
+        managedCommands: [
+          runningShellOnProject(),
+          {
+            ...runningShellOnProject(),
+            id: "sh-other",
+            command: "sleep 1",
+          },
+        ],
+      });
+    });
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(chatHarness.sent).toHaveLength(0);
+    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+      "sleep 1",
+    );
+
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

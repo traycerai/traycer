@@ -5,6 +5,7 @@ import type {
   WorktreeFolderIntent,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import { pathContainsDirectory as pathIsUnderRoot } from "@/lib/path/cross-platform-path";
 
 /**
  * Phase-1 (client-local) owner-scoped teardown snapshot.
@@ -52,13 +53,38 @@ export type TeardownStopTarget =
       readonly holderKey: string;
     };
 
+export type DisclosedTeardownHolder = WorktreeBusyHolder & {
+  readonly holderKey: string;
+};
+
 export type OwnerTeardownSnapshot = {
-  readonly holders: readonly WorktreeBusyHolder[];
+  readonly holders: readonly DisclosedTeardownHolder[];
   readonly stopTargets: readonly TeardownStopTarget[];
 };
 
-export function teardownHolderKey(holder: WorktreeBusyHolder): string {
-  return `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}:${holder.holdKind}:${holder.label}`;
+export function teardownHolderKey(
+  holder: WorktreeBusyHolder,
+  uniqueId: string | undefined = undefined,
+): string {
+  const base = `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}:${holder.holdKind}:${holder.label}`;
+  return uniqueId === undefined ? base : `${base}:${uniqueId}`;
+}
+
+export function teardownHolderRowKey(holder: WorktreeBusyHolder): string {
+  if ("holderKey" in holder) {
+    return (holder as DisclosedTeardownHolder).holderKey;
+  }
+  return teardownHolderKey(holder);
+}
+
+export function teardownHolderSetDrifted(
+  disclosed: readonly WorktreeBusyHolder[],
+  live: readonly WorktreeBusyHolder[],
+): boolean {
+  if (disclosed.length !== live.length) return true;
+  const left = disclosed.map(teardownHolderRowKey).sort();
+  const right = live.map(teardownHolderRowKey).sort();
+  return left.some((key, index) => key !== right[index]);
 }
 
 export function runDirectoryOfBindingEntry(
@@ -121,42 +147,39 @@ export function pathContainsDirectory(
   root: string,
   candidate: string,
 ): boolean {
-  const normalizedRoot = root.replace(/\/+$/, "");
-  const normalizedCandidate = candidate.replace(/\/+$/, "");
-  return (
-    normalizedCandidate === normalizedRoot ||
-    normalizedCandidate.startsWith(`${normalizedRoot}/`)
-  );
+  return pathIsUnderRoot(root, candidate);
 }
 
 export function snapshotOwnerTeardown(
   input: OwnerTeardownSnapshotInput,
 ): OwnerTeardownSnapshot {
-  const holders: WorktreeBusyHolder[] = [];
+  const holders: DisclosedTeardownHolder[] = [];
   const stopTargets: TeardownStopTarget[] = [];
   const agentStopClearsOwner = chatTurnWillCallAgentStop(input);
   if (input.hasActiveTurn) {
-    const holder: WorktreeBusyHolder = {
+    const holder = disclosedHolder({
       ownerRef: input.ownerRef,
       holdKind: "chat-turn",
       activity: "working",
       label: chatTurnHolderLabel(input, agentStopClearsOwner),
-    };
+    });
     holders.push(holder);
     if (agentStopClearsOwner) {
       stopTargets.push({
         kind: "chat-turn",
-        holderKey: teardownHolderKey(holder),
+        holderKey: holder.holderKey,
       });
     }
   }
   if (input.ptyLive) {
-    holders.push({
-      ownerRef: input.ownerRef,
-      holdKind: "terminal-agent-pty",
-      activity: "working",
-      label: `${input.ownerLabel} will restart in the new folder`,
-    });
+    holders.push(
+      disclosedHolder({
+        ownerRef: input.ownerRef,
+        holdKind: "terminal-agent-pty",
+        activity: "working",
+        label: `${input.ownerLabel} will restart in the new folder`,
+      }),
+    );
   }
   for (const shell of input.shells) {
     if (!shell.live) continue;
@@ -166,12 +189,15 @@ export function snapshotOwnerTeardown(
     ) {
       continue;
     }
-    const holder: WorktreeBusyHolder = {
-      ownerRef: input.ownerRef,
-      holdKind: "supervised-shell",
-      activity: "working",
-      label: shellLabel(shell),
-    };
+    const holder = disclosedHolder(
+      {
+        ownerRef: input.ownerRef,
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: shellLabel(shell),
+      },
+      shell.id,
+    );
     holders.push(holder);
     // agent.stop already awaits stopCommandsForAgent for every owner
     // shell. Expanded consequence rows are disclosure-only so a
@@ -181,11 +207,18 @@ export function snapshotOwnerTeardown(
       stopTargets.push({
         kind: "supervised-shell",
         commandId: shell.id,
-        holderKey: teardownHolderKey(holder),
+        holderKey: holder.holderKey,
       });
     }
   }
   return { holders, stopTargets };
+}
+
+function disclosedHolder(
+  holder: WorktreeBusyHolder,
+  uniqueId: string | undefined = undefined,
+): DisclosedTeardownHolder {
+  return { ...holder, holderKey: teardownHolderKey(holder, uniqueId) };
 }
 
 export function snapshotOwnerTeardownHolders(

@@ -25,6 +25,7 @@ export function TeardownCommitDialog(props: {
   readonly immediateDisabled?: boolean;
   readonly immediatePending?: boolean;
   readonly refusalReason?: string;
+  readonly deferContext?: "message" | "update";
   readonly onImmediate: () => void;
   readonly onDefer: () => void;
   readonly onDismiss: () => void;
@@ -33,8 +34,11 @@ export function TeardownCommitDialog(props: {
   const submit = props.choice === "submit";
   const removeOnly = props.choice === "remove";
   const pending = props.immediatePending === true;
+  const deferContext = props.deferContext ?? "message";
   const title = dialogTitle(props.choice);
-  const description = dialogDescription(props.choice);
+  const description = dialogDescription(props.choice, deferContext);
+  const deferLabel = deferButtonLabel(props.choice, deferContext);
+  const immediateLabel = immediateButtonLabel(props.choice);
   return (
     <Dialog
       open={props.open}
@@ -86,7 +90,7 @@ export function TeardownCommitDialog(props: {
               onClick={props.onDefer}
               data-testid="teardown-commit-defer"
             >
-              Apply on next message
+              {deferLabel}
             </Button>
           )}
           {blocked ? (
@@ -97,7 +101,7 @@ export function TeardownCommitDialog(props: {
               onClick={props.onDefer}
               data-testid="teardown-commit-defer"
             >
-              Apply on next message
+              {deferLabel}
             </Button>
           ) : (
             <Button
@@ -108,13 +112,29 @@ export function TeardownCommitDialog(props: {
               onClick={props.onImmediate}
               data-testid="teardown-commit-immediate"
             >
-              {submit ? "Send and switch" : "Stop and switch now"}
+              {immediateLabel}
             </Button>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function deferButtonLabel(
+  choice: TeardownCommitChoice | null,
+  deferContext: "message" | "update",
+): string {
+  if (deferContext === "update" || choice === "commit") {
+    return "Apply on next Update";
+  }
+  return "Apply on next message";
+}
+
+function immediateButtonLabel(choice: TeardownCommitChoice | null): string {
+  if (choice === "submit") return "Send and switch";
+  if (choice === "remove") return "Stop and remove now";
+  return "Stop and switch now";
 }
 
 function dialogTitle(choice: TeardownCommitChoice | null): string {
@@ -126,12 +146,20 @@ function dialogTitle(choice: TeardownCommitChoice | null): string {
   return "Switch workspace?";
 }
 
-function dialogDescription(choice: TeardownCommitChoice | null): string {
+function dialogDescription(
+  choice: TeardownCommitChoice | null,
+  deferContext: "message" | "update",
+): string {
   if (choice === "blocked") {
-    return "This host will not switch folders while the agent is running. The draft stays local until the next message.";
+    return deferContext === "update"
+      ? "This host will not switch folders while the agent is running. The draft stays local until you click Update."
+      : "This host will not switch folders while the agent is running. The draft stays local until the next message.";
   }
   if (choice === "submit") {
     return "Sending this message will switch folders and stop the processes below.";
+  }
+  if (choice === "remove") {
+    return "These processes run in this folder and will stop if you remove it.";
   }
   return "These processes run in the current folder and will stop if you switch now.";
 }

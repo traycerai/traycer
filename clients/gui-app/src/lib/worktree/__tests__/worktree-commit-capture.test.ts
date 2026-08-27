@@ -44,7 +44,7 @@ function capture(
 describe("takeArmedTeardownSubmit", () => {
   it("consumes the armed payload so a later take cannot reuse it", () => {
     const slot: { current: ArmedTeardownSubmit<string> | null } = {
-      current: { input: "send-a", capture: capture({}) },
+      current: { input: "send-a", capture: capture({}), ownerId: "chat-1" },
     };
     expect(takeArmedTeardownSubmit(slot)?.input).toBe("send-a");
     expect(takeArmedTeardownSubmit(slot)).toBeNull();

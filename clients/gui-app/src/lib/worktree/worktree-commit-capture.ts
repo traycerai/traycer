@@ -21,6 +21,7 @@ export type WorktreeCommitCapture = {
 export type ArmedTeardownSubmit<T> = {
   readonly input: T;
   readonly capture: WorktreeCommitCapture;
+  readonly ownerId: string;
 };
 
 export function takeArmedTeardownSubmit<T>(slot: {

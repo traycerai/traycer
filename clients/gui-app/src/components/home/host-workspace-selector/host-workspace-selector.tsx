@@ -1834,6 +1834,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     readonly failures: Readonly<Record<string, string>>;
     readonly restoreRemovalOnDismiss: string | null;
     readonly restoreDraftOnDismiss: WorktreeFolderIntent | null;
+    readonly refusalReason?: string;
   } | null>(null);
   const [teardownCommitPending, setTeardownCommitPending] = useState(false);
   const teardownRunIdRef = useRef(0);
@@ -2269,6 +2270,16 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       requestStagedFolderCommit();
       return;
     }
+    const refusal = stagedCommitRefusalReason({
+      capture: dialog.capture,
+      stagedKey,
+      pendingDefaultPathCount: pendingDefaultPathsRef.current.size,
+      dirtyPathCount: editor.dirtyPathsSinceResume.size,
+    });
+    if (refusal !== null) {
+      setTeardownDialog({ ...dialog, refusalReason: refusal });
+      return;
+    }
     const runId = ++teardownRunIdRef.current;
     setTeardownCommitPending(true);
     const isCancelled = (): boolean => teardownRunIdRef.current !== runId;
@@ -2312,6 +2323,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     surface.ownerId,
     teardownCommitPending,
     teardownDialog,
+    stagedKey,
+    editor.dirtyPathsSinceResume,
   ]);
   const removeFolderNow = useCallback(
     (workspacePath: string): void => {
@@ -3116,6 +3129,10 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         holders={teardownDialog?.holders ?? []}
         failures={teardownDialog?.failures}
         immediatePending={teardownCommitPending}
+        refusalReason={teardownDialog?.refusalReason}
+        deferContext={
+          surface.kind === "terminal-agent" ? "update" : "message"
+        }
         onImmediate={() => {
           void confirmImmediateCommit();
         }}
@@ -3160,6 +3177,32 @@ function InEpicSurface(props: InEpicSurfaceProps) {
 // default (new worktree); a non-git folder can only be Local. The seeding effect
 // stages a pick shortly after mount, so this is the transient pre-seed state. A
 // supported staged entry's own kind wins.
+function stagedCommitRefusalReason(input: {
+  readonly capture: WorktreeCommitCapture;
+  readonly stagedKey: WorktreeStagingKey;
+  readonly pendingDefaultPathCount: number;
+  readonly dirtyPathCount: number;
+}): string | null {
+  if (
+    input.capture.draft !== null &&
+    stagedWorktreeIntentIsSuspended(input.stagedKey)
+  ) {
+    return "This folder change is waiting on unresolved workspace setup.";
+  }
+  if (input.pendingDefaultPathCount > 0) {
+    return "Wait for folder setup to finish before updating.";
+  }
+  const stagedEntries = input.capture.draft?.entries ?? [];
+  if (
+    stagedEntries.length === 0 &&
+    input.dirtyPathCount === 0 &&
+    input.capture.removedWorkspacePaths.length === 0
+  ) {
+    return "Nothing to apply.";
+  }
+  return null;
+}
+
 function deriveHomeRowMode(
   capturedEntry: WorktreeFolderIntent | null,
   isGitRepo: boolean,
