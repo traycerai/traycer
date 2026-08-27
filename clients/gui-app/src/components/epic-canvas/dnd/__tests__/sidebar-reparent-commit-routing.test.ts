@@ -49,6 +49,17 @@ const seam = vi.hoisted(() => {
     tree: emptyTree(),
     /** null models a session with no serving client. */
     hasClient: true,
+    /**
+     * The optimistic overlay's begin/retire pair (Phase 1.1). Only the
+     * registry-backed agent branch calls these - the doc-write branch
+     * (artifacts, doc-only terminal agents) is untouched by the overlay.
+     */
+    beginReparentMutation: vi.fn<
+      (nodeId: string, parentId: string | null) => string | null
+    >(() => "req-1"),
+    retirePendingMutation: vi.fn<
+      (requestId: string, outcome: "landed" | "failed") => boolean
+    >(() => true),
   };
 });
 
@@ -88,6 +99,8 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
             allIds: [...seam.recordIds, ...seam.docResidentIds],
           },
           reparentArtifact: seam.reparentArtifact,
+          beginReparentMutation: seam.beginReparentMutation,
+          retirePendingMutation: seam.retirePendingMutation,
         }),
       },
       ...handle,
@@ -150,6 +163,10 @@ beforeEach(() => {
   seam.docResidentIds = [];
   seam.hasClient = true;
   seam.tree = seam.emptyTree();
+  seam.beginReparentMutation.mockClear();
+  seam.beginReparentMutation.mockReturnValue("req-1");
+  seam.retirePendingMutation.mockClear();
+  seam.retirePendingMutation.mockReturnValue(true);
 });
 
 describe("commitSidebarReparentDrop routes by which plane owns the pointer", () => {
@@ -163,6 +180,16 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
     drop("tui-1", "tui-parent");
+
+    // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
+    // drop time rather than waiting on the round trip.
+    expect(seam.beginReparentMutation).toHaveBeenCalledWith(
+      "tui-1",
+      "tui-parent",
+    );
+    expect(seam.beginReparentMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      seam.request.mock.invocationCallOrder[0],
+    );
 
     expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
       epicId: "epic-1",
@@ -178,7 +205,33 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
         queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
       });
     });
+    // The RPC's ack retires the stamp as LANDED, not deleted - the overlay
+    // stays applied until the invalidated record refetch actually lands the
+    // moved pointer.
+    expect(seam.retirePendingMutation).toHaveBeenCalledWith("req-1", "landed");
     invalidate.mockRestore();
+  });
+
+  it("retires the overlay stamp as FAILED when epic.reparentChat rejects", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.request.mockRejectedValueOnce(new Error("host refused the move"));
+
+    drop("tui-1", "tui-parent");
+
+    expect(seam.beginReparentMutation).toHaveBeenCalledWith(
+      "tui-1",
+      "tui-parent",
+    );
+    await vi.waitFor(() => {
+      expect(seam.retirePendingMutation).toHaveBeenCalledWith(
+        "req-1",
+        "failed",
+      );
+    });
   });
 
   it("writes the doc for a terminal agent the host serves no record for", () => {
@@ -320,5 +373,9 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
 
     expect(seam.request).not.toHaveBeenCalled();
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // The no-client check runs before the overlay is even stamped - a silent
+    // cancel must not leave a phantom pending mutation behind.
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+    expect(seam.retirePendingMutation).not.toHaveBeenCalled();
   });
 });

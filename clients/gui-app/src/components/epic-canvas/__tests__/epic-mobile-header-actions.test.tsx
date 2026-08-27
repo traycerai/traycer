@@ -21,7 +21,9 @@ const holder = vi.hoisted(() => ({
   role: "owner",
   mobile: true,
 }));
-const mutateSpy = vi.hoisted(() => vi.fn<(vars: RenameVariables) => void>());
+const mutateAsyncSpy = vi.hoisted(() =>
+  vi.fn<(vars: RenameVariables) => Promise<void>>(),
+);
 
 vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
   useIsMobileViewport: () => holder.mobile,
@@ -30,7 +32,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicPermissionRole: () => holder.role,
 }));
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
-  useEpicUpdateTitle: () => ({ mutate: mutateSpy, isPending: false }),
+  useEpicUpdateTitle: () => ({ mutateAsync: mutateAsyncSpy, isPending: false }),
 }));
 
 function openEdit(testId: string): HTMLElement {
@@ -63,7 +65,8 @@ describe("<EpicMobileSwitcherTrigger />", () => {
 describe("<MobileEpicHeaderTitle />", () => {
   beforeEach(() => {
     holder.role = "owner";
-    mutateSpy.mockClear();
+    mutateAsyncSpy.mockClear();
+    mutateAsyncSpy.mockResolvedValue(undefined);
   });
   afterEach(cleanup);
 
@@ -74,15 +77,19 @@ describe("<MobileEpicHeaderTitle />", () => {
     expect(title.textContent).toBe("My Epic");
   });
 
-  it("commits a new title via the epic title mutation", () => {
+  it("commits a new title via the epic title mutation", async () => {
     render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
-    expect(mutateSpy).toHaveBeenCalledTimes(1);
-    const variables = mutateSpy.mock.calls[0][0];
+    expect(mutateAsyncSpy).toHaveBeenCalledTimes(1);
+    const variables = mutateAsyncSpy.mock.calls[0][0];
     expect(variables.epicDelta.id).toBe("epic-1");
     expect(variables.epicDelta.title).toBe("Renamed epic");
+    // Flush the retire `.then` arms so no unhandled-promise warning bleeds
+    // into the next test - there is no session registered under "epic-1"
+    // here, so the retire itself is a no-op, but the promise still settles.
+    await Promise.resolve();
   });
 
   it("Escape cancels the edit without committing", () => {
@@ -90,7 +97,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Discarded" } });
     fireEvent.keyDown(input, { key: "Escape" });
-    expect(mutateSpy).not.toHaveBeenCalled();
+    expect(mutateAsyncSpy).not.toHaveBeenCalled();
     expect(screen.getByTestId("mobile-epic-header-title").textContent).toBe(
       "My Epic",
     );
@@ -101,7 +108,7 @@ describe("<MobileEpicHeaderTitle />", () => {
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.blur(input);
-    expect(mutateSpy).not.toHaveBeenCalled();
+    expect(mutateAsyncSpy).not.toHaveBeenCalled();
     expect(screen.getByTestId("mobile-epic-header-title").textContent).toBe(
       "My Epic",
     );

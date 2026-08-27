@@ -8,6 +8,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -46,12 +47,12 @@ vi.mock("@/components/notifications/mobile-notifications-button", () => ({
     <button type="button" aria-label="Notifications" />
   ),
 }));
-const updateTitleMutateSpy = vi.hoisted(() =>
-  vi.fn<(vars: { epicDelta: { title: string } }) => void>(),
+const updateTitleMutateAsyncSpy = vi.hoisted(() =>
+  vi.fn<(vars: { epicDelta: { title: string } }) => Promise<void>>(),
 );
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
-    mutate: updateTitleMutateSpy,
+    mutateAsync: updateTitleMutateAsyncSpy,
     isPending: false,
   }),
 }));
@@ -149,7 +150,8 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     useMobileHeaderStore.setState({ rightActions: null });
     useTabsStore.setState({ items: [], activeItemId: null });
     __getOpenEpicRegistryForTests().disposeAll();
-    updateTitleMutateSpy.mockClear();
+    updateTitleMutateAsyncSpy.mockClear();
+    updateTitleMutateAsyncSpy.mockResolvedValue(undefined);
     restoreEpicTabLayout();
   });
 
@@ -241,7 +243,13 @@ describe("MobileAppHeader on a cold-restored epic tab", () => {
     fireEvent.change(input, { target: { value: "Renamed on the phone" } });
     fireEvent.blur(input);
 
-    expect(updateTitleMutateSpy).toHaveBeenCalledTimes(1);
+    expect(updateTitleMutateAsyncSpy).toHaveBeenCalledTimes(1);
+    // Flush the retire `.then` arm before the manual echo below, so the
+    // "landed" retire and the doc-echo overlay resolution happen in the
+    // documented order rather than racing.
+    await act(async () => {
+      await Promise.resolve();
+    });
     // The committed title landing in the epic doc is what the live session
     // projects back; the host round trip is the mocked half.
     handle.store.setState({

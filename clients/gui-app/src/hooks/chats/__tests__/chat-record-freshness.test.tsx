@@ -215,7 +215,18 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
             (entry) => entry.chatId === params.chatId,
           );
           if (index >= 0) {
-            records[index] = { ...records[index], title: params.title };
+            records[index] = {
+              ...records[index],
+              title: params.title,
+              // `revision` is per-chat MONOTONIC and the only ordering fact
+              // `applyChatRecords` has - a served row whose revision does not
+              // strictly exceed what is held is dropped as stale (see
+              // `chat-records-union.test.ts`'s "rejects a STALE poll answer").
+              // A real host bumps this on every write; a fixture that left it
+              // unchanged would describe an update no host actually emits, and
+              // the re-read this test proves would silently no-op.
+              revision: records[index].revision + 1,
+            };
           }
           return Promise.resolve({ updated: true });
         },
@@ -232,6 +243,9 @@ function createFixture(listFailureCode: "E_HOST_UNSUPPORTED" | null): Fixture {
               // moved the timestamp alone would describe a row no host emits.
               archived: params.archived,
               archivedAt: params.archived ? 5 : null,
+              // See `epic.renameChat` above - the revision guard drops a
+              // served row that does not strictly advance it.
+              revision: records[index].revision + 1,
             };
           }
           return Promise.resolve({ updated: true });
