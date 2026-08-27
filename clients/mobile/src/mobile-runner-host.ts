@@ -1,4 +1,7 @@
+import { App } from "@capacitor/app";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";
+import { Network, type ConnectionStatus } from "@capacitor/network";
 import { SecureStoragePlugin } from "capacitor-secure-storage-plugin";
 import {
   applySlowDown,
@@ -81,6 +84,7 @@ import type {
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
+  SystemResumeEvent,
   TokenRotateResult,
   TokenStoreChange,
   TrayEpic,
@@ -229,7 +233,15 @@ export class MobileRunnerHost implements IRunnerHost {
    */
   readonly pushPermission: IPushPermissionHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
-  private readonly systemResume = new MobileSystemResume();
+  // One evidence pair per platform - see `resumeEvidenceModeFor` and the
+  // MobileSystemResume class doc for why the same Capacitor event names mean
+  // different things on iOS, Android, and Web.
+  private readonly systemResume = new MobileSystemResume(
+    resumeEvidenceModeFor(Capacitor.getPlatform()),
+  );
+  private readonly networkPath = new MobileNetworkPathWatcher(
+    this.systemResume,
+  );
   /**
    * The in-window selection authority (the "shell with no main process"
    * binding the contract names): the SAME engine desktop mounts in Electron
@@ -593,13 +605,14 @@ export class MobileRunnerHost implements IRunnerHost {
     // a parsed callback URL. The `traycer://auth/callback` deep link the
     // approval page fires exists only to make the OS switch back to this app -
     // it carries no payload (see `IRunnerHost.onAuthCallback`), and once the
-    // WebView resumes, its `visibilitychange` edge is the same "the browser
-    // returned" fact. Resume, and not the App plugin's `appUrlOpen`, because
+    // WebView resumes, the shell's foreground edge (DOM visibility or native
+    // app-state, whichever reports first) is the same "the browser returned"
+    // fact. Resume, and not the App plugin's `appUrlOpen`, because
     // resume ALSO covers the manual return - the user switching back by hand
     // after the manual-code page, where no deep link is fired at all. (The
-    // App plugin does exist in this shell now, for the link-login deep link
-    // that carries a real payload; see `link-login-deep-links.ts`. It has
-    // nothing to add here, where the URL is payload-free by design.)
+    // App plugin's `appUrlOpen` still has nothing to add here, where the URL
+    // is payload-free by design; see `link-login-deep-links.ts` for the deep
+    // link that does carry one.)
     // A resume with no in-flight attempt is a no-op in the consumer
     // (`AuthService.handleReturnSignal` only collapses an active poll wait).
     return this.systemResume.subscribe(handler);
@@ -612,8 +625,12 @@ export class MobileRunnerHost implements IRunnerHost {
     return disposable();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     return this.systemResume.subscribe(handler);
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    return this.networkPath.subscribe(handler);
   }
 
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
@@ -1167,55 +1184,384 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * coming back to the foreground. The OS suspends the WebView on every app
  * switch, which kills its sockets and freezes its timers, so the shared wake
  * consumers (host-stream re-dial, the auth refresh scheduler) need exactly the
- * signal a desktop gets from `powerMonitor` and a phone gets from
- * `visibilitychange`. Without it every wake consumer falls back to the
- * cross-platform `window 'online'` event, which does NOT fire on an app switch:
- * the network never went anywhere, only this runtime did.
+ * signal a desktop gets from `powerMonitor`. Without it every wake consumer
+ * falls back to the cross-platform `window 'online'` event, which does NOT
+ * fire on an app switch: the network never went anywhere, only this runtime
+ * did.
  *
- * `visibilitychange` and not the App plugin's `appStateChange`: WKWebView and
- * the Android WebView both raise it, so the resume edge costs nothing on top
- * of whatever plugins the shell already carries, and it also fires for
- * in-WebView backgrounding the native app-state event does not describe.
+ * EXACTLY ONE paired evidence source is selected per platform, because
+ * Capacitor's identically-named events mean different things on each - and
+ * because no callback-only algorithm can distinguish a source's late-replayed
+ * event from the genuine first event of the next episode, fusing two sources
+ * over one episode is unsound by construction (a delayed callback from the
+ * source that missed the completed episode is indistinguishable from a new
+ * episode's opener). One source, one level-triggered pair, no fusion:
+ *
+ *  - iOS (`ios-lifecycle`): App `pause`/`resume`, which map to UIKit
+ *    did-enter-background / will-enter-foreground - the OS's own statement
+ *    that the app really left and returned. `pause` stamps `Date.now()`, so
+ *    the paired resume reports a NUMERIC dwell. DOM visibility is not a
+ *    participant. (`appStateChange(false)` is not used here: on iOS it is
+ *    will-resign-active, which also fires under Control Center, Face ID, and
+ *    permission overlays where the app never backgrounds.)
+ *  - Android (`android-app-state`): App `appStateChange` - `false` fires at
+ *    `onStop` (no longer visible), `true` at resume. Android's `pause` is
+ *    Activity `onPause`, which the lifecycle contract allows while the app
+ *    is still fully visible (multi-window, a dialog), so counting paused
+ *    dwell would force-drop a healthy mux under a permission dialog. The
+ *    dwell reported is specifically invisibility time (onStop -> onResume),
+ *    deliberately shorter than total inactivity.
+ *  - Web/dev (`dom`): DOM `hidden` opens, DOM `visible` closes, dwell is
+ *    `null` - a hidden document proves invisibility, not real backgrounding,
+ *    so no number is fabricated. The Web App plugin's `pause`/`resume` are
+ *    emitted FROM this same DOM event and are not registered - a duplicate
+ *    source with a native label.
+ *
+ * If installing the selected native pair FAILS (no plugin bridge), the
+ * tracker disposes whatever half registered and switches exclusively to the
+ * DOM pair - degraded to unknown dwell, never to two owners of one episode.
+ *
+ * Level-triggered semantics on the selected pair: a duplicate background or
+ * foreground report is ignored, a cold-start foreground is ignored, and one
+ * background followed by its paired foreground emits exactly one resume.
+ * `isBackgrounded()` (the network watcher's suppression gate) reflects only
+ * the selected source.
+ *
+ * The resume event carries the measured dwell
+ * (`SystemResumeEvent.backgroundedForMs`) - what lets the wake policy
+ * distinguish a quick app switch (the socket may have survived - probe it
+ * fast) from a long one (the OS has torn the socket down - redial without
+ * asking). `null` keeps the conservative default downstream.
  *
  * The shell's plugin set is kept SMALL rather than fixed at a number, and each
- * member earns its place by being the only way to reach an OS capability: core,
- * keyboard, push-notifications, app-launcher, secure-storage, native-settings,
- * device, barcode-scanner, and app. The last one is the newest and the least
- * obvious - `@capacitor/app` is there because a URL the OS opens (a QR scanned
- * by the system camera) has no other route into JS: Capacitor's iOS bridge
- * posts the launch/open URL to that plugin and nothing else listens, so
- * without it the app launches and the code is silently dropped. See
- * `link-login-deep-links.ts`. Its resume/state events are deliberately NOT
- * used - this class stays the resume source.
- *
- * Fires ONLY on the hidden -> visible edge. That edge filter is also the whole
- * dedupe, deliberately with no debounce timer: the event is edge-driven (a
- * repeat needs a real hide in between, which is a real suspend), and every
- * consumer downstream is idempotent and rate-limits itself - the remote
- * session's `wake` can only pull one redial forward per armed backoff, and the
- * auth scheduler coalesces on its own. A timer here would only add latency to
- * the recovery this exists to make fast.
+ * member earns its place by being the only way to reach an OS capability:
+ * core, keyboard, push-notifications, app-launcher, secure-storage,
+ * native-settings, device, barcode-scanner, network, and app. `@capacitor/app`
+ * first earned its place because a URL the OS opens (a QR scanned by the
+ * system camera) has no other route into JS (see `link-login-deep-links.ts`);
+ * its lifecycle events are the second capability it is the only route to.
  */
+
+/** Which paired evidence source owns background/foreground on this platform. */
+type ResumeEvidenceMode = "ios-lifecycle" | "android-app-state" | "dom";
+
+/** The selected evidence pair for `Capacitor.getPlatform()`'s answer. */
+function resumeEvidenceModeFor(platform: string): ResumeEvidenceMode {
+  if (platform === "ios") {
+    return "ios-lifecycle";
+  }
+  if (platform === "android") {
+    return "android-app-state";
+  }
+  return "dom";
+}
+
 class MobileSystemResume {
-  private readonly handlers = new Set<() => void>();
-  private hidden = false;
+  private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
   private listening = false;
+  private background = false;
+  /** Stamped only by the numeric modes; `null` dwell everywhere else. */
+  private enteredAt: number | null = null;
+  /**
+   * Ownership token for the native pair. Every native callback checks it
+   * before acting, and the FIRST registration failure bumps it SYNCHRONOUSLY -
+   * so a successfully-registered half whose handle removal is still in
+   * flight, or whose events were already queued, is retired the instant the
+   * pair is known broken, before the DOM fallback can take over. Without
+   * this there is a real interval with two owners: a late partial `pause`
+   * could stamp numeric state under DOM ownership, sticking the network gate
+   * or making the null-dwell fallback report a number.
+   */
+  private nativeOwnerToken = 0;
+
+  constructor(private readonly mode: ResumeEvidenceMode) {}
+
   private readonly onVisibilityChange = (): void => {
-    const hidden = document.visibilityState === "hidden";
-    const resumed = this.hidden && !hidden;
-    this.hidden = hidden;
-    if (!resumed) {
+    if (document.visibilityState === "hidden") {
+      this.noteBackground(false);
+    } else {
+      this.noteForeground();
+    }
+  };
+
+  /** Whether the selected source currently reports the app backgrounded. */
+  isBackgrounded(): boolean {
+    return this.background;
+  }
+
+  subscribe(handler: (event: SystemResumeEvent) => void): Disposable {
+    this.ensureTracking();
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  private noteBackground(stampDwell: boolean): void {
+    if (this.background) {
+      // Level-triggered: a duplicate background report says nothing new.
       return;
     }
+    this.background = true;
+    this.enteredAt = stampDwell ? Date.now() : null;
+  }
+
+  /**
+   * Invoked synchronously on every background -> foreground transition,
+   * BEFORE any resume handler runs. The network watcher registers here: its
+   * quarantine generation must be open before the resume wake is issued, or
+   * a queued network callback delivered between the wake and the watcher's
+   * own (unordered) resume handler could fire a second forced drop against
+   * the mux that wake just recovered.
+   */
+  private epochBoundaryListener: (() => void) | null = null;
+
+  setEpochBoundaryListener(listener: () => void): void {
+    this.epochBoundaryListener = listener;
+  }
+
+  private noteForeground(): void {
+    if (!this.background) {
+      // A duplicate foreground, or a cold start's first active report.
+      return;
+    }
+    this.background = false;
+    if (this.epochBoundaryListener !== null) {
+      this.epochBoundaryListener();
+    }
+    const enteredAt = this.enteredAt;
+    this.enteredAt = null;
+    const event: SystemResumeEvent = {
+      backgroundedForMs:
+        enteredAt === null ? null : Math.max(0, Date.now() - enteredAt),
+    };
     for (const handler of Array.from(this.handlers)) {
       try {
-        handler();
+        handler(event);
       } catch (error) {
         // One bad subscriber must not cost the others their wake.
         console.error("[mobile] system-resume handler threw", error);
       }
     }
-  };
+  }
+
+  /**
+   * Installs the selected pair on first subscription and keeps it: this
+   * object lives as long as the shell, and the level state has to stay
+   * tracked across a window with no subscribers or the next edge is read
+   * against a stale baseline.
+   *
+   * Public (not folded into `subscribe`) because the network watcher reads
+   * `isBackgrounded()` without ever subscribing to resumes, and that read is
+   * only meaningful while the state is actually being tracked - it must be
+   * able to start the tracking itself rather than depend on some unrelated
+   * consumer having subscribed first.
+   */
+  ensureTracking(): void {
+    if (this.listening || typeof document === "undefined") {
+      return;
+    }
+    this.listening = true;
+    if (this.mode === "dom") {
+      this.installDomPair();
+      return;
+    }
+    this.installNativePair(this.mode);
+  }
+
+  /**
+   * The DOM pair - the `dom` mode's whole tracker, and the exclusive
+   * fallback when native registration fails. Seeding from the CURRENT state
+   * (rather than at construction) is what keeps a cold start from counting
+   * as a resume - and a boot-hidden seed carries no entry stamp, so a resume
+   * measured against it honestly reports `null` rather than counting time
+   * before the listener existed.
+   */
+  private installDomPair(): void {
+    if (document.visibilityState === "hidden") {
+      this.noteBackground(false);
+    }
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+  }
+
+  /**
+   * The selected native pair, with an exclusive-fallback contract: if either
+   * registration rejects (no plugin bridge - the dev web entry, tests), the
+   * half that DID register is disposed before the DOM pair takes over, so
+   * two sources can never own one episode.
+   */
+  private installNativePair(mode: "ios-lifecycle" | "android-app-state"): void {
+    const token = ++this.nativeOwnerToken;
+    const owned = (callback: () => void) => (): void => {
+      if (token !== this.nativeOwnerToken) {
+        // A retired owner's callback - a queued event from a half-registered
+        // pair, delivered after fallback. Inert by contract.
+        return;
+      }
+      callback();
+    };
+    const registrations =
+      mode === "ios-lifecycle"
+        ? [
+            App.addListener(
+              "pause",
+              owned(() => {
+                this.noteBackground(true);
+              }),
+            ),
+            App.addListener(
+              "resume",
+              owned(() => {
+                this.noteForeground();
+              }),
+            ),
+          ]
+        : [
+            App.addListener("appStateChange", (state) => {
+              if (token !== this.nativeOwnerToken) {
+                return;
+              }
+              if (state.isActive) {
+                this.noteForeground();
+              } else {
+                this.noteBackground(true);
+              }
+            }),
+          ];
+    void (async () => {
+      try {
+        await Promise.all(registrations);
+        return;
+      } catch (error) {
+        console.warn(
+          "[mobile] native lifecycle listeners unavailable - falling back to DOM visibility",
+          error,
+        );
+      }
+      // Ownership changes FIRST, synchronously with learning of the failure:
+      // every native callback above is inert from this line on, however long
+      // the handle removals below take and whatever the bridge already
+      // queued.
+      this.nativeOwnerToken += 1;
+      // Reset anything a partial native callback wrote before retirement -
+      // the DOM pair must seed from a clean slate, and a native-stamped
+      // number must never ride out through the null-dwell fallback.
+      this.background = false;
+      this.enteredAt = null;
+      const settled = await Promise.allSettled(registrations);
+      await Promise.allSettled(
+        settled
+          .filter(
+            (
+              outcome,
+            ): outcome is PromiseFulfilledResult<PluginListenerHandle> =>
+              outcome.status === "fulfilled",
+          )
+          .map((outcome) => outcome.value.remove()),
+      );
+      this.installDomPair();
+    })();
+  }
+}
+
+/**
+ * The phone's `IRunnerHost.onNetworkPathChanged` source: Capacitor
+ * `networkStatusChange`, filtered down to the two transitions under which an
+ * existing socket is dead (or about to behave like it) with no DOM `online`
+ * event and no resume edge to notice:
+ *
+ *  - connectivity REGAINED (`connected` false -> true);
+ *  - the interface TYPE changing while staying connected (Wi-Fi -> cellular).
+ *    The OS migrates the route out from under the socket and the enum never
+ *    passes through "offline", so every other trigger stays silent while
+ *    sends quietly die.
+ *
+ * Suppressed while the app is backgrounded: a backgrounded phone hopping
+ * networks must not reopen a relay splice nobody is looking at, and the
+ * resume edge owns recovery on the way back (its duration gate already
+ * forces a redial after any background long enough for a network hop to be
+ * likely). The tracked status still updates while backgrounded, so a change
+ * that happened mid-background is not replayed as a stale edge on the next
+ * foreground change.
+ *
+ * Bootstrap is READ-LISTEN-READ with a single reconciliation, because the
+ * native side monitors and emits independently of this JS registration:
+ * a transition can land after snapshot A but before the listener is live
+ * (invisible to both A and the callback stream), and a callback can describe
+ * the same post-transition state a later snapshot also reports. So: snapshot
+ * A, register the listener (buffering callbacks), snapshot B, then walk the
+ * observed chain A -> buffered... -> B ONCE - if any step is a
+ * regained/type-change transition, at most ONE recovery signal is emitted
+ * (a transient flap observed inside the buffer still counts: the socket it
+ * killed stays dead however briefly the path flapped), the newest
+ * observation becomes the live baseline, and only then do callbacks flow
+ * straight through. A chain with no qualifying step - including callbacks
+ * that merely re-announce B - emits nothing. Failed reads degrade to
+ * whatever the chain did observe, without an unhandled rejection.
+ */
+class MobileNetworkPathWatcher {
+  private readonly handlers = new Set<() => void>();
+  private lastStatus: ConnectionStatus | null = null;
+  /**
+   * Observations buffered during bootstrap, each tagged with the lifecycle
+   * tracker's state AT ARRIVAL - a transition observed while backgrounded
+   * belongs to that background episode, and the resume edge (not this
+   * watcher) owns that episode's recovery. `null` once bootstrap has
+   * reconciled and callbacks flow straight through.
+   */
+  private preSeedObservations: Array<{
+    readonly status: ConnectionStatus;
+    readonly backgrounded: boolean;
+  }> | null = [];
+  /**
+   * Bumped on EVERY callback arrival, buffered or live. A snapshot may be
+   * adopted as a baseline only if it resolved with no intervening callback
+   * (its captured value could otherwise be OLDER than an already-delivered
+   * observation - the native read races the event stream).
+   */
+  private callbackRevision = 0;
+  /** Whether a resume completed while bootstrap was still reconciling. */
+  private bootstrapSawResume = false;
+  /**
+   * True from a resume event until the post-resume rebaseline read settles.
+   * Callbacks arriving inside this window are retired into the baseline
+   * silently: they describe (or race with) the background episode the resume
+   * just recovered from, and the resume wake is that episode's single
+   * recovery owner.
+   */
+  private rebaselineActive = false;
+  /**
+   * THE single commit owner for live confirmations. Bumped on every live
+   * callback arrival and on every resume boundary; a confirmation may only
+   * commit (write the baseline, fire the wake) if the sequence it captured
+   * at arrival is still current when its read settles. This is what makes
+   * overlapping confirmations converge on exactly one commit - without it,
+   * two raced callbacks could each compare the same stale baseline against
+   * the current truth and force twice, and an OLDER confirmation exhausting
+   * its quiet reads could overwrite a newer observation.
+   */
+  private liveCommitSeq = 0;
+  /**
+   * Whether `lastStatus` was established by a CONFIRMED read (a quiet
+   * snapshot or a confirmed commit) rather than a raw callback adopted when
+   * confirmation was unavailable. An untrusted baseline may be superseded
+   * but never serve as the predecessor of a forced wake: the next confirmed
+   * status SEEDS from it silently. Without this, a failed confirmation would
+   * promote its own unconfirmed observation into a trusted predecessor and
+   * the following confirmed status could ride a false edge.
+   */
+  private baselineTrusted = true;
+  /**
+   * Which resume owns the current rebaseline read. A second resume during
+   * the read supersedes the first: only the newest generation may adopt the
+   * post-resume baseline and close the quarantine window.
+   */
+  private resumeGeneration = 0;
+  private listening = false;
+
+  constructor(private readonly systemResume: MobileSystemResume) {}
 
   subscribe(handler: () => void): Disposable {
     this.ensureListening();
@@ -1227,21 +1573,335 @@ class MobileSystemResume {
     };
   }
 
+  /** The two transitions under which an existing socket is dead - see doc. */
+  private static isRecoveryTransition(
+    previous: ConnectionStatus,
+    status: ConnectionStatus,
+  ): boolean {
+    const regained = !previous.connected && status.connected;
+    const pathMoved =
+      previous.connected &&
+      status.connected &&
+      previous.connectionType !== status.connectionType;
+    return regained || pathMoved;
+  }
+
+  private emitPathChanged(): void {
+    for (const handler of Array.from(this.handlers)) {
+      try {
+        handler();
+      } catch (error) {
+        // One bad subscriber must not cost the others the signal.
+        console.error("[mobile] network-path handler threw", error);
+      }
+    }
+  }
+
   /**
-   * Installs the DOM listener on first subscription and keeps it: this object
-   * lives as long as the shell, and the visible/hidden state has to stay
-   * tracked across a window with no subscribers or the next resume edge is
-   * read against a stale baseline. Seeding from the CURRENT state here (rather
-   * than at construction) is what keeps a cold start from counting as a
-   * resume - a shell that boots hidden has not woken up yet.
+   * Applies one live observation with CONFIRMATION: the observed status is
+   * validated against a revision-guarded current read before it may change
+   * the baseline or force a redial. JS delivery order is not occurrence
+   * order - a native event queued during a background episode can be
+   * delivered long after resume, and a stale `offline` followed by a late
+   * `online` must collapse against the confirmed current status instead of
+   * manufacturing a recovery edge. Confirmation is UNIVERSAL rather than
+   * scoped to a could-still-be-stale window because no callback-side
+   * property bounds that window; the cost is one native round trip per
+   * (rare) network event. The accepted trade: a genuine flap shorter than
+   * that round trip also collapses - the resume/probe machinery, not this
+   * edge, owns sub-roundtrip blips.
+   *
+   * A read that never goes quiet means newer callbacks are already in
+   * flight and each will run its own confirmation - this one folds the raw
+   * observation into the baseline WITHOUT forcing (conservative: an
+   * unconfirmable edge must not tear down a possibly-healthy mux).
    */
+  private async confirmAndApply(
+    observed: ConnectionStatus,
+    commitSeq: number,
+  ): Promise<void> {
+    const confirmed = await this.settleQuietRead();
+    if (commitSeq !== this.liveCommitSeq) {
+      // A newer callback - or a resume boundary - owns the commit now. This
+      // confirmation writes NOTHING: committing here would either double the
+      // wake (both raced confirmations comparing the same stale baseline) or
+      // let an older observation overwrite a newer one after its quiet reads
+      // ran out.
+      return;
+    }
+    if (confirmed === null) {
+      // No quiet read - but the ownership check above just proved this IS
+      // the newest observation, so it may move the baseline. It moves it as
+      // UNTRUSTED: an unconfirmed raw callback must never become the
+      // predecessor a later confirmed status fires against.
+      this.lastStatus = observed;
+      this.baselineTrusted = false;
+      return;
+    }
+    // `previous` is read AT COMMIT, not at arrival: an arrival-time capture
+    // is exactly what let two overlapping confirmations both see the old
+    // baseline.
+    const previous = this.lastStatus;
+    const previousTrusted = this.baselineTrusted;
+    this.lastStatus = confirmed;
+    this.baselineTrusted = true;
+    if (previous === null || !previousTrusted) {
+      // Seeding (or re-seeding after an untrusted interval): adopt silently.
+      return;
+    }
+    if (!MobileNetworkPathWatcher.isRecoveryTransition(previous, confirmed)) {
+      return;
+    }
+    if (this.systemResume.isBackgrounded()) {
+      return;
+    }
+    this.emitPathChanged();
+  }
+
   private ensureListening(): void {
-    if (this.listening || typeof document === "undefined") {
+    if (this.listening) {
       return;
     }
     this.listening = true;
-    this.hidden = document.visibilityState === "hidden";
-    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    // The resume edge is this watcher's epoch boundary, wired through the
+    // tracker's SYNCHRONOUS pre-handler seam rather than an ordinary resume
+    // subscription: the quarantine below must already be open when the
+    // resume wake is issued, and subscriber iteration order guarantees
+    // nothing.
+    this.systemResume.setEpochBoundaryListener(() => {
+      this.onResumed();
+    });
+    this.systemResume.ensureTracking();
+    // Failure-isolated read-listen-read bootstrap; see the class doc. The
+    // rejection handler attaches to snapshot A IMMEDIATELY - a listener
+    // registration failure must not leave A as an unhandled rejection.
+    const snapshotARead: Promise<ConnectionStatus | null> =
+      Network.getStatus().catch((error: unknown): null => {
+        console.warn("[mobile] network snapshot A unavailable", error);
+        return null;
+      });
+    const listenerReady = Network.addListener(
+      "networkStatusChange",
+      (status) => {
+        this.callbackRevision += 1;
+        if (this.preSeedObservations !== null) {
+          // Bootstrap has not reconciled - hold the observation, tagged with
+          // the lifecycle state it arrived under, instead of letting it
+          // BECOME the baseline.
+          this.preSeedObservations.push({
+            status,
+            backgrounded: this.systemResume.isBackgrounded(),
+          });
+          return;
+        }
+        if (this.rebaselineActive) {
+          // Inside the post-resume quarantine: retire into the baseline. The
+          // resume wake owns this episode's recovery.
+          this.lastStatus = status;
+          return;
+        }
+        this.liveCommitSeq += 1;
+        void this.confirmAndApply(status, this.liveCommitSeq);
+      },
+    );
+    void (async () => {
+      let listenerInstalled = false;
+      try {
+        await listenerReady;
+        listenerInstalled = true;
+      } catch (error) {
+        console.warn(
+          "[mobile] networkStatusChange listener unavailable",
+          error,
+        );
+      }
+      const snapshotA = await snapshotARead;
+      // Snapshot B exists to close the A-to-registration gap, so it is
+      // attempted whenever the listener actually installed - INDEPENDENT of
+      // whether A failed. A quiet read (no callback landing during its round
+      // trip) is required before its value may serve as an ordering anchor.
+      const snapshotB = listenerInstalled ? await this.settleQuietRead() : null;
+      this.reconcileBootstrap(snapshotA, snapshotB);
+    })();
+  }
+
+  /**
+   * Bounds the quiet-read retry loop: after this many reads that each raced
+   * a callback, the newest CALLBACK is simply the freshest observation there
+   * is, and it becomes the baseline instead.
+   */
+  private static readonly QUIET_READ_ATTEMPTS = 3;
+
+  /**
+   * Reads the current status until one read completes with NO callback
+   * arriving during its native round trip, or the attempt bound is hit
+   * (`null` - the caller falls back to the newest buffered/live callback).
+   * The revision check is what makes adoption LINEARIZABLE: a snapshot's
+   * value is captured native-side at call time, so a callback delivered
+   * before the promise resolves can be NEWER than the snapshot - adopting
+   * such a read as the baseline would resurrect a state the event stream
+   * already superseded.
+   */
+  private async settleQuietRead(): Promise<ConnectionStatus | null> {
+    for (
+      let attempt = 0;
+      attempt < MobileNetworkPathWatcher.QUIET_READ_ATTEMPTS;
+      attempt += 1
+    ) {
+      const revisionAtCall = this.callbackRevision;
+      let value: ConnectionStatus;
+      try {
+        value = await Network.getStatus();
+      } catch (error) {
+        console.warn("[mobile] network snapshot unavailable", error);
+        return null;
+      }
+      if (this.callbackRevision === revisionAtCall) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The single bootstrap walk: chain the observations in order (snapshot A,
+   * every buffered callback, quiet snapshot B), emit at most ONE recovery
+   * signal, and adopt the newest observation as the live baseline. A flap
+   * that returned to the starting state still signals - the socket it killed
+   * stays dead - and a callback that merely re-announces a snapshot
+   * contributes no step.
+   *
+   * A step is signal-worthy only if BOTH its endpoints were observed in the
+   * foreground and no resume completed during bootstrap: an observation made
+   * (or raced) under a background episode belongs to that episode, and the
+   * resume edge is that episode's single recovery owner - reconciliation
+   * re-baselines from it, never re-announces it.
+   */
+  private reconcileBootstrap(
+    snapshotA: ConnectionStatus | null,
+    snapshotB: ConnectionStatus | null,
+  ): void {
+    const buffered = this.preSeedObservations ?? [];
+    this.preSeedObservations = null;
+    const chain: Array<{
+      readonly status: ConnectionStatus;
+      readonly backgrounded: boolean;
+    }> = [];
+    if (snapshotA !== null) {
+      chain.push({
+        status: snapshotA,
+        backgrounded: this.systemResume.isBackgrounded(),
+      });
+    }
+    chain.push(...buffered);
+    if (snapshotB !== null) {
+      chain.push({
+        status: snapshotB,
+        backgrounded: this.systemResume.isBackgrounded(),
+      });
+    }
+    if (chain.length === 0) {
+      // Nothing observed at all (reads failed, no callbacks): the first live
+      // callback will seed the baseline, exactly as an unbuffered listener
+      // would have. A resume seen during bootstrap still needs its
+      // rebaseline started - nothing else will.
+      if (this.bootstrapSawResume) {
+        this.baselineTrusted = false;
+        this.beginRebaseline();
+      }
+      return;
+    }
+    let sawForegroundRecovery = false;
+    for (let i = 1; i < chain.length; i += 1) {
+      if (
+        !chain[i - 1].backgrounded &&
+        !chain[i].backgrounded &&
+        MobileNetworkPathWatcher.isRecoveryTransition(
+          chain[i - 1].status,
+          chain[i].status,
+        )
+      ) {
+        sawForegroundRecovery = true;
+        break;
+      }
+    }
+    this.lastStatus = chain[chain.length - 1].status;
+    if (this.bootstrapSawResume) {
+      // A resume completed while bootstrap was reconciling: every bootstrap
+      // observation is CROSS-EPOCH - snapshot B may have been captured on
+      // the far side of the suspend and resolved after it, so trusting it
+      // would let a late background-era callback confirm the new path
+      // against a stale trusted baseline and duplicate the resume-owned
+      // recovery. The newest observation still places the baseline, but
+      // only as untrusted, and the post-resume rebaseline (deferred until
+      // this walk placed its baseline) establishes the trusted one.
+      this.baselineTrusted = false;
+      this.beginRebaseline();
+      return;
+    }
+    // Trust follows provenance: a SNAPSHOT tail (quiet B, or A with nothing
+    // after it) is a confirmed read; a buffered-callback tail is raw, so the
+    // first live confirmation re-seeds from it silently.
+    this.baselineTrusted = snapshotB !== null || buffered.length === 0;
+    if (!sawForegroundRecovery || this.systemResume.isBackgrounded()) {
+      return;
+    }
+    this.emitPathChanged();
+  }
+
+  /**
+   * The resume edge's hand-off: the completed background episode's recovery
+   * belongs to the resume wake, so the network baseline is re-read (quietly,
+   * same linearizable rule as bootstrap) and every observation delivered in
+   * the window - including the episode's own queued callbacks arriving after
+   * the foreground flip - is retired into the baseline rather than
+   * re-announced as a second forced wake against the freshly recovered mux.
+   */
+  private onResumed(): void {
+    // Every resume is a commit boundary: confirmations already in flight
+    // belong to the epoch the app just left and must not commit against the
+    // post-resume world.
+    this.liveCommitSeq += 1;
+    this.resumeGeneration += 1;
+    if (this.preSeedObservations !== null) {
+      // Bootstrap is still reconciling: record the epoch handoff. The
+      // reconcile walk consumes this by refusing to trust ANY bootstrap
+      // snapshot (they may straddle the suspend) and by starting the
+      // post-resume rebaseline itself once its baseline is placed.
+      this.bootstrapSawResume = true;
+      return;
+    }
+    this.beginRebaseline();
+  }
+
+  /**
+   * Starts the generation-owned post-resume rebaseline read. The newest
+   * resume generation owns both the adopted baseline and the closing of the
+   * quarantine window; a superseded read does neither.
+   */
+  private beginRebaseline(): void {
+    this.rebaselineActive = true;
+    const generation = this.resumeGeneration;
+    void this.settleQuietRead().then((status) => {
+      if (generation !== this.resumeGeneration) {
+        // A newer resume superseded this read; that resume's own rebaseline
+        // owns the baseline and the window.
+        return;
+      }
+      if (status !== null) {
+        this.lastStatus = status;
+        this.baselineTrusted = true;
+      } else {
+        // The read never went quiet (or failed). Whatever the baseline holds
+        // - the newest quarantine fold, or, with no folds at all, the
+        // PRE-background status - it does not describe a confirmed
+        // post-resume network. Mark it untrusted: the next confirmed
+        // observation seeds silently instead of firing a second forced wake
+        // against a baseline from the wrong side of the suspend.
+        this.baselineTrusted = false;
+      }
+      this.rebaselineActive = false;
+    });
   }
 }
 

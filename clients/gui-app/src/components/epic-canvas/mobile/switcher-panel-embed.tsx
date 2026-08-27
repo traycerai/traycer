@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { SharingPanel } from "@/components/epic-canvas/panels/epic-sharing/panel";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
@@ -16,6 +16,17 @@ interface SwitcherPanelEmbedProps {
   readonly epicId: string;
   readonly tabId: string;
 }
+
+/**
+ * The surface these panel bodies are sitting on. The desktop sidebar they were
+ * written for is `bg-background`; this sheet is `bg-popover` (`drawer.tsx`), and
+ * `@pierre/trees` paints its own background on the list container and every row.
+ * Declared here rather than inside the tree, because the SHEET is what knows
+ * which surface it is - the tree is mounted on both.
+ */
+const SWITCHER_EMBED_SURFACE_STYLE = {
+  "--pierre-tree-surface": "var(--popover)",
+} as CSSProperties;
 
 /**
  * File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the flat
@@ -40,10 +51,26 @@ interface SwitcherPanelEmbedProps {
  * internal scroller, while the sharing panel is a plain stack of sections that
  * relies on the desktop sidebar's scroll region, so it is given an equivalent
  * one here.
+ *
+ * The two Pierre trees need one thing more, because their scroller is inside a
+ * SHADOW ROOT. vaul's `shouldDrag` walks up from the touch target looking for a
+ * scrolled-away-from-top ancestor, advancing `element.parentNode`; a touch
+ * inside a shadow root retargets to the host, so the walk starts outside the
+ * shadow tree and can never reach the scroller. It falls through to "nothing
+ * scrollable found" and the drawer takes the gesture. Both tree wrappers carry
+ * `data-vaul-no-drag`, which short-circuits that decision.
+ *
+ * This is the DOWNWARD-finger path specifically. An upward finger is
+ * `isDraggingInDirection` for a bottom drawer and returns early, before the
+ * walk - so that direction never depended on the marker. The flat lists need
+ * none of this: their scrollers are ordinary light DOM, so the walk finds them.
  */
 export function SwitcherPanelEmbed(props: SwitcherPanelEmbedProps) {
   return (
-    <div className="min-h-0 flex-1 pb-safe-bottom">
+    <div
+      className="min-h-0 flex-1 pb-safe-bottom"
+      style={SWITCHER_EMBED_SURFACE_STYLE}
+    >
       <SwitcherEmbeddedBody {...props} />
     </div>
   );

@@ -1,6 +1,7 @@
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { TimerHandle } from "../timer-handle";
+import type { ReconnectAllOptions } from "../host-stream-client";
 import { REMOTE_SESSION_LINGER_MS } from "./config";
 import type { IRemoteSession } from "./remote-session";
 
@@ -114,6 +115,29 @@ interface CacheEntry {
    * a field - which it did, when `authRecovery` was added.
    */
   readonly identity: RemoteSessionIdentity;
+  /**
+   * Whether the process-wide proactive sweep may touch this entry at all -
+   * poke its socket on a wake, or force-drop it after a long background.
+   *
+   * Recorded at acquire time from the consumer's replay contract, and
+   * deliberately DISTINCT from `identity.authRecovery`: that field describes
+   * what an UNAUTHORIZED fatal does, while this one describes whether a
+   * reconnect's subscribe replay is safe to provoke. Today the two correlate
+   * (the one-shot `worktree.deleteByPath` transport is the only `terminal`
+   * consumer and the only replay-unsafe one), but a start->observe one-shot
+   * stream could be replay-safe while still wanting terminal auth - so
+   * safety is stated by the acquirer, not inferred.
+   *
+   * Stable per cached identity in practice: replay-unsafe consumers never
+   * share an identity with durable ones (their `authRecovery` differs, which
+   * is part of the cache key), so a cache hit cannot flip this.
+   *
+   * An ineligible entry is skipped by the sweep in BOTH modes. Its own
+   * passive reconnect after a genuine transport loss keeps its existing
+   * contract - this flag only bars the runtime from CAUSING that loss (or
+   * hastening its discovery) on a socket that was healthy.
+   */
+  readonly proactiveWakeEligible: boolean;
   refCount: number;
   /** Armed while the entry lingers at refCount 0; null while consumers hold it. */
   lingerTimer: TimerHandle | null;
@@ -248,11 +272,22 @@ export function remoteSessionCacheKey(identity: RemoteSessionIdentity): string {
  * cached and connected so a prompt re-acquire adopts it warm, and only the
  * window expiring with no consumers closes it for real.
  */
+/**
+ * What the acquiring consumer promises the cache about the session it is
+ * claiming - facts the cache needs when it later acts on HELD entries without
+ * any consumer in the call stack (the process-wide wake sweep).
+ */
+export interface RemoteSessionAcquirePolicy {
+  /** See {@link CacheEntry.proactiveWakeEligible}. */
+  readonly proactiveWakeEligible: boolean;
+}
+
 export function acquireRemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
 >(
   identity: RemoteSessionIdentity,
+  policy: RemoteSessionAcquirePolicy,
   createSession: () => IRemoteSession<RpcRegistry, StreamRegistry>,
 ): IRemoteSession<RpcRegistry, StreamRegistry> {
   const key = remoteSessionCacheKey(identity);
@@ -291,6 +326,7 @@ export function acquireRemoteSession<
     const created: CacheEntry = {
       session,
       identity,
+      proactiveWakeEligible: policy.proactiveWakeEligible,
       refCount: 0,
       lingerTimer: null,
       superseded: false,
@@ -431,7 +467,7 @@ export function acquireRemoteSession<
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),
-    wake: (reason) => {
+    wake: (reason, probe) => {
       // Only a LIVE reference may accelerate a session. A view whose `close()`
       // already ran is a stale callback - a discarded render, a disposed
       // binding - and honouring it would redial a session this consumer no
@@ -443,7 +479,16 @@ export function acquireRemoteSession<
       if (released || entry.superseded || session.isClosed()) {
         return;
       }
-      session.wake(reason);
+      session.wake(reason, probe);
+    },
+    forceReconnect: (reason) => {
+      // Same ownership guard as `wake`, for the same reasons - a forced
+      // redial is strictly MORE session activity than an accelerated one, so
+      // a stale reference may command it even less.
+      if (released || entry.superseded || session.isClosed()) {
+        return;
+      }
+      session.forceReconnect(reason);
     },
     onClosed: (listener) => session.onClosed(listener),
     subscribeAvailabilityRecovered: (listener) =>
@@ -605,13 +650,43 @@ export function retireAllRemoteSessions(): void {
  * abandoned session keeps dialing on wakes nobody asked for. It gets its wake
  * from the consumer that adopts it. Superseded and closed entries are skipped
  * for the same reason the per-consumer view refuses them.
+ *
+ * `options` is the caller's verdict on the sockets this resume left behind,
+ * in the same vocabulary as `IHostStreamClient.reconnectAll` (the per-client
+ * half of the same wake): probe-first with the caller's probe sizing, or
+ * forced drop-and-redial when the runtime was demonstrably suspended long
+ * enough that no socket survived it.
+ *
+ * Replay-unsafe entries are skipped in BOTH modes, and this is the one gate
+ * standing between the sweep and a re-executed side effect: a session
+ * reconnect replays every retained logical subscribe at the next `openAck`,
+ * and for a one-shot destructive stream (`worktree.deleteByPath`) that replay
+ * RE-RUNS the operation. A forced drop of a healthy mux would manufacture
+ * exactly that replay, and even a probe only hastens a loss the entry's own
+ * keepalive would surface - so an entry that declared itself ineligible at
+ * acquire gets neither. Its passive reconnect after a genuine loss keeps its
+ * own contract; the phase of its streams is deliberately NOT consulted here,
+ * because by the time a loss has happened the destructive subscribe is
+ * already retained for replay.
  */
-export function wakeHeldRemoteSessions(reason: string): void {
+export function wakeHeldRemoteSessions(
+  reason: string,
+  options: ReconnectAllOptions,
+): void {
   for (const entry of entriesByKey.values()) {
-    if (entry.refCount <= 0 || entry.superseded || entry.session.isClosed()) {
+    if (
+      entry.refCount <= 0 ||
+      entry.superseded ||
+      entry.session.isClosed() ||
+      !entry.proactiveWakeEligible
+    ) {
       continue;
     }
-    entry.session.wake(reason);
+    if (options.probeFirst) {
+      entry.session.wake(reason, options.wakeProbe);
+    } else {
+      entry.session.forceReconnect(reason);
+    }
   }
 }
 

@@ -123,6 +123,11 @@ export function buildRawHostMessengerForTarget<
       requestId: params.requestId,
       evidence: transportEvidenceRelay,
       clientIdentity: GUI_CLIENT_IDENTITY,
+      // A messenger binding carries unary RPCs (and, if a stream client is
+      // built over the same session, snapshot-shaped streams): nothing a
+      // reconnect replay could double-execute. Messenger-only bindings are in
+      // fact a case the process-wide sweep exists to reach.
+      proactiveWakeEligible: true,
     });
     if (remoteTransport === null) return null;
     return {

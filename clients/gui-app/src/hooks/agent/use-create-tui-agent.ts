@@ -241,7 +241,7 @@ export function useCreateTuiAgentForClient(
 } {
   const startSession = useAgentStartTerminalSession(hostClient);
   const createTuiAgent = useEpicCreateTuiAgentForClient(hostClient);
-  const worktreeCreate = useWorktreeCreateForClient(hostClient);
+  const worktreeCreate = useWorktreeCreateForClient(hostClient, undefined);
   const validateForkProfile = useValidateTuiForkProfile(hostClient);
   const forkProfilePreflightSupported =
     useTuiForkProfileSupported(placeholderHostId);

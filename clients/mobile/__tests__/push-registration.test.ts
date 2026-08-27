@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { PluginListenerHandle } from "@capacitor/core";
 import type {
   StoredCredentials,
+  SystemResumeEvent,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -92,16 +93,16 @@ async function drain(): Promise<void> {
 
 /** A hand-driven stand-in for the shell's foreground-resume edge. */
 class FakeSystemResume implements SystemResumeSource {
-  private readonly handlers = new Set<() => void>();
+  private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     this.handlers.add(handler);
     return { dispose: () => this.handlers.delete(handler) };
   }
 
   async resume(): Promise<void> {
     for (const handler of this.handlers) {
-      handler();
+      handler({ backgroundedForMs: null });
     }
     await drain();
   }
