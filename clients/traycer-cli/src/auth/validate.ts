@@ -8,11 +8,30 @@ import { createCliLogger, type ILogger } from "../logger";
 import { readCredentials, type StoredCredentials } from "../store/credentials";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
+/**
+ * What answering the question COST the stored credentials. Validation is not a
+ * read: a drifted profile is written back, and a stale access token is replaced
+ * by spending the refresh token. `whoami` reports this so the command that looks
+ * observational can say what it actually changed (CLI-018).
+ *
+ *   - `none`              -> the file on disk is byte-identical to before.
+ *   - `profile-refreshed` -> the cached `user` block was updated from the
+ *                            server; the token pair is untouched.
+ *   - `token-rotated`     -> the refresh token was SPENT and a fresh pair
+ *                            minted. Reported even when the commit failed:
+ *                            the spend is what left the file's old pair dead.
+ */
+export type ValidationEffect = "none" | "profile-refreshed" | "token-rotated";
+
 export type ValidationOutcome =
   | { readonly kind: "no-credentials" }
   | { readonly kind: "rejected" }
   | { readonly kind: "network-error" }
-  | { readonly kind: "valid"; readonly credentials: StoredCredentials };
+  | {
+      readonly kind: "valid";
+      readonly credentials: StoredCredentials;
+      readonly effect: ValidationEffect;
+    };
 
 /**
  * Reads stored credentials and round-trips the access token against the authn
@@ -78,7 +97,7 @@ async function reconcileValidProfile(
       userChanged: false,
       credentialsPersisted: false,
     });
-    return { kind: "valid", credentials: stored };
+    return { kind: "valid", credentials: stored, effect: "none" };
   }
   const result = await runWithCliStore((store) =>
     store.updateProfile({
@@ -100,7 +119,13 @@ async function reconcileValidProfile(
     userChanged: true,
     credentialsPersisted: persisted,
   });
-  return { kind: "valid", credentials: next };
+  // Only a landed write is an effect. A superseded/failed advisory persist left
+  // the file exactly as it was, so reporting a refresh would overstate it.
+  return {
+    kind: "valid",
+    credentials: next,
+    effect: persisted ? "profile-refreshed" : "none",
+  };
 }
 
 /**
@@ -134,8 +159,17 @@ async function rotateStaleCredentials(
       });
       // applied/superseded/commit-failed always carry the pair; the null guard
       // is defensive.
+      //
+      // `superseded` adopted a SIBLING's already-committed pair: this process
+      // spent nothing and wrote nothing, so it is not an effect of this
+      // command. `commit-failed` is - the spend happened and killed the pair
+      // the file still names, which is precisely what the caller must know.
       return result.credentials !== null
-        ? { kind: "valid", credentials: result.credentials }
+        ? {
+            kind: "valid",
+            credentials: result.credentials,
+            effect: result.outcome === "superseded" ? "none" : "token-rotated",
+          }
         : { kind: "rejected" };
     case "refresh-network":
     case "lock-busy":

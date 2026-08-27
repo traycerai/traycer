@@ -94,7 +94,7 @@ import { logoutCommand } from "./commands/logout";
 import { buildServiceInstallCommand } from "./commands/service-install";
 import { serviceStatusCommand } from "./commands/service-status";
 import { serviceUninstallCommand } from "./commands/service-uninstall";
-import { whoamiCommand } from "./commands/whoami";
+import { buildWhoamiCommand } from "./commands/whoami";
 import { CLI_ERROR_CODES, cliError } from "./runner/errors";
 import { createCliLogger, errorFromUnknown, type ILogger } from "./logger";
 import {
@@ -634,9 +634,16 @@ function registerAuthCommands(program: Command): void {
     program
       .command("login")
       .description("Sign in to Traycer via your browser")
-      .option(
-        "--token <token>",
-        "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Used by the desktop app after sign-in; not for interactive use.",
+      // Hidden, like every other internal flag on this program: `--token -` is
+      // a scripted/support credential-seeding seam (the Desktop stopped
+      // driving it when both sides moved to the shared credentials file), and
+      // its own help text called itself "Internal" while sitting in the public
+      // help. It stays reachable - hiding is presentation, not removal.
+      .addOption(
+        new Option(
+          "--token <token>",
+          "Internal: seed credentials from a JSON `{ token, refreshToken }` payload piped on stdin (pass '-'). Scripted/support path; interactive sign-in uses no flag.",
+        ).hideHelp(),
       ),
     (opts) =>
       buildLoginCommand({
@@ -644,14 +651,68 @@ function registerAuthCommands(program: Command): void {
       }),
   );
 
+  // `logout` and `whoami` both do more than their verbs suggest, and the
+  // one-line description is the wrong place to say so - it is also the root
+  // help's command list, where a paragraph per command destroys the scan. The
+  // description names the full outcome in one line; the detail (what is
+  // deleted, what is spent, what a partial result means) goes in the leaf's
+  // `--help` body, which is where someone asking "what will this do to my
+  // machine" is already looking.
   withRunner(
-    program.command("logout").description("Forget the stored auth token"),
+    program
+      .command("logout")
+      .description(
+        "Sign out: forget the stored credentials and delete cached published-chat content",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "What this removes:",
+          "  - The stored credentials for this environment. Other signed-in",
+          "    Traycer apps on this machine share that file and are signed out too.",
+          "  - The local published-chat cache. Every entry is a copy of bytes the",
+          "    cloud still holds, so this only costs a re-fetch after signing in.",
+          "",
+          "Partial cleanup is still a successful sign-out: if the cache directory",
+          "cannot be removed, the credentials are gone regardless, so the command",
+          "exits 0 and names the directory to delete by hand (`data.chatCache` in",
+          "--json carries the path, `cleared`, and the reason).",
+          "",
+        ].join("\n"),
+      ),
     () => logoutCommand,
   );
 
   withRunner(
-    program.command("whoami").description("Print the signed-in user"),
-    () => whoamiCommand,
+    program
+      .command("whoami")
+      .description(
+        "Validate the stored credentials with Traycer and print the signed-in user",
+      )
+      .option(
+        "--local",
+        "Read the stored identity only: no authn call, no refresh, nothing written",
+      )
+      .addHelpText(
+        "after",
+        [
+          "",
+          "This is a validate, not a local read. It calls the authn service, and to",
+          "answer it may rewrite the stored credentials: a profile that drifted is",
+          "written back, and a stale access token is replaced by SPENDING the stored",
+          "refresh token. `data.credentialUpdate` reports which of those happened",
+          "('none', 'profile-refreshed', 'token-rotated').",
+          "",
+          "--local skips all of it and reports what is on disk. That answer is",
+          "weaker: it cannot see a revoked or expired session, so exit 0 means 'a",
+          "credential is stored here' (`data.status` is 'stored', not 'valid').",
+          "",
+          "Exit codes: 0 signed in - 1 signed out or rejected - 2 authn unreachable.",
+          "",
+        ].join("\n"),
+      ),
+    (opts) => buildWhoamiCommand({ local: opts.local === true }),
   );
 
   withRunner(
@@ -661,6 +722,25 @@ function registerAuthCommands(program: Command): void {
       .option(
         "--no-qr",
         "Print only the typeable code (for terminals that mangle block glyphs)",
+      )
+      // The command's whole middle is a wait, and the one-line description
+      // read like a fire-and-forget print. Approval - not the scan - is what
+      // signs the phone in, so the terminal is part of the flow until it
+      // answers.
+      .addHelpText(
+        "after",
+        [
+          "",
+          "Requires an existing sign-in on this machine (`traycer login`).",
+          "",
+          "This command waits: it prints the code, then blocks until you approve or",
+          "reject the phone that scanned it, or until the code expires. It installs",
+          "and starts nothing.",
+          "",
+          "Exit codes: 0 approved - 1 rejected, expired, superseded, or signed out -",
+          "2 authn unreachable.",
+          "",
+        ].join("\n"),
       ),
     (opts) => buildLinkPhoneCommand({ showQr: opts.qr !== false }),
   );

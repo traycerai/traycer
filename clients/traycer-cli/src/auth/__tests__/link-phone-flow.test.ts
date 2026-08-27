@@ -157,6 +157,9 @@ beforeEach(() => {
       savedAt: new Date(0).toISOString(),
       user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
     },
+    // link-phone only needs the bearer; the effect rides along because
+    // validating IS a mutation and `whoami` reports which one happened.
+    effect: "none",
   });
   mintMock.mockResolvedValue(mintedCode("ABCDE-FGHJK"));
   statusMock.mockResolvedValue(UNCLAIMED);

@@ -44,8 +44,8 @@ traycer host status
 | Command                        | Purpose                                                                |
 | ------------------------------ | ---------------------------------------------------------------------- |
 | `traycer login`                | Sign in to Traycer.                                                    |
-| `traycer logout`               | Remove locally stored credentials.                                     |
-| `traycer whoami`               | Show the signed-in user.                                               |
+| `traycer logout`               | Sign out and delete locally cached published-chat content.             |
+| `traycer whoami`               | Validate the stored credentials and show the signed-in user.           |
 | `traycer host ensure`          | Install, register, and start the local Traycer Host if needed.         |
 | `traycer host status`          | Show host process, endpoint, and activity status.                      |
 | `traycer host doctor`          | Diagnose host installation and runtime issues.                         |

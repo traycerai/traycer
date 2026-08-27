@@ -7,6 +7,12 @@ import { cliChatPartCacheDir } from "../store/paths";
 // Runner-aware `traycer logout`. JSON mode emits exactly one terminal
 // NDJSON `result` event; human mode prints a single human line.
 //
+// `logout` does TWO things, and the help says both (CLI-017): it forgets the
+// stored credentials, and it deletes the local published-chat cache. The second
+// is not a bonus tidy-up - the cache holds chat content this account published,
+// so leaving it behind would mean signing out without the content leaving the
+// machine.
+//
 // Sign-out runs through the locked mutation store (§7): `signOut` deletes the
 // credentials file under the lock AND advances the tombstone, so a concurrent or
 // subsequent automatic `rotate` (a background monitor, the desktop app) can
@@ -45,20 +51,36 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
   // process left to finish the work, so a fire-and-forget clear here would race
   // the command's own exit.
   //
-  // A clear that FAILS does not fail the logout - the credential is already
-  // deleted and re-running logout could not improve on that - but it must not
-  // be silent either: the bytes it names are exactly what the clear exists to
-  // remove, so the user is told what remains and where, and `data` says so for
-  // scripts.
+  // A clear that FAILS does not fail the logout, and that is a decision rather
+  // than an oversight (CLI-017): the credential delete has already landed, so
+  // the session IS over, and no amount of re-running logout can improve on a
+  // filesystem that refuses the delete. Reporting exit 1 would tell every
+  // caller "you are still signed in", which is false and the more dangerous of
+  // the two errors.
+  //
+  // But it must not be silent either: the bytes it names are exactly what the
+  // clear exists to remove. So the partial outcome is MODELLED - `chatCache`
+  // carries the path, whether it went, and the reason it did not - and the
+  // human line names the directory the user has to delete by hand.
   const cachePath = cliChatPartCacheDir();
   const cacheClearError = await clearDiskChatPartCache(cachePath);
   const loggedOutLine = hadSession ? "Logged out." : "Not logged in.";
   return {
-    data: { loggedOut: hadSession, chatCacheCleared: cacheClearError === null },
+    data: {
+      loggedOut: hadSession,
+      chatCache: {
+        path: cachePath,
+        cleared: cacheClearError === null,
+        error: cacheClearError === null ? null : cacheClearError.message,
+      },
+    },
     human: ctx.runtime.json
       ? null
       : cacheClearError === null
-        ? loggedOutLine
+        ? // "Cleared", not "removed N files": the clear succeeds against a
+          // cache that was never written, and the sentence has to stay true in
+          // that case too.
+          `${loggedOutLine} Cleared the local published-chat cache at ${cachePath}.`
         : `${loggedOutLine} The cached published-chat content at ${cachePath} could not be removed (${cacheClearError.message}); delete that directory manually to finish clearing local data.`,
     exitCode: 0,
   };

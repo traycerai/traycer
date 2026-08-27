@@ -369,6 +369,59 @@ describe("traycer CLI entrypoint registration", () => {
     expect(flags).toContain("--token");
   });
 
+  it("login's --token is hidden from --help: reachable, but no longer advertised as a public flag", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["login"]);
+    // `expectCommand`/the flags check above already prove it is still wired;
+    // `.hideHelp()` only changes what `--help` prints.
+    expect(cmd.helpInformation()).not.toContain("--token");
+  });
+
+  it("whoami exposes --local for the observational read", () => {
+    const program = buildProgram();
+    const cmd = expectCommand(program, ["whoami"]);
+    const flags = cmd.options.map((o) => o.long);
+    expect(flags).toContain("--local");
+  });
+
+  it("whoami's --help discloses that the default validates and may refresh the stored credentials", () => {
+    // `addHelpText` content is invisible to `helpInformation()` (see the
+    // "host update --help" test above for why) - assert on what `--help`
+    // actually prints via `outputHelp()`.
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["whoami"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("SPENDING");
+      expect(printedHelp).toContain("credentialUpdate");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("logout's --help discloses that it deletes the local published-chat cache", () => {
+    const write = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      const program = buildProgram();
+      const cmd = expectCommand(program, ["logout"]);
+      cmd.outputHelp();
+      const printedHelp = write.mock.calls
+        .map(([chunk]) => String(chunk))
+        .join("");
+      expect(printedHelp).toContain("published-chat cache");
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("host install exposes --release, --from, and the bootstrap-flow options", () => {
     const program = buildProgram();
     const cmd = expectCommand(program, ["host", "install"]);

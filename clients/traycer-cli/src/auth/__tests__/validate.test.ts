@@ -139,7 +139,20 @@ describe("validateStoredCredentials", () => {
       credentials: {
         user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
       },
+      effect: "profile-refreshed",
     });
+  });
+
+  it("reports effect='none' when the profile write did not land", async () => {
+    identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
+    updateProfileMock.mockResolvedValue({
+      outcome: "superseded",
+      credentials: null,
+    });
+
+    const outcome = await validateStoredCredentials();
+
+    expect(outcome).toMatchObject({ kind: "valid", effect: "none" });
   });
 
   it("validates against the configured authn URL outside a run slot too (the file carries no URL)", async () => {
@@ -172,6 +185,7 @@ describe("validateStoredCredentials", () => {
     expect(outcome).toMatchObject({
       kind: "valid",
       credentials: { user: { id: "u1", email: "old@traycer.ai", name: "Old" } },
+      effect: "none",
     });
   });
 
@@ -214,6 +228,7 @@ describe("validateStoredCredentials", () => {
     expect(outcome).toMatchObject({
       kind: "valid",
       credentials: { token: "fresh-token" },
+      effect: "token-rotated",
     });
   });
 
@@ -254,7 +269,7 @@ describe("validateStoredCredentials", () => {
     expect(await validateStoredCredentials()).toEqual({ kind: "rejected" });
   });
 
-  it("adopts a sibling's pair on superseded (valid)", async () => {
+  it("adopts a sibling's pair on superseded (valid) and reports effect='none' - nothing was spent or written here", async () => {
     identityMock.mockResolvedValue({ kind: "rejected" });
     rotateMock.mockResolvedValue({
       outcome: "superseded",
@@ -268,6 +283,25 @@ describe("validateStoredCredentials", () => {
     expect(await validateStoredCredentials()).toMatchObject({
       kind: "valid",
       credentials: { token: "sibling-token" },
+      effect: "none",
+    });
+  });
+
+  it("reports effect='token-rotated' on commit-failed - the refresh spend still happened", async () => {
+    identityMock.mockResolvedValue({ kind: "rejected" });
+    rotateMock.mockResolvedValue({
+      outcome: "commit-failed",
+      credentials: {
+        token: "orphaned-token",
+        refreshToken: "orphaned-refresh",
+        savedAt: "2026-02-01T00:00:00.000Z",
+        user: storedCreds.user,
+      },
+    });
+    expect(await validateStoredCredentials()).toMatchObject({
+      kind: "valid",
+      credentials: { token: "orphaned-token" },
+      effect: "token-rotated",
     });
   });
 
