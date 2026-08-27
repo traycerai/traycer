@@ -181,6 +181,104 @@ export type HostUpdateCheckResponse = z.infer<
   typeof hostUpdateCheckResponseSchema
 >;
 
+/**
+ * Where the catalog's effective RC inclusion came from.
+ *
+ * This is PROVENANCE, not a saved preference — nothing in it is persisted.
+ * `installed-rc` says the CLI derived inclusion from an installed canonical
+ * `X.Y.Z-rc.N` host, which is what lets Settings explain that the host is
+ * following its current RC line instead of implying the user checked a box.
+ * `stable-default` is the fail-closed answer, and covers a stable install, a
+ * non-canonical pre-release, no install at all, and an install record the CLI
+ * could not read — a corrupt record must not break registry listing, so it is
+ * reported as the ordinary default rather than as an error.
+ *
+ * The two explicit values mirror the CLI's positive and negative flags. They
+ * exist because "unchecked" and "never touched" are genuinely different
+ * requests: only an explicit false can filter RC rows off an RC host.
+ */
+export const hostIncludePreReleasesSourceSchema = z.enum([
+  "explicit-include",
+  "explicit-exclude",
+  "installed-rc",
+  "stable-default",
+]);
+export type HostIncludePreReleasesSource = z.infer<
+  typeof hostIncludePreReleasesSourceSchema
+>;
+
+/**
+ * v1.1 replaces v1.0's defaulted boolean with a tri-state catalog override:
+ * `true` explicitly includes, `false` explicitly excludes, and ABSENT asks
+ * the host to derive inclusion from its own installed version.
+ *
+ * The third state is an omitted key rather than an explicit `null`, and that
+ * is a wire-projection requirement, not a style choice. Within one major there
+ * is no request-downgrade bridge - `downgradePathsFromLatest` is reserved for
+ * crossing majors - so a v1.1 client talking to a v1.0 host projects its
+ * params by PARSING them with the v1.0 request schema
+ * (`prepareRequestPayload`). `{ includePreReleases: null }` fails that parse,
+ * which would turn every default catalog load against an already-shipped host
+ * into `DOWNGRADE_UNSUPPORTED`. An omitted key parses to v1.0's `false`, which
+ * is precisely the documented old-host fallback: stable-only.
+ *
+ * `.optional()` and never `.default()`, for the reason
+ * `epicSubscribeOpenRequestSchema` gives: a default materializes a key the
+ * caller never wrote, splitting the GUI's query cache between the caller's
+ * params and the parsed params for one logical request - and here it would
+ * also re-collapse "excluded" into "not stated", the exact ambiguity this
+ * minor exists to remove.
+ *
+ * READING THE DERIVE STATE: test `params.includePreReleases === undefined`,
+ * never `"includePreReleases" in params` and never `Object.hasOwn(...)`. The
+ * two ways a derive request reaches a resolver do not agree on key PRESENCE,
+ * only on VALUE:
+ *
+ * - parsed from the wire, a v1.1 client's `{}` yields an object with no such
+ *   own key at all;
+ * - bridged from a v1.0 peer, `hostUpdateCheckUpgradeV10ToV11` yields whatever
+ *   that bridge constructs.
+ *
+ * The bridge deliberately omits the key so the two coincide today, and
+ * `host-update-check.test.ts` pins that with `toStrictEqual` rather than
+ * `toEqual` (which cannot see the difference). An identity check on the VALUE
+ * is correct under either representation, so it is the rule that survives.
+ */
+export const hostUpdateCheckRequestSchemaV11 = z.object({
+  includePreReleases: z.boolean().optional(),
+});
+export type HostUpdateCheckRequestV11 = z.infer<
+  typeof hostUpdateCheckRequestSchemaV11
+>;
+
+/**
+ * v1.1's `ok` arm reports what the catalog actually did.
+ *
+ * `effectiveIncludePreReleases` is the resolved inclusion — the answer the
+ * rows were filtered by — and is NOT a restatement of the request: for a
+ * derive request (the absent third state) it is the host's own derivation,
+ * which is the only way a caller can learn what an unstated override became.
+ * The other three outcomes are unchanged; a CLI that never ran resolved
+ * nothing to report.
+ */
+export const hostUpdateCheckResponseSchemaV11 = z.discriminatedUnion(
+  "outcome",
+  [
+    z.object({
+      outcome: z.literal("ok"),
+      manifest: hostAvailableManifestSchema,
+      effectiveIncludePreReleases: z.boolean(),
+      includePreReleasesSource: hostIncludePreReleasesSourceSchema,
+    }),
+    z.object({ outcome: z.literal("cli-unavailable") }),
+    z.object({ outcome: z.literal("cli-failed") }),
+    z.object({ outcome: z.literal("invalid-output") }),
+  ],
+);
+export type HostUpdateCheckResponseV11 = z.infer<
+  typeof hostUpdateCheckResponseSchemaV11
+>;
+
 export const hostUpdateInstallRequestSchema = z.object({
   version: z.string().min(1),
   force: z.boolean(),

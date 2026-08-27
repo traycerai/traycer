@@ -92,7 +92,9 @@ export function DoctorSheet(props: DoctorSheetProps) {
               : "Diagnostics for the host on this computer, with one-click fixes for common issues."}
           </SheetDescription>
         </SheetHeader>
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
+        {/* The scroll region owns the bottom edge here - the sheet has no
+            footer - so it is what clears the home indicator. */}
+        <div className="flex-1 overflow-y-auto px-4 pb-safe-bottom-gutter">
           {/* Mounted only while open, in both branches: the report is produced
               by running a process on the host, so it must be a consequence of
               opening this sheet rather than of the panel rendering. */}

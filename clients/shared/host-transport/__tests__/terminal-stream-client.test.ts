@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -178,7 +179,10 @@ describe("TerminalStreamClient", () => {
     });
 
     completeHandshake(sockets[0], {
-      ...buildStreamManifest(hostStreamRpcRegistry),
+      ...buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
       "terminal.subscribe": { major: 1, minor: 4 },
     });
     sockets[0].fireText({
@@ -224,7 +228,10 @@ describe("TerminalStreamClient", () => {
       },
     });
 
-    completeHandshake(sockets[0], buildStreamManifest(hostStreamRpcRegistry));
+    completeHandshake(
+      sockets[0],
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR),
+    );
     sockets[0].fireText({
       kind: "sessionUpdated",
       hasBinaryPayload: false,
@@ -266,7 +273,10 @@ describe("TerminalStreamClient", () => {
     });
 
     const manifest = {
-      ...buildStreamManifest(hostStreamRpcRegistry),
+      ...buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      ),
       "terminal.subscribe": { major: 1, minor: 3 },
     };
     completeHandshake(sockets[0], manifest);

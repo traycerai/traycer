@@ -30,6 +30,10 @@ import {
   resetTerminalFocusRegistryForTests,
 } from "@/lib/terminals/terminal-focus-registry";
 import { PaneActivationFocusIntentContext } from "@/components/epic-canvas/pane-activation";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 type Disposable = {
   readonly dispose: () => void;
@@ -158,6 +162,12 @@ vi.mock("@xterm/xterm", () => ({
       if (chunk.includes("\x1b[6n")) {
         this.dataListeners.forEach((listener) => {
           listener("\x1b[16;39R");
+        });
+      }
+      // Real xterm answers OSC 11 colour queries with its themed background.
+      if (chunk.includes("\x1b]11;?")) {
+        this.dataListeners.forEach((listener) => {
+          listener("\x1b]11;rgb:ffff/ffff/ffff\x07");
         });
       }
       if (callback !== undefined) {
@@ -329,6 +339,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
     cleanup();
     resetTerminalFocusRegistryForTests();
     __disposeAllXtermHostsForTests();
+    resetNegotiatedManifests();
     vi.useRealTimers();
     xtermMocks.terminals.length = 0;
     xtermMocks.searchAddons.length = 0;
@@ -1129,6 +1140,125 @@ describe("<TerminalXtermHost /> terminal find", () => {
 
     getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
     expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
+  });
+
+  it("never forwards xterm's OSC 10/11 colour reports as user input", async () => {
+    // The HOST is the single authority for colour queries (it answers with
+    // the session's spawn-time themeHint). A live query still reaches this
+    // client's xterm through the output stream and xterm generates a reply;
+    // forwarding it would race the host's answer with one reply per attached
+    // viewer, each reporting its own theme. Suppression is gated on the host
+    // actually having the responder (terminal.create@2.1+), so the test
+    // seeds the negotiated manifest a real handshake would have recorded.
+    recordNegotiatedHostManifest("host-1", {
+      "terminal.create": { major: 2, minor: 1 },
+    });
+    const onUserInput = vi.fn();
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    getWriter()({ kind: "live", chunk: "\x1b]11;?\x07", onAckable: () => {} });
+    expect(onUserInput).not.toHaveBeenCalled();
+
+    // Genuine input keeps flowing untouched.
+    getWriter()({ kind: "live", chunk: "\x1b[6n", onAckable: () => {} });
+    expect(onUserInput).toHaveBeenCalledWith("\x1b[16;39R");
+
+    // The filter matches only the report grammar xterm generates: an OSC
+    // 10/11 QUERY or colour-SET arriving as genuine user input (a paste)
+    // must reach the PTY untouched.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;#112233\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;#112233\x07\x1b[201~",
+    );
+
+    // Even a byte-exact colour REPORT pasted while the terminal is idle is
+    // user input, not a generated reply: replies only ever surface while a
+    // live output chunk is mid-parse, and the filter is gated on that window.
+    onUserInput.mockClear();
+    xtermMocks.terminals[0].paste("\x1b]11;rgb:1111/2222/3333\x07");
+    expect(onUserInput).toHaveBeenCalledWith(
+      "\x1b[200~\x1b]11;rgb:1111/2222/3333\x07\x1b[201~",
+    );
+  });
+
+  it("keeps forwarding colour replies to a host without the OSC responder", async () => {
+    // A pre-terminal.create@2.1 host has no host-side answer for OSC 10/11.
+    // This viewer's xterm reply - late-query-only and per-viewer as it is -
+    // is the only answer a probing TUI gets there, so suppression must not
+    // engage (Codex review on #1424).
+    recordNegotiatedHostManifest("host-1", {
+      "terminal.create": { major: 2, minor: 0 },
+    });
+    const onUserInput = vi.fn();
+    let writer: TerminalDataWriter | null = null;
+
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        hostId="host-1"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onUserInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={(nextWriter) => {
+          writer = nextWriter;
+        }}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+        onTerminalReady={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(writer).not.toBeNull();
+    });
+    const getWriter = (): TerminalDataWriter => {
+      if (writer === null) {
+        throw new Error("Expected terminal writer");
+      }
+      return writer;
+    };
+
+    getWriter()({ kind: "live", chunk: "\x1b]11;?\x07", onAckable: () => {} });
+    expect(onUserInput).toHaveBeenCalledWith("\x1b]11;rgb:ffff/ffff/ffff\x07");
   });
 
   it("resets the buffer before replaying a reconnect snapshot", async () => {

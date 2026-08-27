@@ -1,16 +1,19 @@
 {
   "name": "@traycer-clients/desktop",
-  "productName": "Traycer",
-  "desktopName": "traycer-desktop.desktop",
   "version": "0.0.0",
+  "private": true,
   "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
   "homepage": "https://traycer.ai",
-  "private": true,
+  "license": "MIT",
+  "author": {
+    "name": "Traycer AI",
+    "email": "support@traycer.ai"
+  },
   "main": "dist/main/index.js",
   "scripts": {
     "clean": "rimraf dist",
     "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
-    "compile": "tsc --noEmit -p tsconfig.json",
+    "compile": "tsgo --noEmit -p tsconfig.json",
     "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs",
     "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
     "build:app": "bun run clean && bun run build:main && bun run build:renderer",
@@ -23,8 +26,9 @@
     "dev:renderer": "vite --config vite.renderer.config.ts",
     "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
     "dev": "bun scripts/dev/dev-stack.cjs",
-    "lint": "eslint . --cache --fix --max-warnings 0",
-    "format": "bun x prettier --write .",
+    "lint": "oxlint -c oxlint.config.mts --fix --deny-warnings .",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run",
     "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs",
     "test:packaging": "vitest run --config vitest.config.packaging.ts"
@@ -40,10 +44,10 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
+    "@rolldown/plugin-babel": "catalog:",
     "@sentry/core": "catalog:",
     "@sentry/esbuild-plugin": "catalog:",
     "@sentry/vite-plugin": "catalog:",
-    "@rolldown/plugin-babel": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/router-plugin": "catalog:",
     "@types/node": "catalog:",
@@ -231,9 +235,6 @@
       "include": "uninstall-host-autostart.nsh"
     }
   },
-  "author": {
-    "name": "Traycer AI",
-    "email": "support@traycer.ai"
-  },
-  "license": "MIT"
+  "desktopName": "traycer-desktop.desktop",
+  "productName": "Traycer"
 }

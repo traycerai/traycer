@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { PrDetailTabId } from "@/stores/epics/pr-detail-view-store";
 import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
 
@@ -148,5 +149,88 @@ describe("PrDetailTabStrip", () => {
       key: "Home",
     });
     expect(picked).toEqual(["overview"]);
+  });
+});
+
+describe("<PrDetailTabStrip /> on a phone viewport", () => {
+  beforeEach(() => {
+    // `useIsMobileViewport` reads `window.innerWidth` directly (not
+    // `matchMedia().matches`, which the global test shim always reports as
+    // `false`), so setting it before render is enough to force the phone
+    // presentation.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+  });
+
+  afterEach(() => {
+    // Restore before anything else sees a phone-width window - the suite above
+    // asserts the desktop arm and would render a menu instead.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+  });
+
+  it("replaces the strip with a menu rather than shrinking five tabs", () => {
+    renderStrip({ tab: "overview", onSelectTab: () => undefined });
+
+    // The whole point of the change: at phone width no tab is rendered at all,
+    // so none can be truncated to "Ov…". A strip that merely restyled itself
+    // would still satisfy every other assertion here.
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    const trigger = screen.getByRole("button", { name: /Overview/ });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+  });
+
+  it("keeps the trigger full-width in the strip's own slot", () => {
+    renderStrip({ tab: "overview", onSelectTab: () => undefined });
+
+    const trigger = screen.getByTestId("pr-detail-tabs");
+    expect(trigger.className).toContain("w-full");
+    // The touch target the strip never had: its tabs are `py-1.5`, ~30px.
+    expect(trigger.className).toContain("min-h-11");
+  });
+
+  it("names the panel from the active tab's label", () => {
+    // `pr-detail-body` labels its `role="tabpanel"` with this id. Radix owns
+    // the trigger BUTTON's id and points the open menu's `aria-labelledby` at
+    // it, so the id lives on the label span - taking the button's would leave
+    // the menu unnamed to name the panel.
+    renderStrip({ tab: "checks", onSelectTab: () => undefined });
+
+    const label = document.getElementById("pr-detail-tab-trigger-checks");
+    expect(label?.textContent).toBe("Checks");
+    expect(screen.getByTestId("pr-detail-tabs").getAttribute("id")).not.toBe(
+      "pr-detail-tab-trigger-checks",
+    );
+  });
+
+  it("carries the same counts and blocking substitution as the strip", () => {
+    renderStrip({ tab: "files", onSelectTab: () => undefined });
+
+    // The trigger shows the ACTIVE tab's own badge, from the same derivation
+    // the strip uses - not a separate mobile count.
+    expect(screen.getByTestId("pr-detail-tabs").textContent).toContain("324");
+  });
+
+  it("opens a row per tab and reports the one that was picked", async () => {
+    const picked: PrDetailTabId[] = [];
+    const user = userEvent.setup();
+    renderStrip({ tab: "overview", onSelectTab: (tab) => picked.push(tab) });
+
+    await user.click(screen.getByTestId("pr-detail-tabs"));
+
+    const rows = await screen.findAllByRole("menuitemradio");
+    expect(rows).toHaveLength(TAB_NAMES.length);
+    // Same substitution rule inside the menu: the red "2" (failures), never
+    // the plain 12.
+    const checks = screen.getByTestId("pr-detail-tab-checks").textContent;
+    expect(checks).toContain("2");
+    expect(checks).not.toContain("12");
+
+    await user.click(screen.getByTestId("pr-detail-tab-files"));
+    expect(picked).toEqual(["files"]);
   });
 });

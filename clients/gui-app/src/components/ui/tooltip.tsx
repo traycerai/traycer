@@ -4,6 +4,11 @@ import * as React from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
+import {
+  readSafeAreaInsets,
+  readSafeAreaInsetsServerSnapshot,
+  subscribeToSafeAreaInsets,
+} from "@/lib/safe-area-insets";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 
 /**
@@ -60,6 +65,7 @@ function TooltipTrigger({
 function TooltipContent({
   className,
   sideOffset = 0,
+  collisionPadding,
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
@@ -67,12 +73,34 @@ function TooltipContent({
   // is display:none and can never receive the pointerleave that would close
   // this, so un-present the portal with the region.
   const concealed = usePortalConcealed();
+  // Subscribed rather than read, and read above the early return so the hook
+  // order does not depend on concealment. Radix takes the padding as a plain
+  // value, so a tooltip mounted in portrait would hold portrait geometry
+  // through a rotation until something else happened to re-render it.
+  const safeAreaInsets = React.useSyncExternalStore(
+    subscribeToSafeAreaInsets,
+    readSafeAreaInsets,
+    readSafeAreaInsetsServerSnapshot,
+  );
   if (concealed) return null;
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}
+        // The safe-area insets are the DEFAULT collision padding, because the
+        // guarantee has to hold for tooltips nobody thought about. Radix
+        // collides against the viewport, which on a phone includes the strip
+        // the app never paints into - so a `side="top"` label on a control in
+        // the app header finds "space" inside the status bar and renders into
+        // it instead of flipping below the trigger. Padding the collision box
+        // by the insets makes that space stop existing, which is the same
+        // thing `#root`'s padding does for everything not portalled.
+        //
+        // A caller may still pass its own, and one does: a tooltip inside a
+        // dialog pads against the dialog's edge, where the device inset is not
+        // the boundary that matters.
+        collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
           // Tooltip content is label-only (see hover-preview-card.tsx for the
           // interactive-content surface); `pointer-events-none` stops the

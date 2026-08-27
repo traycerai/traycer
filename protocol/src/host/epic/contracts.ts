@@ -1,4 +1,5 @@
 import {
+  defineDowngradePath,
   defineRpcContract,
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
@@ -108,6 +109,7 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -142,11 +144,16 @@ import {
   listChatRecordsResponseSchema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
+  getChatRunSettingsResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
+import {
+  fetchArtifactAttachmentRequestSchema,
+  fetchArtifactAttachmentResponseSchema,
+} from "@traycer/protocol/host/epic/artifact-attachment";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -882,6 +889,16 @@ export const epicReadChatAttachmentV10 = defineRpcContract({
   responseSchema: readChatAttachmentResponseSchema,
 });
 
+// Artifact attachment bytes remain canonical in the root document during the
+// @2 rollout, but no longer travel on `epic.subscribe`. The artifact id is the
+// authorization subject; the hash is only a content address.
+export const epicFetchArtifactAttachmentV10 = defineRpcContract({
+  method: "epic.fetchArtifactAttachment",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: fetchArtifactAttachmentRequestSchema,
+  responseSchema: fetchArtifactAttachmentResponseSchema,
+});
+
 // The per-chat run-settings tuple the row above deliberately does not carry.
 // Optional and host-local for the same reason as the list: it answers out of
 // this host's own chat store. A client without it renders the harness mark the
@@ -891,7 +908,71 @@ export const epicGetChatRunSettingsV10 = defineRpcContract({
   method: "epic.getChatRunSettings",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: getChatRunSettingsRequestSchema,
+  // Frozen at the harness id set the v1.2.0 tags shipped. Until Reasonix this
+  // pointed at the live response, whose `settings.harnessId` is the PERSISTED
+  // `guiHarnessIdSchema` - a second copy of the harness enum, on a method whose
+  // name gives no hint that it carries a catalog id. It is `degrade:
+  // unsupported` and off the released floor, so only the tag-based
+  // `protocol-compat` gate could see the growth; a plain `bun run test` stayed
+  // green. Grep RESPONSES for id enums when adding a harness, not just the
+  // three canonical catalog methods.
+  responseSchema: getChatRunSettingsResponseSchemaV10,
+});
+
+export const epicGetChatRunSettingsV20 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
   responseSchema: getChatRunSettingsResponseSchema,
+});
+
+export const epicGetChatRunSettingsUpgradeV10ToV20 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV10,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // Request shape is identical; a v1.0 settings tuple is a valid v2.0 one
+  // (only the `harnessId` enum grows), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const epicGetChatRunSettingsDowngradeV20ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV20,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // A v1.0 caller only ever asks about a chat on a harness it knows, so the
+    // common case reparses cleanly. This response carries exactly ONE settings
+    // tuple, so - like the `agent.*ProviderProfile*` bridges - there is nothing
+    // to filter and the only honest options are pass-through or refuse.
+    //
+    // Refuse, deliberately, rather than answering `{ settings: null }`. That
+    // arm is in-contract and renders as "nothing to show", which makes it a
+    // tempting degrade - but it is a claim ("this chat has no persisted
+    // settings") that would be FALSE for a Reasonix chat, and the caller has no
+    // way to tell the lie from the truth. The hover card that reads this
+    // already renders the record row's harness mark when the read fails, which
+    // is exactly the documented degrade for a host that predates the method.
+    //
+    // The message names no harness, so it stays honest as the enum grows.
+    const parsed = getChatRunSettingsResponseSchemaV10.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Reading this chat's run settings requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 // The terminal-agent RECORD read (`epic.listTuiAgents@1.0`) lives in
@@ -906,4 +987,5 @@ export {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
 };

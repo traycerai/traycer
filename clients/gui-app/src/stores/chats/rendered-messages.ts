@@ -3997,7 +3997,11 @@ const BLOCK_HANDLERS: {
     description: block.description,
     questions: block.questions,
     answers: block.answers,
+    draftAnswers: block.draftAnswers,
+    outcome: block.outcome,
+    settlement: block.settlement,
     error: block.error,
+    delivery: block.delivery,
     forkedWithoutAnswer: block.metadata?.["forkedWithoutAnswer"] === true,
   }),
   // Artifact-operation cards render top-level regardless of the authoring agent
@@ -4044,7 +4048,8 @@ function planContentIdentity(
 
 function blockToSegment(block: ContentBlock): MessageSegment | null {
   const handler = BLOCK_HANDLERS[block.type] as
-    ((b: ContentBlock) => Omit<MessageSegment, "id"> | null) | undefined;
+    | ((b: ContentBlock) => Omit<MessageSegment, "id"> | null)
+    | undefined;
   if (handler === undefined) {
     // Forward-compat: a newer host may emit a block.type the current GUI
     // bundle does not know about. Drop it instead of crashing the chat.

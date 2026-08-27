@@ -32,6 +32,11 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   // OpenRouter, ...) in its own credential store; the env name is illustrative
   // only, same as Hermes above.
   omp: "OPENROUTER_API_KEY",
+  // Reasonix names a DIFFERENT env var per configured provider - the config's
+  // `api_key_env` key chooses it, and the value lives in Reasonix's own global
+  // `.env`, not in the shell. There is no single well-known variable to show,
+  // so this is the default provider preset's name and is illustrative only.
+  reasonix: "DEEPSEEK_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

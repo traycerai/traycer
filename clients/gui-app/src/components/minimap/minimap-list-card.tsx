@@ -12,6 +12,8 @@ export interface MinimapListEntry {
 }
 
 export interface MinimapListCardProps {
+  /** Lets a container that is already a surface neutralize the card's own. */
+  readonly className?: string;
   readonly currentIndex: number;
   readonly cursorIndex: number;
   readonly items: ReadonlyArray<MinimapListEntry>;
@@ -23,6 +25,7 @@ export interface MinimapListCardProps {
 
 /** Shared, single-active-row navigator used by chat turns and artifact headings. */
 export function MinimapListCard({
+  className,
   currentIndex,
   cursorIndex,
   items,
@@ -73,6 +76,7 @@ export function MinimapListCard({
         "pointer-events-auto flex max-h-[min(60cqh,calc(100cqh_-_1rem))] flex-col overflow-hidden rounded-xl border border-border/60 bg-popover text-left text-popover-foreground shadow-lg",
         "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:zoom-in-95 motion-safe:duration-100",
         side === "left" ? "origin-left" : "origin-right",
+        className,
       )}
       data-minimap-list-card=""
     >
@@ -88,7 +92,10 @@ export function MinimapListCard({
               <button
                 aria-current={current ? "location" : undefined}
                 className={cn(
-                  "w-full cursor-pointer rounded-lg py-1.5 pr-3 text-left text-ui-xs font-medium leading-5 transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+                  // A coarse pointer gets a full touch target. `min-h`, not a
+                  // pseudo-element slop area: these rows stack directly on one
+                  // another, so slop would overlap the neighbours.
+                  "w-full cursor-pointer rounded-lg py-1.5 pr-3 text-left text-ui-xs font-medium leading-5 transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70 pointer-coarse:min-h-11",
                   item.level === 1 ? "pl-3" : "pl-7",
                   current
                     ? "bg-foreground/[0.10] text-foreground"

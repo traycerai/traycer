@@ -140,11 +140,15 @@ vi.mock("react-virtuoso", async () => {
     readonly data: ReadonlyArray<unknown> | undefined;
     readonly totalCount: number | undefined;
     readonly computeItemKey:
-      ((index: number, item: undefined) => Key) | undefined;
+      | ((index: number, item: undefined) => Key)
+      | undefined;
     readonly initialTopMostItemIndex:
-      number | { readonly index: number | "LAST" } | undefined;
+      | number
+      | { readonly index: number | "LAST" }
+      | undefined;
     readonly itemContent:
-      ((index: number, item: undefined) => ReactNode) | undefined;
+      | ((index: number, item: undefined) => ReactNode)
+      | undefined;
   }
 
   const Virtuoso = React.forwardRef<MockVirtuosoHandle, MockVirtuosoProps>(
@@ -411,6 +415,7 @@ function renderPickerWithFixture(
       <SurfaceActivityProvider active>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
+            labelDisplay="responsive"
             store={store}
             withServiceTier={false}
             tuiOnly={false}

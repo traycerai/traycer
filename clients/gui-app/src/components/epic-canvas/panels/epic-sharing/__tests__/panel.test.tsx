@@ -365,12 +365,12 @@ describe("<SharingPanel />", () => {
             {
               identifier: "sharm@gmail.com",
               identifierType: "email",
-              role: "viewer",
+              role: "editor",
             },
             {
               identifier: "asjnfakjsnf",
               identifierType: "github_handle",
-              role: "viewer",
+              role: "editor",
             },
           ],
         }),
@@ -487,7 +487,7 @@ describe("<SharingPanel />", () => {
         input: {
           kind: "team",
           teamId: "team-2",
-          role: "viewer",
+          role: "editor",
         },
       },
       expect.objectContaining({}),
@@ -511,7 +511,7 @@ describe("<SharingPanel />", () => {
     expect(testState.collaboratorsQuery.refetch).toHaveBeenCalledTimes(1);
   });
 
-  it("spins the refresh icon while collaborators are refreshing", () => {
+  it("shows the standard agent spinner while collaborators are refreshing", () => {
     testState.collaboratorsQuery = {
       isFetching: true,
       dataUpdatedAt: Date.now(),
@@ -526,8 +526,8 @@ describe("<SharingPanel />", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
     expect(
-      screen.getByTestId("epic-sharing-refresh-spinner").getAttribute("class"),
-    ).toContain("animate-spin");
+      screen.getByTestId("epic-sharing-refresh-spinner").className,
+    ).toContain("font-mono");
   });
 
   it("keeps role triggers visible for teams and direct collaborators", () => {

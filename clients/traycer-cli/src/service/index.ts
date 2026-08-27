@@ -23,7 +23,10 @@ export { resolveServiceCliInvocation } from "./cli-binary";
 // `installService` refuses it outright. Run-state is deliberately not folded
 // in: liveness checks key off pid metadata (`busy-check.ts`), never off this.
 export type ServiceState =
-  "running" | "stopped" | "not-installed" | "externally-managed";
+  | "running"
+  | "stopped"
+  | "not-installed"
+  | "externally-managed";
 
 export interface ServiceStatus {
   readonly state: ServiceState;

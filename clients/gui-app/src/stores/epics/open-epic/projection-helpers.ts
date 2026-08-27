@@ -8,7 +8,6 @@
  *
  *   doc.getMap("epic") = {
  *     title:                    string,
- *     isTitleEditedByUser:      boolean,
  *     artifacts: Y.Map<string, Y.Map<{
  *        id, kind, title, parentId, createdAt, updatedAt,
  *        artifactRoomId?: string, status?: number,
@@ -25,7 +24,7 @@
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { ChatRecordSummary } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -42,6 +41,14 @@ import {
   type RoleClaim,
 } from "@traycer/protocol/persistence/epic/role-claims";
 import * as Y from "yjs";
+import type { PendingMetadataOverlay } from "./pending-metadata-overlay";
+import {
+  applyPendingOverlayToArtifacts,
+  applyPendingOverlayToChats,
+  applyPendingOverlayToEpicHeader,
+  applyPendingOverlayToTuiAgents,
+  collectDeadPendingMutations,
+} from "./pending-metadata-overlay";
 import type {
   ArtifactProjection,
   AgentRolesSlice,
@@ -339,6 +346,9 @@ export function projectTerminalAgent(
   const profileId = entry.get("profileId");
   return {
     id,
+    // This IS the doc arm - every entry it reads is by definition still
+    // pointing at the Y.Doc.
+    docResident: true,
     harnessId,
     title: readMaybeString(entry, "title"),
     parentId: readMaybeNullableString(entry, "parentId"),
@@ -455,6 +465,10 @@ export function terminalAgentProjectionsEq(
 ): boolean {
   const scalarFieldsEqual = [
     a.id === b.id,
+    // Adoption flips this with nothing else necessarily changing (the sweep
+    // imports a frozen entry verbatim), so omitting it here would freeze the
+    // stale routing decision behind the change gate.
+    a.docResident === b.docResident,
     a.harnessId === b.harnessId,
     a.title === b.title,
     a.parentId === b.parentId,
@@ -473,9 +487,17 @@ export function terminalAgentProjectionsEq(
     a.archivedAt === b.archivedAt,
   ].every((fieldEqual) => fieldEqual);
 
+  // Nullability first: `?? []` on both sides would call `null` and `[]`
+  // equal, and any identity-preserving consumer (the incremental reconcile,
+  // the full-projection stabilizer) would then splice a stale `null` row back
+  // over a real `null → []` transition.
+  const shellArgsEqual =
+    a.terminalShellArgs === null || b.terminalShellArgs === null
+      ? a.terminalShellArgs === b.terminalShellArgs
+      : arrayShallowEq(a.terminalShellArgs, b.terminalShellArgs);
   return (
     scalarFieldsEqual &&
-    arrayShallowEq(a.terminalShellArgs ?? [], b.terminalShellArgs ?? []) &&
+    shellArgsEqual &&
     arrayShallowEq(a.workspaceFolders, b.workspaceFolders)
   );
 }
@@ -761,6 +783,28 @@ export function unionChatsSlice(
   return { byId, allIds };
 }
 
+/**
+ * Whether this build projects an epic-doc replica at all - i.e. whether
+ * {@link projectTerminalAgentsSlice} below has a document to read.
+ *
+ * `true` for as long as the renderer subscribes at `epic.subscribe@1`, which
+ * is every build up to and including the one that lands the `@2` client.
+ *
+ * It is a REQUEST FIELD, not a local detail: `epic.listTuiAgents@1.1` serves
+ * the doc-resident remainder only to a caller that declares `false`, because a
+ * caller with a replica already holds those entries live and a second
+ * poll-stale copy only gives its union a conflict to resolve. The host cannot
+ * derive this - `epic.subscribe`'s major is negotiated independently of
+ * `epic.listTuiAgents`' minor - so this constant is the whole answer.
+ *
+ * FLIP IT IN THE SAME CHANGE THAT DELETES THE DOC ARM. Leaving it `true` past
+ * that point costs the doc-resident agents their only remaining source (the
+ * `@1` behaviour this minor exists to replace); flipping it early costs the
+ * duplicate-row conflict. `true` is the safe end of that trade, which is why
+ * it is the value that ships until the doc arm is actually gone.
+ */
+export const GUI_PROJECTS_EPIC_DOC_REPLICA = true;
+
 function projectTerminalAgentsSlice(
   doc: Y.Doc,
   currentUserId: string | null,
@@ -816,12 +860,16 @@ function narrowTuiHarnessId(value: string): TuiHarnessId | null {
  * `updatedAt` stands in when the plane that answered carried no timestamp.
  */
 export function tuiAgentProjectionFromRecord(
-  record: TuiAgentRecordSummary,
+  record: TuiAgentRecordSummaryV11,
 ): TuiAgentProjection | null {
   const harnessId = narrowTuiHarnessId(record.harnessId);
   if (harnessId === null) return null;
   return {
     id: record.tuiAgentId,
+    // Passed through, never assumed false: at `@1.1` the record plane carries
+    // BOTH registry rows and the doc-resident remainder, and the host is the
+    // only party that can still tell them apart.
+    docResident: record.docResident,
     harnessId,
     title: record.title,
     parentId: record.parentId,
@@ -853,7 +901,7 @@ export function tuiAgentProjectionFromRecord(
  * selection frozen at arrival time. Undispatchable rows are dropped here.
  */
 export function tuiAgentRecordsSlice(
-  records: readonly TuiAgentRecordSummary[],
+  records: readonly TuiAgentRecordSummaryV11[],
 ): TerminalAgentsSlice {
   const byId: Record<string, TuiAgentProjection> = {};
   const allIds: string[] = [];
@@ -892,6 +940,22 @@ export function terminalAgentSlicesEq(
  * entries), so an overlap means the doc's copy is a frozen pre-migration
  * mirror. There is no `settings`-style doc-only field to preserve: the row
  * carries the full record.
+ *
+ * ## `@1.1` nearly broke that, and record-wins is only safe because it does not
+ *
+ * `epic.listTuiAgents@1.1` serves the doc-resident remainder as ROWS. Were
+ * those rows to reach a client that still projects a doc, the overlap would be
+ * DELIBERATE and the premise above would invert: the record is the host's
+ * poll-time re-read, while this client's doc entry is the live one it just
+ * wrote to. Record-wins would then discard the fresher side, and a reparent of
+ * such an agent would snap back to its old parent on the next projection.
+ *
+ * That cannot happen, and not by luck: the caller declares
+ * `hasDocReplica` on the request (see `GUI_PROJECTS_EPIC_DOC_REPLICA`) and the
+ * host serves the remainder only when it is `false` - i.e. only to a client
+ * with no doc arm for these rows to collide with. Keep that request field
+ * honest and record-wins stays correct; set it to `false` while still
+ * projecting a doc and this function is where the damage lands.
  *
  * NO display filter here, unlike the chats' union: the host serves the
  * CALLER'S OWN rows only (structurally owner-private, per the contract), and
@@ -970,7 +1034,6 @@ function projectEpicHeader(doc: Y.Doc): EpicHeader {
   return {
     title: readMaybeString(epic, "title"),
     updatedAt: readMaybeNumber(epic, "updatedAt"),
-    isTitleEditedByUser: readMaybeBoolean(epic, "isTitleEditedByUser"),
   };
 }
 
@@ -1132,57 +1195,126 @@ export function projectTreeSlice(
 
 // ─── Full-doc projection (snapshot + initial attach) ──────────────────────
 
-export function projectFullState(
-  doc: Y.Doc,
-  currentUserId: string | null,
+/**
+ * Everything a projection folds in besides the doc itself.
+ *
+ * Grouped rather than passed positionally because all three share one
+ * property: they arrive on their own schedule and must be read AT projection
+ * time, never captured when the session was constructed. The projector holds a
+ * lazy getter for each for that reason. (It also keeps `projectFullState`
+ * inside the repo's parameter-count limit, which is the same pressure pointing
+ * the same way.)
+ */
+export interface ProjectionInputs {
   /**
    * The host's store-backed chat records (`epic.listChatRecords`). Empty in
    * doc-only mode - an older host, or before the first response - and the union
    * then returns the doc slice itself.
    */
-  chatRecords: ChatsSlice,
+  readonly chatRecords: ChatsSlice;
   /**
    * The host's registry-backed terminal-agent rows (`epic.listTuiAgents`),
    * with exactly the chat records' contract: empty in doc-only mode, and the
    * union then returns the doc slice itself.
    */
-  tuiAgentRecords: TerminalAgentsSlice,
+  readonly tuiAgentRecords: TerminalAgentsSlice;
+  /**
+   * Metadata mutations this client has stamped and has no answer for yet.
+   * Empty when nothing is in flight, and every applier is then a reference
+   * pass-through, so the common case costs nothing.
+   */
+  readonly pendingOverlay: PendingMetadataOverlay;
+  /**
+   * Receives the request ids of overlay chains this projection proved
+   * finished (`collectDeadPendingMutations`): landed-only chains whose row
+   * caught up or was overwritten. The store deletes them from the retained
+   * map - without republishing, since a dead chain already displays the
+   * authoritative value. `null` for callers with no map to sweep (tests
+   * projecting a bare doc).
+   */
+  readonly reportDeadMutations:
+    | ((requestIds: readonly string[]) => void)
+    | null;
+}
+
+export function projectFullState(
+  doc: Y.Doc,
+  currentUserId: string | null,
+  inputs: ProjectionInputs,
 ): EpicProjectedSlices {
+  const { chatRecords, tuiAgentRecords, pendingOverlay, reportDeadMutations } =
+    inputs;
   const artifacts = projectArtifactsSlice(doc);
   const deletedArtifacts = projectDeletedArtifactsSlice(doc);
   const docChats = projectChatsSlice(doc, currentUserId);
   const chats = unionChatsSlice(docChats, chatRecords, currentUserId);
   const docTuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
   const tuiAgents = unionTerminalAgentsSlice(docTuiAgents, tuiAgentRecords);
+  const epicHeader = projectEpicHeader(doc);
+  // Sweep finished overlay chains against the PRE-overlay values - the only
+  // place both the union slices and the overlay are in hand together. Runs
+  // before the appliers so a chain proven dead here never patches this
+  // projection either (the map mutation the callback performs is visible to
+  // nothing else mid-projection; the appliers below read the same `pendingOverlay`
+  // reference, which the callback edits in place).
+  if (reportDeadMutations !== null && pendingOverlay.size > 0) {
+    const dead = collectDeadPendingMutations(pendingOverlay, {
+      artifacts,
+      chats,
+      tuiAgents,
+      epicTitle: epicHeader.title,
+    });
+    if (dead.length > 0) reportDeadMutations(dead);
+  }
   const agentRoles = projectAgentRolesSlice(
     doc,
     currentUserId,
     chats,
     tuiAgents,
   );
-  const tree = projectTreeSlice(artifacts, chats, tuiAgents);
-  const contentRevByArtifactId: Record<string, number> = {};
-  for (const id of artifacts.allIds) {
-    contentRevByArtifactId[id] = 0;
-  }
-  return {
-    epic: projectEpicHeader(doc),
+  // The optimistic overlay lands HERE - on the union outputs components read,
+  // and BEFORE the tree is built, so a pending reparent restructures
+  // `childrenByParent` / `rootIds` for free instead of needing the tree
+  // patched a second time.
+  //
+  // `docChats` / `docTuiAgents` are deliberately NOT overlaid: they are the
+  // projector's own input state, and an incremental doc patch has to reconcile
+  // against the doc's history rather than against a display patch.
+  const overlaidArtifacts = applyPendingOverlayToArtifacts(
     artifacts,
+    pendingOverlay,
+  );
+  const overlaidChats = applyPendingOverlayToChats(chats, pendingOverlay);
+  const overlaidTuiAgents = applyPendingOverlayToTuiAgents(
+    tuiAgents,
+    pendingOverlay,
+  );
+  const tree = projectTreeSlice(
+    overlaidArtifacts,
+    overlaidChats,
+    overlaidTuiAgents,
+  );
+  return {
+    epic: applyPendingOverlayToEpicHeader(epicHeader, pendingOverlay),
+    artifacts: overlaidArtifacts,
     deletedArtifacts,
     docChats,
-    chats,
+    chats: overlaidChats,
     docTuiAgents,
-    tuiAgents,
+    tuiAgents: overlaidTuiAgents,
     agentRoles,
     tree,
-    contentRevByArtifactId,
   };
 }
 
 // ─── Y.Doc mutation helpers (used by store actions) ───────────────────────
 
 export type AddableArtifactType =
-  "chat" | "spec" | "ticket" | "story" | "review";
+  | "chat"
+  | "spec"
+  | "ticket"
+  | "story"
+  | "review";
 
 export const NEW_ARTIFACT_TITLES: Readonly<
   Record<AddableArtifactType, string>

@@ -45,7 +45,11 @@ export type ActiveHostUpdateAttemptPhase = Exclude<
  * vice versa) after the durable record changes.
  */
 export type AttemptClaimAction =
-  "start" | "resume-apply" | "activate" | "force" | "defer";
+  | "start"
+  | "resume-apply"
+  | "activate"
+  | "force"
+  | "defer";
 
 export interface AttemptClaimRequest {
   readonly targetVersion: string;

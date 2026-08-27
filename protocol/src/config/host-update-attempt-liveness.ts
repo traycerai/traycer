@@ -298,7 +298,10 @@ export function attemptHolderUsesPlainIdentityProbe(
  * other lacks, so the duplication cannot drift silently.
  */
 export type AttemptHolderLivenessVerdict =
-  "dead" | "alive-same" | "alive-different" | "indeterminate";
+  | "dead"
+  | "alive-same"
+  | "alive-different"
+  | "indeterminate";
 
 /**
  * Tri-state OS liveness for a pid. NOT a boolean, and that is the entire

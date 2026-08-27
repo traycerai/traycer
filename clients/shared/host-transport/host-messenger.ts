@@ -1,11 +1,14 @@
-import type {
-  LatestContract,
-  MethodVersionRegistry,
-  RequestOf,
-  ResponseOf,
-  RpcErrorCode,
-  RpcErrorDetails,
-  VersionedRpcRegistry,
+import {
+  isRpcErrorCode,
+  worktreeBusyHoldersSchema,
+  type LatestContract,
+  type MethodVersionRegistry,
+  type RequestOf,
+  type ResponseOf,
+  type RpcErrorCode,
+  type RpcErrorDetails,
+  type VersionedRpcRegistry,
+  type WorktreeBusyHolder,
 } from "@traycer/protocol/framework/index";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
@@ -110,6 +113,13 @@ export class HostRpcError extends Error {
    * `null` when the failure did not arrive via a fatal-error frame.
    */
   readonly fatalDetails: FatalErrorDetails | null;
+  /**
+   * Typed `WORKTREE_BUSY` holder inventory. `null` when the envelope omitted
+   * it (old host), carried a different code, or failed schema parse. Callers
+   * that render a confirm dialog read this; they must not fall back to
+   * parsing `message`.
+   */
+  readonly holders: readonly WorktreeBusyHolder[] | null;
 
   constructor(details: {
     code: RpcErrorCode;
@@ -117,6 +127,7 @@ export class HostRpcError extends Error {
     requestId: string;
     method: string;
     fatalDetails: FatalErrorDetails | null;
+    holders?: readonly WorktreeBusyHolder[] | null;
   }) {
     super(details.message);
     this.name = "HostRpcError";
@@ -124,6 +135,8 @@ export class HostRpcError extends Error {
     this.requestId = details.requestId;
     this.method = details.method;
     this.fatalDetails = details.fatalDetails;
+    this.holders =
+      details.code === "WORKTREE_BUSY" ? (details.holders ?? null) : null;
   }
 
   static fromErrorDetails(
@@ -137,8 +150,47 @@ export class HostRpcError extends Error {
       requestId,
       method,
       fatalDetails: null,
+      holders: holdersForBusyCode(error.code, error.holders),
     });
   }
+
+  /**
+   * Build from a decoded wire error envelope (`code` is an open string).
+   * Unknown codes collapse to `RPC_ERROR`. `holders` survive only on
+   * `WORKTREE_BUSY` when they match the protocol schema.
+   */
+  static fromWireEnvelope(
+    error: {
+      readonly code: string;
+      readonly message: string;
+      readonly holders?: unknown;
+    },
+    requestId: string,
+    method: string,
+  ): HostRpcError {
+    return new HostRpcError({
+      code: isRpcErrorCode(error.code) ? error.code : "RPC_ERROR",
+      message: error.message,
+      requestId,
+      method,
+      fatalDetails: null,
+      holders: holdersForBusyCode(error.code, error.holders),
+    });
+  }
+}
+
+function holdersForBusyCode(
+  code: string,
+  holders: unknown,
+): readonly WorktreeBusyHolder[] | null {
+  if (code !== "WORKTREE_BUSY") {
+    return null;
+  }
+  if (holders === undefined || holders === null) {
+    return null;
+  }
+  const parsed = worktreeBusyHoldersSchema.safeParse(holders);
+  return parsed.success ? parsed.data : null;
 }
 
 /**

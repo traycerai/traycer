@@ -431,6 +431,14 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // An explicit human maintenance action may probe one disabled profile.
+  // It can spawn the same long-running CLI usage probe as the ordinary read,
+  // but is never polled or coalesced with another profile's action.
+  "providers.refreshProfileStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
   "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
   "host.notificationHooks.status": { ...LATEST_SCHEDULING, poll: null },
   // Testing a hook sends a real notification.
@@ -982,6 +990,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Like the chat attachment read, artifact attachment bytes are addressed by
+  // their content hash and the image cache owns retry after a transient miss.
+  // Polling this unary method would only re-fetch immutable bytes.
+  "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1364,6 +1376,12 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // Enabling a provider changes persisted provider configuration.
   "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Profile eligibility is persisted provider configuration.
+  "providers.setProfileEnabled": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

@@ -10,6 +10,7 @@ import { X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence } from "motion/react";
+import { useHeaderTabDisplacement } from "./use-header-tab-displacement";
 import * as m from "motion/react-m";
 import {
   useDraggable,
@@ -24,6 +25,7 @@ import {
   type HeaderTabDragData,
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
@@ -56,7 +58,7 @@ import {
 } from "@/components/ui/leader-digit-shortcuts";
 import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
 import {
-  HEADER_TAB_LAYOUT_TRANSITION,
+  useHeaderTabDisplacementTransition,
   TAB_CLASS_BASE,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
@@ -92,6 +94,7 @@ interface TabItemProps {
    */
   readonly chrome: "own" | "member";
   readonly includeMotionFrame: boolean;
+  readonly offsetX: number;
   readonly isActive: boolean;
   readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
@@ -226,13 +229,21 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       const epicId = tab.epicId;
       const tabHostId = tab.hostId;
       const handle = getOpenEpicRegistry().peek(epicId);
-      const previousTitle =
-        handle?.store.getState().epic.title ?? resolvedTabName;
-      // Optimistic local update for instant feedback; rolled back to the prior
-      // title if the authoritative cloud rename can't be applied.
-      handle?.store.getState().setEpicTitle(next);
-      const rollback = () => {
-        handle?.store.getState().setEpicTitle(previousTitle);
+      // Optimistic overlay for instant feedback. This used to capture the
+      // prior title and write it back on failure; the overlay makes that pair
+      // unnecessary, because the patch sits OVER the authoritative value and
+      // dropping it reveals whatever the host actually has. Do not reintroduce
+      // a write-back - a second `setEpicTitle` on the failure path would
+      // persist the old title as a fresh local mutation rather than reverting
+      // to the server's.
+      const requestId =
+        handle?.store.getState().beginEpicTitleMutation(next) ?? null;
+      // "landed" keeps the patch applied until the doc echoes the new title
+      // back (the ack is proof the host has it); "failed" drops it, revealing
+      // the authoritative value. Both keep the pending map bounded.
+      const retire = (outcome: "landed" | "failed") => {
+        if (requestId === null) return;
+        handle?.store.getState().retirePendingMutation(requestId, outcome);
       };
       // The header strip is app-global and not guaranteed to sit inside a
       // HostRuntimeProvider, so reach the host client through the snapshot
@@ -251,7 +262,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       // app-wide client, which is all this surface ever had.
       const client = epicRenameClient(tabHostId);
       if (client === null) {
-        rollback();
+        // No RPC ever fired, so nothing can land this stamp - drop it.
+        retire("failed");
         reportableErrorToast(
           "Couldn't reach the host to rename the epic.",
           undefined,
@@ -272,6 +284,9 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         })
         .then(
           () => {
+            // Before the early return below - a null user id means there is no
+            // cloud cache to patch, not that the mutation is still pending.
+            retire("landed");
             if (userId === null) return;
             updateEpicTitleInCloudTaskCaches(
               queryClient,
@@ -281,7 +296,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             );
           },
           (error: unknown) => {
-            rollback();
+            retire("failed");
             if (error instanceof HostRpcError) {
               toastFromHostError(error, "Couldn't rename epic.");
             } else {
@@ -295,7 +310,10 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           },
         );
     },
-    [resolvedTabName, queryClient, tab],
+    // `resolvedTabName` is gone from here with the capture/rollback pair that
+    // read it - the overlay reveals the authoritative title on failure rather
+    // than restoring a captured one, so this callback no longer depends on it.
+    [queryClient, tab],
   );
   const rename = useInlineRename({
     // Bind to the RAW title, not `displayName` - editing must never seed the
@@ -461,12 +479,15 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       />
     </ContextMenu>
   );
-  return includeMotionFrame ? (
-    <HeaderTabMotionFrame isDragging={isDragging}>
+  if (!includeMotionFrame) return control;
+  return (
+    <HeaderTabMotionFrame
+      isDragging={isDragging}
+      offsetX={props.offsetX}
+      dnd={dnd}
+    >
       {control}
     </HeaderTabMotionFrame>
-  ) : (
-    control
   );
 });
 
@@ -502,6 +523,7 @@ function useHeaderTabDnd(
   const dragKey = stripItemId.startsWith("tab:")
     ? tabId
     : `${stripItemId}:${tabId}`;
+  const dragDisabled = useDragSourceDisabled();
   const {
     listeners,
     setNodeRef: dragRef,
@@ -509,7 +531,7 @@ function useHeaderTabDnd(
   } = useDraggable({
     id: getHeaderTabDragId(tabKind, dragKey),
     data: dragData,
-    disabled: config === null,
+    disabled: config === null || dragDisabled,
   });
   const dropData = useMemo<HeaderTabSlotDropData>(
     () => ({
@@ -525,7 +547,11 @@ function useHeaderTabDnd(
       `${config?.stripItemId ?? "member"}:${tabId}`,
     ),
     data: dropData,
-    disabled: config === null || !config.isDropSlot,
+    // The source stays mounted as a full-width layout placeholder while the
+    // overlay follows the pointer. It must not remain a collision target: once
+    // provisional order moves that placeholder under the pointer it would
+    // steal `over` from the neighbour whose center actually opened the slot.
+    disabled: config === null || !config.isDropSlot || isDragging,
   });
   const ref = useMemo(
     () => mergeRefs<HTMLElement>(dragRef, dropRef),
@@ -538,30 +564,30 @@ function HeaderTabDropIndicator(props: {
   readonly visible: boolean;
   readonly side: "left" | "right";
 }) {
+  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
+  // while the new one enters, so the strip shows two landing positions at once
+  // for the length of the exit (~110ms measured). A drop indicator states one
+  // destination, so it unmounts immediately and only its entry animates.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.span
-          aria-hidden
-          data-testid="tab-drop-indicator"
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={{ duration: 0.12, ease: "easeOut" }}
-          className={cn(
-            "absolute inset-y-1 z-20 origin-center",
-            props.side === "left" ? "left-2" : "right-2",
-          )}
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId={undefined}
-          />
-        </m.span>
-      ) : null}
-    </AnimatePresence>
+    <m.span
+      aria-hidden
+      data-testid="tab-drop-indicator"
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={{ duration: 0.12, ease: "easeOut" }}
+      className={cn(
+        "absolute inset-y-1 z-20 origin-center",
+        props.side === "left" ? "left-2" : "right-2",
+      )}
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId={undefined}
+      />
+    </m.span>
   );
 }
 
@@ -607,17 +633,36 @@ function TabLeadingIcon(props: {
 
 function HeaderTabMotionFrame(props: {
   readonly isDragging: boolean;
+  readonly offsetX: number;
+  /** Drag config; its `stripItemId` is the drag model's measurement anchor. */
+  readonly dnd: HeaderTabDndConfig | null;
   readonly children: React.ReactNode;
 }) {
+  const transition = useHeaderTabDisplacementTransition();
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const x = useHeaderTabDisplacement({
+    nodeRef: frameRef,
+    offsetX: props.offsetX,
+    transition,
+  });
+
   return (
     <m.div
-      layout="position"
+      ref={frameRef}
       initial={false}
-      animate={{
-        opacity: props.isDragging ? 0.36 : 1,
-        scale: props.isDragging ? 0.96 : 1,
-      }}
-      transition={HEADER_TAB_LAYOUT_TRANSITION}
+      animate={{ opacity: props.isDragging ? 0 : 1 }}
+      style={{ x }}
+      // Explicit x from the drag model - deliberately NOT `layout="position"`
+      // plus CSS `order`. That pairing strands a translateX when the item set
+      // changes under an in-flight projection; binding x to state makes the
+      // class unrepresentable rather than merely currently unreachable.
+      //
+      // Position springs, opacity does not: the dragged tab's source frame must
+      // become invisible on the same frame the overlay is painted, or the strip
+      // briefly shows two copies of one tab.
+      transition={transition}
+      data-strip-item-id={props.dnd?.stripItemId}
+      data-strip-item-mergeable="true"
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
       className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"

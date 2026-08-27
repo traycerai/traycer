@@ -1259,7 +1259,6 @@ describe("host.getRateLimitUsage v4.0 OpenCode arm + downgrade bridges", () => {
       expect(toV1.value.providerRateLimits).toEqual(openCodeUnsupported);
     }
   });
-
 });
 
 // `host.getRateLimitUsage@4.0`'s `force` opt-out (see

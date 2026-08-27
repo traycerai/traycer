@@ -9,7 +9,11 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import {
+  LegendList,
+  type LegendListRef,
+  type MaintainVisibleContentPositionConfig,
+} from "@legendapp/list/react";
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import {
@@ -25,7 +29,9 @@ import {
   clearChatTimelineVisibleRows,
 } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import {
+  chatTimelineKeySequence,
   computeStableChatTimelineRows,
+  didChatTimelineKeySequenceChange,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "./chat-stable-rows";
@@ -130,6 +136,7 @@ interface ChatTimelineRowSharedState {
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
   readonly navigationHighlightStore: NavigationHighlightStore;
+  readonly onRowMount: ((messageId: string) => void) | undefined;
 }
 
 const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
@@ -138,6 +145,24 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
 
 /** decision #5: "isNearEnd (library default 10% threshold)". */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
+
+/** The two configurations the timeline alternates between, at module scope so
+ *  each keeps one identity and a commit that does not move between them hands
+ *  the list the same object. See the prop itself for what selects which. */
+const CHAT_TIMELINE_MVCP_SIZE_ONLY: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+  { data: false, size: true };
+const CHAT_TIMELINE_MVCP_WITH_DATA: MaintainVisibleContentPositionConfig<ChatMessageModel> =
+  { data: true, size: true };
+
+/** Both arms are pinned by the prop-capture cases in `chat-timeline.test.tsx`,
+ *  which observe what the list actually received rather than calling this. */
+function resolveChatTimelineMvcp(
+  keySequenceChanged: boolean,
+): MaintainVisibleContentPositionConfig<ChatMessageModel> {
+  return keySequenceChanged
+    ? CHAT_TIMELINE_MVCP_WITH_DATA
+    : CHAT_TIMELINE_MVCP_SIZE_ONLY;
+}
 
 // M4 (ticket 16 spacer alignment): the old 40px header/footer were
 // unsanctioned drift (decision log #30).
@@ -204,6 +229,8 @@ export interface ChatTimelineProps {
   readonly navigationHighlightedMessageId?: string | null;
   /** Notifies presentational consumers after LegendList remeasures any row. */
   readonly onItemSizeChanged?: () => void;
+  /** Fires for every mounted virtual row, including cached equal-size rows. */
+  readonly onRowMount?: (messageId: string) => void;
   /**
    * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
@@ -222,9 +249,11 @@ export interface ChatTimelineProps {
  * unchanged. Bottom-follow is a strict 1px edge, owned by
  * `useChatTimelineFollowLatch` (see that module) rather than LegendList's
  * own `maintainScrollAtEnd`, which this component never enables.
- * `maintainVisibleContentPosition` stays on unconditionally - it keeps an
- * already-detached reader's view pixel-stable against unrelated growth,
- * which never pulls toward the tail. There is no app-owned scroll mode here.
+ * `maintainVisibleContentPosition` stays on unconditionally, but only on its
+ * SIZE channel - it keeps an already-detached reader's view pixel-stable
+ * against unrelated growth, which never pulls toward the tail. See the prop
+ * itself for why the data channel is off. There is no app-owned scroll mode
+ * here.
  */
 export const ChatTimeline = memo(function ChatTimeline({
   messages,
@@ -245,10 +274,13 @@ export const ChatTimeline = memo(function ChatTimeline({
   resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
   onItemSizeChanged,
+  onRowMount,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
   const rows = useStableChatTimelineRows(listRef, messages);
+
+  const keySequenceChanged = useCommittedKeySequenceChanged(listRef, rows);
 
   // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
   // hook's own doc comment. Bottom-follow is owned entirely here now -
@@ -284,6 +316,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       getMessageActions,
       nextStepActions,
       navigationHighlightStore,
+      onRowMount,
     }),
     [
       taskTitle,
@@ -291,6 +324,7 @@ export const ChatTimeline = memo(function ChatTimeline({
       getMessageActions,
       nextStepActions,
       navigationHighlightStore,
+      onRowMount,
     ],
   );
 
@@ -396,7 +430,37 @@ export const ChatTimeline = memo(function ChatTimeline({
         // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
         // The separate `isAtEnd` calculation owns the 1px edge tolerance.
         maintainScrollAtEndThreshold={0}
-        maintainVisibleContentPosition
+        // SIZE is always on: it keeps a detached reader pixel-stable when
+        // content above the viewport changes HEIGHT - a nested chain-open in
+        // find, a row remeasuring above the reader.
+        //
+        // DATA rides the key sequence, because the two things it is asked to
+        // tell apart arrive on the same signal. The library treats any row
+        // object it cannot prove equal as a structural data change, and while
+        // that channel is on it arms an MVCP anchor lock on every such pass.
+        // A held lock stops the library recalculating item positions inline
+        // and defers them to an animation frame; a row that grows is laid out
+        // by the browser immediately while the offsets of the rows after it
+        // are only rewritten a frame later, so the frame in between paints
+        // those rows inside the grown row's band. A streaming reply hands over
+        // a changed array on every token, well inside the lock's 300ms expiry,
+        // so leaving DATA on holds that lock - and that overlap - for the
+        // whole stream.
+        //
+        // The rows themselves distinguish the two: a streaming token changes a
+        // row's CONTENT in place, while an insert, a removal, or a move
+        // changes the sequence of row KEYS. Only the latter can shift what a
+        // detached reader is looking at, and only the latter needs the anchor,
+        // so the channel is on for exactly those commits. Off, positions are
+        // recalculated inline and stay coherent before the browser paints.
+        //
+        // Deliberately NOT `itemsAreEqual`: the library reuses that same
+        // comparator to decide whether a mounted container refreshes its item
+        // data, so calling same-key rows equal would freeze a streaming row's
+        // rendered content in place.
+        maintainVisibleContentPosition={resolveChatTimelineMvcp(
+          keySequenceChanged,
+        )}
         onItemSizeChanged={handleItemSizeChanged}
         onScroll={handleScroll}
         onMetricsChange={handleMetricsChange}
@@ -469,6 +533,18 @@ const stableChatTimelineRowsCache = new WeakMap<
   StableChatTimelineRowsState
 >();
 
+/**
+ * The row key sequence each mounted timeline last RENDERED, keyed by that
+ * mount's `listRef` exactly as `stableChatTimelineRowsCache` is. Written only
+ * from a layout effect, so a render React discards never advances it - which
+ * is the whole point of keeping it separate from the row-reuse cache above,
+ * whose entry is published during render by design.
+ */
+const committedChatTimelineKeysCache = new WeakMap<
+  RefObject<LegendListRef | null>,
+  ReadonlyArray<string>
+>();
+
 /** Returns a structurally-shared copy of `rows`: for each row whose content
  *  hasn't changed since last call, the previous object reference is reused.
  *  `messages` is rebuilt wholesale on every store update (every streaming
@@ -476,7 +552,12 @@ const stableChatTimelineRowsCache = new WeakMap<
  *  -style adjust-state-during-render retry would cost a genuine extra render
  *  pass on that hot path, not just a Strict Mode dev artifact. See
  *  `stableChatTimelineRowsCache`'s own doc comment for the cache shape and
- *  why it stays correct under a discarded speculative render. */
+ *  why it stays correct under a discarded speculative render.
+ *
+ *  Row reuse is all this decides. Anything that has to reason about what the
+ *  list last RENDERED - the key sequence the MVCP data channel rides - reads
+ *  `committedChatTimelineKeysCache` instead, precisely because this entry is
+ *  published during render and a discarded render can move it. */
 function useStableChatTimelineRows(
   listRef: RefObject<LegendListRef | null>,
   rows: ReadonlyArray<ChatMessageModel>,
@@ -489,6 +570,42 @@ function useStableChatTimelineRows(
     stableChatTimelineRowsCache.set(listRef, next);
     return next.result;
   }, [rows, listRef]);
+}
+
+/**
+ * Whether `rows` moves rows relative to the sequence this timeline last
+ * actually RENDERED - the signal `maintainVisibleContentPosition` rides.
+ *
+ * The baseline is published from a layout effect, never from render, and that
+ * is the whole design: React discards renders, and a baseline a discarded one
+ * advanced makes the real render that replaces it compare against a sequence
+ * nothing ever rendered. Concretely - committed `[A,B]`, a discarded render of
+ * `[A,B,C]`, then a real `[A,B,C']` - a render-time baseline would compare
+ * three keys against three, call the genuine insertion settled content, and
+ * hand it to the library with its anchor off. A discarded render runs no
+ * layout effect, so it cannot move this.
+ *
+ * `listRef` is used only as the per-mount map key, exactly as
+ * `stableChatTimelineRowsCache` uses it; its `current` is never read here.
+ */
+function useCommittedKeySequenceChanged(
+  listRef: RefObject<LegendListRef | null>,
+  rows: ReadonlyArray<ChatMessageModel>,
+): boolean {
+  const keySequenceChanged = useMemo(
+    () =>
+      didChatTimelineKeySequenceChange(
+        committedChatTimelineKeysCache.get(listRef),
+        rows,
+      ),
+    [listRef, rows],
+  );
+
+  useLayoutEffect(() => {
+    committedChatTimelineKeysCache.set(listRef, chatTimelineKeySequence(rows));
+  }, [listRef, rows]);
+
+  return keySequenceChanged;
 }
 
 /**
@@ -521,10 +638,18 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   if (ctx === null) {
     throw new Error("ChatTimelineRow must render inside ChatTimeline");
   }
+  const { onRowMount } = ctx;
   const isNavigationHighlighted = useIsNavigationHighlighted(
     ctx.navigationHighlightStore,
     message.id,
   );
+
+  // LegendList's size callback is not a mount callback: a recycled row whose
+  // cached height is unchanged does not report a size delta. Find needs this
+  // commit-boundary signal to resume a pending reveal for every real row mount.
+  useLayoutEffect(() => {
+    onRowMount?.(message.id);
+  }, [message.id, onRowMount]);
 
   return (
     <div

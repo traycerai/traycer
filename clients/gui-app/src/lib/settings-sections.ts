@@ -8,11 +8,13 @@ import {
   Keyboard,
   LineChart,
   Palette,
+  QrCode,
   Server,
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
 } from "lucide-react";
+import { isMobileApp } from "@/lib/mobile-app";
 
 export type SettingsSectionId =
   | "general"
@@ -25,6 +27,7 @@ export type SettingsSectionId =
   | "worktrees"
   | "host"
   | "devices"
+  | "link-phone"
   // Two sections, both labelled "Diagnostics", and the group they sit in is
   // what distinguishes them — `app-diagnostics` is this window's own logging
   // and heap, `diagnostics` is the selected host's. The host one keeps the
@@ -89,14 +92,14 @@ export interface SettingsSection {
 
 /**
  * Order is meaningful twice over: it drives the leader-digit shortcuts
- * (`dispatch.ts` indexes straight into this array) and it groups the sidebar.
- * Entries must stay contiguous per group or the sidebar renders a group
- * heading twice.
+ * (`dispatch.ts` indexes positionally, through `visibleSettingsSections()`
+ * below, which preserves this order) and it groups the sidebar. Entries must
+ * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now thirteen. Agent
- * selection, Shell and the host's Diagnostics are the eleventh through
- * thirteenth and go without.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now fourteen.
+ * Notifications, Agent selection, Shell and the host's Diagnostics are the
+ * eleventh through fourteenth and go without.
  *
  * Agent selection is the one that lost a digit to the app-scoped Diagnostics
  * entry below, and that is a genuine cost rather than a tidy outcome: the rule
@@ -147,6 +150,14 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "devices",
     label: "Sessions",
     icon: ShieldCheck,
+    group: "account",
+  },
+  // Account, like Sessions: the code it mints signs the PHONE into the
+  // account, regardless of which host this window looks at.
+  {
+    id: "link-phone",
+    label: "Link a phone",
+    icon: QrCode,
     group: "account",
   },
   // Account, not Host: what this reports is the ACCOUNT's token and cost
@@ -220,6 +231,61 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     group: "host",
   },
 ];
+
+/**
+ * Sections the installed mobile app does not offer. Two different reasons sit
+ * here, and the difference is worth keeping straight:
+ *
+ * - **Keybindings — the shell cannot drive it.** Every chord is captured from
+ *   a `keydown` on `window` (`chord-capture-core.tsx`), a binding is cleared
+ *   with Backspace and committed by the next full chord, so on a touch shell
+ *   the chip arms to "Press chord…" and can never resolve, and an existing
+ *   binding can never be removed. A section whose every control needs a
+ *   hardware keyboard is a dead end on a phone, not a sparse page.
+ * - **Link a phone — the role is backwards.** The panel DISPLAYS a QR and a
+ *   one-time code for another device to read, and in the mobile app that
+ *   device is the one holding the panel: the phone is the SCANNER
+ *   (`link-code-sign-in.tsx` redeems a code this panel mints, and its own copy
+ *   says "On your desktop, open Settings → Link a phone"). A phone could
+ *   physically show the code to a second phone, so this is a product decision
+ *   about which end of the pairing each build is, not an inability.
+ */
+const MOBILE_APP_OMITTED_SECTION_IDS: ReadonlySet<SettingsSectionId> = new Set([
+  "keybindings",
+  "link-phone",
+]);
+
+/**
+ * The sections a build OFFERS, as opposed to the ones it can resolve.
+ *
+ * `SETTINGS_SECTIONS` stays whole because it is the compatibility table:
+ * routes, remembered tab paths and titles all resolve an id through it, and an
+ * id that no longer resolves is a broken lookup rather than a hidden row. This
+ * is the list anything that PRESENTS a choice reads instead — the sidebar, the
+ * command palette's settings sub-page, and the leader digits, which index
+ * positionally and so must walk the same list the sidebar badges do.
+ *
+ * Returns `SETTINGS_SECTIONS` itself where nothing is omitted, so a consumer's
+ * identity comparisons and memo dependencies are unaffected.
+ */
+export function visibleSettingsSections(): ReadonlyArray<SettingsSection> {
+  if (!isMobileApp()) return SETTINGS_SECTIONS;
+  return SETTINGS_SECTIONS.filter(
+    (section) => !MOBILE_APP_OMITTED_SECTION_IDS.has(section.id),
+  );
+}
+
+/**
+ * Whether this build offers `sectionId` at all. A surface holding a REMEMBERED
+ * id (a persisted modal section, a restored tab path) asks this before showing
+ * the panel for it, so a build that dropped a section cannot present a panel
+ * its own navigation has no row for.
+ */
+export function isSettingsSectionVisible(
+  sectionId: SettingsSectionId,
+): boolean {
+  return visibleSettingsSections().some((section) => section.id === sectionId);
+}
 
 // No `HOST_SCOPED_SECTION_IDS` / `isHostScopedSection` helper here. Whether a
 // section is host-scoped is already stated by `group: "host"` in the table

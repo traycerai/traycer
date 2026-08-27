@@ -795,7 +795,7 @@ describe("Recent filters leave Attention invariant", () => {
     expect(recent.current).toEqual([]);
   });
 
-  it("resets unreadOnly and categories when setOpen(true)", () => {
+  it("keeps unreadOnly and categories across open and close - the filters are durable", () => {
     act(() => {
       useNotificationsPopoverStore.getState().setUnreadOnly(true);
       useNotificationsPopoverStore.getState().toggleCategory("task");
@@ -814,7 +814,17 @@ describe("Recent filters leave Attention invariant", () => {
       useNotificationsPopoverStore.getState().setOpen(true);
     });
 
+    // Opening no longer resets: the center reopens the way the user last
+    // filtered it. `resetFilters` is the explicit way back to the default.
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(true);
+    expect(useNotificationsPopoverStore.getState().categories.has("task")).toBe(
+      false,
+    );
+
+    act(() => {
+      useNotificationsPopoverStore.getState().resetFilters();
+    });
     expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(false);
     expect(
       [...useNotificationsPopoverStore.getState().categories].sort(),
@@ -826,7 +836,7 @@ describe("Recent filters leave Attention invariant", () => {
       useNotificationsPopoverStore.getState().setOpen(false);
     });
 
-    // Closing must leave filters alone; only open resets.
+    // Closing leaves filters alone too - durable in both directions.
     expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(true);
     expect(
       useNotificationsPopoverStore.getState().categories.has("collaboration"),

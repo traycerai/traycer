@@ -6,6 +6,7 @@ import {
   railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
+  visibleRailHarnesses,
 } from "@/components/home/pickers/harness-rail-providers";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
@@ -34,6 +35,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind,
     authType: "oauth",
     label,
@@ -322,11 +324,169 @@ describe("railHarnessDegraded", () => {
   });
 });
 
+describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7.1)", () => {
+  it("degrades on a definitive unauthenticated row even when the providers.list-derived set is empty - the staleness-window fix", () => {
+    const signedOut: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unauthenticated",
+    };
+    // Empty set: no other source flags this provider, which is exactly the
+    // window a separately-timed `providers.list` query can lag through.
+    expect(railHarnessDegraded(signedOut, new Set())).toBe(true);
+  });
+
+  it("still degrades when providers.list-derived membership flags it and the row's own authStatus is absent (old host)", () => {
+    const noRowVerdict: HarnessOption = { ...harness("claude") };
+    expect(noRowVerdict.authStatus).toBeUndefined();
+    expect(
+      railHarnessDegraded(noRowVerdict, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+
+  it("still degrades when providers.list-derived membership flags it even though the row's own authStatus reads authenticated - the two sources are OR'd, not one replacing the other", () => {
+    const rowSaysAuthenticated: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "authenticated",
+    };
+    expect(
+      railHarnessDegraded(
+        rowSaysAuthenticated,
+        new Set<GuiHarnessId>(["claude"]),
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT degrade on a row's unknown authStatus - fail-open, non-definitive", () => {
+    const unknownRow: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unknown",
+    };
+    expect(railHarnessDegraded(unknownRow, new Set())).toBe(false);
+  });
+
+  it("does NOT degrade on a row's unavailable authStatus - fail-open, non-definitive", () => {
+    const unavailableRow: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unavailable",
+    };
+    expect(railHarnessDegraded(unavailableRow, new Set())).toBe(false);
+  });
+
+  it("widening authStatus to unknown/unavailable would also widen visibility - asserted through visibleRailHarnesses, not just degradation", () => {
+    // A sticky-enabled provider reporting `available: false` (no CLI
+    // installed) with a non-definitive row verdict must stay HIDDEN, not
+    // merely non-degraded - `railHarnessVisible` ORs degraded into
+    // visibility, so widening the predicate to `unknown`/`unavailable` would
+    // give this provider a permanent, un-runnable tab.
+    const unreachable: HarnessOption = {
+      ...harness("claude"),
+      available: false,
+      authStatus: "unknown",
+    };
+    const visible = visibleRailHarnesses(
+      [unreachable],
+      [],
+      new Set(),
+      new Map(),
+    );
+    expect(visible).toEqual([]);
+
+    // Contrast: a DEFINITIVE unauthenticated row on the same unreachable
+    // provider keeps it visible - that is the "recoverable, needs
+    // attention" case the degraded set exists to surface.
+    const signedOutUnreachable: HarnessOption = {
+      ...harness("claude"),
+      available: false,
+      authStatus: "unauthenticated",
+    };
+    const visibleSignedOut = visibleRailHarnesses(
+      [signedOutUnreachable],
+      [],
+      new Set(),
+      new Map(),
+    );
+    expect(visibleSignedOut.map((h) => h.id)).toEqual(["claude"]);
+  });
+});
+
+describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) gate", () => {
+  it("does not degrade or show an explicitly-off, signed-out, unavailable provider", () => {
+    const explicitlyOff: HarnessOption = {
+      ...harness("claude"),
+      enabled: false,
+      available: false,
+      authStatus: "unauthenticated",
+    };
+    expect(railHarnessDegraded(explicitlyOff, new Set())).toBe(false);
+    expect(
+      visibleRailHarnesses([explicitlyOff], [], new Set(), new Map()),
+    ).toEqual([]);
+  });
+
+  // Enablement is no longer tri-state: there is no "auto, undetected" middle
+  // ground distinct from an explicit off, so a disabled provider can no
+  // longer stay visible as a "sign in to enable" offer - it is gone from the
+  // picker like any other disabled provider, same as the case above.
+  // Removed: "still degrades and shows an auto-mode, signed-out provider even
+  // though enabled is false", which asserted exactly that now-nonexistent
+  // distinction.
+
+  it("still degrades and shows a sticky-on, signed-out provider", () => {
+    const stickyOn: HarnessOption = {
+      ...harness("claude"),
+      authStatus: "unauthenticated",
+    };
+    expect(railHarnessDegraded(stickyOn, new Set())).toBe(true);
+    expect(
+      visibleRailHarnesses([stickyOn], [], new Set(), new Map()).map(
+        (h) => h.id,
+      ),
+    ).toEqual(["claude"]);
+  });
+
+  // Was "keeps the other two degradation arms unaffected by an explicit off -
+  // the gate is narrow": under the retired tri-state model the disabled early
+  // return only covered the signed-out arm, so `degradedHarnessIds`
+  // membership and the API-key arm still fired underneath it. The current
+  // gate is one unconditional `if (!harness.enabled) return false` ahead of
+  // all three arms (see the doc comment on `railHarnessDegraded`), so it is
+  // no longer narrow - disabled now blocks every arm, which is what this case
+  // asserts instead.
+  it("an explicit off blocks every degradation arm, not just the signed-out one", () => {
+    const offButFlagged: HarnessOption = {
+      ...harness("claude"),
+      enabled: false,
+    };
+    expect(
+      railHarnessDegraded(offButFlagged, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(false);
+
+    const offApiKeyUnavailable: HarnessOption = {
+      ...harness("codex"),
+      enabled: false,
+      available: false,
+      requiresApiKey: true,
+    };
+    expect(railHarnessDegraded(offApiKeyUnavailable, new Set())).toBe(false);
+  });
+
+  it("behaves exactly as before on an old host with no authStatus", () => {
+    const oldHost: HarnessOption = { ...harness("claude") };
+    expect(oldHost.authStatus).toBeUndefined();
+    expect(railHarnessDegraded(oldHost, new Set())).toBe(false);
+    expect(
+      railHarnessDegraded(oldHost, new Set<GuiHarnessId>(["claude"])),
+    ).toBe(true);
+  });
+});
+
 describe("visibleRailEntries: signed-out while available", () => {
-  it("sinks a signed-out-but-available provider below the ready ones", () => {
+  it("keeps a signed-out-but-available provider IN PLACE, carrying only the degraded flag", () => {
     // Degrading codex, which sorts FIRST canonically (see the pack-readiness
-    // block above) - proving the deprioritization fires without
-    // `available: false`.
+    // block above). The old rail sank degraded rows below the ready ones;
+    // that re-sort is deliberately gone - a late auth verdict may change a
+    // row's appearance (the dim), never its position, so rows stop moving
+    // under the pointer seconds after the rail rendered.
     const entries = visibleRailEntries({
       harnesses: [harness("claude"), harness("codex")],
       fallbackHarnesses: [],
@@ -337,10 +497,11 @@ describe("visibleRailEntries: signed-out while available", () => {
     });
 
     expect(entries.map((entry) => entry.harness.id)).toEqual([
-      "claude",
       "codex",
+      "claude",
     ]);
-    expect(entries[1].degraded).toBe(true);
+    expect(entries[0].degraded).toBe(true);
+    expect(entries[1].degraded).toBe(false);
   });
 });
 

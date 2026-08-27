@@ -106,7 +106,8 @@ export interface DesktopTrayControllerOptions {
   // an already-open native menu can still fire the old item's click after
   // presentation has moved on.
   readonly onCommand:
-    ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
+    | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
+    | null;
 }
 
 /**
@@ -170,7 +171,8 @@ export class DesktopTrayController {
   };
   private onEpicSelected: ((epicId: string) => void) | null;
   private onCommand:
-    ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
+    | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
+    | null;
   // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
   // `accelerator` below means the OS never binds this key combo from the
   // menu; the real registration lives solely in the global-shortcuts

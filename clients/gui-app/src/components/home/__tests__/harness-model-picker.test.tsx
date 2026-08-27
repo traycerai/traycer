@@ -269,6 +269,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   },
 }));
 
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProviderProfileEnablementPending: () => () => false,
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
 // Resolves to a sentinel string standing in for a `HostClient`: "default" for
 // a null host id (mirrors the real hook's app-wide-default fallback), else
 // the raw host id - lets `useProvidersListForClient` above key its
@@ -334,7 +342,8 @@ vi.mock("react-virtuoso", async () => {
     readonly totalCount?: number;
     readonly computeItemKey?: (index: number, item: undefined) => Key;
     readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
+      | number
+      | { readonly index: number | "LAST" };
     readonly itemContent?: (index: number, item: undefined) => ReactNode;
   }
 
@@ -963,6 +972,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
           tuiOnly={resolvedInput.tuiOnly ?? false}
@@ -1078,6 +1088,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1097,6 +1108,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1427,6 +1439,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -1446,6 +1459,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -1664,7 +1678,7 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.getByRole("tab", { name: "Claude" })).not.toBeNull();
   });
 
-  it("orders the rail by provider defaults and moves degraded providers down", async () => {
+  it("orders the rail by provider defaults, keeping degraded providers in place", async () => {
     const codex = codexModels();
     const claude = claudeModels();
     queryMock.harnesses = [
@@ -1697,12 +1711,16 @@ describe("<HarnessModelPicker />", () => {
     await openPicker();
     const tabs = screen.getAllByRole("tab");
 
+    // OpenRouter is degraded (setup required) yet HOLDS its canonical slot:
+    // the old degraded sink re-sorted rows when late verdicts landed, which
+    // is exactly the mid-render movement this picker no longer does. Degraded
+    // is a flag on the row, never a position.
     expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
       "Codex",
       "Claude",
+      "OpenRouter",
       "Droid",
       "Cursor",
-      "OpenRouter",
     ]);
     expect(
       screen
@@ -1967,6 +1985,67 @@ describe("<HarnessModelPicker />", () => {
     ).toBe("true");
   });
 
+  it("falls back to a RUNNABLE provider rather than the first degraded one", async () => {
+    // The last-resort branch of `resolveActiveProviderId`, reached the way a
+    // cold boot reaches it: the composer's selected provider (codex, this
+    // suite's default) has an availability probe still in flight, so the
+    // toolbar store holds the selection there while the picker cannot browse
+    // it. The picker has to choose for the user. Claude comes first in
+    // canonical order but is signed out - browse-only. Landing there would
+    // open onto a reauth panel while a provider that can actually run a turn
+    // sits one tab over.
+    //
+    // Order used to answer this by accident, since degraded providers sank to
+    // the bottom of the list this scans. Removing that sink (a late verdict
+    // must not move a row under the cursor) is why the preference is now
+    // stated in the resolver, and why this test exists.
+    const codex = codexModels();
+    const claude = claudeModels();
+    const droid = [
+      model({ harnessId: "droid", slug: "droid-core", label: "Droid Core" }),
+    ];
+    const probingCodex: HarnessOption = {
+      ...CODEX_HARNESS,
+      available: false,
+      availabilityPending: true,
+      error: null,
+    };
+    queryMock.harnesses = [probingCodex, CLAUDE_HARNESS, DROID_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(probingCodex, []),
+      catalogHarness(CLAUDE_HARNESS, claude),
+      catalogHarness(DROID_HARNESS, droid),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", claude],
+      ["droid", droid],
+    ]);
+    queryMock.providerStates = [
+      providerCliState({
+        providerId: "claude-code",
+        authStatus: "unauthenticated",
+        apiKey: { supported: false, configured: false, source: null },
+      }),
+    ];
+
+    renderPicker(undefined);
+    // The selected provider's model query is gated on its availability, so an
+    // unsettled codex leaves the trigger with nothing to name.
+    await openPickerByTriggerName("Select model");
+
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    const droidTab = screen.getByRole("tab", { name: "Droid" });
+    expect(droidTab.getAttribute("aria-selected")).toBe("true");
+    expect(claudeTab.getAttribute("aria-selected")).toBe("false");
+    // The degraded provider keeps both its dimming and its canonical place -
+    // the fix is about what gets LANDED on, not about moving anything.
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+    expect(screen.getAllByRole("tab").indexOf(claudeTab)).toBeLessThan(
+      screen.getAllByRole("tab").indexOf(droidTab),
+    );
+  });
+
   it("keeps a ready provider entirely ungated while a sibling downloads", async () => {
     preparingClaudeSetup({ status: "downloading", percent: 42 });
 
@@ -2122,6 +2201,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2163,6 +2243,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2182,6 +2263,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2331,6 +2413,7 @@ describe("<HarnessModelPicker />", () => {
     const nextColor = PROVIDER_PROFILE_ACCENT_COLORS[4];
     const ambientProfile = {
       profileId: "ambient",
+      enabled: true,
       kind: "ambient" as const,
       authType: "oauth" as const,
       label: "Terminal account",
@@ -2351,6 +2434,7 @@ describe("<HarnessModelPicker />", () => {
     const workProfile = {
       ...ambientProfile,
       profileId: "work-profile",
+      enabled: true,
       kind: "managed" as const,
       label: "Work",
       accentColor: initialColor,
@@ -2415,6 +2499,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2434,6 +2519,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2544,6 +2630,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2563,6 +2650,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2926,6 +3014,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -2945,6 +3034,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -2989,6 +3079,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3008,6 +3099,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3051,6 +3143,7 @@ describe("<HarnessModelPicker />", () => {
     return [
       {
         profileId: "ambient",
+        enabled: true,
         kind: "ambient",
         authType: "oauth",
         label: "Terminal account",
@@ -3070,6 +3163,7 @@ describe("<HarnessModelPicker />", () => {
       },
       {
         profileId: "work-profile",
+        enabled: true,
         kind: "managed",
         authType: "oauth",
         label: "Work",
@@ -3178,6 +3272,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3197,6 +3292,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3256,6 +3352,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3275,6 +3372,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3317,6 +3415,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3336,6 +3435,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3385,6 +3485,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3404,6 +3505,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3445,6 +3547,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: [
           {
             profileId: "ambient",
+            enabled: true,
             kind: "ambient",
             authType: "oauth",
             label: "Terminal account",
@@ -3464,6 +3567,7 @@ describe("<HarnessModelPicker />", () => {
           },
           {
             profileId: "work-profile",
+            enabled: true,
             kind: "managed",
             authType: "oauth",
             label: "Work",
@@ -3900,6 +4004,64 @@ describe("<HarnessModelPicker />", () => {
       harnessId: "claude",
       modelSlug: "claude-opus-4-7",
       profileId: null,
+    });
+  });
+
+  /**
+   * Search-on-open is a hardware-keyboard convenience, and the panel is opened
+   * on every harness or model change. On a touch pointer the same focus is a
+   * software keyboard over the list the tap was aiming at, so it stands down.
+   *
+   * Both arms are pinned because the coarse arm is invisible on every
+   * developer's machine: asserting only the focused case keeps passing after
+   * the gate is deleted.
+   */
+  describe("search autofocus", () => {
+    /**
+     * The global test shim answers every media query with `matches: false`,
+     * which is the fine-pointer arm. This narrows the coarse-pointer query
+     * alone so the rest of the app's queries keep the shim's answer.
+     */
+    function stubCoarsePointer(coarse: boolean): void {
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) => ({
+          matches: coarse && query === "(pointer: coarse)",
+          media: query,
+          onchange: null,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+          addListener: () => undefined,
+          removeListener: () => undefined,
+          dispatchEvent: () => false,
+        }),
+      });
+    }
+
+    it("focuses the search when a fine pointer is driving", async () => {
+      stubCoarsePointer(false);
+      renderPicker(undefined);
+      const input = await openPicker();
+
+      await waitFor(() => expect(document.activeElement).toBe(input));
+    });
+
+    it("leaves the search alone on a coarse pointer", async () => {
+      stubCoarsePointer(true);
+      renderPicker(undefined);
+      // A real pointer press focuses the trigger before the popover opens;
+      // jsdom's synthetic click does not, and the trigger holding focus is
+      // exactly what makes declining safe rather than stranding.
+      screen.getByRole("button", { name: /^GPT-5\.5/ }).focus();
+      const input = await openPicker();
+
+      expect(document.activeElement).not.toBe(input);
+      // Declining strands nothing here: the trigger is a still-mounted button
+      // in the composer toolbar, and closing restores the composer's caret.
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /^GPT-5\.5/ }),
+      );
     });
   });
 });

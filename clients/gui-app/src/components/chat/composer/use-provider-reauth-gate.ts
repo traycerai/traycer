@@ -32,7 +32,9 @@ import {
  *   profile just because ambient happens to be signed out).
  */
 export type ProviderReauthReason =
-  "provider_unauthenticated" | "profile_missing" | "profile_unauthenticated";
+  | "provider_unauthenticated"
+  | "profile_missing"
+  | "profile_unauthenticated";
 
 export interface ProviderReauthGate {
   readonly providerId: ProviderId | null;

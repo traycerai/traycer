@@ -73,7 +73,8 @@ describe("useHostQueries enabled handling", () => {
           "host.status",
           {
             readonly data:
-              ResponseOfMethod<HostRpcRegistry, "host.status"> | undefined;
+              | ResponseOfMethod<HostRpcRegistry, "host.status">
+              | undefined;
           }
         >({
           client,

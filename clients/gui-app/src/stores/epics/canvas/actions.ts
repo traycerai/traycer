@@ -836,6 +836,36 @@ export function promotePreview(
 }
 
 /**
+ * Restore a pane's preview slot to `previewTabId`, the inverse of
+ * `promotePreview`.
+ *
+ * Dragging a preview tile promotes it on drag start, so a CANCELLED drag would
+ * otherwise leave the promotion behind - a state residual, which is exactly
+ * what `Esc restores order and geometry exactly` forbids. Only restores when
+ * that tile is still in the pane, so a cancel cannot resurrect a preview for a
+ * tab that has since gone.
+ *
+ * It also refuses when the pane's preview slot has been claimed by a DIFFERENT
+ * tile since the drag began - agent activity can open a new preview mid-drag,
+ * and restoring over it would evict a preview this gesture never touched.
+ * Cancel must undo its own promotion, not the pane's current state.
+ */
+export function restorePreview(
+  state: EpicCanvasState,
+  paneId: string,
+  previewTabId: string,
+): EpicCanvasState {
+  if (state.root === null) return state;
+  const root = replacePane(state.root, paneId, (pane) =>
+    pane.tabInstanceIds.includes(previewTabId) && pane.previewTabId === null
+      ? { ...pane, previewTabId }
+      : pane,
+  );
+  if (root === state.root) return state;
+  return { ...state, root };
+}
+
+/**
  * Set the active tab within a pane; also focus that pane globally.
  * `tabId` is a tab `instanceId`.
  */

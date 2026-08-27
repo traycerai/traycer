@@ -104,7 +104,6 @@ export const prGetLocalDiffSummaryV10 = defineRpcContract({
   responseSchema: prGetLocalDiffSummaryResponseV11Schema,
 });
 
-
 /**
  * `pr.getLocalFileDiff@1.0` - one file's patch from a range
  * `pr.getLocalDiffSummary` resolved, addressed by the summary's OID pair.

@@ -6,9 +6,9 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
-  RotateCcw,
   type LucideIcon,
 } from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
 import type {
   PrDetailCore,
   PrSourceNotice,
@@ -136,15 +136,10 @@ export function PrDetailHeader(props: {
           data-testid="pr-detail-refresh"
           className="text-muted-foreground hover:text-foreground"
         >
-          {props.refreshing ? (
-            <AgentSpinningDots
-              testId="pr-detail-refresh-dots"
-              variant="dots"
-              className="size-4"
-            />
-          ) : (
-            <RotateCcw className="size-4" />
-          )}
+          <RefreshIcon
+            refreshing={props.refreshing}
+            testId={props.refreshing ? "pr-detail-refresh-dots" : undefined}
+          />
         </Button>
       </div>
     </div>

@@ -50,7 +50,6 @@ import {
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
-import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { type EpicNodeRef } from "@/stores/epics/canvas/types";
@@ -77,13 +76,10 @@ import { ChatsPanelSkeleton } from "@/components/epic-canvas/skeletons/chats-pan
 import { CommentsPanelSkeleton } from "@/components/epic-canvas/skeletons/comments-panel-skeleton";
 import { FileTreePanelSkeleton } from "@/components/epic-canvas/skeletons/file-tree-panel-skeleton";
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
-import { CommentSidebar } from "@/components/comments";
+import { CommentSidebarPanel } from "@/components/comments";
 import { DropLine } from "@/components/ui/drop-line";
 import { Sidebar } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { useArtifactAnchorPositions } from "@/stores/comments/anchor-positions-store";
-import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import {
   DEFAULT_LEFT_PANEL_ID,
   useActiveLeftPanelId,
@@ -161,7 +157,6 @@ import {
   isArtifactUnread,
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
-import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import {
@@ -171,6 +166,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   Archive,
+  CopyMinus,
   Download,
   FolderOpen,
   ListChecks,
@@ -1231,7 +1227,11 @@ function GitDiffPanelBody(props: LeftPanelBodyProps): ReactNode {
   return <GitDiffPanelBodyLive epicId={props.epicId} tabId={props.tabId} />;
 }
 
-function FileTreePanelBody(props: LeftPanelBodyProps) {
+// Exported (export-only, desktop-neutral) so the mobile "Switch tab" sheet can
+// embed the same file-tree body the desktop left panel renders, rather than
+// forking it. The `SnapshotGate` resolves against the canvas-side
+// `SnapshotLoadingProvider` that already wraps the mobile tile view.
+export function FileTreePanelBody(props: LeftPanelBodyProps) {
   return (
     <SnapshotGate skeleton={FILE_TREE_PANEL_SKELETON}>
       <FileTreePanelBodyLive epicId={props.epicId} tabId={props.tabId} />
@@ -2022,31 +2022,30 @@ function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="chats"
-            collapsed={props.collapsed}
-            addLabel="Add agent"
-            menuTestId="epic-sidebar-add-chat-root-menu"
-            triggerTestId="epic-sidebar-add-chat-root"
-            itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
-            excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
-          />
-          <ChatHeaderMoreMenu
-            epicId={props.epicId}
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="chats"
+          collapsed={props.collapsed}
+          addLabel="Add agent"
+          menuTestId="epic-sidebar-add-chat-root-menu"
+          triggerTestId="epic-sidebar-add-chat-root"
+          itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
+          excludeTypes={CHAT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ChatHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ChatFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
         canArchive={canArchive}
-        onCollapseAll={collapseAll}
       />
     </div>
   );
@@ -2137,6 +2136,8 @@ function ChatHeaderMoreMenu(props: {
   readonly epicId: string;
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const permissionRole = useEpicPermissionRole();
@@ -2158,14 +2159,20 @@ function ChatHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-56"
       >
-        <DropdownMenuItem
-          onSelect={() => openSearch(props.tabId, "chats", "")}
-          data-testid="epic-sidebar-more-search-chats"
-        >
-          <Search className="size-4" />
-          Search agents
-        </DropdownMenuItem>
+        {props.searching ? null : (
+          <DropdownMenuItem
+            onSelect={() => openSearch(props.tabId, "chats", "")}
+            data-testid="epic-sidebar-more-search-chats"
+          >
+            <Search className="size-4" />
+            Search agents
+          </DropdownMenuItem>
+        )}
         <CommGraphOpenMenuItem epicId={props.epicId} disabled={false} />
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         {isEditableRole(permissionRole) ? (
           <DropdownMenuItem
             disabled={!selectionEnabled}
@@ -2183,6 +2190,8 @@ function ChatHeaderMoreMenu(props: {
 function ArtifactHeaderMoreMenu(props: {
   readonly tabId: string;
   readonly collapsed: boolean;
+  readonly searching: boolean;
+  readonly onCollapseAll: () => void;
 }) {
   const selection = useSidebarBulkSelection();
   const openSearch = usePanelHeaderSearchStore((state) => state.openSearch);
@@ -2206,10 +2215,10 @@ function ArtifactHeaderMoreMenu(props: {
         avoidCollisions={false}
         className="w-[var(--radix-dropdown-menu-content-available-width)] min-w-0 max-w-52"
       >
-        {/* Hidden only when the Epic has NO artifacts - see
-            `useArtifactSearchAvailable` for why emptiness gates this and a size
-            threshold does not. */}
-        {searchAvailable ? (
+        {/* Hidden when the Epic has NO artifacts or is open read-only - see
+            `useArtifactSearchAvailable` for why emptiness and write access gate
+            this and a size threshold does not. */}
+        {searchAvailable && !props.searching ? (
           <DropdownMenuItem
             onSelect={() => openSearch(props.tabId, "artifacts", "")}
             data-testid="epic-sidebar-more-search-artifacts"
@@ -2218,6 +2227,10 @@ function ArtifactHeaderMoreMenu(props: {
             Search artifacts
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={props.onCollapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={!selection.canSelect}
           onSelect={selection.enterSelectionMode}
@@ -2244,29 +2257,28 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   return (
     <div className="flex items-center gap-0.5">
       {props.mode === "search" ? null : (
-        <>
-          <TreePanelActions
-            epicId={props.epicId}
-            tabId={props.tabId}
-            panelId="artifacts"
-            collapsed={props.collapsed}
-            addLabel="Add artifact"
-            menuTestId="epic-sidebar-add-artifact-root-menu"
-            triggerTestId="epic-sidebar-add-artifact-root"
-            itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
-            excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
-          />
-          <ArtifactHeaderMoreMenu
-            tabId={props.tabId}
-            collapsed={props.collapsed}
-          />
-        </>
+        <TreePanelActions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          panelId="artifacts"
+          collapsed={props.collapsed}
+          addLabel="Add artifact"
+          menuTestId="epic-sidebar-add-artifact-root-menu"
+          triggerTestId="epic-sidebar-add-artifact-root"
+          itemTestId={(type) => `epic-sidebar-add-artifact-root-${type}`}
+          excludeTypes={ARTIFACT_PANEL_EXCLUDED_TYPES}
+        />
       )}
+      <ArtifactHeaderMoreMenu
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+        searching={props.mode === "search"}
+        onCollapseAll={collapseAll}
+      />
       <ArtifactFilterMenu
         epicId={props.epicId}
         tabId={props.tabId}
         collapsed={props.collapsed}
-        onCollapseAll={collapseAll}
         onMarkAllRead={markAllRead}
         markAllReadDisabled={unreadArtifacts.length === 0}
       />
@@ -2482,47 +2494,5 @@ function CommentsPanelActions(props: LeftPanelHeaderSlotProps) {
     >
       <X className="size-4" />
     </Button>
-  );
-}
-
-interface CommentSidebarPanelProps {
-  readonly epicId: string;
-  readonly activeArtifactId: string;
-}
-
-function CommentSidebarPanel(props: CommentSidebarPanelProps) {
-  const { epicId, activeArtifactId } = props;
-  const artifactRecord = useEpicArtifact(activeArtifactId);
-  // The sidebar is a sibling of the canvas, deliberately outside every
-  // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
-  // one, which re-points under it while this Epic keeps rendering (D15).
-  const hostClient = useEpicSessionHostClient();
-  const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
-  const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
-  const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
-
-  const artifactKind =
-    artifactRecord !== null && "kind" in artifactRecord
-      ? artifactRecord.kind
-      : null;
-
-  if (artifactRecord === null || artifactKind === null) {
-    return null;
-  }
-
-  return (
-    <CommentSidebar
-      epicId={epicId}
-      hostClient={hostClient}
-      artifactType={artifactKind}
-      artifactId={activeArtifactId}
-      anchorPositions={anchorPositions}
-      currentUserId={currentUserId}
-      canModerate={false}
-      onActivateThread={(threadId) => {
-        setFlashThread(epicId, threadId);
-        revealCommentThreadAnchor(epicId, activeArtifactId, threadId);
-      }}
-    />
   );
 }

@@ -44,7 +44,7 @@ describe("analytics", () => {
       disable_surveys_automatic_display: true,
       disable_product_tours: true,
       disable_web_experiments: true,
-      advanced_disable_decide: true,
+      advanced_disable_flags: true,
       advanced_disable_feature_flags: true,
       save_campaign_params: false,
       save_referrer: false,
@@ -225,6 +225,7 @@ describe("analytics", () => {
     });
     sdk.register({
       app: "gui-app",
+      app_surface: "desktop",
       app_version: "1.2.3",
       platform: "macos",
       release_channel: "production",
@@ -245,6 +246,7 @@ describe("analytics", () => {
     expect(custom?.properties).toMatchObject({
       token: "phc_test_project_key",
       app: "gui-app",
+      app_surface: "desktop",
       app_version: "1.2.3",
       platform: "macos",
       release_channel: "production",
@@ -254,6 +256,7 @@ describe("analytics", () => {
     // opaque SDK-generated UUIDs that keep session analyses working.
     const allowedKeys = new Set([
       "app",
+      "app_surface",
       "app_version",
       "distinct_id",
       "harness",
@@ -274,8 +277,19 @@ describe("analytics", () => {
       token: "phc_test_project_key",
       distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
     });
+    // Identity events carry the same registered app globals as declared
+    // events - the surface a sign-in came from is as real as a click's.
     expect(Object.keys(identify?.properties ?? {}).sort()).toEqual(
-      ["$anon_distinct_id", "distinct_id", "token"].sort(),
+      [
+        "$anon_distinct_id",
+        "app",
+        "app_surface",
+        "app_version",
+        "distinct_id",
+        "platform",
+        "release_channel",
+        "token",
+      ].sort(),
     );
     // Email is the ONLY person property allowed through; everything else the
     // SDK staged on $set/$set_once (name, custom props, referrer/campaign
@@ -314,6 +328,7 @@ describe("analytics", () => {
       });
       sdk.register({
         app: "gui-app",
+        app_surface: "desktop",
         app_version: "1.2.3",
         platform: "macos",
         release_channel: "production",
@@ -345,6 +360,7 @@ describe("analytics", () => {
     });
     sdk.register({
       app: "gui-app",
+      app_surface: "desktop",
       app_version: "1.2.3",
       platform: "macos",
       release_channel: "production",
@@ -370,7 +386,15 @@ describe("analytics", () => {
       distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
     });
     expect(Object.keys(setEvent?.properties ?? {}).sort()).toEqual(
-      ["distinct_id", "token"].sort(),
+      [
+        "app",
+        "app_surface",
+        "app_version",
+        "distinct_id",
+        "platform",
+        "release_channel",
+        "token",
+      ].sort(),
     );
     expect(JSON.stringify(captured)).not.toMatch(/Alice/);
   });
@@ -1049,5 +1073,92 @@ describe("analytics", () => {
         }),
       ).toBeNull();
     });
+  });
+});
+
+describe("app surface and platform globals", () => {
+  afterEach(async () => {
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    setMobileApp(false);
+  });
+
+  it("reports desktop off the mobile app and mobile on it", async () => {
+    const { analyticsAppSurface } = await import("@/lib/analytics");
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    expect(analyticsAppSurface()).toBe("desktop");
+    setMobileApp(true);
+    expect(analyticsAppSurface()).toBe("mobile");
+  });
+
+  it("names the mobile OS from the user agent on the mobile app", async () => {
+    const { analyticsPlatform } = await import("@/lib/analytics");
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    setMobileApp(true);
+    try {
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15",
+      });
+      expect(analyticsPlatform()).toBe("ios");
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36",
+      });
+      expect(analyticsPlatform()).toBe("android");
+    } finally {
+      // The stub is an OWN property shadowing the prototype accessor, so
+      // deleting it restores the real user agent.
+      Reflect.deleteProperty(navigator, "userAgent");
+    }
+  });
+});
+
+describe("app-surface pass-through in the outbound sanitizer", () => {
+  function capture(overrides: Record<string, unknown>): {
+    uuid: string;
+    event: string;
+    properties: Record<string, unknown>;
+  } {
+    return {
+      uuid: "5a3c2d1e-0f1b-4c2d-8e3f-9a8b7c6d5e4f",
+      event: "chat_message_sent",
+      properties: {
+        token: "phc_test_project_key",
+        distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        app: "gui-app",
+        app_surface: "desktop",
+        app_version: "1.2.3",
+        platform: "macos",
+        release_channel: "production",
+        harness: "codex",
+        ...overrides,
+      },
+    };
+  }
+
+  it("passes mobile surface and OS through instead of dropping the event", async () => {
+    // The regression this pins: the globals allowlist rebuilds outbound
+    // properties and returns null - dropping the WHOLE event - on any value
+    // outside its sets. Before app_surface/ios/android were admitted, every
+    // event from the installed mobile app would have vanished silently.
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+    const sanitized = sanitizePostHogCaptureResult(
+      capture({ app_surface: "mobile", platform: "ios" }),
+    );
+    expect(sanitized?.properties).toMatchObject({
+      app_surface: "mobile",
+      platform: "ios",
+    });
+  });
+
+  it("drops an event whose surface global is missing or out of vocabulary", async () => {
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+    expect(
+      sanitizePostHogCaptureResult(capture({ app_surface: undefined })),
+    ).toBeNull();
+    expect(
+      sanitizePostHogCaptureResult(capture({ app_surface: "toaster" })),
+    ).toBeNull();
   });
 });

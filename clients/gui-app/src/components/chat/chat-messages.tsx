@@ -33,7 +33,11 @@ import {
 } from "@/stores/chats/chat-tab-state-cache";
 import { registerChatTabViewportCapture } from "@/stores/chats/chat-tab-viewport-handoff";
 import { ChatTurnMinimap } from "@/components/chat/chat-turn-minimap";
-import { CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR } from "@/components/chat/chat-turn-minimap-logic";
+import {
+  CHAT_TURN_MINIMAP_KEYBOARD_OWNER_SELECTOR,
+  shouldMountChatTurnMinimap,
+} from "@/components/chat/chat-turn-minimap-logic";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
 import { resolveScrollToEndPillState } from "@/components/chat/chat-scroll-to-end-pill-state";
 import { ScrollToEndPill } from "@/components/chat/scroll-to-end-pill";
@@ -318,7 +322,12 @@ function isDemonstrablyPastIssuedFreeRestoreTarget(
 }
 
 type ChatKeyboardScrollAction =
-  "page-up" | "page-down" | "line-up" | "line-down" | "top" | "bottom";
+  | "page-up"
+  | "page-down"
+  | "line-up"
+  | "line-down"
+  | "top"
+  | "bottom";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
@@ -1678,6 +1687,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const chatTurnMinimapSide = useSettingsStore(
     (state) => state.chatTurnMinimapSide,
   );
+  const isMobileViewport = useIsMobileViewport();
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteReplyEnabled && visible && !systemOverlayActive,
@@ -2345,19 +2355,29 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     });
   }, [cancelTimelineLiveFollowForUserNavigation, identity]);
 
-  const { onRenderedDataChange: onChatFindRenderedDataChange } =
-    useChatFindController({
-      instanceId,
-      messages,
-      messagesRef,
-      backgroundToolBlockIds,
-      backgroundToolBlockIdsRef,
-      messageIndexByIdRef,
-      getScroller,
-      scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
-      cancelManualNavigation: cancelManualNavigationForFind,
-      setScrolledActiveUserMessageIdIfChanged,
-    });
+  const {
+    onRenderedDataChange: onChatFindRenderedDataChange,
+    scheduleMountedHighlightSync: scheduleChatFindMountedHighlightSync,
+  } = useChatFindController({
+    instanceId,
+    messages,
+    messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
+    messageIndexByIdRef,
+    getScroller,
+    scrollToLocation: scrollToTimelineLocationSuppressingFollowRestore,
+    cancelManualNavigation: cancelManualNavigationForFind,
+    setScrolledActiveUserMessageIdIfChanged,
+  });
+
+  const onChatTimelineItemSizeChanged = useCallback((): void => {
+    onTimelineItemSizeChanged();
+  }, [onTimelineItemSizeChanged]);
+
+  const onChatTimelineRowMount = useCallback((): void => {
+    scheduleChatFindMountedHighlightSync();
+  }, [scheduleChatFindMountedHighlightSync]);
 
   // The controller does not diff message arrays to decide scrolling - append,
   // prepend, reorder/weave, in-place update, and suffix replacement all flow
@@ -2506,22 +2526,34 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
             navigationHighlightedMessageId={navigationHighlightedMessageId}
-            onItemSizeChanged={onTimelineItemSizeChanged}
+            onItemSizeChanged={onChatTimelineItemSizeChanged}
+            onRowMount={onChatTimelineRowMount}
             onListMetricsChange={onListMetricsChange}
             data-testid="chat-messages-scroll"
             data-scroll-mode={scrollMode}
           />
-          {hasContent && chatTurnMinimapSide !== "hide" ? (
-            <ChatTurnMinimap
-              messages={messages}
-              inViewRefreshRef={minimapInViewRefreshRef}
-              listRef={chatTimelineRef}
-              topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
-              viewportRef={transcriptContainerRef}
-              bottomInset={endInset}
-              onSelect={onMinimapItemSelect}
-              side={chatTurnMinimapSide}
-            />
+          {/* The minimap rail is untappable on touch and its hover-expand
+              never fires; hide it below md and reclaim the right edge.
+              `contents` keeps the absolutely-positioned rail's layout
+              identical on desktop (>=768px). The `side` setting is a user
+              preference, not a viewport rule, so it cannot stand in for this. */}
+          {shouldMountChatTurnMinimap({
+            hasContent,
+            side: chatTurnMinimapSide,
+            mobileViewport: isMobileViewport,
+          }) ? (
+            <div className="contents max-md:hidden">
+              <ChatTurnMinimap
+                messages={messages}
+                inViewRefreshRef={minimapInViewRefreshRef}
+                listRef={chatTimelineRef}
+                topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
+                viewportRef={transcriptContainerRef}
+                bottomInset={endInset}
+                onSelect={onMinimapItemSelect}
+                side={chatTurnMinimapSide}
+              />
+            </div>
           ) : null}
           {hasContent ? (
             <ScrollToEndPill

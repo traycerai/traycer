@@ -24,6 +24,7 @@ export type { CommonRecordRegistry } from "./common/registry";
 export {
   persistenceRecordRegistry,
   epicRecordV200,
+  epicRecordV300,
   roomMetadataRecordV100,
 } from "./persistence/registry";
 export type { PersistenceRecordRegistry } from "./persistence/registry";

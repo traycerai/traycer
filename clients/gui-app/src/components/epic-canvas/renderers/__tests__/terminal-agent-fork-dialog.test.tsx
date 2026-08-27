@@ -1062,6 +1062,9 @@ function sourceAgentWithTerminalArgs(
 ): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises the fork
+    // dialog's terminal-args plumbing, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",
@@ -1132,6 +1135,7 @@ function workspaceSeedForFolder(
 function ambientProfile(label: string): ProviderProfile {
   return {
     profileId: "ambient",
+    enabled: true,
     kind: "ambient",
     authType: "oauth",
     label,
@@ -1154,6 +1158,7 @@ function ambientProfile(label: string): ProviderProfile {
 function managedProfile(profileId: string, label: string): ProviderProfile {
   return {
     profileId,
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label,

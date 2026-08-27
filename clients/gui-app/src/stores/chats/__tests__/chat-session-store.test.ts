@@ -3,6 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatEvent,
   ClaudePendingWake,
+  InterviewDeliveryProjection,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -403,6 +404,8 @@ function createProtocolChainHarness(
         },
         sameTurnSteeringProtocolSupported: () =>
           client.sameTurnSteeringProtocolSupported(),
+        interviewSettlementActionsProtocolSupported: () =>
+          client.interviewSettlementActionsProtocolSupported(),
         close: () => {
           client.close();
         },
@@ -824,6 +827,69 @@ function persistedUserMessage(
   };
 }
 
+function persistedInterviewMessage(
+  delivery: InterviewDeliveryProjection,
+): Extract<Message, { role: "assistant" }> {
+  return {
+    role: "assistant",
+    messageId: "assistant-interview",
+    sender: {
+      type: "agent",
+      harnessId: "codex",
+      agentId: "agent-1",
+      displayName: "Codex",
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [
+      {
+        type: "interview",
+        blockId: "interview-delivery-retry",
+        status: "completed",
+        timestamp: 4,
+        parentBlockId: null,
+        toolName: "AskUserQuestion",
+        title: null,
+        description: null,
+        questions: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            header: null,
+            options: [],
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          {
+            questionId: "q1",
+            question: "Which scope?",
+            values: ["Alpha"],
+            notes: null,
+            selection: null,
+          },
+        ],
+        error: null,
+        metadata: null,
+        outcome: "answered",
+        draftAnswers: [],
+        settlement: { settlementId: "settlement-1", source: "gui" },
+        diagnostics: [],
+        delivery,
+        settlementExtensions: {},
+      },
+    ],
+    startedAt: 4,
+    blocksVersion: 1,
+    timestamp: 4,
+    turnId: "turn-1",
+    usage: null,
+    reasoningEffort: null,
+    serviceTier: null,
+    imageResolutions: [],
+  };
+}
+
 describe("createChatSessionStore", () => {
   // The worktree intent staging store is a module-global Zustand store; a test
   // that leaves a staged (or restored-on-reject) intent behind would make later
@@ -1159,6 +1225,710 @@ describe("createChatSessionStore", () => {
       }),
     ).toBe("after_safe_point");
 
+    harness.handle.dispose();
+  });
+
+  it("dedupes an exact interview delivery retry and reconciles newer generations", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const failedDelivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [persistedInterviewMessage(failedDelivery)],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(first).not.toBeNull();
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.sent[0]?.kind).toBe("interviewDeliveryRetry");
+    expect(harness.sent[0]).toMatchObject({ generation: 0 });
+    expect(
+      harness.handle.store.getState().pendingActions[first ?? ""]
+        .interviewBlockId,
+    ).toBeNull();
+
+    // The same exact outbox identity is a single action while pending, and
+    // remains one action after its ACK moves it to acceptedActions.
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry(identity),
+    ).toBe(first);
+    expect(harness.sent).toHaveLength(1);
+
+    // Any authoritative status transition retires the accepted retry. A later
+    // failed generation is a fresh exact identity and can be retried once.
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          status: "delivering",
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          ...failedDelivery,
+          generation: 1,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const newer = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry({ ...identity, generation: 1 });
+    expect(newer).not.toBeNull();
+    expect(newer).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
+  it("retires an accepted retry when a reconnect snapshot leaves the failed tuple unchanged", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const delivery = {
+      deliveryId: "delivery-1",
+      status: "failed" as const,
+      retryable: true,
+      generation: 0,
+    };
+    const snapshot = (): void =>
+      emitSnapshotFrame({
+        callbacks,
+        access: "owner",
+        messages: [persistedInterviewMessage(delivery)],
+        queue: { status: "idle", items: [] },
+        pendingFileEditApprovals: [],
+      });
+    snapshot();
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const identity = {
+      blockId: "interview-delivery-retry",
+      settlementId: "settlement-1",
+      deliveryId: "delivery-1",
+      generation: 0,
+    };
+    const first = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    snapshot();
+    expect(harness.handle.store.getState().acceptedActions).toEqual({});
+    harness.handle.store.setState({
+      interviewDeliveryRetryProtocolSupported: true,
+    });
+    const retried = harness.handle.store
+      .getState()
+      .interviewDeliveryRetry(identity);
+    expect(retried).not.toBeNull();
+    expect(retried).not.toBe(first);
+    expect(harness.sent).toHaveLength(2);
+  });
+
+  it("applies correlated lifecycle delivery updates without waiting for a snapshot", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        persistedInterviewMessage({
+          deliveryId: "delivery-1",
+          status: "pending",
+          retryable: true,
+          generation: 0,
+        }),
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      settlement: { settlementId: "settlement-1", source: "gui" },
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      delivery: {
+        deliveryId: "delivery-1",
+        status: "failed",
+        generation: 1,
+      },
+    });
+  });
+
+  it("installs lifecycle authority on a streaming block and ignores a stale settlement", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-new",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-new",
+        status: "failed",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Stale failure",
+      resolvedAt: 6,
+      settlementId: "settlement-stale",
+      settlementSource: "runtime",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "completed",
+      answers: [{ values: ["Beta"] }],
+      error: null,
+      outcome: "answered",
+      settlement: { settlementId: "settlement-new", source: "gui" },
+      delivery: { deliveryId: "delivery-new", status: "failed" },
+    });
+  });
+
+  it("applies a lifecycle frame only to the newest unresolved owner when block ids repeat", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const historical = persistedInterviewMessage({
+      deliveryId: "delivery-old",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const current = persistedInterviewMessage({
+      deliveryId: "delivery-placeholder",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const currentBlock = current.blocks[0];
+    if (currentBlock.type !== "interview") {
+      throw new Error("Expected interview");
+    }
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        { ...historical, messageId: "assistant-historical" },
+        {
+          ...current,
+          messageId: "assistant-current",
+          blocks: [
+            {
+              ...currentBlock,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    // An unchanged update for the older exact settlement must still count as
+    // routed; it must not fall through and install old authority on the newer
+    // unresolved row that happens to reuse the block id.
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 4,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "pending",
+        retryable: true,
+        generation: 0,
+      },
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Beta"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 5,
+      settlementId: "settlement-current",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      answers: [
+        {
+          questionId: "q1",
+          question: "Which scope?",
+          values: ["Alpha"],
+          notes: null,
+          selection: null,
+        },
+      ],
+      resolvedAt: 6,
+      settlementId: "settlement-1",
+      settlementSource: "gui",
+      delivery: {
+        deliveryId: "delivery-old",
+        status: "failed",
+        retryable: true,
+        generation: 1,
+      },
+    });
+
+    const messages = harness.handle.store.getState().messages;
+    const oldBlock =
+      messages[0]?.role === "assistant" ? messages[0].blocks[0] : null;
+    const newBlock =
+      messages[1]?.role === "assistant" ? messages[1].blocks[0] : null;
+    expect(oldBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      settlement: { settlementId: "settlement-1" },
+      delivery: { deliveryId: "delivery-old", generation: 1 },
+    });
+    expect(newBlock).toMatchObject({
+      outcome: "answered",
+      answers: [{ values: ["Beta"] }],
+      settlement: { settlementId: "settlement-current" },
+    });
+  });
+
+  it("preserves the current pending owner when historical lifecycle frames reuse its block id", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const blockId = "interview-delivery-retry";
+    const historicalAnswered = persistedInterviewMessage({
+      deliveryId: "delivery-historical-answered",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const historicalErrored = persistedInterviewMessage({
+      deliveryId: "delivery-historical-errored",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const current = persistedInterviewMessage({
+      deliveryId: "delivery-current-placeholder",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const answeredBlock = historicalAnswered.blocks[0];
+    const erroredBlock = historicalErrored.blocks[0];
+    const currentBlock = current.blocks[0];
+    if (
+      answeredBlock.type !== "interview" ||
+      erroredBlock.type !== "interview" ||
+      currentBlock.type !== "interview"
+    ) {
+      throw new Error("Expected interview blocks");
+    }
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...historicalAnswered,
+          messageId: "assistant-historical-answered",
+          blocks: [
+            {
+              ...answeredBlock,
+              settlement: {
+                settlementId: "settlement-historical-answered",
+                source: "gui",
+              },
+            },
+          ],
+        },
+        {
+          ...historicalErrored,
+          messageId: "assistant-historical-errored",
+          blocks: [
+            {
+              ...erroredBlock,
+              settlement: {
+                settlementId: "settlement-historical-errored",
+                source: "gui",
+              },
+            },
+          ],
+        },
+        {
+          ...current,
+          messageId: "assistant-current-pending",
+          blocks: [
+            {
+              ...currentBlock,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+      pendingInterviews: [{ blockId, requestedAt: 2 }],
+    });
+    const draft = {
+      pageIndex: 0,
+      answers: [{ selected: ["Beta"], otherText: "", otherSelected: false }],
+    };
+    useInterviewDraftStore.getState().saveDraft(CHAT_ID, blockId, draft);
+    const actionId = harness.handle.store
+      .getState()
+      .interviewAnswer(blockId, []);
+    if (actionId === null) throw new Error("Expected interview answer action");
+
+    const expectCurrentOwnerStatePreserved = (): void => {
+      expect(harness.handle.store.getState().pendingInterviews).toEqual([
+        { blockId, requestedAt: 2 },
+      ]);
+      expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+    };
+
+    callbacks.onInterviewAnswered({
+      kind: "interviewAnswered",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      answers: [],
+      resolvedAt: 4,
+      settlementId: "settlement-historical-answered",
+      settlementSource: "gui",
+      delivery: null,
+    });
+    expectCurrentOwnerStatePreserved();
+    expect(
+      harness.handle.store.getState().pendingActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onActionAck({
+      kind: "actionAck",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      clientActionId: actionId,
+      action: "interviewAnswer",
+      status: "accepted",
+      reason: null,
+      code: null,
+      backgroundStopTaskIds: [],
+    });
+    expect(
+      harness.handle.store.getState().acceptedActions[actionId],
+    ).toBeDefined();
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId,
+      reason: "Historical failure",
+      resolvedAt: 5,
+      settlementId: "settlement-historical-errored",
+      settlementSource: "gui",
+      outcome: "failed",
+      draftAnswers: [],
+      delivery: null,
+    });
+    expectCurrentOwnerStatePreserved();
+    expect(
+      harness.handle.store.getState().acceptedActions[actionId],
+    ).toBeDefined();
+  });
+
+  it("does not let an ambiguous legacy cleanup overwrite a terminal outcome", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-legacy",
+      status: "delivered",
+      retryable: false,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [{ ...existing, settlement: null, delivery: null }],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Late ambiguous cleanup",
+      resolvedAt: 6,
+      settlementId: null,
+      settlementSource: null,
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block = message.role === "assistant" ? message.blocks[0] : null;
+    expect(block).toMatchObject({
+      status: "completed",
+      outcome: "answered",
+      answers: [{ values: ["Alpha"] }],
+      error: null,
+    });
+  });
+
+  it("keeps a null lifecycle outcome ambiguous even when provenance is present", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const persisted = persistedInterviewMessage({
+      deliveryId: "delivery-unknown",
+      status: "pending",
+      retryable: true,
+      generation: 0,
+    });
+    const existing = persisted.blocks[0];
+    if (existing.type !== "interview") throw new Error("Expected interview");
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [
+        {
+          ...persisted,
+          blocks: [
+            {
+              ...existing,
+              status: "streaming",
+              answers: [],
+              outcome: null,
+              settlement: null,
+              delivery: null,
+            },
+          ],
+        },
+      ],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    callbacks.onInterviewErrored({
+      kind: "interviewErrored",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      blockId: "interview-delivery-retry",
+      reason: "Older host did not classify this result",
+      resolvedAt: 5,
+      settlementId: "settlement-unknown",
+      settlementSource: "runtime",
+      outcome: null,
+      draftAnswers: [],
+      delivery: null,
+    });
+
+    const message = harness.handle.store.getState().messages[0];
+    const block =
+      message.role === "assistant"
+        ? message.blocks.find((candidate) => candidate.type === "interview")
+        : undefined;
+    expect(block).toMatchObject({
+      status: "errored",
+      error: "Older host did not classify this result",
+      outcome: null,
+      settlement: null,
+    });
+  });
+
+  it("does not emit an interview delivery retry on a pre-1.7 chat session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 6 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetry({
+        blockId: "interview-delivery-retry",
+        settlementId: "settlement-1",
+        deliveryId: "delivery-1",
+        generation: 0,
+      }),
+    ).toBeNull();
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(false);
+    harness.handle.dispose();
+  });
+
+  it("enables interview delivery retry from a negotiated 1.7 session", () => {
+    const harness = createProtocolChainHarness({ major: 1, minor: 7 });
+    harness.session.emitStatus("open", null);
+    expect(
+      harness.handle.store.getState().interviewDeliveryRetryProtocolSupported,
+    ).toBe(true);
     harness.handle.dispose();
   });
 
@@ -7059,6 +7829,9 @@ describe("createChatSessionStore", () => {
       blockId: "question-snapshot",
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
@@ -7073,6 +7846,11 @@ describe("createChatSessionStore", () => {
       blockId: "question-live",
       reason: "Skipped",
       resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
@@ -7099,7 +7877,7 @@ describe("createChatSessionStore", () => {
       .interviewAnswer("question-answer", []);
     const skipActionId = harness.handle.store
       .getState()
-      .interviewError("question-skip", "Skipped by user");
+      .interviewSkip("question-skip", "Skipped by user", []);
 
     expect(answerActionId).not.toBeNull();
     expect(skipActionId).not.toBeNull();
@@ -7107,6 +7885,12 @@ describe("createChatSessionStore", () => {
       "interviewAnswer",
       "interviewError",
     ]);
+    expect(harness.sent[1]).toMatchObject({
+      kind: "interviewError",
+      blockId: "question-skip",
+      reason: "Skipped by user",
+      settlement: { outcome: "skipped", draftAnswers: [] },
+    });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
       { blockId: "question-skip", requestedAt: 3 },
@@ -7162,6 +7946,11 @@ describe("createChatSessionStore", () => {
       blockId: "question-skip",
       reason: "Skipped by user",
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId: "question-answer", requestedAt: 2 },
@@ -7198,6 +7987,9 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
     });
 
     expect(
@@ -7238,6 +8030,11 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(
@@ -7431,6 +8228,9 @@ describe("createChatSessionStore", () => {
       blockId,
       answers: [],
       resolvedAt: 4,
+      settlementId: null,
+      settlementSource: null,
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);
@@ -7470,9 +8270,9 @@ describe("createChatSessionStore", () => {
 
     const actionId = harness.handle.store
       .getState()
-      .interviewError(blockId, "Skipped by user");
+      .interviewSkip(blockId, "Skipped by user", []);
     if (actionId === null) {
-      throw new Error("expected interviewError action");
+      throw new Error("expected interview Skip action");
     }
 
     callbacks.onInterviewErrored({
@@ -7483,6 +8283,11 @@ describe("createChatSessionStore", () => {
       blockId,
       reason: "Skipped by user",
       resolvedAt: 5,
+      settlementId: null,
+      settlementSource: null,
+      outcome: "skipped",
+      draftAnswers: [],
+      delivery: null,
     });
 
     expect(harness.handle.store.getState().pendingInterviews).toEqual([]);

@@ -1,9 +1,52 @@
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
+import { modLabel } from "@/lib/keybindings/platform";
+import { Button } from "@/components/ui/button";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { contrastRatio } from "../../../../__tests__/contrast";
 
+// A representative call site: the mod+Enter chip shared by every primary
+// action button (Submit, Next, Start, ...). Proves the gate reaches a real
+// rendered button, and that hiding the chip never empties the button's label.
+function renderSubmitButton() {
+  return render(
+    <Button type="button">
+      Submit
+      <PrimaryActionShortcutHint />
+    </Button>,
+  );
+}
+
+describe("<PrimaryActionShortcutHint /> inside a labelled button", () => {
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
+
+  it("shows the mod+Enter chip alongside the label outside the mobile app", () => {
+    renderSubmitButton();
+    // The chip is `aria-hidden` (it duplicates the visible label rather than
+    // adding information), so the accessible name stays exactly "Submit"
+    // even while the glyphs are on screen.
+    const button = screen.getByRole("button", { name: "Submit" });
+    expect(button.textContent).toContain(modLabel());
+    expect(button.textContent).toContain("↵");
+  });
+
+  it("drops the chip on the installed mobile app but keeps the label", () => {
+    setMobileApp(true);
+    renderSubmitButton();
+    const button = screen.getByRole("button", { name: "Submit" });
+    expect(button.textContent).toBe("Submit");
+    expect(button.textContent).not.toContain(modLabel());
+    expect(button.textContent).not.toContain("↵");
+  });
+});
+
+// Main's contrast contract, kept alongside the mobile-gate cases: the keycaps
+// inherit the button's own colors, so they stay legible on every preset's
+// primary action fill.
 const PRIMARY_ACTION_PRESETS = [
   ["amoled light", "#171717", "#ffffff"],
   ["amoled dark", "#ededed", "#000000"],
@@ -27,7 +70,7 @@ const PRIMARY_ACTION_PRESETS = [
   ["everforest dark", "#a7c080", "#2d353b"],
 ] as const;
 
-describe("PrimaryActionShortcutHint", () => {
+describe("PrimaryActionShortcutHint keycap contrast", () => {
   it("keeps keycaps at the action label contrast across full-palette presets", () => {
     const { container } = render(
       <div className="bg-primary text-primary-foreground">

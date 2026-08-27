@@ -61,6 +61,13 @@ export function WorkspaceFileRenderer(props: {
   readonly language: string;
   readonly editing: boolean;
   readonly editAdapter: DiffClickToEditAdapter;
+  /**
+   * Wrap long lines instead of scrolling them. Unwrapped, Diffs gives its code
+   * area its own horizontal scroll box (`overflow-x` on `[data-code]`, with the
+   * gutter stuck to its left edge), which sits inside the tile's vertical
+   * scroller; wrapped, that box does not exist and the tile scrolls in one axis.
+   */
+  readonly wordWrap: boolean;
   readonly revealLine: number | null;
   readonly revealNonce: number | null;
   readonly findTarget: WorkspaceFileSourceFindTargetWithNonce | null;
@@ -82,6 +89,7 @@ export function WorkspaceFileRenderer(props: {
     onRevealConsumed,
     revealLine,
     revealNonce,
+    wordWrap,
   } = props;
   const { resolvedTheme } = useResolvedTheme();
   const themeName = resolveDiffThemeName(resolvedTheme);
@@ -147,7 +155,7 @@ export function WorkspaceFileRenderer(props: {
   const options = useMemo<FileOptions<undefined>>(
     () => ({
       disableFileHeader: true,
-      overflow: "scroll",
+      overflow: wordWrap ? "wrap" : "scroll",
       useTokenTransformer: true,
       theme: themeName,
       themeType: resolvedTheme,
@@ -157,7 +165,13 @@ export function WorkspaceFileRenderer(props: {
         handlePostRender(node, phase);
       },
     }),
-    [editAdapter.fileOptions, handlePostRender, resolvedTheme, themeName],
+    [
+      editAdapter.fileOptions,
+      handlePostRender,
+      resolvedTheme,
+      themeName,
+      wordWrap,
+    ],
   );
 
   useEffect(() => {

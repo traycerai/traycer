@@ -54,6 +54,26 @@ export type {
 export { RPC_ERROR_CODES, isRpcErrorCode } from "./versioned-rpc-types";
 
 export type {
+  WorktreeBusyErrorDetails,
+  WorktreeBusyHoldKind,
+  WorktreeBusyHolder,
+  WorktreeBusyHolderActivity,
+  WorktreeBusyHolders,
+  WorktreeBusyOwnerKind,
+  WorktreeBusyOwnerRef,
+} from "./worktree-busy-holders";
+export {
+  worktreeBusyErrorDetailsSchema,
+  worktreeBusyHoldKindSchema,
+  worktreeBusyHolderActivitySchema,
+  worktreeBusyHolderSchema,
+  worktreeBusyHoldersSchema,
+  worktreeBusyHoldersWireFieldSchema,
+  worktreeBusyOwnerKindSchema,
+  worktreeBusyOwnerRefSchema,
+} from "./worktree-busy-holders";
+
+export type {
   AnyOfJsonSchema,
   ArrayJsonSchema,
   ContractJsonSchemas,
@@ -142,6 +162,7 @@ export type {
   ClientRequestFrame,
   ClientFatalErrorFrame,
   ConnectionManifest,
+  ManifestMethodEntry,
   HostFrame,
   HostOpenAckFrame,
   HostResponseFrame,
@@ -168,6 +189,7 @@ export {
   hostFatalErrorFrameSchema,
   incompatibilityUpgradeGuidanceSchema,
   incompatibleMethodDetailsSchema,
+  manifestMethodEntrySchema,
   schemaVersionSchema,
   fatalErrorDetailsSchema,
   hostRestartIntentSchema,
@@ -207,8 +229,11 @@ export {
   buildConnectionManifest,
   mergeConnectionManifests,
   selectConnectionManifestForPeer,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
 } from "./capability-manifest";
+
+export type { ServedMajorsByMethod } from "./capability-manifest";
 
 export type {
   CompatibilityCheckResult,

@@ -43,7 +43,7 @@ const authenticatedUserResponseSchema = getRecordSchema(
  * Every attempt is time-boxed with `AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS)`
  * so a stalled/half-open socket can no longer hang the caller indefinitely -
  * previously an un-timed-out `fetch` here could block `auth.start()` (and, through
- * it, the renderer's "Initializing Traycer Host…" gate) until the OS TCP timeout,
+ * it, the renderer's "Loading Traycer…" gate) until the OS TCP timeout,
  * i.e. many minutes. A fired timeout rejects the `fetch`, which the surrounding
  * `catch` already collapses to `network-error`; that outcome (plus a 5xx or a 409
  * refresh-grace race) is the only one re-driven. A terminal `rejected`/`valid`
@@ -198,7 +198,8 @@ type UserFetchResult =
   | {
       readonly kind: "failed";
       readonly result:
-        { readonly kind: "rejected" } | { readonly kind: "network-error" };
+        | { readonly kind: "rejected" }
+        | { readonly kind: "network-error" };
     };
 
 async function fetchUserResponse(

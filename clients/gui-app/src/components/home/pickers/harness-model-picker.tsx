@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
 import {
   findUpgradeServiceTierForModel,
@@ -76,7 +77,9 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
@@ -164,6 +167,8 @@ interface HarnessModelPickerProps {
    * renderer-default host while the composer is bound elsewhere.
    */
   runTargetHostId: string | null;
+  /** Forwarded to `HarnessModelTrigger`; see its `labelDisplay`. */
+  labelDisplay: "responsive" | "model-only";
   /**
    * Per-row admission override for the active provider's profile strip,
    * keyed by `profileCommitId`. `null` for every caller except the TUI
@@ -248,6 +253,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     disabled,
   );
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const coarsePointer = useCoarsePointer();
   const listRef = useRef<VirtuosoHandle | null>(null);
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = useCallback(() => {
@@ -364,9 +370,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         ? []
         : orderModelPickerHarnesses(
             restrictToTui(harnessesQuery.data.harnesses, tuiOnly),
-            degradedHarnessIds,
           ),
-    [degradedHarnessIds, harnessesQuery.data, tuiOnly],
+    [harnessesQuery.data, tuiOnly],
   );
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
@@ -498,12 +503,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // providers (e.g. `traycer`) are filtered out of the catalog up front so every
   // derived structure (active provider, rows, rail) inherits the restriction.
   const catalogHarnesses = useMemo(
-    () =>
-      orderModelPickerHarnesses(
-        restrictToTui(catalog.harnesses, tuiOnly),
-        degradedHarnessIds,
-      ),
-    [catalog.harnesses, degradedHarnessIds, tuiOnly],
+    () => orderModelPickerHarnesses(restrictToTui(catalog.harnesses, tuiOnly)),
+    [catalog.harnesses, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalogForClient(runTargetClient);
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
@@ -616,6 +617,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => profilesByHarnessId.get(resolvedActiveProviderId) ?? [],
     [profilesByHarnessId, resolvedActiveProviderId],
   );
+  const activeProviderProfileEnablementPending =
+    useProviderProfileEnablementPending(
+      runTargetClient,
+      guiHarnessIdToProviderId(resolvedActiveProviderId),
+    );
   // The browsed provider's full CLI state, for the panel's ambient-auth line
   // (which credential a single-profile provider is actually running on - e.g.
   // Copilot riding the GitHub CLI's login). Same `providers.list` response the
@@ -816,15 +822,22 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
 
+  // Type-to-filter is what a keyboard-driven user opens this for, and the
+  // panel is opened often - every harness or model change. On a touch pointer
+  // the same focus is a software keyboard over the list the tap was aiming at,
+  // so the search stands down and waits to be tapped. Nothing is stranded:
+  // the panel stays open with focus where the trigger left it, and closing
+  // still returns the composer its caret. The pointer decides, not the
+  // viewport and not the build.
   useEffect(() => {
-    if (!visibleOpen) return;
+    if (!visibleOpen || coarsePointer) return;
     const timer = window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [visibleOpen]);
+  }, [coarsePointer, visibleOpen]);
 
   // Leader-key scope: while open, ⌘+digit switches the browsed rail entry
   // (suppressing epic-tab switching) and ⌥+digit sets the thinking level.
@@ -845,6 +858,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     activeProviderId: resolvedActiveProviderId,
     activeProviderProfiles,
     activeProviderProfileAdmission: profileAdmission,
+    profileEnablementPending: activeProviderProfileEnablementPending,
     onProfileChange: handleProfileChange,
   });
 
@@ -910,6 +924,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             profileAccentDot={presentation.profileAccentDot}
             isLoading={presentation.isLoading}
             disabled={disabled}
+            labelDisplay={props.labelDisplay}
           />
         </TooltipWrapper>
       </PopoverTrigger>
@@ -931,6 +946,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProfileId={activePanelProfileId}
         activeProfileIdByHarnessId={activeProfileIdByHarnessId}
         activeProviderProfiles={activeProviderProfiles}
+        profileEnablementPending={activeProviderProfileEnablementPending}
         activeProviderState={activeProviderState}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
@@ -997,10 +1013,12 @@ function HarnessModelPickerTooltip({
         <TooltipSummaryRow label="Profile" value={profileLabel} />
       )}
       {shortcutLabel === null ? null : (
-        <div className="mt-0.5 flex min-w-0 items-center justify-between gap-3 border-t border-background/15 pt-1">
-          <span className="text-background/70">Shortcut</span>
-          <Kbd className="text-code-xs">{shortcutLabel}</Kbd>
-        </div>
+        <ShortcutHint>
+          <div className="mt-0.5 flex min-w-0 items-center justify-between gap-3 border-t border-background/15 pt-1">
+            <span className="text-background/70">Shortcut</span>
+            <Kbd className="text-code-xs">{shortcutLabel}</Kbd>
+          </div>
+        </ShortcutHint>
       )}
     </div>
   );
@@ -1134,15 +1152,21 @@ function restrictToTui<T extends HarnessOption>(
   return tuiOnly ? harnesses.filter(isTuiCapable) : harnesses;
 }
 
+/**
+ * Provider order, and nothing else.
+ *
+ * Degraded providers used to sink to the bottom here, which is a stable rule
+ * only if the verdict behind it is stable - and it is not: `authStatus`
+ * arrives with the catalog row while `degradedHarnessIds` comes from a
+ * separately-timed `providers.list` query, so either can flip after the list
+ * has been drawn. The row the user was reading would then jump to the end of
+ * the list under their cursor. Dimming says the same thing without moving
+ * anything, so dimming is all that is left.
+ */
 function orderModelPickerHarnesses<T extends HarnessOption>(
   harnesses: ReadonlyArray<T>,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): ReadonlyArray<T> {
-  return sortGuiHarnessesByProviderOrder(harnesses).toSorted(
-    (left, right) =>
-      Number(railHarnessDegraded(left, degradedHarnessIds)) -
-      Number(railHarnessDegraded(right, degradedHarnessIds)),
-  );
+  return sortGuiHarnessesByProviderOrder(harnesses);
 }
 
 function degradedHarnessIdsFromProviderStates(
@@ -1232,7 +1256,24 @@ function resolveActiveProviderId(input: {
   ) {
     return selectedProviderId;
   }
-  return harnesses.find(selectable)?.id ?? activeProviderId;
+  // Last resort - neither the active nor the selected provider can be landed
+  // on, so this picks one for the user. ORDER used to answer this by accident:
+  // degraded providers sank to the bottom of `orderModelPickerHarnesses`, so
+  // the first selectable entry was a ready one whenever a ready one existed.
+  // Order no longer says anything about runnability (a late verdict must not
+  // move a row), so the preference is stated here instead of being inherited
+  // from a sort. Without it, opening the picker on a fresh boot could land on
+  // whichever signed-out provider happens to come first in canonical order and
+  // show its reauth panel while a signed-in provider sits one tab away.
+  //
+  // A degraded provider is still the fallback when every selectable one is
+  // degraded: it is browseable and fixable, and the alternative is landing on
+  // a provider that is not even selectable.
+  const runnable = harnesses.find(
+    (harness) =>
+      selectable(harness) && !railHarnessDegraded(harness, degradedHarnessIds),
+  );
+  return (runnable ?? harnesses.find(selectable))?.id ?? activeProviderId;
 }
 
 interface ResolveRowAnchorsInput {

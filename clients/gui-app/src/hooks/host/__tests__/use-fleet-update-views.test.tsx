@@ -58,6 +58,7 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by this test");
     }),
     notifyBearerRotated: vi.fn(),
+    wake: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,

@@ -26,7 +26,8 @@ type FakeSession = {
   readonly method: string;
   readonly params: unknown;
   statusHandler:
-    ((status: string, reason: StreamCloseReason | null) => void) | null;
+    | ((status: string, reason: StreamCloseReason | null) => void)
+    | null;
   frameHandler: ((envelope: unknown) => void) | null;
 };
 
@@ -53,6 +54,7 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
       isClosed: () => false,
       notifyBearerRotated: () => undefined,
       reconnectAll: () => undefined,
+      isReady: () => true,
       getMethodSupport: () => hoisted.state.methodSupport,
     };
   }),

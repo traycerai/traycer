@@ -60,7 +60,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostGetInstallationInfoResponse,
-  HostUpdateCheckResponse,
+  HostUpdateCheckResponseV11,
 } from "../ipc-contracts/host-management-types";
 import type {
   AccessibilityThemeSnapshot,
@@ -68,6 +68,7 @@ import type {
   DisplaySnapshot,
   DisplayTopology,
   FileSaveInput,
+  FileSaveResult,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
@@ -102,6 +103,14 @@ import type {
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import {
+  linkLoginStatusViaHttp,
+  mintLinkLoginCodeViaHttp,
+  respondLinkLoginViaHttp,
+  type LinkLoginStatusFetchResult,
+  type MintLinkLoginCodeFetchResult,
+  type RespondLinkLoginFetchResult,
+} from "@traycer-clients/shared/auth/link-login";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type {
   UpdateHostVersionPolicyFetchResult,
@@ -268,7 +277,8 @@ export interface DesktopFileDropsBridge {
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
   readNativeClipboardFilePaths(): Promise<readonly string[]>;
-  saveFile(input: FileSaveInput): Promise<string | null>;
+  saveFile(input: FileSaveInput): Promise<FileSaveResult | null>;
+  openSavedFile(path: string): Promise<void>;
 }
 
 /**
@@ -321,7 +331,7 @@ export interface DesktopHostManagementBridge {
   cliManifest(): Promise<CliInstallManifestSnapshot | null>;
   maintenanceUpdateCheck(
     input: HostAvailableVersionsInput & { readonly expectedHostId: string },
-  ): Promise<HostUpdateCheckResponse>;
+  ): Promise<HostUpdateCheckResponseV11>;
   maintenanceDoctor(input: {
     readonly expectedHostId: string;
   }): Promise<MaintenanceDoctorProjection>;
@@ -443,7 +453,9 @@ export interface DesktopPlatformBridge {
     onTopologyChange(
       handler: (event: {
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }) => void,
     ): { dispose: () => void };
@@ -646,6 +658,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
+  // No OS push on the desktop: notifications here are native `show` calls, not
+  // an APNs/FCM permission the user can revoke from a settings app.
+  readonly pushPermission: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly refreshSelectionFleet: () => Promise<void>;
@@ -920,6 +935,50 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<RevokeAllSessionsFetchResult> {
     return this.bridge.revokeAllSessions(bearerToken);
+  }
+
+  // No camera on the desktop shell; sign-in by link code is a phone surface.
+  readonly linkCodeScanner = null;
+  readonly deviceDescriber = null;
+  readonly linkLoginDeepLinks = null;
+
+  mintLinkLoginCode(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<MintLinkLoginCodeFetchResult> {
+    // Runs in the renderer rather than behind the preload bridge, and that is
+    // fine in a PACKAGED build too: authn allows the renderer's own origin
+    // unconditionally, not just in dev. `registerPlugins` unions the env
+    // allowlist with `corsOrigins(...)`, which always contains
+    // `DESKTOP_RENDERER_ORIGIN` = `app://renderer` — the privileged scheme
+    // Electron serves the packaged GUI from. The dev Vite origin arrives
+    // through the same union's `desktopDevOrigin`.
+    //
+    // The bridge is what `listUserSessions` needs for a different reason: it
+    // handles retained step-up credentials, which must not cross into the
+    // renderer. Nothing here touches those, so there is no second reason to
+    // pay for a main-process hop.
+    return mintLinkLoginCodeViaHttp(this.authnBaseUrl, bearerToken, signal);
+  }
+  linkLoginStatus(
+    bearerToken: string,
+    code: string,
+    signal: AbortSignal,
+  ): Promise<LinkLoginStatusFetchResult> {
+    return linkLoginStatusViaHttp(this.authnBaseUrl, bearerToken, code, signal);
+  }
+
+  respondLinkLogin(
+    bearerToken: string,
+    code: string,
+    approve: boolean,
+  ): Promise<RespondLinkLoginFetchResult> {
+    return respondLinkLoginViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+      approve,
+    );
   }
 
   mintHostCredential(

@@ -24,6 +24,9 @@ import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skelet
 import { TabGroupView } from "@/components/epic-canvas/canvas/tab-group-view";
 import { EpicCanvasDragInteractionShield } from "@/components/epic-canvas/dnd/drag-interaction-shield";
 import { useEmptyShellDropActive } from "@/components/epic-canvas/dnd/dnd-store";
+import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
+import { MobileTabSwitcherMount } from "@/components/epic-canvas/mobile/mobile-tab-switcher-mount";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 
 interface TileCanvasPaneContextValue {
   readonly epicId: string;
@@ -61,7 +64,7 @@ export function TileCanvas(props: TileCanvasProps) {
   const renderLive = snapshotLoaded || hasActiveHandoff;
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground max-md:border-0"
       data-testid="tile-canvas"
     >
       <TileCanvasBody
@@ -119,6 +122,7 @@ function TileCanvasLive(
   );
   const resizeSplitInTab = useEpicCanvasStore((s) => s.resizeSplitInTab);
   const hasRecords = useEpicHasArtifactRecords();
+  const isMobile = useIsMobileViewport();
 
   const onResizeGroup = useCallback(
     (groupId: string, sizes: ReadonlyArray<number>) => {
@@ -138,7 +142,27 @@ function TileCanvasLive(
     if (!hasRecords) {
       return <EmptyEpicBlankRoot tabId={tabId} />;
     }
+    // A phone reaches its tabs through the header's switcher trigger, so the
+    // sheet has to be mounted here too - the empty shell's "drag from the
+    // sidebar" is a desktop answer, and without this the trigger would open
+    // nothing on the one screen with no tabs to switch between.
+    if (isMobile) {
+      return (
+        <>
+          <EmptyShell epicId={epicId} tabId={tabId} />
+          <MobileTabSwitcherMount epicId={epicId} tabId={tabId} />
+        </>
+      );
+    }
     return <EmptyShell epicId={epicId} tabId={tabId} />;
+  }
+  // Below the mobile breakpoint an open epic shows exactly ONE tile
+  // full-screen instead of the recursively-splitting canvas. The split tree is
+  // read but never mutated, so the persisted desktop layout is unchanged on
+  // return. Desktop (>=768px) falls through to the SplitContainer path below,
+  // which stays byte-for-byte identical.
+  if (isMobile) {
+    return <MobileEpicTileView epicId={epicId} tabId={tabId} />;
   }
   return (
     <TileCanvasPaneContext.Provider value={paneContext}>

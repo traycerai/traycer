@@ -91,7 +91,9 @@ export type DecodedUpdateDispatchAck =
   | { readonly kind: "invalid"; readonly reason: UpdateDispatchAckDefect };
 
 export type UpdateDispatchAckDefect =
-  "unparseable-json" | "unsupported-version" | "malformed-fields";
+  | "unparseable-json"
+  | "unsupported-version"
+  | "malformed-fields";
 
 /**
  * Nonces this contract will accept, on argv and in the file.

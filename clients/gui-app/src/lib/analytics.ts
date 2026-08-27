@@ -1,4 +1,5 @@
 import posthog, { type CaptureResult, type PostHogConfig } from "posthog-js";
+import { isMobileApp } from "@/lib/mobile-app";
 
 export type AnalyticsSource =
   | "direct_ui"
@@ -20,7 +21,9 @@ export type AnalyticsSource =
   | "host_failover";
 
 export type AnalyticsWorkspaceSurface =
-  "landing" | "new-conversation" | "owner";
+  | "landing"
+  | "new-conversation"
+  | "owner";
 
 export type AnalyticsWorkspaceContextSource = "browse" | "recent";
 
@@ -71,6 +74,7 @@ export type AnalyticsSettingsSection =
   | "general"
   | "host"
   | "keybindings"
+  | "link-phone"
   | "notifications"
   | "providers"
   | "shell"
@@ -107,6 +111,7 @@ export type AnalyticsHarness =
   | "openrouter"
   | "pi"
   | "qwen"
+  | "reasonix"
   | "traycer";
 
 /** Product vocabulary only - never the internal host/app-local/global source
@@ -119,7 +124,12 @@ export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
  * summary unavailable) - never as a generic "didn't bother computing it"
  * escape hatch. */
 export type AnalyticsCountBucket =
-  "unknown" | "0" | "1" | "2-5" | "6-20" | "21+";
+  | "unknown"
+  | "0"
+  | "1"
+  | "2-5"
+  | "6-20"
+  | "21+";
 
 export type AnalyticsNotificationEntryPoint = Extract<
   AnalyticsSource,
@@ -129,14 +139,16 @@ export type AnalyticsNotificationEntryPoint = Extract<
 export type AnalyticsNotificationHostState = "exact" | "unknown";
 
 export type AnalyticsNotificationFilter =
-  "unread_only" | AnalyticsNotificationCategory;
+  | "unread_only"
+  | AnalyticsNotificationCategory;
 
 export type AnalyticsNotificationSection = "attention" | "recent";
 
 export type AnalyticsNotificationSurface = "center" | "toast" | "native";
 
 export type AnalyticsNotificationAcknowledgmentSource =
-  "explicit_action" | "activation";
+  | "explicit_action"
+  | "activation";
 
 export type AnalyticsNotificationOutcome = "success" | "failure";
 
@@ -159,7 +171,10 @@ export function analyticsCountBucket(
  * bugs show up as heap correlating with this bucket, so it is the axis every
  * resource sample must carry. */
 export type AnalyticsSessionAgeBucket =
-  "under_1h" | "1_to_4h" | "4_to_12h" | "over_12h";
+  | "under_1h"
+  | "1_to_4h"
+  | "4_to_12h"
+  | "over_12h";
 
 /** Escalating JS-heap pressure bands. `critical` sits below the renderer's
  * 4 GB old-space ceiling with room to still report before an OOM. */
@@ -202,6 +217,7 @@ export type AnalyticsProvider =
   | "openrouter"
   | "pi"
   | "qwen"
+  | "reasonix"
   | "traycer";
 
 export type AnalyticsRole = "editor" | "owner" | "viewer";
@@ -838,7 +854,10 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";
     readonly blocked_action:
-      "send" | "open_github_issue" | "report_on_github" | "save_bundle";
+      | "send"
+      | "open_github_issue"
+      | "report_on_github"
+      | "save_bundle";
   };
   readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
     | {
@@ -887,7 +906,7 @@ export const POSTHOG_CONFIG = {
   disable_surveys_automatic_display: true,
   disable_product_tours: true,
   disable_web_experiments: true,
-  advanced_disable_decide: true,
+  advanced_disable_flags: true,
   advanced_disable_feature_flags: true,
   person_profiles: "identified_only",
   save_campaign_params: false,
@@ -982,6 +1001,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "openrouter",
   "pi",
   "qwen",
+  "reasonix",
   "traycer",
 ]);
 
@@ -1004,6 +1024,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "openrouter",
   "pi",
   "qwen",
+  "reasonix",
   "traycer",
 ]);
 
@@ -1027,6 +1048,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     general: true,
     host: true,
     keybindings: true,
+    "link-phone": true,
     notifications: true,
     providers: true,
     shell: true,
@@ -2021,8 +2043,12 @@ function safeAppGlobals(
     (appVersion !== null &&
       (typeof appVersion !== "string" ||
         !/^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(appVersion))) ||
+    typeof properties.app_surface !== "string" ||
+    !new Set(["desktop", "mobile"]).has(properties.app_surface) ||
     typeof properties.platform !== "string" ||
-    !new Set(["linux", "macos", "other", "windows"]).has(properties.platform) ||
+    !new Set(["android", "ios", "linux", "macos", "other", "windows"]).has(
+      properties.platform,
+    ) ||
     typeof properties.release_channel !== "string" ||
     !new Set(["development", "other", "production"]).has(
       properties.release_channel,
@@ -2032,6 +2058,7 @@ function safeAppGlobals(
   }
   return {
     app: "gui-app",
+    app_surface: String(properties.app_surface),
     app_version: appVersion,
     platform: String(properties.platform),
     release_channel: String(properties.release_channel),
@@ -2101,9 +2128,17 @@ export function sanitizePostHogCaptureResult(
   if (result === null) return null;
   const rawProperties: Record<string, unknown> = { ...result.properties };
   if (result.event === "$identify") {
+    // The identity events carry the same app globals as declared events -
+    // "which surface emitted this" holds for a sign-in exactly as it does
+    // for a click, and the globals allowlist bounds what passes.
     const identity = safeIngestionProperties(rawProperties, true);
-    if (identity === null) return null;
-    const sanitized = captureResult("$identify", identity, result.timestamp);
+    const identifyGlobals = safeAppGlobals(rawProperties);
+    if (identity === null || identifyGlobals === null) return null;
+    const sanitized = captureResult(
+      "$identify",
+      { ...identity, ...identifyGlobals },
+      result.timestamp,
+    );
     const personProperties = safePersonProperties(
       stagedPersonProperties(result, rawProperties),
     );
@@ -2113,12 +2148,19 @@ export function sanitizePostHogCaptureResult(
   }
   if (result.event === "$set") {
     const identity = safeIngestionProperties(rawProperties, false);
+    const setGlobals = safeAppGlobals(rawProperties);
     const personProperties = safePersonProperties(
       stagedPersonProperties(result, rawProperties),
     );
-    if (identity === null || personProperties === null) return null;
+    if (identity === null || setGlobals === null || personProperties === null) {
+      return null;
+    }
     return {
-      ...captureResult("$set", identity, result.timestamp),
+      ...captureResult(
+        "$set",
+        { ...identity, ...setGlobals },
+        result.timestamp,
+      ),
       $set: personProperties,
     };
   }
@@ -2354,7 +2396,29 @@ export function trackedSettingSetter<Value>(
   };
 }
 
-function analyticsPlatform(): "linux" | "macos" | "other" | "windows" {
+/**
+ * Which product shell is emitting events. A phone-narrow desktop window is
+ * still `desktop`: this is the install target, not the viewport.
+ */
+export function analyticsAppSurface(): "desktop" | "mobile" {
+  return isMobileApp() ? "mobile" : "desktop";
+}
+
+export function analyticsPlatform():
+  | "android"
+  | "ios"
+  | "linux"
+  | "macos"
+  | "other"
+  | "windows" {
+  if (isMobileApp()) {
+    // `navigator.platform` reads "iPhone"/"Linux armv8l" inside the mobile
+    // WebViews, which the desktop branches below would misfile as other or
+    // linux; the user agent names the OS directly.
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) return "ios";
+    if (/android/i.test(navigator.userAgent)) return "android";
+    return "other";
+  }
   const platform = navigator.platform.toLowerCase();
   if (platform.includes("mac")) return "macos";
   if (platform.includes("win")) return "windows";
@@ -2407,6 +2471,7 @@ export class Analytics {
     this.guarded(() =>
       posthog.register({
         app: "gui-app",
+        app_surface: analyticsAppSurface(),
         app_version: import.meta.env.VITE_APP_VERSION ?? null,
         platform: analyticsPlatform(),
         release_channel: analyticsReleaseChannel(),

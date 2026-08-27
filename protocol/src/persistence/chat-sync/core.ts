@@ -90,7 +90,10 @@ export const chatHeadCoreShape = {
   settings: chatSyncRunSettingsSchema.nullable(),
 } as const;
 
-export const chatHeadCoreSchema = withResidualCapture("core", chatHeadCoreShape);
+export const chatHeadCoreSchema = withResidualCapture(
+  "core",
+  chatHeadCoreShape,
+);
 export type ChatHeadCore = z.infer<typeof chatHeadCoreSchema>;
 
 // ---- Wire projections -------------------------------------------------- //

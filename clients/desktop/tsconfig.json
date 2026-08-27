@@ -18,7 +18,6 @@
     "declaration": false,
     "allowImportingTsExtensions": true,
     "types": ["node"],
-    "baseUrl": ".",
     "paths": {
       "@traycer-clients/shared/*": ["../shared/*"],
       "@traycer-clients/desktop/*": ["./src/*"],

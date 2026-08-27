@@ -56,10 +56,10 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   hostRpcRegistry,
-  providersListDowngradeV7ToV1,
-  providersListDowngradeV7ToV2,
-  providersListDowngradeV7ToV3,
-  providersListDowngradeV7ToV6,
+  providersListDowngradeV8ToV1,
+  providersListDowngradeV8ToV2,
+  providersListDowngradeV8ToV3,
+  providersListDowngradeV8ToV6,
   providersListUpgradeV3ToV4,
   providersListUpgradeV5ToV6,
   providersListUpgradeV6ToV7,
@@ -342,7 +342,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
   });
 
   it("downgrades v7.0 → v6.0 requests by stripping native", () => {
-    const result = providersListDowngradeV7ToV6.downgradeRequest(
+    const result = providersListDowngradeV8ToV6.downgradeRequest(
       providersListRequestSchema.parse({
         forceAuthRefresh: true,
         native: {
@@ -372,7 +372,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
       ],
       native: { ok: true, kind: "mcp", servers: [] },
     });
-    const result = providersListDowngradeV7ToV6.downgradeResponse(
+    const result = providersListDowngradeV8ToV6.downgradeResponse(
       providersListResponseSchema.parse(v70),
     );
     expect(result.ok).toBe(true);
@@ -409,7 +409,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV3.downgradeResponse(
+    const result = providersListDowngradeV8ToV3.downgradeResponse(
       providersListResponseSchema.parse(v31),
     );
     expect(result.ok).toBe(true);
@@ -434,7 +434,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
         },
       ],
     });
-    const result = providersListDowngradeV7ToV2.downgradeResponse(
+    const result = providersListDowngradeV8ToV2.downgradeResponse(
       providersListResponseSchema.parse(v31),
     );
     expect(result.ok).toBe(true);
@@ -469,7 +469,7 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
     const list = providersListResponseSchema.parse({
       providers: [latest],
     });
-    const listResult = providersListDowngradeV7ToV1.downgradeResponse(
+    const listResult = providersListDowngradeV8ToV1.downgradeResponse(
       providersListResponseSchema.parse(list),
     );
     expect(listResult.ok).toBe(true);

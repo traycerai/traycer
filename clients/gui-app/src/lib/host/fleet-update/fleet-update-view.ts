@@ -98,7 +98,8 @@ export interface FleetUpdateRecordObservation {
  * must not silently make it record-derived.
  */
 export type FleetUpdateObservation =
-  FleetUpdateWireObservation | FleetUpdateRecordObservation;
+  | FleetUpdateWireObservation
+  | FleetUpdateRecordObservation;
 
 /** Narrowing helper, so no consumer re-derives the discriminant test. */
 export function isRecordObservation(

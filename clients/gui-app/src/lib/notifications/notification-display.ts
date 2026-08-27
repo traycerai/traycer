@@ -16,7 +16,7 @@ import {
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 import type {
   HostNotificationEntryV21,
-  HostNotificationsCloudFeedRow,
+  HostNotificationsCloudFeedRowV11,
 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
@@ -441,7 +441,7 @@ export function displayHostChannelEmission(
  * unlike a v1 channel batch, one snapshot can contain entries from several
  * hosts and every native activation envelope must retain the correct one. */
 export function displayCloudSnapshotArrivals(
-  entries: ReadonlyArray<HostNotificationsCloudFeedRow>,
+  entries: ReadonlyArray<HostNotificationsCloudFeedRowV11>,
   target: NotificationDisplayTarget,
 ): void {
   const focused = readFocusedHostNotificationPresence();

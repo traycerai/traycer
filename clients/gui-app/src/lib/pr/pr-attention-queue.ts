@@ -29,7 +29,9 @@ import {
 import { formatPrCheckName, prCheckContextKey } from "./pr-check-groups";
 
 export type PrAttentionKind =
-  "check-failure" | "changes-requested" | "review-required";
+  | "check-failure"
+  | "changes-requested"
+  | "review-required";
 
 export interface PrAttentionItem {
   /** Stable across frames so React keys don't churn on every poll. */

@@ -170,12 +170,16 @@ describe("strict SemVer for the diagnostic version", () => {
    * form, and a naive `\d+` grammar accepts leading zeros - both of which
    * shipped once and produced artifacts the host refused at startup.
    */
-  it.each(["1.2.0", "0.0.0", "1.2.0-rc.2", "1.2.0-rc.2+build.7", "10.20.30", "0.0.0-local"])(
-    "accepts %j",
-    (version) => {
-      expect(isStrictSemVer(version)).toBe(true);
-    },
-  );
+  it.each([
+    "1.2.0",
+    "0.0.0",
+    "1.2.0-rc.2",
+    "1.2.0-rc.2+build.7",
+    "10.20.30",
+    "0.0.0-local",
+  ])("accepts %j", (version) => {
+    expect(isStrictSemVer(version)).toBe(true);
+  });
 
   it.each([
     ["a leading v", "v1.2.0"],
@@ -229,7 +233,9 @@ describe("strict SemVer for the diagnostic version", () => {
     // explicitly: dropping either is how the two would silently diverge.
     expect(STRICT_SEMVER_PATTERN.startsWith("^")).toBe(true);
     expect(STRICT_SEMVER_PATTERN.endsWith("$")).toBe(true);
-    expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("1.2.0-rc.2")).toBe(true);
+    expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("1.2.0-rc.2")).toBe(
+      true,
+    );
     expect(new RegExp(STRICT_SEMVER_PATTERN, "u").test("v1.2.0-rc.2")).toBe(
       false,
     );
@@ -424,17 +430,14 @@ describe("upgradeChannel on the requirement", () => {
    * the schema rather than iterated over a removed helper.
    */
 
-  it.each(["stable", "rc", null] as const)(
-    "parses %j",
-    (upgradeChannel) => {
-      expect(
-        clientCompatibilityRequirementSchema.safeParse({
-          ...REQUIREMENT,
-          upgradeChannel,
-        }).success,
-      ).toBe(true);
-    },
-  );
+  it.each(["stable", "rc", null] as const)("parses %j", (upgradeChannel) => {
+    expect(
+      clientCompatibilityRequirementSchema.safeParse({
+        ...REQUIREMENT,
+        upgradeChannel,
+      }).success,
+    ).toBe(true);
+  });
 
   it("rejects a channel the wire schema does not carry", () => {
     expect(

@@ -43,6 +43,8 @@ import { createComposerPickerStore } from "@/components/chat/composer/picker/com
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
 import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
+import { ProfileDisabledBanner } from "@/components/chat/composer/profile-disabled-banner";
+import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
@@ -91,10 +93,12 @@ import {
   nextComposerMode,
   type ComposerMode,
 } from "@/components/home/data/landing-options";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { ComposerModeSwitcher } from "@/components/home/composer/composer-mode-switcher";
 import { useComposerPlacement } from "@/hooks/host/use-composer-placement";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
+import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { usePromptStash } from "@/hooks/composer/use-prompt-stash";
@@ -138,6 +142,22 @@ function promptStashIsDisabled(
   attachmentPending: boolean,
 ): boolean {
   return isSubmitting || attachmentPending;
+}
+
+function landingComposerCanSubmit(args: {
+  readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
+  readonly submitBlocked: boolean;
+  readonly workspaceCanStart: boolean;
+  readonly hasSubmittableContent: boolean;
+}): boolean {
+  return (
+    !args.isSubmitting &&
+    !args.attachmentPending &&
+    !args.submitBlocked &&
+    args.workspaceCanStart &&
+    args.hasSubmittableContent
+  );
 }
 
 export function LandingComposer(props: LandingComposerProps) {
@@ -188,6 +208,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const composerMode = draftComposerMode ?? globalComposerMode;
   const chatComposerActive = activityEnabled && composerMode === "chat";
+  // Phones collapse the composer toolbar into a single options-sheet trigger.
+  // Only the toolbar slot swaps, so the editor keeps its position in the tree
+  // and never remounts when the viewport crosses the breakpoint.
+  const isMobile = useIsMobileViewport();
 
   useEffect(() => {
     return () => {
@@ -259,6 +283,12 @@ export function LandingComposer(props: LandingComposerProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
+  const profileEligibility = useProfileEligibilityGate(
+    hostClient,
+    harnessId,
+    profileId,
+    chatComposerActive,
+  );
   const mentionRoots = useLandingComposerMentionRoots(draftId);
   useComposerPickerItems({
     pickerStore,
@@ -583,13 +613,15 @@ export function LandingComposer(props: LandingComposerProps) {
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     packPreparingHint: packGate.hint,
     packBlocked: packGate.blocked,
+    profileDisabled: profileEligibility.disabled,
   });
-  const canSubmit =
-    !isSubmitting &&
-    !attachmentPending &&
-    !submitBlocked &&
-    workspaceCanStart &&
-    hasSubmittableContent;
+  const canSubmit = landingComposerCanSubmit({
+    isSubmitting,
+    attachmentPending,
+    submitBlocked,
+    workspaceCanStart,
+    hasSubmittableContent,
+  });
 
   // Submit-time refusal copy (selection model §54). The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
@@ -796,13 +828,25 @@ export function LandingComposer(props: LandingComposerProps) {
       attachmentPending={attachmentPending}
       workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-start">{switcher}</div>}
+      toolbarLayout={isMobile ? "collapsed" : "full"}
       topBanner={
         <>
           <ComposerHostNotice
             notice={hostNotice}
             onDismiss={dismissHostNotice}
           />
-          {rateLimitPrompt.kind === "visible" ? (
+          {profileEligibility.disabled ? (
+            <ProfileDisabledBanner
+              profileLabel={profileEligibility.profileLabel}
+              enablePending={profileEligibility.enablePending}
+              onEnableProfile={profileEligibility.enableProfile}
+              onChooseProfile={() => {
+                toggleActiveModelPicker();
+              }}
+            />
+          ) : null}
+          {!profileEligibility.disabled &&
+          rateLimitPrompt.kind === "visible" ? (
             <ProfileRateLimitSwitchBanner
               key={rateLimitPrompt.warningKey}
               harnessId={harnessId}
@@ -876,13 +920,18 @@ function resolveLandingSubmitBlock(args: {
   readonly workspaceDisabledHint: string | null;
   readonly packPreparingHint: string | null;
   readonly packBlocked: boolean;
+  readonly profileDisabled: boolean;
 }): {
   readonly submitBlocked: boolean;
   readonly submitBlockedHint: string | null;
 } {
   return {
-    submitBlocked: args.packBlocked,
-    submitBlockedHint: args.workspaceDisabledHint ?? args.packPreparingHint,
+    submitBlocked: args.profileDisabled || args.packBlocked,
+    submitBlockedHint:
+      args.workspaceDisabledHint ??
+      (args.profileDisabled
+        ? "Profile disabled — enable it or choose another profile"
+        : args.packPreparingHint),
   };
 }
 

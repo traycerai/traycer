@@ -8,6 +8,7 @@ import {
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
 import { selectConnectionManifestForPeer } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "./served-stream-majors";
 import {
   extractBearerForOpenFrame,
   MissingBearerTokenForOpenFrameError,
@@ -115,7 +116,8 @@ export interface WsStreamClientOptions<
    * short-lived provisioning probe (CLI `host install`) is who needs it.
    */
   readonly onHostCredentialState:
-    ((hostId: string, state: HostCredentialState) => void) | null;
+    | ((hostId: string, state: HostCredentialState) => void)
+    | null;
   /**
    * Where this transport's observations reach the selection authority.
    *
@@ -482,6 +484,32 @@ export class WsStreamClient<
   /** The `close()` reason tag, or `null` while the client is still open. */
   getClosedReason(): string | null {
     return this.closedReason;
+  }
+
+  /**
+   * Whether nothing this client owns is currently disconnected
+   * (see {@link IHostStreamClient.isReady}).
+   *
+   * This client is not one connection: it owns N independent per-method
+   * sockets, each with its own status and its own reconnect loop, so "ready"
+   * can only mean "none of mine is down". A client that owns NO sessions
+   * answers `true` - it has not subscribed to anything, which is not evidence
+   * of an outage, and answering `false` there would make a client flip to
+   * not-ready every time its last stream is legitimately unsubscribed.
+   *
+   * Deliberately scoped to owned sessions and nothing else: the point of this
+   * method is that a surface can ask the client it actually speaks for.
+   */
+  isReady(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    for (const session of this.ownedSessions) {
+      if (!session.isOpen()) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -911,7 +939,7 @@ export class WsStreamClient<
   ): void {
     const myManifest = selectConnectionManifestForPeer(
       this.options.registry,
-      buildStreamManifest(this.options.registry),
+      buildStreamManifest(this.options.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     let changed = false;
@@ -1113,7 +1141,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
    * this build cannot subscribe to. `null` when nobody is watching.
    */
   readonly onHostCredentialState:
-    ((hostId: string, state: HostCredentialState) => void) | null;
+    | ((hostId: string, state: HostCredentialState) => void)
+    | null;
   /**
    * Reports positive host-recovery evidence to the owning client - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
@@ -1328,6 +1357,16 @@ class StreamSession<
     }
     this.teardownSocket(1000, "reconnect-requested-by-consumer");
     this.onTransportDrop();
+  }
+
+  /**
+   * Whether this session is carrying traffic right now. `"open"` is the only
+   * status that qualifies: `"connecting"` has not arrived yet, `"reconnecting"`
+   * has lost the socket, and `"closed"` is over. A disposed session is never
+   * open, whatever status it last published.
+   */
+  isOpen(): boolean {
+    return !this.disposed && this.status === "open";
   }
 
   close(): void {
@@ -1658,7 +1697,10 @@ class StreamSession<
       this.onTransportDrop();
       return;
     }
-    const manifest = buildStreamManifest(this.config.registry);
+    const manifest = buildStreamManifest(
+      this.config.registry,
+      CLIENT_SERVED_STREAM_MAJORS,
+    );
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
@@ -1838,7 +1880,7 @@ class StreamSession<
     const theirManifest = ackParse.data.manifest;
     const myManifest = selectConnectionManifestForPeer(
       this.config.registry,
-      buildStreamManifest(this.config.registry),
+      buildStreamManifest(this.config.registry, CLIENT_SERVED_STREAM_MAJORS),
       theirManifest,
     );
     const compat = checkStreamMethodCompatibility(
@@ -2589,8 +2631,9 @@ interface PreparedStreamSubscribeRequest {
  * never heard of, even though the abstract compatibility check passed (this
  * is what broke `chat.subscribe@1.1` against host-v1.0.0 - the compat check
  * passed, but the client still declared `1.1`, which host-v1.0.0's registry
- * has no contract for). Cross-major skew never reaches here: streams have no
- * cross-major bridge, so `compat.ok` would already be `false`.
+ * has no contract for). Cross-major canonical skew never reaches here: the
+ * open-ack selection has already chosen the highest shared installed major
+ * before this request is prepared.
  */
 export function prepareStreamSubscribeRequest(
   registry: VersionedStreamRpcRegistry,

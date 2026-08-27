@@ -16,6 +16,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { Kbd } from "@/components/ui/kbd";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import type { WorktreeWorkspacesRefresh } from "@/hooks/worktree/use-worktree-workspaces-refresh";
@@ -524,7 +525,9 @@ function WorkspaceRefreshFooter(props: {
             />
           ) : null}
           Refresh
-          <Kbd className="ml-0.5 font-mono">R</Kbd>
+          <ShortcutHint>
+            <Kbd className="ml-0.5 font-mono">R</Kbd>
+          </ShortcutHint>
         </Button>
       </div>
     </div>

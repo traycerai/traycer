@@ -123,7 +123,8 @@ interface StartupConsumersOptions {
     params: GetTaskContextsRequest,
   ) => Promise<GetTaskContextsResponse> | GetTaskContextsResponse;
   readonly listHarnesses: () =>
-    Promise<ListHarnessesResponse> | ListHarnessesResponse;
+    | Promise<ListHarnessesResponse>
+    | ListHarnessesResponse;
   readonly onMethod: (method: string) => void;
 }
 

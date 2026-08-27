@@ -610,7 +610,8 @@ export function managedVersionsUnavailableMessage(
 }
 
 export type ProviderManagedVersionsUnavailableCause =
-  "host-unsupported" | ProviderManagedVersionsUnavailable["reason"];
+  | "host-unsupported"
+  | ProviderManagedVersionsUnavailable["reason"];
 
 /**
  * Why the managed install failed, for the CLI row's warning affordance.

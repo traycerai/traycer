@@ -14,7 +14,11 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
 import type { HostScopeStatus } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -22,10 +26,12 @@ import {
   act,
   cleanup,
   fireEvent,
+  queries,
   render,
   screen,
   waitFor,
   within,
+  type BoundFunctions,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -125,6 +131,14 @@ type RecolorProfileMutate = (
   options: MutationSuccessOptions,
 ) => void;
 
+// `providers.setEnabled@2.2`'s request shape - typing this mock's calls lets
+// tests read `.mock.calls[0]` without an unsafe `any` destructure.
+type SetEnabledVariables = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.setEnabled"
+>;
+type SetEnabledMutate = (variables: SetEnabledVariables) => void;
+
 const providerMocks = vi.hoisted(() => ({
   listResult: {
     data: { providers: [] as ProviderCliState[] },
@@ -132,12 +146,16 @@ const providerMocks = vi.hoisted(() => ({
     isError: false,
     isFetching: false,
     error: undefined as
-      HostRpcError | { message: string; code: string } | undefined,
+      | HostRpcError
+      | { message: string; code: string }
+      | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
-  setEnabledMutate: vi.fn(),
+  setEnabledMutate: vi.fn<SetEnabledMutate>(),
+  setProfileEnabledMutate: vi.fn(),
+  refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
   setTerminalAgentArgsMutate: vi.fn(),
@@ -152,7 +170,8 @@ const providerMocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
@@ -291,6 +310,28 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
     isPending: false,
   }),
 }));
+
+// The panel's profile controls use a host-scoped TanStack mutation in
+// production. This legacy panel harness intentionally has no QueryClient;
+// keep its provider-detail coverage focused on rendering and the existing
+// provider mutations while the dedicated hook suite covers cache behavior.
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: providerMocks.setProfileEnabledMutate,
+    isPending: false,
+  }),
+  useProviderProfileEnablementPending: () => () => false,
+}));
+
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      mutateAsync: providerMocks.refreshProfileStatusMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: () => ({
@@ -442,6 +483,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   // host, never a tab) - this harness has no real `<HostRuntimeProvider>`, so
   // stub it the same way every other provider hook here is stubbed.
   return { ...actual, useHostClient: () => null };
+});
+
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return { ...actual, useHostSupportsMethod: () => true };
 });
 
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
@@ -668,6 +717,89 @@ vi.mock("sonner", () => ({
 vi.mock("@/components/ui/dropdown-menu", async () => ({
   ...(await import("./dropdown-menu-passthrough-mock")),
 }));
+
+// Radix's Select needs a pointer-capable layout to open its listbox, which
+// jsdom does not provide. Mirrors the stand-in
+// `provider-model-provider-connect-dialog.test.tsx` uses: same element
+// structure, every option always rendered, `onValueChange` forwarded so a
+// test can pick an option by clicking it - plus `disabled` forwarding on both
+// `Select` and `SelectItem`, which that mock doesn't need but the enablement
+// floor here does (the "Off" item disables itself rather than vanishing).
+vi.mock("@/components/ui/select", async () => {
+  const { createContext, useContext } = await import("react");
+  const ValueChangeContext = createContext<(value: string) => void>(() => {});
+  // The currently-selected value, threaded down to `SelectItem` so it can
+  // report `data-state` the way real Radix does. Absent from the mock until
+  // the mobile section picker's "reopening marks the picked row as checked"
+  // test needed it - every other consumer just clicks an item and never reads
+  // this attribute back.
+  const SelectedValueContext = createContext<string | undefined>(undefined);
+  return {
+    Select: (props: {
+      readonly children: ReactNode;
+      readonly value?: string;
+      readonly onValueChange?: (value: string) => void;
+      readonly disabled?: boolean;
+    }) => (
+      <ValueChangeContext.Provider
+        value={
+          props.disabled === true
+            ? () => {}
+            : (props.onValueChange ?? (() => {}))
+        }
+      >
+        <SelectedValueContext.Provider value={props.value}>
+          <div>{props.children}</div>
+        </SelectedValueContext.Provider>
+      </ValueChangeContext.Provider>
+    ),
+    // `role="combobox"` and the forwarded `aria-label` mirror real Radix
+    // (`SelectPrimitive.Trigger` sets `role="combobox"`; the trigger's
+    // `aria-label` prop passes straight through). Without both, every
+    // `getByRole("combobox", { name: ... })` query this file already had
+    // before this mock existed - the mobile provider/section pickers - would
+    // find a plain unnamed `role="button"` element instead.
+    SelectTrigger: (props: {
+      readonly children: ReactNode;
+      readonly id?: string;
+      readonly "aria-label"?: string;
+    }) => (
+      <button
+        type="button"
+        role="combobox"
+        id={props.id}
+        aria-label={props["aria-label"]}
+        aria-expanded={false}
+        aria-controls="select-mock-content"
+      >
+        {props.children}
+      </button>
+    ),
+    SelectValue: () => null,
+    SelectContent: (props: { readonly children: ReactNode }) => (
+      <div>{props.children}</div>
+    ),
+    SelectItem: (props: {
+      readonly children: ReactNode;
+      readonly value: string;
+      readonly disabled?: boolean;
+    }) => {
+      const onValueChange = useContext(ValueChangeContext);
+      const selectedValue = useContext(SelectedValueContext);
+      return (
+        <button
+          type="button"
+          data-value={props.value}
+          data-state={props.value === selectedValue ? "checked" : "unchecked"}
+          disabled={props.disabled ?? false}
+          onClick={() => onValueChange(props.value)}
+        >
+          {props.children}
+        </button>
+      );
+    },
+  };
+});
 /**
  * The only thing the panel calls on a scope client, so the only thing a stub
  * has to be. Named rather than asserted: the real `HostClient` is far wider
@@ -720,10 +852,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { ProviderProfileReauthPanel } from "@/components/settings/panels/provider-profile-reauth-panel";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
-} from "@/components/settings/panels/use-provider-profile-login-flow";
+} from "@/lib/providers/provider-ambient-auth";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -915,12 +1048,22 @@ function profile(input: TestProfileInput): ProviderProfile {
   return profileWithAccent(input, null);
 }
 
+function legacyAwaitLoginProfile(
+  input: TestProfileInput,
+): Omit<ProviderProfile, "enabled"> {
+  const current = profile(input);
+  const { enabled: _enabled, ...legacy } = current;
+  void _enabled;
+  return legacy;
+}
+
 function profileWithAccent(
   input: TestProfileInput,
   accentColor: ProviderProfileAccentColor | null,
 ): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.label,
@@ -963,6 +1106,12 @@ function firstAwaitLoginCall(): readonly [
   const call = providerMocks.awaitLoginMutate.mock.calls.at(0);
   if (call === undefined) throw new Error("Expected await login call.");
   return call;
+}
+
+function firstSetEnabledCall(): SetEnabledVariables {
+  const call = providerMocks.setEnabledMutate.mock.calls.at(0);
+  if (call === undefined) throw new Error("Expected setEnabled call.");
+  return call[0];
 }
 
 function firstSubmitLoginCodeCall(): readonly [
@@ -1244,6 +1393,23 @@ function railProviderNames(): readonly string[] {
   return within(list)
     .getAllByRole("button")
     .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
+/**
+ * The rail row for a provider, scoped to the rail LIST like
+ * `railProviderNames` above - never bare `screen`. Below `md` the
+ * always-mounted `ProvidersMobileSelect` renders one item per provider under
+ * the SAME display name (jsdom applies no CSS, so `md:hidden` never actually
+ * hides it there), so an unscoped `getByRole("button", { name })` collides
+ * with that item the moment more than one provider is in the fixture.
+ * `hidden` is threaded through explicitly rather than defaulted, since the
+ * one caller behind a dialog's `hideOthers` needs it true and every other
+ * caller needs it false.
+ */
+function railProviderRow(name: string | RegExp, hidden: boolean): HTMLElement {
+  const nav = screen.getByRole("navigation", { name: "Providers", hidden });
+  const list = within(nav).getByRole("list", { name: "Providers", hidden });
+  return within(list).getByRole("button", { name, hidden });
 }
 
 describe("<ProvidersSettingsPanel />", () => {
@@ -1645,7 +1811,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
     // CLI candidates live on CLI & Args; Account / Profiles lead the tab order.
     selectTab("CLI & Args");
 
@@ -2078,10 +2244,10 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Configured, not verified")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByText("Could not check account status")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Qwen Code" }));
+    fireEvent.click(railProviderRow("Qwen Code", false));
     expect(screen.getByText("Checking account")).toBeDefined();
   });
 
@@ -2127,7 +2293,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /Traycer/i }));
+    fireEvent.click(railProviderRow(/Traycer/i, false));
 
     expect(screen.queryByText(/Disabled by/)).toBeNull();
   });
@@ -2139,7 +2305,7 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /OpenRouter/i }));
+    fireEvent.click(railProviderRow(/OpenRouter/i, false));
     selectTab("CLI & Args");
 
     expect(screen.getByText("/usr/local/bin/opencode")).toBeDefined();
@@ -2315,10 +2481,118 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected provider switch to render as a button.");
     }
 
-    expect(switchElement.disabled).toBe(true);
+    expect(switchElement.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
+  });
+
+  // The three-way Auto/On/Off enablement control (and the `enablementMode`/
+  // `enablementSource` wire fields, the `mode` param on `providers.setEnabled`,
+  // and the `legacyEnabledForMode` helper that translated a chosen mode into
+  // the legacy `enabled` mirror) are gone. `providers-settings-panel.tsx`'s
+  // own comment on `ProviderEnablementControl` explains why: "nobody could
+  // tell what Auto meant from looking at it, and a provider it enabled could
+  // silently switch itself off a few seconds later when a background probe
+  // finally answered." Every provider row now renders the same binary switch
+  // unconditionally - there is no second rendering path left to contrast it
+  // against, so the "with enablementMode absent" framing this describe block
+  // used to test under is gone too. What survives is the one fact worth
+  // keeping on its own: the switch calls `setEnabled` with the plain
+  // {providerId, enabled, profileAction} shape and no `mode` field.
+  it("clicking the enable switch calls setEnabled with no mode field", () => {
+    // Two enabled providers so the one-enabled floor doesn't block the click.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const switchElement = screen.getByRole("switch");
+    fireEvent.click(switchElement);
+
+    expect(providerMocks.setEnabledMutate).toHaveBeenCalledTimes(1);
+    const variables = firstSetEnabledCall();
+    expect(variables).not.toHaveProperty("mode");
+    // Default-selected provider is whichever ORDERED_PROVIDERS ranks
+    // first (opencode, ahead of traycer) - the row identity isn't the
+    // point of this test, the absent `mode` is.
+    //
+    // `enabled: false` is asserted alongside it because the absence of `mode`
+    // is only half the contract: with the tri-state gone, this boolean is the
+    // ENTIRE payload's worth of intent, so a switch that sent the unflipped
+    // value would satisfy every other assertion here. The row starts enabled
+    // (see the two-provider fixture above), so the click must request off.
+    expect(variables).toMatchObject({
+      providerId: "opencode",
+      enabled: false,
+      profileAction: null,
+    });
+  });
+
+  // The detail pane's inert gate used to be keyed on the sticky MODE rather
+  // than the effective `enabled` boolean, specifically so an auto-undetected
+  // provider (`enabled: false` with no explicit off) stayed reachable for its
+  // sign-in CTA. That distinction is gone along with the mode: `enabled: false`
+  // now has exactly one cause - the user turned the provider off - so
+  // `providers-settings-panel.tsx` keys the gate on `!state.enabled` directly
+  // (see its comment on `detailPaneInert`), and there is no longer a case
+  // where a disabled provider's pane stays reachable.
+  describe("detail pane inert gate", () => {
+    function singleProvider(overrides: { readonly enabled: boolean }): void {
+      providerMocks.listResult.data = {
+        providers: [
+          {
+            ...providerState({
+              providerId: "traycer",
+              selected: { kind: "bundled" },
+              candidates: [],
+              envOverrides: [],
+              nativeCapabilities: FULL_TABS,
+            }),
+            enabled: overrides.enabled,
+          },
+        ],
+      };
+    }
+
+    it("is inert exactly when the provider is disabled", () => {
+      singleProvider({ enabled: false });
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container.querySelector("[inert]")).not.toBeNull();
+      unmount();
+
+      singleProvider({ enabled: true });
+      const { container: container2 } = render(
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>,
+      );
+      expect(container2.querySelector("[inert]")).toBeNull();
+    });
   });
 
   it("renders capability-driven tabs and hides unsupported ones", () => {
@@ -2358,7 +2632,7 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expectPinnedRailLayout();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
 
     expect(screen.queryByRole("tab", { name: "CLI & Args" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
@@ -2397,7 +2671,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("Env");
     expect(screen.getByDisplayValue("A")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
+    fireEvent.click(railProviderRow("Cursor", false));
     expect(screen.getByDisplayValue("B")).toBeDefined();
     expect(
       screen.getByRole("tab", { name: "Env" }).getAttribute("data-state"),
@@ -2443,7 +2717,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("Account");
     expect(field().value).toBe("sk-live-secret");
 
-    fireEvent.click(screen.getByRole("button", { name: "Devin" }));
+    fireEvent.click(railProviderRow("Devin", false));
     selectTab("Account");
     expect(field().value).toBe("");
   });
@@ -2477,7 +2751,7 @@ describe("<ProvidersSettingsPanel />", () => {
     selectTab("MCP");
     expect(screen.getByTestId("provider-mcp-tab")).toBeDefined();
 
-    fireEvent.click(screen.getByRole("button", { name: "Amp" }));
+    fireEvent.click(railProviderRow("Amp", false));
     expect(screen.queryByRole("tab", { name: "MCP" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByText("Environment variables")).toBeDefined();
@@ -2942,6 +3216,72 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows a copyable CLI command for a managed profile", () => {
+    const command =
+      "CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/profiles/ambient' codex";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            {
+              ...profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              launchCommand: { command, shell: "posix" },
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByText("Open from terminal")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Run this command on this host to open Codex with this profile.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByLabelText("Codex profile launch command").textContent,
+    ).toBe(command);
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Copy Codex profile launch command",
+      }),
+    ).toBeDefined();
+  });
+
   it("resets the edit draft when reopening the same or a different profile", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const workColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
@@ -3093,6 +3433,10 @@ describe("<ProvidersSettingsPanel />", () => {
           onDismissFailedAttempt={vi.fn()}
           selectedProfileId={null}
           onSelectedProfileIdChange={vi.fn()}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={vi.fn()}
         />
       </TooltipProvider>
     );
@@ -3305,6 +3649,65 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
     ).toHaveLength(1);
+  });
+
+  it("selects a disabled managed profile for Settings management", () => {
+    const disabledProfile = {
+      ...profile({
+        profileId: "managed-disabled",
+        kind: "managed",
+        label: "Disabled profile",
+        email: "disabled@example.test",
+        tier: "Pro",
+        authStatus: "authenticated",
+        duplicateOfProfileId: null,
+        ambientDriftNotice: null,
+      }),
+      enabled: false,
+    };
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            disabledProfile,
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Disabled profile, Disabled",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Disabled profile",
+    );
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -4043,6 +4446,73 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Signed in as")).toBeDefined();
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes an omitted enabled field on the Settings awaitLogin flow row", async () => {
+    const returnedProfiles: ProviderProfile[] = [];
+    const entryProfile = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      tier: "Pro",
+      authStatus: "unauthenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProviderProfileReauthPanel
+          state={codePasteReauthProviderState()}
+          profile={entryProfile}
+          onSameAccountReconnected={(returnedProfile) =>
+            returnedProfiles.push(returnedProfile)
+          }
+          onCancel={vi.fn()}
+          onDone={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        existingProfileId: null,
+        state: {
+          profiles: [
+            legacyAwaitLoginProfile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(returnedProfiles).toHaveLength(1);
+    });
+    expect(returnedProfiles[0]?.enabled).toBe(true);
   });
 
   it("re-polls awaitLogin instead of failing when the ambient row is still authPending after the login completes (terminal-account switch)", async () => {
@@ -5217,9 +5687,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // dialog aria-hides the tab rail; openProfilesTab is unnecessary and would
     // fail getByRole("tab") without { hidden: true }.
     expect(
-      screen
-        .getByRole("button", { name: "Claude Code", hidden: true })
-        .getAttribute("data-active"),
+      railProviderRow("Claude Code", true).getAttribute("data-active"),
     ).toBe("true");
     expect(
       screen
@@ -6665,6 +7133,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profiles: [
             {
               profileId: "managed-1",
+              enabled: true,
               kind: "managed",
               authType: "oauth",
               label: "Work",
@@ -6966,5 +7435,369 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
     expect(providerMocks.removeProfileMutate).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Mobile section picker: below `md`, `ProviderDetail` swaps the desktop tab rail
+// for a dropdown (see `provider-section-select.tsx`). A separate, top-level
+// `describe` rather than nesting inside the suite above - it needs its own
+// narrow-viewport `beforeEach`/`afterEach` (the outer suite's tests assume the
+// default 1024px width), and keeping the override scoped to these tests is what
+// stops it leaking into every test above or below.
+// -----------------------------------------------------------------------------
+
+// Radix Select opens from a click on the trigger, and the trigger is named by
+// its `aria-label` - which is what tells it apart from the PROVIDER select one
+// row above it. (The three-way Auto/On/Off enablement control used to render
+// a THIRD combobox, labelled "Availability", when a provider's `enablementMode`
+// was set - that control is gone, so querying by name is now belt-and-braces
+// rather than load-bearing, and is kept for that reason.)
+function openSectionPicker(): void {
+  fireEvent.click(screen.getByRole("combobox", { name: "Section" }));
+}
+
+/**
+ * The section picker's own rendered items, scoped to ITS `Select` root - not
+ * `screen`, which also holds the always-mounted `ProvidersMobileSelect` one
+ * row above it (same collision `railProviderRow` exists for). The mock
+ * renders a `Select`'s trigger and content as siblings under one wrapping
+ * element (see the `@/components/ui/select` mock), and the trigger is
+ * `role="combobox"` rather than `"button"`, so scoping to that sibling group
+ * and querying `role="button"` reaches exactly the section rows and nothing
+ * else on the page.
+ */
+function sectionPicker(): BoundFunctions<typeof queries> {
+  const trigger = screen.getByRole("combobox", { name: "Section" });
+  const root = trigger.parentElement;
+  if (root === null) {
+    throw new Error("Section picker trigger has no parent element");
+  }
+  return within(root);
+}
+
+// `FULL_TABS` (general/env/usage/mcp/plugins/skills) has no `account` or
+// `modelProviders` entry, so it cannot exercise every section row. This adds
+// both, on top of the same `mcp`/`plugins`/`skills` capability blocks.
+const PICKER_EIGHT_TABS: ProviderNativeCapabilities = {
+  ...FULL_TABS,
+  supportedTabs: [
+    "general",
+    "usage",
+    "env",
+    "modelProviders",
+    "mcp",
+    "plugins",
+    "skills",
+  ],
+};
+
+// Advertises only `general` and `mcp`; combined with `apiKey.supported` below
+// this yields exactly three tabs (account, general, mcp) via
+// `supportedTabsFor` - see `provider-settings-tabs.ts`.
+const PICKER_THREE_TABS: ProviderNativeCapabilities = {
+  supportedTabs: ["general", "mcp"],
+  mcp: SAMPLE_MCP,
+  plugins: null,
+  skills: null,
+  modelProviders: null,
+};
+
+function pickerProviderState(input: {
+  readonly providerId: ProviderCliState["providerId"];
+  readonly nativeCapabilities: ProviderNativeCapabilities;
+}): ProviderCliState {
+  return providerState({
+    providerId: input.providerId,
+    selected: { kind: "bundled" },
+    candidates: [],
+    envOverrides: [],
+    nativeCapabilities: input.nativeCapabilities,
+    // These fixtures need `account` among the sections, and `supportedTabsFor`
+    // derives that one from the API key rather than from the advertisement.
+    apiKey: { supported: true, configured: false, source: null },
+  });
+}
+
+describe("<ProvidersSettingsPanel /> mobile section picker", () => {
+  beforeEach(() => {
+    // `useIsMobileViewport` reads `window.innerWidth` directly (not
+    // `matchMedia().matches`, which the global test shim always reports as
+    // `false`), so setting it before render is enough to force the phone
+    // presentation.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 400,
+    });
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
+    hostScopeMocks.setHostId.mockClear();
+    hostScopeMocks.hostId = "host-a";
+    hostScopeMocks.host = undefined;
+    hostScopeMocks.status = undefined;
+    hostScopeMocks.client = null;
+    // Default fixture for the "entering a provider" tests below: a single
+    // provider advertising every hub section.
+    providerMocks.listResult.data = {
+      providers: [
+        pickerProviderState({
+          providerId: "claude-code",
+          nativeCapabilities: PICKER_EIGHT_TABS,
+        }),
+      ],
+    };
+    providerMocks.listResult.isError = false;
+    providerMocks.listResult.error = undefined;
+  });
+
+  afterEach(() => {
+    cleanup();
+    // Restore before the next file's tests (or the suite above, if test order
+    // ever changes) see the default desktop width again.
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+    useProvidersFocusStore.setState({
+      focusHarnessId: null,
+      focusHostId: null,
+      focusTargetHostId: null,
+      focusProfileId: null,
+      startSignIn: false,
+      focusTab: null,
+    });
+  });
+
+  it("offers every supported section as a dropdown row, in the desktop order", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The card grid this replaced was a `TabsPrimitive.List` of tab triggers,
+    // and it was the whole of the phone rail. Nothing renders one now.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+
+    openSectionPicker();
+
+    // Same list and same labels the desktop rail draws, in `PROVIDER_TAB_ORDER`
+    // - the point of the swap is that only the CONTAINER differs. Compared as
+    // one ordered array rather than eight presence checks, since the order is
+    // half of what is being asserted.
+    expect(
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual([
+      "Account",
+      "Profiles & Limits",
+      "CLI & Args",
+      "Env",
+      "Model Providers",
+      "MCP",
+      "Plugins",
+      "Skills",
+    ]);
+  });
+
+  it("shows the picked section's body without a second gesture", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
+
+    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByRole("tabpanel")).toBeDefined();
+
+    // The dropdown holds the selection it was given: reopening it marks Env as
+    // the checked row. Asserted through `data-state` rather than
+    // `aria-selected`, which Radix only sets on the FOCUSED item.
+    openSectionPicker();
+    expect(
+      sectionPicker()
+        .getByRole("button", { name: "Env" })
+        .getAttribute("data-state"),
+    ).toBe("checked");
+  });
+
+  it("keeps every inactive section pane hidden", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Env" }));
+
+    // The dead-space regression this pins, now owned entirely by Radix. It
+    // mounts EVERY pane's div - active or not - and hides the inactive ones
+    // through a computed `hidden` that caller props spread over, so a phone arm
+    // that passes `hidden` with `false` or `undefined` (rather than omitting
+    // the key) un-hides all seven empty panes and their stacked vertical
+    // paddings render as a blank band above or below the active body.
+    expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
+    const mounted = screen.getAllByRole("tabpanel", { hidden: true });
+    expect(mounted).toHaveLength(8);
+    expect(mounted.filter((pane) => pane.hasAttribute("hidden"))).toHaveLength(
+      7,
+    );
+  });
+
+  it("names each section pane, since a phone renders no tab to name it after", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Radix points a pane's `aria-labelledby` at the trigger that selects it.
+    // The dropdown replaces the whole `TabsList`, so that id names an element
+    // that is not rendered - the phone arm labels the pane by its section
+    // instead, and clears the dangling reference.
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.getAttribute("aria-labelledby")).toBeNull();
+    expect(panel.getAttribute("aria-label")).toBe("Account");
+  });
+
+  it("opens a deep link straight on the requested tab", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "opencode",
+          selected: { kind: "bundled" },
+          candidates: OPENCODE_CANDIDATES,
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "traycer",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+        providerState({
+          providerId: "openrouter",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    useProvidersFocusStore.setState({
+      focusHarnessId: "opencode",
+      focusTab: "env",
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The deep link's section is the one on screen, and it is READABLE on
+    // arrival rather than merely present in the DOM - a phone spends no gesture
+    // on a chooser for a question the caller already answered.
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.getByText("Environment variables")).toBeDefined();
+    expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe("Env");
+  });
+
+  it("renders exactly a 3-section provider's sections, no others", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        pickerProviderState({
+          providerId: "amp",
+          nativeCapabilities: PICKER_THREE_TABS,
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openSectionPicker();
+
+    expect(
+      sectionPicker()
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Account", "CLI & Args", "MCP"]);
+  });
+
+  it("keeps the same tabpanel element mounted when the active section is re-picked", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const panel = screen.getByRole("tabpanel");
+
+    // Re-picking the section that is already active is a no-op selection, not
+    // a remount: Radix only calls `onValueChange` when the value actually
+    // changes, so the body keeps its queries, scroll position and half-typed
+    // fields.
+    openSectionPicker();
+    fireEvent.click(sectionPicker().getByRole("button", { name: "Account" }));
+
+    expect(screen.getByRole("tabpanel")).toBe(panel);
+  });
+
+  it("does not make the section pane a scroll box on a phone", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // Checked as exact class-LIST membership rather than a substring: the
+    // `md:`-prefixed class contains the unprefixed one as a substring
+    // (`md:overflow-y-auto` contains `overflow-y-auto`), so a substring check
+    // cannot tell "scrolls at every width" from "scrolls from md up" apart -
+    // and telling those two apart is the entire point of this assertion.
+    // jsdom applies no CSS and computes no layout, so the class list is the
+    // only observable this test has for which breakpoint a scroll declaration
+    // lives under.
+    const panel = screen.getByRole("tabpanel");
+    const classes = panel.className.split(" ");
+    expect(classes).not.toContain("overflow-y-auto");
+    expect(classes).not.toContain("min-h-0");
+    expect(classes).toContain("md:overflow-y-auto");
+    expect(classes).toContain("md:min-h-0");
+  });
+
+  it("drops the panel blurb on a phone so the sync line shares the heading row", () => {
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    // The blurb's absence is what keeps the global status control on the
+    // title's own line: the shell header is a wrapping row of
+    // [title + description] and [action], and the description's max-content
+    // width alone exceeds a phone-width row, which pushes the action onto a
+    // row of its own.
+    expect(screen.queryByText(/Choose the CLI binary/)).toBeNull();
+    expect(screen.getByTestId("providers-global-status")).toBeDefined();
   });
 });

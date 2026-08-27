@@ -41,6 +41,7 @@ import { useCompactRelativeTime } from "@/lib/relative-time";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { TerminalAgentProgressIcon } from "@/components/chat/terminal-agent-progress-icon";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
@@ -121,7 +122,6 @@ import {
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
   useAncestorIds,
-  useEpicActiveAgentIds,
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
@@ -229,6 +229,7 @@ import {
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { ChatSearchHeaderInput } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-search";
@@ -255,10 +256,7 @@ import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversatio
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
-import {
-  NotificationIndicatorIcon,
-  type IndicatorRunningKind,
-} from "@/components/notifications/notification-indicator-icon";
+import { type IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -1422,10 +1420,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = anyMutationPending([
-    renameChat.isPending,
-    renameTerminalAgent.isPending,
-  ]);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = anyMutationPending([
@@ -1591,7 +1585,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1601,26 +1594,68 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
+    // Settle the editor on COMMIT, not on the ack — same contract as the
+    // artifact tree and as `useInlineRename`, which both tab strips rename
+    // through. The overlay below is the feedback; a failure toasts and rolls
+    // back. This also closes a real hole in the arms that follow: the
+    // no-RPC-arm `else` retired the stamp and left the input open forever,
+    // because the only `setIsRenaming(false)` lived in the success callback.
+    setIsRenaming(false);
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
+    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
+    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
+    // so the overlay path would only ever roll back.
+    if (artifactType === "terminal-agent") {
+      const agents = epicHandle.store.getState().tuiAgents.byId;
+      if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+          renameArtifactInTab(tabId, nodeId, trimmed);
+        }
+        return;
+      }
+    }
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do. That write no-opped for every registry-backed row — which
+    // post chats-off-YJS is most of this tree — so these renames had no local
+    // feedback at all. Rationale and the promise-carried retire contract live
+    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    const landed = (): void => {
+      retire("landed");
+      // The tab snapshot only on settlement - it is a persisted fallback with
+      // no rollback path, so a speculative write would preserve a rejected
+      // title across restarts - and only while this is still the LATEST
+      // stamped rename for the node: settles are unordered, and an older ack
+      // landing last must not overwrite the newer snapshot. See
+      // `use-rename-canvas-tab.ts`.
+      if (
+        requestId === null ||
+        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+      ) {
+        renameArtifactInTab(tabId, nodeId, trimmed);
+      }
+    };
+    const failed = (): void => {
+      retire("failed");
+    };
     if (artifactType === "chat") {
-      renameChat.mutate(
-        { epicId, chatId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameChat
+        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+        .then(landed, failed);
     } else if (artifactType === "terminal-agent") {
-      renameTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameTerminalAgent
+        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+        .then(landed, failed);
+    } else {
+      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
+      // would never land; drop it outright.
+      retire("failed");
     }
   }, [
     artifactType,
@@ -1631,14 +1666,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameArtifactInTab,
     renameChat,
     renameTerminalAgent,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -1647,7 +1680,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1730,7 +1763,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1778,7 +1810,6 @@ interface ChatNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1880,7 +1911,6 @@ function ChatNodeShellBody(
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1969,7 +1999,6 @@ function ChatNodeShellBody(
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             isArchived={archiveRow.isArchived}
@@ -2285,7 +2314,7 @@ function ChatRowOwnLeadingIcon(props: {
   }
   if (props.artifactType === "terminal-agent") {
     return (
-      <TerminalAgentProgressIcon
+      <SidebarTerminalAgentProgressIcon
         epicId={props.epicId}
         nodeId={props.nodeId}
         ownerHostId={props.ownerHostId}
@@ -2296,34 +2325,21 @@ function ChatRowOwnLeadingIcon(props: {
 }
 
 /**
- * Terminal-agent (TUI) sidebar icon. Routed through the shared
- * `NotificationIndicatorIcon` exactly like the chat row and the canvas TUI tab,
- * so notification status (failure / unread-done) outranks live activity and the
- * harness brand mark holds the idle slot. A TUI agent's `agent.stopped` rows are
- * chat-scoped to its agent id, so it carries indicator state of its own; there
- * is still no renderer run-status to smooth against and no waiting-for-approval
- * state to style, so epic-wide awareness remains the sole RUN authority.
- *
- * The awareness TIER splits that running arm in two, exactly as the chat icon
- * and the descendant rollup already do. Without it a TUI agent kept non-idle by
- * a scheduled wakeup wore the busy spinner, and - worse - disagreed with its own
- * parent, whose collapsed rollup rendered the calm background glyph for the same
- * agent. The trailing status chip used to carry this split; it went away with
- * the row redesign, and the split has to land somewhere.
+ * Terminal-agent (TUI) sidebar icon: the sidebar's idle glyph (harness brand
+ * mark, generic bot as fallback) over the shared
+ * {@link TerminalAgentProgressIcon} status mapping, which is what makes
+ * notification status outrank live activity and splits the running arm into
+ * turn vs background. Only the idle glyph and the icon-color display are the
+ * sidebar's own; every other surface listing agents renders a different idle
+ * glyph over that same mapping rather than re-deriving one.
  */
-function TerminalAgentProgressIcon(props: {
+function SidebarTerminalAgentProgressIcon(props: {
   readonly epicId: string;
   readonly nodeId: string;
   readonly ownerHostId: string | null;
 }) {
-  const isActive = useEpicActiveAgentIds().has(props.nodeId);
-  const tier = useEpicAgentActivityTiers().get(props.nodeId);
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   const icon = useNodeIconDisplay("terminal-agent");
-  const indicatorState = useSurfaceNotificationIndicatorState(
-    { epicId: props.epicId, chatId: props.nodeId },
-    props.ownerHostId,
-  );
   // The underlying harness's brand mark (Claude, Codex, …) so the row reads
   // as the tool driving the agent. Brand marks keep their own colors and
   // intentionally don't follow the per-type icon-color customization; the
@@ -2335,17 +2351,14 @@ function TerminalAgentProgressIcon(props: {
       <StaticSidebarNodeIcon artifactType="terminal-agent" />
     );
   return (
-    <NotificationIndicatorIcon
-      state={indicatorState}
-      running={isActive ? (tier ?? "turn") : false}
-      subjectId={props.nodeId}
-      testIdPrefix="terminal-agent-sidebar"
+    <TerminalAgentProgressIcon
+      epicId={props.epicId}
+      nodeId={props.nodeId}
+      originHostId={props.ownerHostId}
       className={icon.className}
       style={icon.style}
-      runningTitle="Agent in progress"
-      defaultIcon={idleIcon}
-      statusPresentation="message"
-      agentSurface="tui"
+      testIdPrefix="terminal-agent-sidebar"
+      idleIcon={idleIcon}
     />
   );
 }
@@ -2451,7 +2464,6 @@ interface ChatRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly isArchived: boolean;
@@ -2468,7 +2480,6 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
   } = props;
@@ -2507,18 +2518,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
             }}
             onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={renamePending}
             className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
             aria-label={`Rename ${nodeName}`}
             data-testid={`epic-sidebar-rename-input-${nodeId}`}
           />
-          {renamePending ? (
-            <AgentSpinningDots
-              className="shrink-0 text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
         </div>
       </div>
     </div>
@@ -2719,6 +2722,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           },
     [epicId, nodeId, sourceHostId, viewTabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -2726,7 +2730,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: selectionMode || dragData === null,
+    disabled: dragDisabled || selectionMode || dragData === null,
     data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(

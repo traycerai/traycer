@@ -18,6 +18,7 @@ import type {
 } from "electron-updater/out/types";
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import type { LinuxPackageType } from "./linux-update-guidance";
+import { isCanonicalReleaseCandidate } from "@traycer-clients/shared/host-version/release-line";
 
 // electron-updater's HTTP executor reads a `redirect` field the node `http`
 // `RequestOptions` type doesn't declare; model that augmentation locally rather
@@ -119,7 +120,15 @@ export function projectDesktopRelease(
     return [];
   }
   const version = match[1];
-  const isReleaseCandidate = version.includes("-rc.");
+  // The same canonical predicate the channel model derives implicit RC
+  // following from, rather than a local substring test: a tag this projection
+  // accepts as an RC is one the selector may later have to place on a release
+  // line, and two definitions of "is this an RC" is how the two would drift.
+  // EQUIVALENT, not a behavior change - the tag regex above already admits only
+  // `X.Y.Z` and `X.Y.Z-rc.N` with strict SemVer numerics, so both spellings
+  // accept exactly the same set here. The point is that there is now one
+  // definition rather than two.
+  const isReleaseCandidate = isCanonicalReleaseCandidate(version);
   // Reject inconsistent metadata rather than trusting the tag: a stable tag
   // flagged `prerelease`, or an rc tag flagged stable, is a publishing mistake
   // that must not silently ship.
@@ -157,7 +166,8 @@ export function isPlatformCompatibleRelease(
 // drawn from. `reason` is a log-only diagnostic; it is never surfaced to the
 // user (the updater sanitizes all update failures).
 export type DesktopReleaseManifestValidation =
-  { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
 
 // Deep, network-informed compatibility check run during discovery: the cheap
 // `isPlatformCompatibleRelease` gate only proves the manifest/installer *assets

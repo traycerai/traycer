@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import { useRegisterTileMinimap } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
 import { MinimapListCard } from "@/components/minimap/minimap-list-card";
 import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
 import { MinimapRailTick } from "@/components/minimap/minimap-rail-tick";
@@ -19,7 +20,7 @@ import {
   resolveMinimapWindow,
 } from "@/components/minimap/minimap-track-geometry";
 import { cn } from "@/lib/utils";
-import type { MinimapSide } from "@/stores/settings/settings-store";
+import type { MinimapPlacement } from "@/stores/settings/settings-store";
 import { useArtifactHeadingMetrics } from "./use-artifact-heading-metrics";
 
 const ARTIFACT_HEADING_TRACK_MAX_HEIGHT_CSS = "max(1px, calc(100cqh - 2rem))";
@@ -28,7 +29,8 @@ export interface ArtifactHeadingMinimapProps {
   readonly editor: Editor;
   readonly scroller: HTMLElement | null;
   readonly refreshRef: RefObject<() => void>;
-  readonly side: MinimapSide;
+  /** `hide` keeps the outline published for the tile bar, rail and all. */
+  readonly side: MinimapPlacement;
 }
 
 function clampIndex(index: number, itemCount: number): number {
@@ -37,26 +39,32 @@ function clampIndex(index: number, itemCount: number): number {
 
 /** A document outline with the same open, select, and keyboard model as chat. */
 export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
+  const { editor, refreshRef, scroller, side } = props;
   const {
     outline,
     activeIndex,
     hitStripWidth,
     maxVisibleItems,
     scrollToIndex,
-  } = useArtifactHeadingMetrics({
-    editor: props.editor,
-    scroller: props.scroller,
-    refreshRef: props.refreshRef,
-    side: props.side,
-  });
+  } = useArtifactHeadingMetrics({ editor, refreshRef, scroller, side });
   const [open, setOpen] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
   const regionRef = useRef<HTMLDivElement | null>(null);
   const hitStripRef = useRef<HTMLButtonElement | null>(null);
   const visible = outline.length > 0;
+  const railHidden = side === "hide";
   const isInert = hitStripWidth <= 0;
   const currentIndex = clampIndex(activeIndex ?? 0, outline.length);
   const resolvedCursorIndex = clampIndex(cursorIndex, outline.length);
+
+  // Published even when the rail is hidden or inert: the phone tile bar's
+  // button is an explicit affordance and is the only way in on a touch device.
+  useRegisterTileMinimap({
+    title: "Table of contents",
+    items: outline,
+    currentIndex,
+    onSelect: scrollToIndex,
+  });
 
   useEffect(() => {
     const region = regionRef.current;
@@ -148,7 +156,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
     ],
   );
 
-  if (!visible || isInert) return null;
+  if (railHidden || !visible || isInert) return null;
 
   const window = resolveMinimapWindow({
     currentIndex,
@@ -164,14 +172,14 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
   return (
     <div
       className="pointer-events-none absolute inset-0 z-30 hidden [container-type:size] [@media(pointer:fine)]:block"
-      data-side={props.side}
+      data-side={side}
       data-testid="artifact-heading-minimap"
     >
       <div
         aria-label="Document outline controls"
         className={cn(
           "pointer-events-auto absolute top-1/2 -translate-y-1/2 select-none",
-          props.side === "left" ? "left-3" : "right-3",
+          side === "left" ? "left-3" : "right-3",
         )}
         {...paneActivationDeferProps}
         ref={regionRef}
@@ -213,7 +221,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
                 key={entry.key}
                 level={entry.level}
                 open={open}
-                side={props.side}
+                side={side}
                 top={resolveMinimapTrackTopStyle(
                   localIndex,
                   railItems.length,
@@ -227,7 +235,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
           <div
             className={cn(
               "absolute top-1/2 w-[min(20rem,calc(100cqw-1.5rem))] -translate-y-1/2",
-              props.side === "left" ? "left-0" : "right-0",
+              side === "left" ? "left-0" : "right-0",
             )}
             data-testid="artifact-heading-minimap-card"
           >
@@ -237,7 +245,7 @@ export function ArtifactHeadingMinimap(props: ArtifactHeadingMinimapProps) {
               items={outline}
               onCursorIndexChange={setCursorIndex}
               onSelect={select}
-              side={props.side}
+              side={side}
               title="Table of contents"
             />
           </div>

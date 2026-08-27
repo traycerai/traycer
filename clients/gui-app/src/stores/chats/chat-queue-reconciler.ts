@@ -1748,6 +1748,7 @@ export function addAcceptedAction(
         clientActionId: pending.clientActionId,
         action: pending.action,
         interviewBlockId: pending.interviewBlockId,
+        interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
         acceptedAt: now,
         restoreContent: pending.restoreContent,
@@ -1773,10 +1774,9 @@ export function addAcceptedAction(
  * recent entries. Returns the same object if no pruning is needed.
  *
  * An accepted-but-unresolved interview action (`interviewBlockId !== null`)
- * is a lifecycle lock, not generic action history: the UI busy-gate and the
- * duplicate-dispatch guard both read it via `existingInterviewActionId`, and
- * it must survive until the host's `interviewAnswered`/`interviewErrored`
- * frame authoritatively clears it (`withoutInterviewActionsForBlock`).
+ * or delivery retry (`interviewDeliveryRetry !== null`) is a lifecycle lock,
+ * not generic action history. Its duplicate-dispatch guard must survive until
+ * the corresponding authoritative interview delivery transition retires it.
  * Exempt it from the retention window and record cap below, or a
  * slow-to-resolve interview (or enough unrelated traffic to evict it from the
  * cap) would silently un-gate a duplicate submission before the host
@@ -1791,9 +1791,15 @@ export function pruneAcceptedActions(
 
   const all = Object.values(acceptedActions);
   const interviewLocked = all.filter(
-    (action) => action.interviewBlockId !== null,
+    (action) =>
+      action.interviewBlockId !== null ||
+      action.interviewDeliveryRetry !== null,
   );
-  const prunable = all.filter((action) => action.interviewBlockId === null);
+  const prunable = all.filter(
+    (action) =>
+      action.interviewBlockId === null &&
+      action.interviewDeliveryRetry === null,
+  );
 
   const unexpired = prunable.filter(
     (action) => now - action.acceptedAt <= RETENTION_MS,

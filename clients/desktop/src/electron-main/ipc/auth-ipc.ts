@@ -128,6 +128,16 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.authTokenStoreDelete, () => {
     return bridge.authTokenStore.delete();
   });
+  // One IPC call for the whole conditional delete: the comparison and the
+  // delete run inside a single locked FileTokenStore mutation, never composed
+  // from separate get/delete invokes in a renderer.
+  bridge.handleInvoke(
+    RunnerHostInvoke.authTokenStoreDeleteIfToken,
+    (_event, expectedToken: unknown) => {
+      assertString(expectedToken, "authTokenStoreDeleteIfToken");
+      return bridge.authTokenStore.deleteIfToken(expectedToken);
+    },
+  );
   // §6 one-time legacy→file migration. The renderer decrypts its legacy
   // localStorage token pair and hands it over; main single-flights the reconcile
   // across windows. Same fail-closed `{ token, refreshToken }` parse as signIn.

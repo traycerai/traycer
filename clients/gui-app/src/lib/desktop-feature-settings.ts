@@ -11,7 +11,8 @@ export interface FeatureSettingsBridge {
 
 interface RunnerHostWindowShape {
   readonly platform:
-    { readonly featureSettings: FeatureSettingsBridge | undefined } | undefined;
+    | { readonly featureSettings: FeatureSettingsBridge | undefined }
+    | undefined;
 }
 
 export function getFeatureSettingsBridge(): FeatureSettingsBridge | null {

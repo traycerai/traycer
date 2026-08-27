@@ -117,7 +117,9 @@ export type HostLoginItemStatus =
  * rationale in `registerHostLoginItemUnserialized`).
  */
 export type RegisterHostLoginItemResult =
-  HostLoginItemStatus | "removed-by-user" | "deferred-busy";
+  | HostLoginItemStatus
+  | "removed-by-user"
+  | "deferred-busy";
 
 type LoginItemRegistrationSnapshot = {
   readonly primary: HostLoginItemStatus | null;

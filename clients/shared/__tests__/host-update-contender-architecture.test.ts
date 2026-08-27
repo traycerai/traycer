@@ -677,7 +677,11 @@ function facadeInternalVerifierViolations(
     controls: ts.Node[];
     registration: boolean;
     kind:
-      "facade" | "filesystem" | "child-process" | "registration" | "controller";
+      | "facade"
+      | "filesystem"
+      | "child-process"
+      | "registration"
+      | "controller";
   }> = [];
   const containsExit = (node: ts.Node): boolean => {
     let found = false;
@@ -846,12 +850,14 @@ function facadeInternalVerifierViolations(
       return false;
     const owner = ownerFor(node);
     if (owner === undefined) return false;
-    if (!(
-      ts.isFunctionDeclaration(owner) ||
-      ts.isMethodDeclaration(owner) ||
-      ts.isArrowFunction(owner) ||
-      ts.isFunctionExpression(owner)
-    ))
+    if (
+      !(
+        ts.isFunctionDeclaration(owner) ||
+        ts.isMethodDeclaration(owner) ||
+        ts.isArrowFunction(owner) ||
+        ts.isFunctionExpression(owner)
+      )
+    )
       return false;
     const propertyBase = node.expression.expression;
     const parameter = owner.parameters.find(
@@ -2930,7 +2936,9 @@ function mayContainDynamicImport(source: string): boolean {
  * to treat the wrapper's own declared name as equally bound.
  */
 type WrapperFunctionLike =
-  ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
+  | ts.ArrowFunction
+  | ts.FunctionExpression
+  | ts.FunctionDeclaration;
 
 function unwrapParenthesized(expr: ts.Expression): ts.Expression {
   return ts.isParenthesizedExpression(expr)

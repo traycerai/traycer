@@ -32,6 +32,7 @@ export {
   type RemoteSessionIdentity,
   remoteSessionCacheKey,
   retireAllRemoteSessions,
+  wakeHeldRemoteSessions,
   subscribeRemoteSessionReadiness,
   resetRemoteSessionReadinessListenersForTest,
 } from "./active-remote-sessions";

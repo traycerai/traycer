@@ -1086,6 +1086,9 @@ export function NewConversationModalBody(props: {
       topBanner={
         <ComposerHostNotice notice={hostNotice} onDismiss={dismissHostNotice} />
       }
+      // The modal is desktop-shaped and never collapses; the phone-width
+      // toolbar is the landing composer's alone for now.
+      toolbarLayout="full"
       stashControl={
         <PromptStashControl
           controller={promptStash}

@@ -14,6 +14,7 @@ import {
   recordTuiAgentActivityRequestSchemaV11,
   recordTuiAgentActivityResponseSchema,
   tuiAgentPromptSubmittedRequestSchema,
+  tuiAgentPromptSubmittedRequestSchemaV11,
   tuiAgentPromptSubmittedResponseSchema,
   tuiAgentTurnEndedRequestSchema,
   tuiAgentTurnEndedResponseSchema,
@@ -150,4 +151,28 @@ export const agentTuiPromptSubmittedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: tuiAgentPromptSubmittedRequestSchema,
   responseSchema: tuiAgentPromptSubmittedResponseSchema,
+});
+
+export const agentTuiPromptSubmittedV11 = defineRpcContract({
+  method: "agent.tui.promptSubmitted",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: tuiAgentPromptSubmittedRequestSchemaV11,
+  responseSchema: tuiAgentPromptSubmittedResponseSchema,
+});
+
+// A v1.0 request carries no workspace intent, so the upgrade fills `null`
+// (binding-as-stored). The response is byte-identical. A v1.1 peer projects
+// onto a v1.0 host by re-parsing through the (non-strict) v1.0 request
+// schema, which strips `worktreeIntent` on the wire.
+export const agentTuiPromptSubmittedUpgradeV10ToV11 = defineUpgradePath<
+  typeof agentTuiPromptSubmittedV10,
+  typeof agentTuiPromptSubmittedV11
+>({
+  from: agentTuiPromptSubmittedV10.schemaVersion,
+  to: agentTuiPromptSubmittedV11.schemaVersion,
+  upgradeRequest: (request) => ({
+    ...request,
+    worktreeIntent: null,
+  }),
+  upgradeResponse: (response) => response,
 });

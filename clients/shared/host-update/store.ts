@@ -224,7 +224,8 @@ const UNSUPPORTED_DIR_FSYNC_CODES: ReadonlySet<string> = new Set([
 type DirectorySyncStage = "open" | "sync";
 
 let directorySyncHook:
-  ((dir: string, stage: DirectorySyncStage) => Promise<void>) | null = null;
+  | ((dir: string, stage: DirectorySyncStage) => Promise<void>)
+  | null = null;
 
 export function __setDirectorySyncHookForTest(
   hook: ((dir: string, stage: DirectorySyncStage) => Promise<void>) | null,

@@ -34,13 +34,16 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
       data-settings-panel-shell
       className={cn(
         "mx-auto w-full max-w-5xl",
-        compact ? "px-5 py-5" : "px-8 py-10",
+        // Phone gutters are tighter than the desktop panel's; the compact
+        // (modal) density has its own, narrower pair.
+        compact ? "px-5 py-5" : "px-4 py-6 sm:px-8 sm:py-10",
         fillHeight && "flex h-full flex-col",
       )}
     >
       <header
         className={cn(
-          "flex items-start justify-between gap-4",
+          // Wraps so a long title + trailing action don't overflow a phone.
+          "flex flex-wrap items-start justify-between gap-4",
           compact ? "mb-4" : "mb-8",
         )}
       >

@@ -30,6 +30,7 @@ function profile(
 ): ProviderProfile {
   return {
     profileId: "p",
+    enabled: true,
     kind: "managed",
     authType: "oauth",
     label: "P",
