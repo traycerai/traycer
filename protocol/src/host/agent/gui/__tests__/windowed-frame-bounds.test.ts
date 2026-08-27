@@ -333,12 +333,13 @@ describe("the bounded snapshot is actually bounded", () => {
     // Sized to land in the reserve: over `ceiling - overhead`, under `ceiling`.
     const insideTheReserve = {
       padding: "x".repeat(
-        WINDOWED_SNAPSHOT_MAX_BYTES - WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES / 2,
+        WINDOWED_SNAPSHOT_MAX_BYTES -
+          WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES / 2,
       ),
     };
-    expect(
-      utf8ByteLength(JSON.stringify(insideTheReserve)),
-    ).toBeLessThan(WINDOWED_SNAPSHOT_MAX_BYTES);
+    expect(utf8ByteLength(JSON.stringify(insideTheReserve))).toBeLessThan(
+      WINDOWED_SNAPSHOT_MAX_BYTES,
+    );
     expect(
       windowedSnapshotFitsFrame(insideTheReserve, WINDOWED_SNAPSHOT_MAX_BYTES),
     ).toBe(false);
@@ -349,11 +350,12 @@ describe("the bounded snapshot is actually bounded", () => {
     // guard that simply rejects everything near the ceiling.
     const clear = {
       padding: "x".repeat(
-        WINDOWED_SNAPSHOT_MAX_BYTES - WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES * 2,
+        WINDOWED_SNAPSHOT_MAX_BYTES -
+          WINDOWED_SNAPSHOT_FRAME_OVERHEAD_BYTES * 2,
       ),
     };
-    expect(
-      windowedSnapshotFitsFrame(clear, WINDOWED_SNAPSHOT_MAX_BYTES),
-    ).toBe(true);
+    expect(windowedSnapshotFitsFrame(clear, WINDOWED_SNAPSHOT_MAX_BYTES)).toBe(
+      true,
+    );
   });
 });
