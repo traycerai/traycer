@@ -121,6 +121,10 @@ import {
   useEpicSidebarExpansionStore,
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import {
   useAncestorIds,
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
@@ -728,6 +732,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // `role="tree"`).
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   const treeRegionRef = useRef<HTMLDivElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
   useEffect(() => {
     const region = treeRegionRef.current;
     if (region === null) return;
@@ -996,12 +1001,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
   // Filter- and search-only: see `combineSidebarVisibleIds`. Archive hiding must
   // never reach here. A search match nested under a collapsed parent forces that
   // parent open for the same reason a filter match does.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, narrowedVisibleIds),
-    [ancestorIdsOfActive, narrowedVisibleIds],
+    () =>
+      mergeForcedExpanded(
+        mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
+        narrowedVisibleIds,
+      ),
+    [ancestorIdsOfActive, ancestorIdsOfReveal, narrowedVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -1024,6 +1034,38 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction],
   );
+
+  useLayoutEffect(() => {
+    if (revealRequest === null) return;
+    const region = treeRegionRef.current;
+    if (region === null) return;
+    const row = Array.from(
+      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
+    if (row === undefined) {
+      // A projected node absent from the rendered tree is hidden by the
+      // current filter/archive view. Do not retain a stale request that would
+      // unexpectedly scroll when the user changes that view later.
+      if (Object.hasOwn(tree.nodeById, revealRequest.nodeId)) {
+        clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+      }
+      return;
+    }
+
+    for (const ancestorId of ancestorIdsOfReveal) {
+      expandAction(tabId, panelId, ancestorId);
+    }
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+  }, [
+    ancestorIdsOfReveal,
+    expandAction,
+    expandedIds,
+    panelId,
+    revealRequest,
+    tabId,
+    tree,
+  ]);
 
   const expansion = useMemo<ExpansionController>(
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
@@ -2459,6 +2501,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
   // nothing shifts horizontally or vertically between viewing and renaming.
   return (
     <div
+      data-sidebar-node-id={nodeId}
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
@@ -2743,6 +2786,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         htmlFor={selectionInputId}
         ref={dragRef}
         data-testid={`epic-sidebar-item-${nodeId}`}
+        data-sidebar-node-id={nodeId}
         data-artifact-type={artifactType}
         className={rowClassName}
         style={{
@@ -2816,6 +2860,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           : null,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
+      data-sidebar-node-id={nodeId}
       data-artifact-type={artifactType}
       className={rowClassName}
       style={{
