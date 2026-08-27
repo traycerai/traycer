@@ -50,9 +50,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  isArtifactFilterActive,
   useAcknowledgedRootCreatePending,
-  useArtifactFilter,
   useArtifactSort,
   useLocalRootCreatePending,
   type RootCreatePanelId,
@@ -141,8 +139,12 @@ import {
   collectVisibleSidebarTreeIds,
   useMaybeSidebarBulkSelection,
 } from "./epic-sidebar-selection";
+import {
+  ARTIFACT_FILTER_EMPTY_DESCRIPTION,
+  FILTERED_EMPTY_TITLE,
+  useArtifactFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import { useEpicStore } from "@/hooks/use-epic-store";
-import { useShallow } from "zustand/react/shallow";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -225,52 +227,27 @@ function usePanelRootIds(
 }
 
 /**
- * Visible-id set for an active artifact filter (status / kind / read), expanded
- * to include ancestors so a matched ticket nested under a spec stays reachable.
- * Status and read are evaluated only against artifacts that carry them; specs
- * and reviews (status `null`, never assignable) drop out whenever a status or
- * kind constraint excludes them. `null` when no filter is active.
+ * Visible-id set for an active artifact filter (status / kind / read): the
+ * filter's matches, expanded to include ancestors so a matched ticket nested
+ * under a spec stays reachable in the rendered tree. `null` when no filter is
+ * active.
+ *
+ * The two halves are separate because only the first is about the FILTER. The
+ * ancestor pass is what a tree owes its own render path - a flat surface
+ * filtering the same epic wants the matches and nothing else - so the match
+ * producer lives in `epic-sidebar-panel-filters` and is shared, while the
+ * expansion stays here with the tree that needs it.
  */
 function useArtifactVisibleIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useArtifactFilter(epicId);
-  const artifacts = useEpicStore((s) => s.artifacts);
+  const matchIds = useArtifactFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
-  const readState = useArtifactReadStateStore(
-    useShallow((s) => ({
-      seedAtByEpic: s.seedAtByEpic,
-      lastSeenByArtifact: s.lastSeenByArtifact,
-    })),
+  return useMemo(
+    () =>
+      matchIds === null
+        ? null
+        : collectWithAncestors([...matchIds], tree.nodeById),
+    [matchIds, tree],
   );
-  return useMemo(() => {
-    if (!isArtifactFilterActive(filter)) return null;
-    const statusSet = new Set<number>(filter.statuses);
-    const kindSet = new Set<string>(filter.kinds);
-    const matches: string[] = [];
-    for (const id of artifacts.allIds) {
-      if (!Object.hasOwn(artifacts.byId, id)) continue;
-      const artifact = artifacts.byId[id];
-      if (kindSet.size > 0 && !kindSet.has(artifact.kind)) continue;
-      if (
-        statusSet.size > 0 &&
-        (artifact.status === null || !statusSet.has(artifact.status))
-      ) {
-        continue;
-      }
-      if (filter.read !== "all") {
-        const unread = isArtifactUnread({
-          epicId,
-          artifactId: artifact.id,
-          updatedAt: artifact.updatedAt,
-          seedAtByEpic: readState.seedAtByEpic,
-          lastSeenByArtifact: readState.lastSeenByArtifact,
-        });
-        if (filter.read === "unread" && !unread) continue;
-        if (filter.read === "read" && unread) continue;
-      }
-      matches.push(artifact.id);
-    }
-    return collectWithAncestors(matches, tree.nodeById);
-  }, [filter, artifacts, tree, readState, epicId]);
 }
 
 /**
@@ -557,8 +534,8 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={FileText}
-        title="No matches for the current filters."
-        description="Status, Type, or Read state may be hiding artifacts."
+        title={FILTERED_EMPTY_TITLE}
+        description={ARTIFACT_FILTER_EMPTY_DESCRIPTION}
         testId="epic-artifact-sidebar-filter-empty"
       />
     );

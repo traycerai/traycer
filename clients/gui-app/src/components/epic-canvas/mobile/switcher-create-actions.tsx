@@ -34,13 +34,17 @@ interface SwitcherCreateProps {
 }
 
 /**
- * "New chat" row for the Agents category. Opens the shared New Conversation
- * modal through the desktop funnel (force chat mode, then request the modal
- * with `ACTIVE_TILE_PLACEMENT`); the modal's Chat/Terminal interface switcher
- * covers both a GUI chat and a TUI terminal-agent, so one row serves the whole
- * category. The modal replaces the sheet, so the sheet closes as it opens.
+ * "New chat" affordance for the Agents category: the same header "+" the
+ * Artifacts category carries, so both tabs put creating in one place rather
+ * than each teaching its own.
+ *
+ * Opens the shared New Conversation modal through the desktop funnel (force
+ * chat mode, then request the modal with `ACTIVE_TILE_PLACEMENT`); the modal's
+ * Chat/Terminal interface switcher covers both a GUI chat and a TUI
+ * terminal-agent, so one control serves the whole category. The modal replaces
+ * the sheet, so the sheet closes as it opens.
  */
-export function SwitcherNewChatRow(props: SwitcherCreateProps) {
+export function SwitcherNewChatAction(props: SwitcherCreateProps) {
   const { epicId, tabId, onClose } = props;
   const handleSelect = () => {
     useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
@@ -54,11 +58,17 @@ export function SwitcherNewChatRow(props: SwitcherCreateProps) {
     onClose();
   };
   return (
-    <SwitcherNewItemRow
-      label="New chat"
-      onSelect={handleSelect}
-      testId="switcher-new-chat"
-    />
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="New chat"
+      data-testid="switcher-new-chat"
+      onClick={handleSelect}
+      className="text-muted-foreground hover:text-foreground"
+    >
+      <Plus className="size-4" />
+    </Button>
   );
 }
 

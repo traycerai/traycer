@@ -23,6 +23,13 @@ import { useEpicAgentNodeIds } from "@/lib/epic-selectors";
  *
  * Reads the epic projection, so every caller needs a session handle in scope
  * (`EpicSessionGate`) - see `PrOwnerBadges`.
+ *
+ * That handle is necessary but not sufficient, and a container gating on this
+ * has to expect both. `OpenEpicState.chats` is the host's store-backed record
+ * plane unioned with the doc's not-yet-swept residue, so against a live session
+ * that has not yet been served `epic.listChatRecords` this returns EMPTY for
+ * the same reason it does when every owner was deleted - and both times the
+ * honest answer is the same, which is why they are not distinguished here.
  */
 export function usePresentPrOwners(
   owners: readonly PrOwnerRef[],

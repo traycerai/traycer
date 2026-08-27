@@ -87,7 +87,6 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   CHAT_ARCHIVE_VISIBILITY,
-  CHAT_OWNERSHIP,
   CHAT_ORIGIN,
   isChatFilterActive,
   matchesChatOwnershipFilter,
@@ -110,7 +109,6 @@ import {
   useActiveEpicArtifactId,
   useEpicCanvasStore,
   useIsActiveEpicArtifact,
-  useOpenTileContentIds,
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
@@ -218,11 +216,19 @@ import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
   combineSidebarVisibleIds,
-  revealArchiveHiddenIds,
   sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
-  useSidebarArchiveHiddenIds,
 } from "./epic-sidebar-selection";
+import {
+  chatDescendantKind,
+  useChatArchiveHiddenIds,
+  type ChatDescendantStatusKind,
+} from "./use-chat-archive-hidden-ids";
+import {
+  chatFilterEmptyStateDescription,
+  FILTERED_EMPTY_TITLE,
+  useChatFilterMatchIds,
+} from "./epic-sidebar-panel-filters";
 import {
   getSidebarNodeDragId,
   getPaneScopedDndId,
@@ -316,7 +322,6 @@ const SidebarChatSharingContext = createContext<SidebarChatSharingValue>({
 const EMPTY_CLOUD_CHATS: readonly CloudChatSummary[] = [];
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
-const EMPTY_ALWAYS_VISIBLE_IDS: ReadonlyArray<string> = [];
 const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
 
@@ -339,16 +344,6 @@ function archiveEmptyStateCopy(
       : null,
   };
 }
-
-type ChatDescendantStatusKind =
-  | "failure"
-  | "fork"
-  | "interview"
-  | "approval"
-  | "running"
-  | "background"
-  | "done"
-  | "terminal-failure";
 
 /**
  * One shared urgency ladder for a collapsed parent's icon slot: the parent's
@@ -386,35 +381,6 @@ const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
   "done",
   "terminal-failure",
 ];
-
-/** The ladder kind an activity tier occupies. */
-function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
-  return tier === "turn" ? "running" : "background";
-}
-
-/**
- * The single tier a descendant chat is counted under - its own highest. The
- * attention precedence goes through the shared `attentionTone`, so
- * failure > interview > approval lives in exactly one place.
- */
-function chatDescendantKind(
-  indicatorState: NotificationIndicatorState,
-  tier: AgentActivityTier | undefined,
-): ChatDescendantStatusKind | null {
-  const tone = attentionTone(indicatorState);
-  if (tone === FAILURE_TONE) return "failure";
-  if (tone === FORK_TONE) return "fork";
-  if (tone === INTERVIEW_TONE) return "interview";
-  if (tone === APPROVAL_TONE) return "approval";
-  // Terminal failure is demoted only for the exact chat's own glyph, where a
-  // newer live turn/Done is a stronger statement of current state. Once this
-  // chat is rolled into a collapsed parent it is a distinct failed child and
-  // must remain attention-priority over a sibling's activity or completion.
-  if (terminalFailureTone(indicatorState, "gui") !== null) return "failure";
-  if (tier !== undefined) return activityTierKind(tier);
-  if (indicatorState.unreadDone) return "done";
-  return null;
-}
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants: the
@@ -582,38 +548,6 @@ function usePanelRootIds(
 }
 
 /**
- * Nodes the active interface and ownership filters MATCH - the raw matches, with
- * no ancestor expansion. Every local agent is owned by the viewer;
- * collaborators' agents arrive only as cloud rows. `null` when neither filter is
- * active.
- *
- * Ancestor expansion is deliberately NOT done here. A path ancestor is a
- * rendering concession, not a match, and expanding before combining with search
- * would let one narrowing's concession satisfy the other's predicate - see
- * {@link intersectMatchIds}.
- */
-function useChatFilterMatchIds(epicId: string): ReadonlySet<string> | null {
-  const filter = useChatFilter(epicId);
-  const liveRecords = useEpicArtifactRecords();
-  return useMemo(() => {
-    if (!isChatFilterActive(filter)) return null;
-    const includeLocal = matchesChatOwnershipFilter(true, filter.ownership);
-    return new Set(
-      liveRecords.flatMap((record): string[] =>
-        includeLocal &&
-        CHATS_TREE_FILTER(record.type) &&
-        (filter.origin === CHAT_ORIGIN.All ||
-          (filter.origin === CHAT_ORIGIN.Gui && record.type === "chat") ||
-          (filter.origin === CHAT_ORIGIN.Tui &&
-            record.type === "terminal-agent"))
-          ? [record.id]
-          : [],
-      ),
-    );
-  }, [filter, liveRecords]);
-}
-
-/**
  * Whether a cloud row survives the archive filter.
  *
  * The row carries its own `isArchived`, so this is the same question the local
@@ -648,18 +582,6 @@ function cloudRowMatchesOwnershipFilter(
   filter: ChatFilter,
 ): boolean {
   return matchesChatOwnershipFilter(chat.isOwnedByViewer, filter.ownership);
-}
-
-function chatFilterEmptyStateDescription(filter: ChatFilter): string {
-  const interfaceActive = filter.origin !== CHAT_ORIGIN.All;
-  const ownershipActive = filter.ownership !== CHAT_OWNERSHIP.All;
-  if (interfaceActive && !ownershipActive) {
-    return "The Interface filter is hiding the other agents.";
-  }
-  if (ownershipActive && !interfaceActive) {
-    return "The Ownership filter is hiding the other agents.";
-  }
-  return "The current filters are hiding the other agents.";
 }
 
 // Panel body composes sort/filter/expansion/selection/pending-create hooks in
@@ -748,7 +670,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // the id set `useChatVisibleIds` expands it into; a cloud row is not in the
   // tree, so it answers both axes directly.
   const chatFilter = useChatFilter(epicId);
-  const baseArchiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
   const canArchive = useChatArchiveSupported();
   const canSetVisibility = useCloudChatVisibilitySupported();
   // Epic-session-bound like every other sharing fact in this tree: the
@@ -798,40 +719,12 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const [notificationIndicators, setNotificationIndicators] =
     useState<SurfaceNotificationIndicators>(EMPTY_INDICATOR_STATE_RESPONSE);
-  const openTileContentIds = useOpenTileContentIds(tabId);
-  const activityTiers = useEpicAgentActivityTiers();
-  const appLocalNotificationRows = useAppLocalNotificationsStore(
-    (state) => state.byId,
-  );
-  const alwaysVisibleIds = useMemo((): ReadonlyArray<string> => {
-    if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
-      return EMPTY_ALWAYS_VISIBLE_IDS;
-    }
-    return indicatorChatIds.filter((chatId) => {
-      if (openTileContentIds.has(chatId)) return true;
-      const indicatorState = selectNotificationIndicatorState(
-        { byId: appLocalNotificationRows },
-        { epicId, chatId },
-        null,
-        notificationIndicators,
-      );
-      return (
-        chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
-      );
-    });
-  }, [
-    activityTiers,
-    appLocalNotificationRows,
-    archiveVisibility,
+  const archiveHiddenIds = useChatArchiveHiddenIds({
     epicId,
-    indicatorChatIds,
+    tabId,
+    chatIds: indicatorChatIds,
     notificationIndicators,
-    openTileContentIds,
-  ]);
-  const archiveHiddenIds = useMemo(
-    () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
-    [baseArchiveHiddenIds, alwaysVisibleIds, tree],
-  );
+  });
 
   // Two independent narrowings, kept separate on purpose. `filterRootIds` is
   // the interface/ownership filter result and feeds the "no matches" empty
@@ -1159,7 +1052,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No matches for the current filters."
+        title={FILTERED_EMPTY_TITLE}
         description={chatFilterEmptyStateDescription(chatFilter)}
         testId="epic-chat-sidebar-filter-empty"
       />
