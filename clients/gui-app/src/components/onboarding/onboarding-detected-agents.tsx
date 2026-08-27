@@ -1,8 +1,9 @@
 import {
   type ProviderCliState,
   type ProviderId,
+  type ProvidersAwaitLoginResponse,
 } from "@traycer/protocol/host/provider-schemas";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ProviderList } from "@/components/providers/provider-list";
 import type { ProviderListRow } from "@/components/providers/provider-list";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,11 @@ import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useProvidersSetEnabled } from "@/hooks/providers/use-providers-set-enabled-mutation";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useHostScopedProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
+import {
+  AMBIENT_AUTH_PENDING_REPOLL_CAP,
+  AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
+  isAmbientAuthVerdictPending,
+} from "@/lib/providers/provider-ambient-auth";
 import {
   orderProvidersByEnablement,
   providerDisplayName,
@@ -210,7 +216,28 @@ function SignInToEnableButton(props: {
   const { hosts } = useHostOptions();
   const isLocalHost =
     hosts.find((host) => host.isActive)?.isLocalMachine ?? false;
-  const isPending = startLogin.isPending || awaitLogin.isPending;
+  // The gap between two re-polls is still this button working, so it counts as
+  // pending: neither mutation is in flight during the timeout, and without
+  // this the button would re-arm mid-settle and invite a second login child
+  // for a sign-in that is about to land.
+  const [settling, setSettling] = useState(false);
+  // Pending re-poll timer, plus the latch that stops one already in flight
+  // from scheduling its successor after the act has moved on. Onboarding
+  // unmounts this row the moment the user advances, and a `setSettling` or an
+  // enable fired into a dead tree is a React warning at best and an
+  // enablement the user never sees at worst.
+  const repollTimerRef = useRef<number | null>(null);
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      unmountedRef.current = true;
+      if (repollTimerRef.current !== null) {
+        window.clearTimeout(repollTimerRef.current);
+        repollTimerRef.current = null;
+      }
+    };
+  }, []);
+  const isPending = startLogin.isPending || awaitLogin.isPending || settling;
   // The RPC succeeded but the host declined to start the login, so the
   // provider tooling is the limiting factor, not auth - the same outcome
   // Settings names `failureMessages.notStarted`, and the one edge that could
@@ -242,19 +269,68 @@ function SignInToEnableButton(props: {
       {
         onSuccess: (result) => {
           if (!result.started) return;
-          awaitLogin.mutate(
-            { providerId, profileId: null },
-            {
-              // Only on a completed login: `state` is null when the host has
-              // no settled outcome to report, and a cancelled or failed
-              // sign-in must not leave the user with a provider they never
-              // got to use.
-              onSuccess: (completion) => {
-                if (completion.state?.auth.status !== "authenticated") return;
-                onEnable(providerId);
+          // Per-attempt budget, scoped to this closure so a later press starts
+          // over with a full one - the same shape Settings' login flow gives
+          // each attempt.
+          let repolls = 0;
+          const scheduleRepoll = (): boolean => {
+            if (repolls >= AMBIENT_AUTH_PENDING_REPOLL_CAP) return false;
+            repolls += 1;
+            setSettling(true);
+            repollTimerRef.current = window.setTimeout(() => {
+              repollTimerRef.current = null;
+              if (unmountedRef.current) return;
+              awaitOnce();
+            }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+            return true;
+          };
+          // Only a COMPLETED, authenticated login enables: `state` is null when
+          // the host has no settled outcome to report, and a cancelled or
+          // failed sign-in must not leave the user with a provider they never
+          // got to use.
+          //
+          // An unsettled ambient verdict is not a failure, though - it is the
+          // host's auth probe still running behind a login that may well have
+          // succeeded (see `isAmbientAuthVerdictPending`). Deciding on it would
+          // make the button's advertised action silently not happen, which is
+          // the one outcome a screen called "Sign in to enable" cannot have. So
+          // the same bounded re-poll Settings runs applies here, and only a
+          // settled - or budget-exhausted - "not authenticated" stops the
+          // chain.
+          const handleCompletion = (
+            completion: ProvidersAwaitLoginResponse,
+          ): void => {
+            if (unmountedRef.current) return;
+            if (completion.state?.auth.status === "authenticated") {
+              setSettling(false);
+              onEnable(providerId);
+              return;
+            }
+            if (
+              completion.state !== null &&
+              isAmbientAuthVerdictPending(completion.state) &&
+              scheduleRepoll()
+            ) {
+              return;
+            }
+            setSettling(false);
+          };
+          const awaitOnce = (): void => {
+            awaitLogin.mutate(
+              { providerId, profileId: null },
+              {
+                onSuccess: handleCompletion,
+                // A failed await ends the attempt: the mutation's own
+                // `onError` has already toasted, and re-polling a transport
+                // failure would only stretch the spinner over it.
+                onError: () => {
+                  if (unmountedRef.current) return;
+                  setSettling(false);
+                },
               },
-            },
-          );
+            );
+          };
+          awaitOnce();
         },
       },
     );

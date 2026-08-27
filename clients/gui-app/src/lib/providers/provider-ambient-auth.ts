@@ -2,6 +2,7 @@ import type { GuiHarnessOption } from "@traycer/protocol/host/index";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
+  ProviderMutationCliStateV21,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -77,6 +78,62 @@ export function isProviderAmbientSignedOut(
 export function isHarnessRowSignedOut(harness: GuiHarnessOption): boolean {
   return harness.authStatus === "unauthenticated";
 }
+
+/**
+ * `authenticated` / `unauthenticated` are ANSWERS; `unknown` / `unavailable`
+ * / `configured` are the absence of one. Every caller that has to distinguish
+ * "the probe said no" from "the probe has not said anything yet" asks through
+ * here.
+ */
+export function isDefinitiveProviderAuthStatus(
+  status: ProviderAuthStatus,
+): boolean {
+  return status === "authenticated" || status === "unauthenticated";
+}
+
+/**
+ * The `providers.awaitLogin` window in which the ambient verdict is NOT yet
+ * settled, and so must not be read as a failed sign-in.
+ *
+ * The host's login runner evicts the ambient auth cache when the login child
+ * closes, and assembles the response's `state` from a NON-BLOCKING re-probe
+ * (older hosts always; any host when a background probe is still running), so
+ * a fresh, successful login can settle the long-poll while its own verdict is
+ * still in flight. `authPending` is the host saying exactly that. Callers wait
+ * it out with a bounded re-poll rather than concluding anything - re-awaiting
+ * is cheap, since with no login job in flight the host resolves immediately
+ * with a re-probed state.
+ *
+ * Both surfaces that turn an `awaitLogin` completion into a decision read this
+ * one predicate - Settings' login flow (which drives its own state machine off
+ * it) and onboarding's "Sign in to enable" button (which decides whether to
+ * write the enablement). A second copy of the rule would be a silent
+ * divergence in exactly the case neither surface can reproduce on demand.
+ */
+export function isAmbientAuthVerdictPending(
+  state: ProviderMutationCliStateV21,
+): boolean {
+  return (
+    state.authPending && !isDefinitiveProviderAuthStatus(state.auth.status)
+  );
+}
+
+/**
+ * Budget for the bounded re-poll of the window above: a few short re-polls let
+ * a background probe land instead of misreporting a successful sign-in as a
+ * failure. Definitive verdicts are never re-polled, so this only ever bounds
+ * the unsettled case.
+ *
+ * Beside the predicate rather than in either flow because BOTH flows spend it
+ * - Settings' login state machine and onboarding's "Sign in to enable" button
+ * - and two budgets would mean the same sign-in gets a different amount of
+ * patience depending on which screen the user is standing on.
+ */
+export const AMBIENT_AUTH_PENDING_REPOLL_CAP = 3;
+// Exported so tests can drive the re-poll deterministically with fake timers
+// instead of hardcoding a duplicate magic number that could silently drift
+// from this value.
+export const AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS = 2_000;
 
 /**
  * Definitive signed-in verdict for the terminal/ambient account - the

@@ -129,9 +129,9 @@ export interface VisibleRailEntriesInput {
  * The rail entries to render, in order - one per visible provider. Disabled/
  * unavailable providers that are not recoverable from the picker stay hidden.
  * Recoverable degraded providers (signed out or missing an API key) stay
- * visible, move below the ready providers, and show the model-list CTA when
- * selected. Shared by `ProviderRail` and the picker's ⌘-digit shortcut so the
- * digits line up with the badges on the SAME ordered list.
+ * visible IN PLACE - dimmed, and showing the model-list CTA when selected.
+ * Shared by `ProviderRail` and the picker's ⌘-digit shortcut so the digits
+ * line up with the badges on the SAME ordered list.
  */
 export function visibleRailEntries(
   input: VisibleRailEntriesInput,
@@ -163,18 +163,19 @@ export function visibleRailEntries(
 /**
  * The providers the rail renders, in order. Disabled/unavailable providers that
  * are not recoverable from the picker stay hidden. Recoverable degraded
- * providers (signed out or missing an API key) stay visible, move below the
- * ready providers, and show the model-list CTA when selected. Shared by
- * `ProviderRail` and the picker's ⌘-digit shortcut so the digits line up with
- * the badges on the SAME ordered list.
+ * providers (signed out or missing an API key) stay visible IN PLACE - dimmed,
+ * and showing the model-list CTA when selected. Shared by `ProviderRail` and
+ * the picker's ⌘-digit shortcut so the digits line up with the badges on the
+ * SAME ordered list.
  *
  * A provider whose managed pack is still downloading also stays visible, and
  * that is load-bearing rather than cosmetic: on a first boot the host converges
  * every enabled provider (~1.6 GB), so `downloading` is the COMMON early state.
  * Hiding those rows would empty the picker on first run and then repopulate it
  * silently - the user would have no way to tell "not supported" from "arriving
- * in 30 seconds". They render gated and labelled instead, sorted below the
- * ready providers alongside the degraded ones.
+ * in 30 seconds". They render gated and labelled instead, and a pack that
+ * BLOCKS execution is the one thing still sorted below the ready providers -
+ * see `deprioritized` for why that survived and degradation did not.
  */
 export function visibleRailHarnesses(
   harnesses: ReadonlyArray<HarnessOption>,
@@ -218,8 +219,10 @@ export function visibleRailHarnesses(
 }
 
 /**
- * A provider the picker treats as "needs attention": visible but browse-only,
- * sorted below the ready providers, never auto-committed.
+ * A provider the picker treats as "needs attention": visible and dimmed where
+ * it already sits, browse-only, and never the automatic landing spot while a
+ * ready provider exists (`resolveActiveProviderId` states that preference
+ * directly - position stopped implying it once the degraded sink went).
  *
  * DISABLED PROVIDERS ARE NOT DEGRADED, they are absent - hence the early
  * return. `railHarnessVisible` ORs degradation INTO visibility so a signed-out

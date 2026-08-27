@@ -1256,7 +1256,24 @@ function resolveActiveProviderId(input: {
   ) {
     return selectedProviderId;
   }
-  return harnesses.find(selectable)?.id ?? activeProviderId;
+  // Last resort - neither the active nor the selected provider can be landed
+  // on, so this picks one for the user. ORDER used to answer this by accident:
+  // degraded providers sank to the bottom of `orderModelPickerHarnesses`, so
+  // the first selectable entry was a ready one whenever a ready one existed.
+  // Order no longer says anything about runnability (a late verdict must not
+  // move a row), so the preference is stated here instead of being inherited
+  // from a sort. Without it, opening the picker on a fresh boot could land on
+  // whichever signed-out provider happens to come first in canonical order and
+  // show its reauth panel while a signed-in provider sits one tab away.
+  //
+  // A degraded provider is still the fallback when every selectable one is
+  // degraded: it is browseable and fixable, and the alternative is landing on
+  // a provider that is not even selectable.
+  const runnable = harnesses.find(
+    (harness) =>
+      selectable(harness) && !railHarnessDegraded(harness, degradedHarnessIds),
+  );
+  return (runnable ?? harnesses.find(selectable))?.id ?? activeProviderId;
 }
 
 interface ResolveRowAnchorsInput {

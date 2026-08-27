@@ -28,10 +28,16 @@ type AwaitLoginVariables = {
   readonly profileId: string | null;
 };
 type AwaitLoginCompletion = {
-  readonly state: { readonly auth: { readonly status: string } } | null;
+  readonly state: {
+    readonly auth: { readonly status: string };
+    // The host's "my auth probe has not answered yet" flag. Carried here
+    // because the button's decision depends on it, not just on `status`.
+    readonly authPending: boolean;
+  } | null;
 };
 type AwaitLoginOptions = {
   readonly onSuccess: (completion: AwaitLoginCompletion) => void;
+  readonly onError: () => void;
 };
 type AwaitLoginMutate = (
   variables: AwaitLoginVariables,
@@ -157,6 +163,10 @@ vi.mock("sonner", () => ({
 }));
 
 import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
+import {
+  AMBIENT_AUTH_PENDING_REPOLL_CAP,
+  AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
+} from "@/lib/providers/provider-ambient-auth";
 
 function latestStartLoginCall(): readonly [
   StartLoginVariables,
@@ -167,18 +177,46 @@ function latestStartLoginCall(): readonly [
   return call;
 }
 
-describe("OnboardingDetectedAgents", () => {
-  afterEach(() => {
-    cleanup();
-    fixtures.providers = [];
-    fixtures.startLoginMutate.mockReset();
-    fixtures.startLoginPending = false;
-    fixtures.startLoginSuccess = false;
-    fixtures.startLoginData = undefined;
-    fixtures.awaitLoginMutate.mockReset();
-    fixtures.setEnabledMutate.mockReset();
-    fixtures.toastError.mockReset();
+function latestAwaitLoginOptions(): AwaitLoginOptions {
+  const call = fixtures.awaitLoginMutate.mock.calls.at(-1);
+  if (call === undefined) throw new Error("Expected an awaitLogin call.");
+  return call[1];
+}
+
+function signInButton(): HTMLElement {
+  return screen.getByRole("button", { name: /sign in to enable/i });
+}
+
+/**
+ * The whole mutable surface of `fixtures`, back to its declared state. Shared
+ * by every block below: this suite mocks its hooks at module scope, so a value
+ * left set by one test is read by the next one that renders.
+ */
+function resetFixtures(): void {
+  cleanup();
+  fixtures.providers = [];
+  fixtures.startLoginMutate.mockReset();
+  fixtures.startLoginPending = false;
+  fixtures.startLoginSuccess = false;
+  fixtures.startLoginData = undefined;
+  fixtures.awaitLoginMutate.mockReset();
+  fixtures.setEnabledMutate.mockReset();
+  fixtures.toastError.mockReset();
+}
+
+/** Render the codex row and drive it to the point where the login started. */
+function startSignInAttempt(): void {
+  fixtures.providers = [fixtures.signInProvider];
+  render(<OnboardingDetectedAgents />);
+  fireEvent.click(signInButton());
+  const [, startOptions] = latestStartLoginCall();
+  act(() => {
+    startOptions.onSuccess({ started: true });
   });
+}
+
+describe("OnboardingDetectedAgents", () => {
+  afterEach(resetFixtures);
 
   it("renders providers in the shared provider order", () => {
     render(<OnboardingDetectedAgents />);
@@ -257,17 +295,7 @@ describe("OnboardingDetectedAgents", () => {
 // `started: false` must render as an inline row error DERIVED from the
 // mutation result, not a toast and not `useState`.
 describe("SignInToEnableButton declined sign-in", () => {
-  afterEach(() => {
-    cleanup();
-    fixtures.providers = [];
-    fixtures.startLoginMutate.mockReset();
-    fixtures.startLoginPending = false;
-    fixtures.startLoginSuccess = false;
-    fixtures.startLoginData = undefined;
-    fixtures.awaitLoginMutate.mockReset();
-    fixtures.setEnabledMutate.mockReset();
-    fixtures.toastError.mockReset();
-  });
+  afterEach(resetFixtures);
 
   it("renders the inline alert and does not await login when the CLI declines to start", () => {
     fixtures.providers = [fixtures.signInProvider];
@@ -335,13 +363,15 @@ describe("SignInToEnableButton declined sign-in", () => {
     act(() => {
       awaitOptions.onSuccess({ state: null });
       awaitOptions.onSuccess({
-        state: { auth: { status: "unauthenticated" } },
+        state: { auth: { status: "unauthenticated" }, authPending: false },
       });
     });
     expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
 
     act(() => {
-      awaitOptions.onSuccess({ state: { auth: { status: "authenticated" } } });
+      awaitOptions.onSuccess({
+        state: { auth: { status: "authenticated" }, authPending: false },
+      });
     });
     expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
       providerId: "codex",
@@ -404,5 +434,113 @@ describe("SignInToEnableButton declined sign-in", () => {
 
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(fixtures.toastError).not.toHaveBeenCalled();
+  });
+});
+
+// The window where `providers.awaitLogin` has settled but the host's ambient
+// auth probe has not. It is not a verdict, and a button whose whole promise is
+// "Sign in to enable" must not silently decline to enable on one.
+describe("SignInToEnableButton unsettled auth verdict", () => {
+  afterEach(resetFixtures);
+
+  it("re-polls an unsettled ambient verdict instead of reading it as a failed sign-in", () => {
+    // The host's `providers.awaitLogin` can settle before its auth probe does
+    // (the login runner evicts the ambient cache when the child closes; older
+    // hosts always assemble the response from a non-blocking probe). Reading
+    // that window as "not authenticated" would make a button called "Sign in
+    // to enable" complete a successful sign-in and then silently not enable.
+    vi.useFakeTimers();
+    try {
+      startSignInAttempt();
+      expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        latestAwaitLoginOptions().onSuccess({
+          state: { auth: { status: "unknown" }, authPending: true },
+        });
+      });
+      expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+      // Still this button's work, so it stays busy: neither mutation is in
+      // flight during the gap, and an idle-looking button invites a second
+      // login child for a sign-in that is about to land.
+      expect(signInButton()).toHaveProperty("disabled", true);
+
+      act(() => {
+        vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+      });
+      expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(2);
+
+      act(() => {
+        latestAwaitLoginOptions().onSuccess({
+          state: { auth: { status: "authenticated" }, authPending: false },
+        });
+      });
+      expect(fixtures.setEnabledMutate).toHaveBeenCalledWith({
+        providerId: "codex",
+        enabled: true,
+        profileAction: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("spends the shared re-poll budget and then stops, without enabling", () => {
+    vi.useFakeTimers();
+    try {
+      startSignInAttempt();
+      // One completion per await: the initial one plus each re-poll. The last
+      // iteration is the one whose completion finds the budget spent.
+      for (
+        let attempt = 0;
+        attempt <= AMBIENT_AUTH_PENDING_REPOLL_CAP;
+        attempt += 1
+      ) {
+        act(() => {
+          latestAwaitLoginOptions().onSuccess({
+            state: { auth: { status: "unknown" }, authPending: true },
+          });
+        });
+        act(() => {
+          vi.advanceTimersByTime(AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+        });
+      }
+
+      expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(
+        AMBIENT_AUTH_PENDING_REPOLL_CAP + 1,
+      );
+      // A never-settled probe is not consent to enable, and it must not leave
+      // the button spinning forever either.
+      expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+      expect(signInButton()).toHaveProperty("disabled", false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats a DEFINITIVE unauthenticated verdict as final, pending flag or not", () => {
+    // `authPending` alone does not buy time - only an unsettled STATUS does.
+    // A host that reports a settled `unauthenticated` while some other probe
+    // is still running has already answered this question.
+    vi.useFakeTimers();
+    try {
+      startSignInAttempt();
+      act(() => {
+        latestAwaitLoginOptions().onSuccess({
+          state: { auth: { status: "unauthenticated" }, authPending: true },
+        });
+      });
+      act(() => {
+        vi.advanceTimersByTime(
+          AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS *
+            (AMBIENT_AUTH_PENDING_REPOLL_CAP + 1),
+        );
+      });
+
+      expect(fixtures.awaitLoginMutate).toHaveBeenCalledTimes(1);
+      expect(fixtures.setEnabledMutate).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

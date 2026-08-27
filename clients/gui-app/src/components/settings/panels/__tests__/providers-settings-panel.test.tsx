@@ -856,7 +856,7 @@ import { ProviderProfileReauthPanel } from "@/components/settings/panels/provide
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
-} from "@/components/settings/panels/use-provider-profile-login-flow";
+} from "@/lib/providers/provider-ambient-auth";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
