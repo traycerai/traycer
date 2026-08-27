@@ -129,9 +129,9 @@ export interface VisibleRailEntriesInput {
  * The rail entries to render, in order - one per visible provider. Disabled/
  * unavailable providers that are not recoverable from the picker stay hidden.
  * Recoverable degraded providers (signed out or missing an API key) stay
- * visible, move below the ready providers, and show the model-list CTA when
- * selected. Shared by `ProviderRail` and the picker's ⌘-digit shortcut so the
- * digits line up with the badges on the SAME ordered list.
+ * visible IN PLACE - dimmed, and showing the model-list CTA when selected.
+ * Shared by `ProviderRail` and the picker's ⌘-digit shortcut so the digits
+ * line up with the badges on the SAME ordered list.
  */
 export function visibleRailEntries(
   input: VisibleRailEntriesInput,
@@ -163,18 +163,19 @@ export function visibleRailEntries(
 /**
  * The providers the rail renders, in order. Disabled/unavailable providers that
  * are not recoverable from the picker stay hidden. Recoverable degraded
- * providers (signed out or missing an API key) stay visible, move below the
- * ready providers, and show the model-list CTA when selected. Shared by
- * `ProviderRail` and the picker's ⌘-digit shortcut so the digits line up with
- * the badges on the SAME ordered list.
+ * providers (signed out or missing an API key) stay visible IN PLACE - dimmed,
+ * and showing the model-list CTA when selected. Shared by `ProviderRail` and
+ * the picker's ⌘-digit shortcut so the digits line up with the badges on the
+ * SAME ordered list.
  *
  * A provider whose managed pack is still downloading also stays visible, and
  * that is load-bearing rather than cosmetic: on a first boot the host converges
  * every enabled provider (~1.6 GB), so `downloading` is the COMMON early state.
  * Hiding those rows would empty the picker on first run and then repopulate it
  * silently - the user would have no way to tell "not supported" from "arriving
- * in 30 seconds". They render gated and labelled instead, sorted below the
- * ready providers alongside the degraded ones.
+ * in 30 seconds". They render gated and labelled instead, and a pack that
+ * BLOCKS execution is the one thing still sorted below the ready providers -
+ * see `deprioritized` for why that survived and degradation did not.
  */
 export function visibleRailHarnesses(
   harnesses: ReadonlyArray<HarnessOption>,
@@ -188,21 +189,28 @@ export function visibleRailHarnesses(
   );
   // Asks whether the pack state BLOCKS, not whether one exists. Bare map
   // membership was coherent before the gate landed - a preparing tab was
-  // unselectable, so sorting it down with the signed-out ones was honest.
-  // Once a downloading pack stopped taking a runnable provider away, it made
-  // the rail reorder itself throughout convergence: every enabled provider
-  // sinks on a first boot and pops back up as its own install finishes, and
-  // `PickerLeaderBadge` reads the rail index, so the whole set of ⌘-digits
-  // reassigns once per completing pack. A user who learned that Codex is ⌘2
-  // gets a different provider a minute later.
+  // unselectable, so sorting it down was honest. Once a downloading pack
+  // stopped taking a runnable provider away, it made the rail reorder itself
+  // throughout convergence: every enabled provider sinks on a first boot and
+  // pops back up as its own install finishes, and `PickerLeaderBadge` reads
+  // the rail index, so the whole set of ⌘-digits reassigns once per completing
+  // pack. A user who learned that Codex is ⌘2 gets a different provider a
+  // minute later.
   //
   // Same predicate the tab's own appearance and click handler ask
   // (`railEntryPackGated`), so position cannot disagree with selectability.
+  //
+  // DEGRADED IS DELIBERATELY NOT A TERM HERE, for the same reason one layer
+  // up. A signed-out provider used to sink to the bottom of the rail, and the
+  // verdict that decides it arrives asynchronously - from a separately-timed
+  // `providers.list` query, or from an auth probe landing after first paint.
+  // So the row a user had just clicked would slide to the far end of the rail
+  // under them, ⌘-digits reassigning as it went. A row may CHANGE APPEARANCE
+  // when a late verdict lands; it may not change place.
   const deprioritized = (harness: HarnessOption): number => {
     const preparing = preparingByHarnessId.get(harness.id);
     return Number(
-      railHarnessDegraded(harness, degradedHarnessIds) ||
-        (preparing !== undefined && providerPackBlocksExecution(preparing)),
+      preparing !== undefined && providerPackBlocksExecution(preparing),
     );
   };
   return sortGuiHarnessesByProviderOrder(visible).toSorted(
@@ -211,8 +219,18 @@ export function visibleRailHarnesses(
 }
 
 /**
- * A provider the picker treats as "needs attention": visible but browse-only,
- * sorted below the ready providers, never auto-committed.
+ * A provider the picker treats as "needs attention": visible and dimmed where
+ * it already sits, browse-only, and never the automatic landing spot while a
+ * ready provider exists (`resolveActiveProviderId` states that preference
+ * directly - position stopped implying it once the degraded sink went).
+ *
+ * DISABLED PROVIDERS ARE NOT DEGRADED, they are absent - hence the early
+ * return. `railHarnessVisible` ORs degradation INTO visibility so a signed-out
+ * provider stays browseable and fixable; applied to a provider the user
+ * switched OFF, that same OR resurrects it as a dim "setup required" tab for
+ * an account nobody asked to be reminded about. Disabled means gone from the
+ * picker, and dimming is reserved for a provider the user DID enable and has
+ * not signed into.
  *
  * Signed-out membership (`degradedHarnessIds`, derived from
  * `isProviderAmbientSignedOut`) degrades REGARDLESS of `harness.available`.
@@ -249,35 +267,12 @@ export function railHarnessDegraded(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
 ): boolean {
+  if (!harness.enabled) return false;
   return (
-    (isHarnessRowSignedOut(harness) && !harnessRowExplicitlyOff(harness)) ||
+    isHarnessRowSignedOut(harness) ||
     degradedHarnessIds.has(harness.id) ||
     (!harness.available && harness.requiresApiKey)
   );
-}
-
-/**
- * The one enablement state the row's signed-out verdict must NOT reach.
- *
- * `railHarnessVisible` ORs degradation INTO visibility, which is what keeps a
- * signed-out provider browseable so the user can fix it. Applied to a provider
- * the user deliberately switched OFF, that same OR resurrects it: it is
- * unavailable AND signed out, so it would come back as a "setup required" tab
- * for an account nobody asked to be reminded about.
- *
- * Keyed on the MODE, deliberately not on effective `enabled`. Those differ on
- * exactly the row this feature exists for: an `auto` provider with no detected
- * account is `enabled: false` too, and it must stay visible - that is the
- * "sign in to enable" offer. Only `off` is the user having said no.
- *
- * This is the same guard `providerNeedsPickerReauth` already applies on the
- * `providers.list` arm (`provider.enabled && …`); without it here the two arms
- * of this predicate disagree about disabled providers. On a host below
- * `agent.gui.listHarnesses@7.1` the field is absent - so is `authStatus`, and
- * the first operand is already false.
- */
-function harnessRowExplicitlyOff(harness: HarnessOption): boolean {
-  return harness.enablementMode === "off";
 }
 
 /**
@@ -301,6 +296,13 @@ function railHarnessVisible(
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
   preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>,
 ): boolean {
+  // Disabled is hidden, unconditionally, ahead of every other arm. The host
+  // already reports a disabled provider `available: false`, so the arms below
+  // would hide it anyway today - but each of them is a rule about a DIFFERENT
+  // question (is the binary there, is a probe running, is a pack downloading),
+  // and leaving "the user turned this off" to be an emergent consequence of
+  // three unrelated predicates is how it stopped holding last time.
+  if (!harness.enabled) return false;
   return (
     harness.available ||
     harnessAvailabilityUnsettled(harness) ||

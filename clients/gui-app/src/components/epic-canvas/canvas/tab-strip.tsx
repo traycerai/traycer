@@ -2,6 +2,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -19,8 +20,15 @@ import {
   SplitSquareVertical,
   X,
 } from "lucide-react";
-import { AnimatePresence, LayoutGroup } from "motion/react";
+import {
+  AnimatePresence,
+  LayoutGroup,
+  useReducedMotion,
+  type Transition,
+} from "motion/react";
 import * as m from "motion/react-m";
+import { runTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
+import { useTileTabDisplacement } from "@/components/epic-canvas/dnd/use-tile-tab-displacement";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -52,7 +60,11 @@ import {
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
-import { useTabStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useActiveArtifactTab,
+  useTabStripDropIndex,
+  useTileStripOffsets,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import type {
   EpicCanvasTileRef,
   EpicTerminalRef,
@@ -111,12 +123,17 @@ import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { useEpicTerminalAuthority } from "@/hooks/terminal/use-epic-terminal-authority";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 
-const EPIC_TAB_LAYOUT_TRANSITION = {
+/**
+ * Neighbour displacement while a tile is dragged past it. Same shape as the
+ * header's certified reorder spring: overdamped (no overshoot, which Chrome
+ * also has none of) and ~174ms to settle, comfortably inside the 320ms budget.
+ */
+const EPIC_TAB_REORDER_TRANSITION = {
   type: "spring",
-  stiffness: 520,
-  damping: 42,
-  mass: 0.65,
-} as const;
+  stiffness: 700,
+  damping: 41,
+  mass: 0.55,
+} satisfies Transition;
 
 const EPIC_TAB_DROP_INDICATOR_TRANSITION = {
   duration: 0.12,
@@ -204,6 +221,9 @@ export function TabStrip(props: TabStripProps) {
   } = props;
 
   const stripRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    runTileStripCommitHandoff(groupId);
+  });
   const handleWheel = useHorizontalWheelScroll();
   const { setTabRef, getTabElement } = useTabElementRegistry();
   const stripEndDropData = useMemo<EpicCanvasDropTargetData>(
@@ -242,6 +262,10 @@ export function TabStrip(props: TabStripProps) {
   // Narrow per-strip subscription: preview ticks re-render only the strip
   // actually hovered, not every strip on the canvas.
   const dndDropIndicator = useTabStripDropIndex(groupId);
+  const activeArtifactTab = useActiveArtifactTab();
+  // Displacement is an explicit per-tile x offset resolved by the drag model,
+  // not a provisional CSS `order`. Empty map => every tile sits at x 0.
+  const tileOffsets = useTileStripOffsets(groupId);
   // Terminal-agent tabs are chat-scoped notification entities too: a TUI
   // agent's `agent.stopped` row is keyed by its agent id, and the tab icon
   // already reads `chats[tab.id]`.
@@ -269,6 +293,7 @@ export function TabStrip(props: TabStripProps) {
         ref={stripRef}
         data-testid="tab-strip"
         data-group-id={groupId}
+        data-view-tab-id={tabId}
         className={cn(
           "relative flex h-9 shrink-0 items-stretch border-b border-canvas-border/70 bg-canvas",
         )}
@@ -290,31 +315,39 @@ export function TabStrip(props: TabStripProps) {
             re-renders only the two tabs whose flags flip.
           */}
             <LayoutGroup id={`epic-tab-strip-${groupId}`}>
-              {tabs.map((tab, index) => (
-                <TabItem
-                  key={tab.instanceId}
-                  domRef={setTabRef(tab.instanceId)}
-                  tab={tab}
-                  epicId={epicId}
-                  tabId={tabId}
-                  groupId={groupId}
-                  showDropIndicatorBefore={dndDropIndicator === index}
-                  index={index}
-                  onSelect={onSelectTab}
-                  onClose={onCloseTab}
-                  onPromotePreview={onPromotePreview}
-                  canRenameTabs={canRenameTabs}
-                  menuProps={{
-                    groupId,
-                    tabId: tab.instanceId,
-                    canCloseRight: index < tabs.length - 1,
-                    ...menuHandlers,
-                  }}
-                />
-              ))}
+              {tabs.map((tab, index) => {
+                return (
+                  <TabItem
+                    key={tab.instanceId}
+                    domRef={setTabRef(tab.instanceId)}
+                    tab={tab}
+                    epicId={epicId}
+                    tabId={tabId}
+                    groupId={groupId}
+                    offsetX={tileOffsets.get(tab.instanceId) ?? 0}
+                    showDropIndicatorBefore={
+                      activeArtifactTab?.sourceGroupId !== groupId &&
+                      dndDropIndicator === index
+                    }
+                    index={index}
+                    onSelect={onSelectTab}
+                    onClose={onCloseTab}
+                    onPromotePreview={onPromotePreview}
+                    canRenameTabs={canRenameTabs}
+                    menuProps={{
+                      groupId,
+                      tabId: tab.instanceId,
+                      canCloseRight: index < tabs.length - 1,
+                      ...menuHandlers,
+                    }}
+                  />
+                );
+              })}
               <TabStripEndDropIndicator
                 visible={
-                  dndDropIndicator !== null && dndDropIndicator >= tabs.length
+                  activeArtifactTab?.sourceGroupId !== groupId &&
+                  dndDropIndicator !== null &&
+                  dndDropIndicator >= tabs.length
                 }
               />
             </LayoutGroup>
@@ -422,6 +455,7 @@ interface TabItemProps {
   /** The view (canvas) tab id - scopes the per-tab activation selector. */
   readonly tabId: string;
   readonly groupId: string;
+  readonly offsetX: number;
   readonly index: number;
   readonly showDropIndicatorBefore: boolean;
   readonly onSelect: (groupId: string, tabId: string) => void;
@@ -640,6 +674,10 @@ function TabItemBody(
   const { setNodeRef: dropRef } = useDroppable({
     id: getArtifactTabDropId(groupId, tab.instanceId),
     data: dropData,
+    // Keep the invisible source frame as layout space, never as a drop target.
+    // Otherwise provisional reordering can slide it beneath the pointer and
+    // mask the adjacent tab that should drive the next insertion boundary.
+    disabled: isDragging,
   });
   const { onRename } = menuProps;
   const { displayTitle, canRename, rename } = useTabRenameControl({
@@ -739,7 +777,11 @@ function TabItemBody(
 
   return (
     <ContextMenu>
-      <TabItemMotionFrame isDragging={isDragging}>
+      <TabItemMotionFrame
+        isDragging={isDragging}
+        tileItemId={tab.instanceId}
+        offsetX={props.offsetX}
+      >
         <ContextMenuTrigger asChild>
           <div
             ref={setRef}
@@ -1024,19 +1066,41 @@ function GitDiffTooltipSummaryRow(props: {
   );
 }
 
+/**
+ * Tile frames are displaced by an EXPLICIT x transform driven from the drag
+ * model - deliberately not `layout="position"` + CSS `order`, which is what the
+ * header still uses.
+ *
+ * That pairing strands a `translateX` when the item set changes under an
+ * in-flight layout projection: closing two tabs ~40ms apart leaves tiles
+ * rendered hundreds of px from their layout position until the next drag clears
+ * it. Binding x to state instead means the target is always explicitly stated
+ * and is 0 whenever no drag is active, so a stranded transform is not
+ * representable rather than merely unlikely.
+ */
 function TabItemMotionFrame(props: {
   readonly isDragging: boolean;
+  readonly tileItemId: string;
+  readonly offsetX: number;
   readonly children: ReactNode;
 }) {
+  const transition = useTileDisplacementTransition();
+  const nodeRef = useRef<HTMLDivElement | null>(null);
+  const x = useTileTabDisplacement({
+    nodeRef,
+    offsetX: props.offsetX,
+    transition,
+  });
   return (
     <m.div
-      layout="position"
+      ref={nodeRef}
       initial={false}
       animate={{
-        opacity: props.isDragging ? 0.36 : 1,
-        scale: props.isDragging ? 0.97 : 1,
+        opacity: props.isDragging ? 0 : 1,
       }}
-      transition={EPIC_TAB_LAYOUT_TRANSITION}
+      style={{ x }}
+      transition={transition}
+      data-tile-item-id={props.tileItemId}
       className="relative flex shrink-0 items-stretch"
     >
       {props.children}
@@ -1044,50 +1108,60 @@ function TabItemMotionFrame(props: {
   );
 }
 
+/**
+ * Displacement spring for tile frames. Matches the header's certified reorder
+ * spring (zeta ~1.05, ~174ms, no overshoot); under reduced motion the order
+ * still changes but nothing travels.
+ */
+function useTileDisplacementTransition(): Transition {
+  const reduceMotion = useReducedMotion() === true;
+  return reduceMotion
+    ? { duration: 0 }
+    : { ...EPIC_TAB_REORDER_TRANSITION, opacity: { duration: 0 } };
+}
+
 function TabStripDropIndicator(props: { readonly visible: boolean }) {
+  // No AnimatePresence: its exit animation keeps the OLD indicator mounted
+  // while the new one enters, so the strip shows two landing positions at once
+  // for the length of the exit (~110ms measured). A drop indicator states one
+  // destination, so it unmounts immediately and only its entry animates.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.span
-          aria-hidden
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-          className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId="tab-strip-drop-indicator"
-          />
-        </m.span>
-      ) : null}
-    </AnimatePresence>
+    <m.span
+      aria-hidden
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
+      className="absolute inset-y-1 left-0 z-20 -translate-x-0.5 origin-center"
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId="tab-strip-drop-indicator"
+      />
+    </m.span>
   );
 }
 
 function TabStripEndDropIndicator(props: { readonly visible: boolean }) {
+  // Same reason as TabStripDropIndicator: an exit animation would keep this
+  // mounted alongside the indicator that replaced it.
+  if (!props.visible) return null;
   return (
-    <AnimatePresence initial={false}>
-      {props.visible ? (
-        <m.div
-          initial={{ opacity: 0, scaleY: 0.45 }}
-          animate={{ opacity: 1, scaleY: 1 }}
-          exit={{ opacity: 0, scaleY: 0.45 }}
-          transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
-          className="my-1 origin-center self-stretch"
-        >
-          <DropLine
-            orientation="vertical"
-            glow={false}
-            className="h-full"
-            testId="tab-strip-drop-indicator"
-          />
-        </m.div>
-      ) : null}
-    </AnimatePresence>
+    <m.div
+      initial={{ opacity: 0, scaleY: 0.45 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      transition={EPIC_TAB_DROP_INDICATOR_TRANSITION}
+      className="my-1 origin-center self-stretch"
+    >
+      <DropLine
+        orientation="vertical"
+        glow={false}
+        className="h-full"
+        testId="tab-strip-drop-indicator"
+      />
+    </m.div>
   );
 }
 

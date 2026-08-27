@@ -270,9 +270,9 @@ export type GuiHarnessIdV60 = z.infer<typeof guiHarnessIdSchemaV60>;
 /**
  * Frozen harness id set as shipped in protocol v7.0 (with Hugging Face).
  *
- * Taken when v7.1 opened for the auth-aware enablement row fields
- * (`authStatus` / `enablementMode`): v7.0 stops being the head line there, so
- * it can no longer track the live enum. Identical to `guiHarnessIdSchema` at
+ * Taken when v7.1 opened for the catalog row's `authStatus`: v7.0 stops being
+ * the head line there, so it can no longer track the live enum. Identical to
+ * `guiHarnessIdSchema` at
  * the freeze cut - the freeze pins the SET, so a future harness cannot widen a
  * line v1.2.0-rc.1 peers already negotiate. Do NOT add new harnesses here -
  * extend the latest `guiHarnessIdSchema`; a v8.0 bridge drops post-v7.0 ids
@@ -627,12 +627,10 @@ export type AgentSelectionGuideRequest = z.infer<
   typeof agentSelectionGuideRequestSchema
 >;
 
-// A single contributing guide file. Current hosts emit exactly one `global`
-// source (`~/.traycer/agent-selection-guide.md`, `priority` fixed at 1, `path`
-// kept for attribution). The `workspace` variant is legacy wire shape: older
-// hosts still emit per-workspace `.traycer/agent-selection-guide.md` sources,
-// and released 1.0 responses must keep parsing, but current clients ignore
-// workspace entries instead of layering them over the global guide.
+// A single contributing guide file. Hosts emit workspace sources before the
+// global source, with higher priority values for more specific workspaces.
+// Clients sort by priority and layer workspace instructions over the global
+// guide. The paths are kept for attribution in the rendered instructions.
 export const agentSelectionGuideSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),

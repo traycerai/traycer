@@ -409,13 +409,13 @@ describe("railHarnessDegraded: catalog-row authStatus (agent.gui.listHarnesses@7
   });
 });
 
-describe("railHarnessDegraded / visibleRailHarnesses: explicitly-off gate (enablementMode)", () => {
+describe("railHarnessDegraded / visibleRailHarnesses: disabled (enabled: false) gate", () => {
   it("does not degrade or show an explicitly-off, signed-out, unavailable provider", () => {
     const explicitlyOff: HarnessOption = {
       ...harness("claude"),
+      enabled: false,
       available: false,
       authStatus: "unauthenticated",
-      enablementMode: "off",
     };
     expect(railHarnessDegraded(explicitlyOff, new Set())).toBe(false);
     expect(
@@ -423,29 +423,18 @@ describe("railHarnessDegraded / visibleRailHarnesses: explicitly-off gate (enabl
     ).toEqual([]);
   });
 
-  // Load-bearing: gating on `enabled` instead of `enablementMode` would break
-  // this one - an `auto` provider with no detected account is `enabled: false`
-  // too, and it must stay visible as the "sign in to enable" offer.
-  it("still degrades and shows an auto-mode, signed-out provider even though enabled is false", () => {
-    const autoUndetected: HarnessOption = {
-      ...harness("claude"),
-      enabled: false,
-      authStatus: "unauthenticated",
-      enablementMode: "auto",
-    };
-    expect(railHarnessDegraded(autoUndetected, new Set())).toBe(true);
-    expect(
-      visibleRailHarnesses([autoUndetected], [], new Set(), new Map()).map(
-        (h) => h.id,
-      ),
-    ).toEqual(["claude"]);
-  });
+  // Enablement is no longer tri-state: there is no "auto, undetected" middle
+  // ground distinct from an explicit off, so a disabled provider can no
+  // longer stay visible as a "sign in to enable" offer - it is gone from the
+  // picker like any other disabled provider, same as the case above.
+  // Removed: "still degrades and shows an auto-mode, signed-out provider even
+  // though enabled is false", which asserted exactly that now-nonexistent
+  // distinction.
 
   it("still degrades and shows a sticky-on, signed-out provider", () => {
     const stickyOn: HarnessOption = {
       ...harness("claude"),
       authStatus: "unauthenticated",
-      enablementMode: "on",
     };
     expect(railHarnessDegraded(stickyOn, new Set())).toBe(true);
     expect(
@@ -455,30 +444,35 @@ describe("railHarnessDegraded / visibleRailHarnesses: explicitly-off gate (enabl
     ).toEqual(["claude"]);
   });
 
-  it("keeps the other two degradation arms unaffected by an explicit off - the gate is narrow", () => {
-    // degradedHarnessIds membership still degrades under enablementMode: "off".
+  // Was "keeps the other two degradation arms unaffected by an explicit off -
+  // the gate is narrow": under the retired tri-state model the disabled early
+  // return only covered the signed-out arm, so `degradedHarnessIds`
+  // membership and the API-key arm still fired underneath it. The current
+  // gate is one unconditional `if (!harness.enabled) return false` ahead of
+  // all three arms (see the doc comment on `railHarnessDegraded`), so it is
+  // no longer narrow - disabled now blocks every arm, which is what this case
+  // asserts instead.
+  it("an explicit off blocks every degradation arm, not just the signed-out one", () => {
     const offButFlagged: HarnessOption = {
       ...harness("claude"),
-      enablementMode: "off",
+      enabled: false,
     };
     expect(
       railHarnessDegraded(offButFlagged, new Set<GuiHarnessId>(["claude"])),
-    ).toBe(true);
+    ).toBe(false);
 
-    // Unavailable + requiresApiKey still degrades under enablementMode: "off".
     const offApiKeyUnavailable: HarnessOption = {
       ...harness("codex"),
+      enabled: false,
       available: false,
       requiresApiKey: true,
-      enablementMode: "off",
     };
-    expect(railHarnessDegraded(offApiKeyUnavailable, new Set())).toBe(true);
+    expect(railHarnessDegraded(offApiKeyUnavailable, new Set())).toBe(false);
   });
 
-  it("behaves exactly as before on an old host with no authStatus/enablementMode", () => {
+  it("behaves exactly as before on an old host with no authStatus", () => {
     const oldHost: HarnessOption = { ...harness("claude") };
     expect(oldHost.authStatus).toBeUndefined();
-    expect(oldHost.enablementMode).toBeUndefined();
     expect(railHarnessDegraded(oldHost, new Set())).toBe(false);
     expect(
       railHarnessDegraded(oldHost, new Set<GuiHarnessId>(["claude"])),
@@ -487,10 +481,12 @@ describe("railHarnessDegraded / visibleRailHarnesses: explicitly-off gate (enabl
 });
 
 describe("visibleRailEntries: signed-out while available", () => {
-  it("sinks a signed-out-but-available provider below the ready ones", () => {
+  it("keeps a signed-out-but-available provider IN PLACE, carrying only the degraded flag", () => {
     // Degrading codex, which sorts FIRST canonically (see the pack-readiness
-    // block above) - proving the deprioritization fires without
-    // `available: false`.
+    // block above). The old rail sank degraded rows below the ready ones;
+    // that re-sort is deliberately gone - a late auth verdict may change a
+    // row's appearance (the dim), never its position, so rows stop moving
+    // under the pointer seconds after the rail rendered.
     const entries = visibleRailEntries({
       harnesses: [harness("claude"), harness("codex")],
       fallbackHarnesses: [],
@@ -501,10 +497,11 @@ describe("visibleRailEntries: signed-out while available", () => {
     });
 
     expect(entries.map((entry) => entry.harness.id)).toEqual([
-      "claude",
       "codex",
+      "claude",
     ]);
-    expect(entries[1].degraded).toBe(true);
+    expect(entries[0].degraded).toBe(true);
+    expect(entries[1].degraded).toBe(false);
   });
 });
 

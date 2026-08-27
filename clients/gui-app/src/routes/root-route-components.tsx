@@ -21,6 +21,7 @@ import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-b
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
@@ -132,6 +133,16 @@ function RootSurface(props: {
   if (!props.isStandalone) {
     return (
       <AppShell>
+        {/*
+         * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
+         * It owns the tear-off flow, which reaches `useRouterState` and so
+         * throws without a router. This is a route component - it renders under
+         * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
+         * the router requirement structural rather than a runtime check.
+         * Rendered by the provider instead, it would mount wherever the
+         * provider mounts, which is the provider-light case the move fixes.
+         */}
+        <TabDetachOwner />
         <Outlet />
       </AppShell>
     );

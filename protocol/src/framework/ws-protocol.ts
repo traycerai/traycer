@@ -26,14 +26,13 @@ import {
  */
 
 /**
- * Per-method canonical version manifest exchanged on connection open.
+ * Per-method version manifest exchanged on connection open.
  *
- * Each side advertises, per known method, only its canonical (highest
- * installed) `{ major, minor }`. Local registries carry the structural
- * invariants required to answer "can I bridge from my canonical to theirs?"
- * without extra data on the wire.
+ * Each side advertises, per known method, its canonical (highest installed)
+ * `{ major, minor }` plus every installed major. An omitted `supportedMajors`
+ * is reserved for legacy peers that predate this additive field.
  */
-export type ConnectionManifest = Readonly<Record<string, SchemaVersion>>;
+export type ConnectionManifest = Readonly<Record<string, ManifestMethodEntry>>;
 
 /**
  * Discriminated reason for a method being incompatible between two sides.
@@ -177,7 +176,7 @@ export type FatalErrorDetails = {
 
 /**
  * First frame sent by the client: bearer token plus the client's per-method
- * canonical manifest.
+ * version manifest.
  */
 export type ClientOpenFrame = {
   readonly kind: "open";
@@ -225,8 +224,8 @@ export type ClientFrame =
 
 /**
  * Host acknowledgement of a successful token + compatibility check, carrying
- * the host's per-method canonical manifest so the client can run its own
- * mirror check.
+ * the host's selected per-method manifest so the client can run its own mirror
+ * check.
  */
 export type HostOpenAckFrame = {
   readonly kind: "openAck";
@@ -279,12 +278,23 @@ export const schemaVersionSchema = z.object({
 });
 
 /**
- * Canonical schema for the per-method canonical version manifest exchanged
- * on `open` / `openAck`.
+ * Per-method manifest entry. This deliberately remains non-strict: a newer
+ * peer's future additive keys must be stripped by an older peer rather than
+ * rejecting an otherwise compatible connection.
+ */
+export const manifestMethodEntrySchema = schemaVersionSchema.extend({
+  supportedMajors: z.array(z.number().int().nonnegative()).min(1).optional(),
+});
+
+export type ManifestMethodEntry = z.infer<typeof manifestMethodEntrySchema>;
+
+/**
+ * Canonical schema for the per-method version manifest exchanged on `open` /
+ * `openAck`.
  */
 export const connectionManifestSchema = z.record(
   z.string(),
-  schemaVersionSchema,
+  manifestMethodEntrySchema,
 );
 
 /**

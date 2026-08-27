@@ -1,7 +1,15 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
@@ -23,6 +31,10 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
+const mocks = vi.hoisted(() => ({
+  handle: { current: null as OpenEpicStoreHandle | null },
+}));
+
 const mutateSpies = vi.hoisted(() => ({
   renameChat: vi.fn(),
   renameTuiAgent: vi.fn(),
@@ -30,24 +42,42 @@ const mutateSpies = vi.hoisted(() => ({
   renameTerminal: vi.fn(),
 }));
 
-// `useSwitcherRename` maps kind -> mutation hook; mocking the mutation hooks
-// (rather than the mapping itself) exercises the real mapping in
-// `use-switcher-rename.ts`.
+function makeMutateAsync<TVariables>(
+  spy: (variables: TVariables) => void,
+): (variables: TVariables) => Promise<void> {
+  return (variables: TVariables) => {
+    spy(variables);
+    return Promise.resolve();
+  };
+}
+
+// `useSwitcherRename` (the hook this bar's title delegates rename commits to)
+// now reads a REAL session handle for the optimistic overlay
+// (`beginRenameMutation` / `retirePendingMutation`), so it is backed by a real
+// `createOpenEpicStore` session rather than a fake shape. The mutation hooks
+// stay mocked (rather than the `useSwitcherRename` mapping itself), which
+// exercises the real kind -> mutation mapping in `use-switcher-rename.ts`.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useOpenEpicHandle: () => {
+    if (mocks.handle.current === null) throw new Error("no handle seeded");
+    return mocks.handle.current;
+  },
+}));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
   useEpicRenameChat: () => ({
-    mutate: mutateSpies.renameChat,
+    mutateAsync: makeMutateAsync(mutateSpies.renameChat),
     isPending: false,
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
   useEpicRenameTuiAgent: () => ({
-    mutate: mutateSpies.renameTuiAgent,
+    mutateAsync: makeMutateAsync(mutateSpies.renameTuiAgent),
     isPending: false,
   }),
 }));
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicRenameArtifact: () => ({
-    mutate: mutateSpies.renameArtifact,
+    mutateAsync: makeMutateAsync(mutateSpies.renameArtifact),
     isPending: false,
   }),
 }));
@@ -87,6 +117,64 @@ const FILE_TILE: EpicCanvasTileRef = {
   filePath: "index.ts",
 };
 
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function makeMeta(): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: "epic-1",
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+  };
+}
+
+/** A live session for "epic-1" - no nodes seeded, since these tests only
+ * assert on the RPC call args, and `useSwitcherRename` fires the RPC
+ * regardless of whether `beginRenameMutation` finds a row to overlay. */
+function newSession(): OpenEpicStoreHandle {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = createOpenEpicStore({
+    epicId: "epic-1",
+    streamClientFactory: factory,
+    userId: null,
+    onAuthError: null,
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
+  return handle;
+}
+
 function openEdit(): HTMLElement {
   fireEvent.click(screen.getByTestId("mobile-current-tile-title"));
   return screen.getByTestId("mobile-current-tile-title-input");
@@ -99,8 +187,13 @@ describe("<MobileCurrentTileBar />", () => {
     mutateSpies.renameTuiAgent.mockClear();
     mutateSpies.renameArtifact.mockClear();
     mutateSpies.renameTerminal.mockClear();
+    mocks.handle.current = newSession();
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    mocks.handle.current?.dispose();
+    mocks.handle.current = null;
+  });
 
   it("shows the current tile title and icon", () => {
     render(<MobileCurrentTileBar epicId="epic-1" tile={SPEC_TILE} />);

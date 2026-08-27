@@ -357,7 +357,7 @@ describe("<ArtifactFilterMenu />", () => {
 
     fireEvent.pointerDown(
       screen.getByRole("button", {
-        name: "Filter artifacts, 1 filter active, ordered by Name",
+        name: "Filter artifacts, 1 filter active, ordered by Name descending",
       }),
       { button: 0 },
     );

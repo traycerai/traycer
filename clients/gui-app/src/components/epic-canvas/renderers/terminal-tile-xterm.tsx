@@ -902,6 +902,14 @@ function createXtermEntry(
         ? prependResetEscape(write.chunk)
         : write.chunk;
       hasReceivedContent = true;
+      // Fresh engine + empty snapshot: nothing to replay. xterm's WriteBuffer
+      // can drop the parse callback for a zero-length write, so credit now
+      // instead of leaking snapshotReplayDepth. A retained engine prepends
+      // RIS, which is never empty, and takes the write path below.
+      if (replay.length === 0) {
+        write.onAckable();
+        return;
+      }
       snapshotReplayDepth += 1;
       term.write(replay, () => {
         snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);

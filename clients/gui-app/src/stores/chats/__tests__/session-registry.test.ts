@@ -547,6 +547,30 @@ describe("ChatSessionRegistry", () => {
     registry.disposeAll();
     expect(listener).toHaveBeenCalledTimes(2);
   });
+
+  it("membershipIdsForHost lists session keys of that host only", () => {
+    const registry = new ChatSessionRegistry({
+      idleTtlMs: TTL_MS,
+      maxWarmSessions: WARM_CAP,
+    });
+
+    registry.acquire(
+      { epicId: "epic-1", chatId: "chat-a", hostId: HOST, scopeKey: SCOPE },
+      () => createHandle("epic-1", "chat-a").handle,
+    );
+    registry.acquire(
+      { epicId: "epic-2", chatId: "chat-b", hostId: HOST_B, scopeKey: SCOPE },
+      () => createHandle("epic-2", "chat-b").handle,
+    );
+
+    const hostA = registry.membershipIdsForHost(HOST);
+    const hostB = registry.membershipIdsForHost(HOST_B);
+    expect(hostA).toHaveLength(1);
+    expect(hostB).toHaveLength(1);
+    expect(hostA[0]).not.toBe(hostB[0]);
+    expect(registry.membershipIdsForHost("host-none")).toEqual([]);
+    registry.disposeAll();
+  });
 });
 
 function markRunning(handle: ChatSessionStoreHandle): void {

@@ -156,9 +156,10 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   // Only THIS dialog's own run disables the whole form; a sweep of some other
   // Task's worktrees just removes its own paths from selection above.
   const isSweeping = sweepMutation.isPending;
+  const proofReady = !isPending && !isError;
 
   const handleConfirm = () => {
-    if (hostId === null || checkedRows.length === 0) return;
+    if (!proofReady || hostId === null || checkedRows.length === 0) return;
     // Background model, matching Settings worktree deletion: confirm hands
     // the streamed run off and closes immediately. The mutation acknowledges
     // the kickoff and reports the outcome via toasts; re-opening while the
@@ -209,7 +210,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
               rows={rows}
               isRowChecked={isRowChecked}
               isRowSweeping={isRowSweeping}
-              interactionDisabled={isSweeping || refresh.refreshing}
+              interactionDisabled={
+                isSweeping || refresh.refreshing || !proofReady
+              }
               onToggle={(path, checked) => {
                 setCheckOverrides((prev) => {
                   const next = new Map(prev);
@@ -245,6 +248,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             className="w-full sm:w-auto"
             disabled={
               hostId === null ||
+              !proofReady ||
               isSweeping ||
               refresh.refreshing ||
               checkedRows.length === 0
@@ -310,11 +314,14 @@ function SweepWorktreesCheckedAt(props: {
   readonly checkedAt: number | null;
   readonly refreshing: boolean;
 }): ReactNode {
-  if (props.refreshing) {
-    return <span className="text-ui-xs text-muted-foreground">Checking…</span>;
+  if (props.checkedAt !== null) {
+    return <SweepWorktreesCheckedAtText checkedAt={props.checkedAt} />;
   }
-  if (props.checkedAt === null) return <span />;
-  return <SweepWorktreesCheckedAtText checkedAt={props.checkedAt} />;
+  return props.refreshing ? (
+    <span className="text-ui-xs text-muted-foreground">Checking…</span>
+  ) : (
+    <span />
+  );
 }
 
 function SweepWorktreesCheckedAtText(props: {
@@ -352,7 +359,7 @@ function SweepRowList(props: {
   readonly interactionDisabled: boolean;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
-  if (props.isPending) {
+  if (props.isPending && props.rows.length === 0) {
     return (
       <div className="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground">
         <AgentSpinningDots

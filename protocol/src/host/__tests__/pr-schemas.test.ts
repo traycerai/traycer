@@ -51,7 +51,10 @@ import {
   prGetLocalDiffSummaryV10,
   prGetLocalFileDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
@@ -1607,16 +1610,19 @@ describe("pr split RPC contracts", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["pr.getLocalDiffSummary"]).toBeUndefined();
     expect(split.manifest["pr.getLocalFileDiff"]).toBeUndefined();
     expect(split.optionalManifest["pr.getLocalDiffSummary"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
     expect(split.optionalManifest["pr.getLocalFileDiff"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
   });
 });

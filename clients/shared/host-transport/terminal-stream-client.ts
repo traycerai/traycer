@@ -6,6 +6,7 @@ import {
   type TerminalSubscribeServerFrame,
   type TerminalSubscribeServerFrameV14,
   type TerminalSubscribeServerFrameV15,
+  type TerminalSubscribeViewer,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -83,6 +84,13 @@ export interface TerminalStreamClientOptions {
   readonly sessionId: string;
   readonly cols: number;
   readonly rows: number;
+  /**
+   * `terminal.subscribe@1.6` attachment intent. Absent ⇒ `presentation`
+   * (today's behavior). `cache` is a warm-reattach attachment with no
+   * attention claim; intent is open-frame-only, so a lease-state change
+   * constructs a new client rather than restating on the live session.
+   */
+  readonly viewer?: TerminalSubscribeViewer;
   readonly callbacks: TerminalStreamCallbacks;
 }
 
@@ -104,6 +112,7 @@ export class TerminalStreamClient {
       sessionId: options.sessionId,
       cols: options.cols,
       rows: options.rows,
+      viewer: options.viewer ?? "presentation",
     });
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
