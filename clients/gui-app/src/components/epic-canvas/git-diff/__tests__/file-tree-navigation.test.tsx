@@ -167,4 +167,36 @@ describe("<FileTree /> nested focus navigation", () => {
     const tree = screen.getByTestId("git-pierre-file-tree");
     expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
   });
+
+  /**
+   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
+   * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
+   * bubbling out of Pierre's shadow-rooted scroller before it reaches a
+   * document BUBBLE listener - the modal scroll lock a vaul drawer registers
+   * while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands
+   * in; the hook only calls `stopPropagation()`, which does not care about
+   * the event's concrete type. `touchstart` is the control: it is untouched
+   * by this hook, so it must still reach the document. Deleting
+   * `ref={touchShieldRef}` from the wrapper must fail this test.
+   */
+  it("shields a bubbling touchmove from the pierre tree so it never reaches the document", () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic 1");
+    renderTree(tabId);
+
+    const documentTouchMove = vi.fn();
+    const documentTouchStart = vi.fn();
+    document.addEventListener("touchmove", documentTouchMove);
+    document.addEventListener("touchstart", documentTouchStart);
+    try {
+      const tree = screen.getByTestId("git-pierre-file-tree");
+      tree.dispatchEvent(new Event("touchmove", { bubbles: true }));
+      tree.dispatchEvent(new Event("touchstart", { bubbles: true }));
+
+      expect(documentTouchMove).not.toHaveBeenCalled();
+      expect(documentTouchStart).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("touchmove", documentTouchMove);
+      document.removeEventListener("touchstart", documentTouchStart);
+    }
+  });
 });

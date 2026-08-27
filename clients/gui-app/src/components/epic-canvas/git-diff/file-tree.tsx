@@ -14,6 +14,7 @@ import { GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
@@ -266,14 +267,19 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     id: getGitDiffTileDragId(`tree:${props.viewTabId}:${props.group}`),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
     // `data-vaul-no-drag` for the same reason as the workspace file tree: this
     // tree's scroller is inside a shadow root, so vaul's parentElement climb
     // from the retargeted touch target cannot find it and would claim the
-    // gesture as a drawer dismiss. Inert outside the mobile sheet.
+    // gesture as a drawer dismiss. `touchShieldRef` for the same reason as
+    // there too: the sheet's modal scroll lock would otherwise keep the
+    // shadow-rooted scroller from touch-scrolling (see
+    // `useShadowScrollerTouchShield`). Both inert outside the mobile sheet.
     <div
       {...bridge.wrapperProps}
+      ref={touchShieldRef}
       data-vaul-no-drag=""
       className="flex h-full min-h-0 flex-col"
     >

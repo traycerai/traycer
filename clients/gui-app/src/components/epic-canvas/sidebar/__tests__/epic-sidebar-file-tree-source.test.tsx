@@ -663,6 +663,37 @@ describe("sidebar file tree source selection", () => {
     expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
   });
 
+  /**
+   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
+   * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
+   * bubbling out of Pierre's shadow-rooted scroller before it reaches a
+   * document BUBBLE listener - the modal scroll lock a vaul drawer registers
+   * while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands
+   * in; the hook only calls `stopPropagation()`, which does not care about
+   * the event's concrete type. `touchstart` is the control: it is untouched
+   * by this hook, so it must still reach the document. Deleting
+   * `ref={touchShieldRef}` from the wrapper must fail this test.
+   */
+  it("shields a bubbling touchmove from the pierre tree so it never reaches the document", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    const documentTouchMove = vi.fn();
+    const documentTouchStart = vi.fn();
+    document.addEventListener("touchmove", documentTouchMove);
+    document.addEventListener("touchstart", documentTouchStart);
+    try {
+      const tree = screen.getByTestId("pierre-file-tree-stub");
+      tree.dispatchEvent(new Event("touchmove", { bubbles: true }));
+      tree.dispatchEvent(new Event("touchstart", { bubbles: true }));
+
+      expect(documentTouchMove).not.toHaveBeenCalled();
+      expect(documentTouchStart).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("touchmove", documentTouchMove);
+      document.removeEventListener("touchstart", documentTouchStart);
+    }
+  });
+
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {
     const client = new MockWsStreamClient("unknown");
     renderPanel(client);

@@ -65,6 +65,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import {
   useWorkspaceFileListSubscription,
@@ -761,6 +762,7 @@ function FileTreeBodyForResolvedHost(
     ),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
     <div
@@ -797,10 +799,13 @@ function FileTreeBodyForResolvedHost(
 
           It governs the DISMISS path only. An upward finger returns earlier via
           `isDraggingInDirection` and never reaches the walk - and this marker is
-          NOT what makes the tree scroll on touch, which remains an open defect
-          tracked separately. Inert on desktop, which mounts no drawer. */}
+          NOT what makes the tree scroll on touch: that is `touchShieldRef`,
+          which keeps the sheet's modal scroll lock from freezing the
+          shadow-rooted scroller (see `useShadowScrollerTouchShield`). Both are
+          inert on desktop, which mounts no drawer. */}
       <div
         {...bridge.wrapperProps}
+        ref={touchShieldRef}
         data-vaul-no-drag=""
         className="relative min-h-0 flex-1"
       >
