@@ -667,6 +667,30 @@ describe("stream bridging mirrors the shipped stream checker", () => {
     expect(verdict).toEqual({ ok: true });
   });
 
+  it("refuses a shared major that is neither side's canonical", () => {
+    // Mine installs {1,2} (canonical 2), theirs installs {1,3} (canonical
+    // 3): the only shared line is 1, and a manifest entry names a concrete
+    // minor only for its canonical major - so neither side can verify what
+    // would be spoken on line 1. `canBridgeStream` must refuse, not
+    // green-light the pairing and let subscribe-time selection guess.
+    const majorOne = streamRegistryAt(1)["demo.subscribe"][1];
+    const majorTwo = streamRegistryAt(2)["demo.subscribe"][2];
+    const majorThree = streamRegistryAt(3)["demo.subscribe"][3];
+    const mineRegistry = defineVersionedStreamRpcRegistry({
+      "demo.subscribe": { 1: majorOne, 2: majorTwo },
+    });
+    const theirsRegistry = defineVersionedStreamRpcRegistry({
+      "demo.subscribe": { 1: majorOne, 3: majorThree },
+    });
+    const verdict = checkStreamCompatibility(
+      mineRegistry,
+      buildStreamManifest(mineRegistry, SERVES_EVERY_INSTALLED_MAJOR),
+      buildStreamManifest(theirsRegistry, SERVES_EVERY_INSTALLED_MAJOR),
+      "client",
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
   it("treats a stream method the released peer never had as advisory (the resources.subscribe precedent)", () => {
     const mine = buildProtocolSurface({
       unary: {},

@@ -128,6 +128,23 @@ describe("fetchArtifactAttachmentResponseSchema", () => {
     );
   });
 
+  it("rejects a bytesBase64 that is not Base64 - the field contract is validated, not just documented", () => {
+    expect(
+      fetchArtifactAttachmentFoundSchema.safeParse({
+        ok: true,
+        bytesBase64: "not base64!",
+        mediaType: "image/png",
+      }).success,
+    ).toBe(false);
+    expect(
+      fetchArtifactAttachmentFoundSchema.safeParse({
+        ok: true,
+        bytesBase64: "AA==",
+        mediaType: "image/png",
+      }).success,
+    ).toBe(true);
+  });
+
   it("round-trips missing as data, not as an RPC error, and collapses every absence reason", () => {
     const missing = { ok: false as const, reason: "missing" as const };
     expect(fetchArtifactAttachmentResponseSchema.parse(missing)).toEqual(

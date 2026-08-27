@@ -169,6 +169,16 @@ function canBridgeStream(
   if (mine.major !== theirs.major) {
     const shared = highestSharedMajor(mine, theirs);
     if (shared === null) return false;
+    // A shared major that is NEITHER side's canonical is not checkable from
+    // anywhere: a manifest entry names a concrete minor only for its
+    // canonical major, so with (say) mine [1,2]@2 against theirs [1,3]@3 the
+    // shared line 1 has no advertised minor on either side and selection
+    // would have to guess one. Neither side's symmetric check covers it -
+    // the branch below that trusts additive-minors only holds when the
+    // shared line is OUR canonical, where the minor we speak is the one we
+    // advertise. Refuse the bridge rather than green-light an unverifiable
+    // pairing.
+    if (shared !== mine.major && shared !== theirs.major) return false;
     // A shared MAJOR is not a bridge. Retaining a major says nothing about
     // which of its MINORS are still installed, and the handshake selects a
     // concrete `{major, minor}` - so "we both have major 1" passed here while

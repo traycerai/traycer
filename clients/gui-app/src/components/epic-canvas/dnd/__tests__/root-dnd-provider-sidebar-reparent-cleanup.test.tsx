@@ -8,7 +8,7 @@
  * stale refs until the tree remounted.
  *
  * `commitSidebarReparentDrop` itself no longer throws for that specific
- * pairing (see `sidebar-reparent-commit-doc-projected-divergence.test.ts` -
+ * pairing (see `sidebar-reparent-commit-doc-projected-agreement.test.ts` -
  * it is caught one layer down now). So the only way to exercise THIS file's
  * belt-and-suspenders - the provider's own try/catch/finally around the
  * commit call - is to force the commit to throw for some OTHER reason and

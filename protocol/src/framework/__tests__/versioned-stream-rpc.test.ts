@@ -60,7 +60,10 @@ const handshakeV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: z.object({
     id: z.string(),
-    resumeToken: z.string().nullable(),
+    // `.default(null)` is what makes this ADDITIVE, as the fixture's name
+    // and comment claim: a v1.0 peer never sends the key, so a v1.1 schema
+    // that required it would reject every v1.0 open request.
+    resumeToken: z.string().nullable().default(null),
   }),
   serverFrameSchema: z.discriminatedUnion("kind", [
     z.object({

@@ -22,8 +22,13 @@ export type FetchArtifactAttachmentRequest = z.infer<
 
 export const fetchArtifactAttachmentFoundSchema = z.object({
   ok: z.literal(true),
-  /** Base64 of the raw bytes addressed by `hash`. */
-  bytesBase64: z.string(),
+  /**
+   * Base64 of the raw bytes addressed by `hash` - VALIDATED as Base64, not
+   * merely documented: the client decodes this blind, and a host bug that
+   * ships a non-Base64 string should fail the RPC envelope, not surface as
+   * a corrupt image downstream.
+   */
+  bytesBase64: z.base64(),
   /**
    * HOST-AUTHORITATIVE, derived from the delivered bytes' magic bytes - never
    * echoed from a document-authored media type or inferred from a filename.

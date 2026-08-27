@@ -199,6 +199,10 @@ export class EpicV2StreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
+    // The receive-path half of the `closed` contract the send methods
+    // already keep: after `close()` the session can still deliver frames
+    // already in flight, and the store callbacks must not hear them.
+    if (this.closed) return;
     // This is intentionally session-scoped. `RemoteStreamClient` cannot
     // answer a connection-wide version query, while its logical stream knows
     // the version it actually opened at.

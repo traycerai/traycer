@@ -130,61 +130,60 @@ type EpochOnlyKind = Exclude<
   ReplacementStateKind | "pong"
 >;
 
-const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
-  readonly kind: EpochOnlyKind;
-  readonly extra: Record<string, unknown>;
-  readonly hasBinaryPayload: boolean;
-}> = [
-  {
-    kind: "commentThreadsChanged",
+/**
+ * Keyed by kind rather than declared as an array so the fixture set is
+ * EXHAUSTIVE over `EpochOnlyKind` by construction: a new epoch-only frame
+ * kind on a future `@2` minor fails to compile here until it gets a
+ * fixture, instead of silently skipping the loops that assert it requires
+ * `streamEpoch` and strips a leaked `seq`. Same discipline as
+ * `replacementStateFixture`'s `never` check.
+ */
+const EPOCH_ONLY_KIND_FIXTURE_BY_KIND: {
+  readonly [Kind in EpochOnlyKind]: {
+    readonly extra: Record<string, unknown>;
+    readonly hasBinaryPayload: boolean;
+  };
+} = {
+  commentThreadsChanged: {
     extra: { artifactIds: ["spec-1"] },
     hasBinaryPayload: false,
   },
-  {
-    kind: "earlyMeta",
+  earlyMeta: {
     extra: { meta: EMPTY_EARLY_META },
     hasBinaryPayload: false,
   },
-  {
-    kind: "permissionChanged",
+  permissionChanged: {
     extra: { permissionRole: "editor" },
     hasBinaryPayload: false,
   },
-  {
-    kind: "cloudSyncStatus",
+  cloudSyncStatus: {
     extra: { status: "connected" },
     hasBinaryPayload: false,
   },
-  {
-    kind: "migrationStarted",
+  migrationStarted: {
     extra: {},
     hasBinaryPayload: false,
   },
-  {
-    kind: "migrationProgress",
+  migrationProgress: {
     extra: { phase: "upload", chunksDone: 1, chunksTotal: 4 },
     hasBinaryPayload: false,
   },
-  {
-    kind: "migrationFailed",
+  migrationFailed: {
     extra: { reason: "cloud unavailable" },
     hasBinaryPayload: false,
   },
-  {
-    kind: "migrationNotAllowed",
+  migrationNotAllowed: {
     extra: {},
     hasBinaryPayload: false,
   },
-  {
-    kind: "epicDeleted",
+  epicDeleted: {
     extra: {
       deletedByDisplayName: "Ada",
       deletedByTraycerUserId: "user-9",
     },
     hasBinaryPayload: false,
   },
-  {
-    kind: "artifactDoc",
+  artifactDoc: {
     extra: {
       artifactId: "spec-1",
       docGuid: "guid-1",
@@ -192,13 +191,11 @@ const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
     },
     hasBinaryPayload: true,
   },
-  {
-    kind: "artifactDocUpdate",
+  artifactDocUpdate: {
     extra: { artifactId: "spec-1", docGuid: "guid-1" },
     hasBinaryPayload: true,
   },
-  {
-    kind: "artifactDocAck",
+  artifactDocAck: {
     extra: {
       artifactId: "spec-1",
       docGuid: "guid-1",
@@ -206,17 +203,23 @@ const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
     },
     hasBinaryPayload: false,
   },
-  {
-    kind: "artifactDocAwareness",
+  artifactDocAwareness: {
     extra: { artifactId: "spec-1" },
     hasBinaryPayload: true,
   },
-  {
-    kind: "artifactUnavailable",
+  artifactUnavailable: {
     extra: { artifactId: "spec-1", reason: "deleted", terminal: true },
     hasBinaryPayload: false,
   },
-];
+};
+
+const EPOCH_ONLY_KIND_FIXTURES: ReadonlyArray<{
+  readonly kind: EpochOnlyKind;
+  readonly extra: Record<string, unknown>;
+  readonly hasBinaryPayload: boolean;
+}> = (
+  Object.keys(EPOCH_ONLY_KIND_FIXTURE_BY_KIND) as readonly EpochOnlyKind[]
+).map((kind) => ({ kind, ...EPOCH_ONLY_KIND_FIXTURE_BY_KIND[kind] }));
 
 function replacementStateFixture(
   kind: ReplacementStateKind,
