@@ -5,6 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   classifyWorktreeTier,
@@ -26,8 +27,8 @@ import { sweepEligibleTier } from "@/lib/worktree/sweep-candidates";
 /**
  * Why a row is not default-checked (or not checkable at all). `shared` and
  * `not-landed` rows stay CHECKABLE - the user may consciously sweep them -
- * while `in-use` (host refuses anyway) and `checking` (facts unverified)
- * rows are disabled.
+ * while `checking` (facts unverified) rows are disabled. `in-use` rows
+ * stay checkable-unchecked: selecting them is a deliberate stop-and-sweep.
  */
 export type EpicSweepRowNote = "shared" | "in-use" | "checking" | "not-landed";
 
@@ -44,6 +45,13 @@ export interface EpicSweepWorktreeRow {
   /** Disabled rows can never be swept from this dialog. */
   readonly disabled: boolean;
   readonly note: EpicSweepRowNote | null;
+  /**
+   * T2 holder inventory when a test (or a later `listHolders` provider)
+   * supplies it. Empty in production until T7 populates a listing; Sweep
+   * treats an in-use row with an empty list as unknown and discloses a
+   * generic stop line rather than authorizing silently.
+   */
+  readonly holders: readonly WorktreeBusyHolder[];
 }
 
 export interface EpicSweepWorktreeCandidatesResult {
@@ -85,8 +93,9 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  *
  * EVERY owned worktree is returned, classified: green + exclusive + not busy
  * rows default-checked, everything else unchecked with its reason (still
- * checkable except busy/unverified rows), so the dialog shows the full worktree
- * picture rather than a silently pre-filtered subset.
+ * checkable except unverified rows; in-use is checkable-unchecked), so the
+ * dialog shows the full worktree picture rather than a silently pre-filtered
+ * subset.
  *
  * Known residual: PR facts are read non-blocking on the host, so the first
  * forced probe after an EXTERNAL merge can still serve the stale `open` fact
@@ -283,9 +292,9 @@ function classifySweepRow(
   entry: WorktreeHostEntryV14,
 ): EpicSweepWorktreeRow {
   const tier = classifyWorktreeTier(entry);
-  const base = { entry, tier, defaultChecked: false } as const;
+  const base = { entry, tier, defaultChecked: false, holders: [] } as const;
   if (entry.inUse) {
-    return { ...base, disabled: true, note: "in-use" };
+    return { ...base, disabled: false, note: "in-use" };
   }
   if (entry.resolvedAt === null) {
     return { ...base, disabled: true, note: "checking" };

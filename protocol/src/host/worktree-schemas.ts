@@ -10,6 +10,10 @@
  * folders.
  */
 import { z } from "zod";
+import {
+  worktreeBusyHoldersSchema,
+  worktreeBusyOwnerRefSchema,
+} from "@traycer/protocol/framework/worktree-busy-holders";
 export {
   worktreeBusyErrorDetailsSchema,
   worktreeBusyHoldKindSchema,
@@ -879,6 +883,36 @@ export const worktreeDeleteResponseSchema = z.object({
 });
 export type WorktreeDeleteResponse = z.infer<
   typeof worktreeDeleteResponseSchema
+>;
+
+/**
+ * `worktree.listHolders@1.0` — path-scoped holder inventory with an optional
+ * owner filter. Bridges the host's holder-inventory engine:
+ *
+ * - `owner` absent/null: holders of `worktreePath`
+ *   (`listHoldersForWorktreePath`).
+ * - `owner` present: that owner's holders (`listHoldersForOwner`). The path
+ *   is still required so the method stays path-scoped on the wire; it does
+ *   not filter the owner inventory (rebind disclosure needs dropped-path
+ *   holders too).
+ *
+ * Unknown path or owner → `{ holders: [] }`. Brand-new method, outside the
+ * released floor: an old host simply lacks it (`degrade: unsupported`) and
+ * an old client never calls it.
+ */
+export const worktreeListHoldersRequestSchema = z.object({
+  worktreePath: z.string(),
+  owner: worktreeBusyOwnerRefSchema.nullable().default(null),
+});
+export type WorktreeListHoldersRequest = z.infer<
+  typeof worktreeListHoldersRequestSchema
+>;
+
+export const worktreeListHoldersResponseSchema = z.object({
+  holders: worktreeBusyHoldersSchema,
+});
+export type WorktreeListHoldersResponse = z.infer<
+  typeof worktreeListHoldersResponseSchema
 >;
 
 /**

@@ -1483,6 +1483,9 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
+  // Pure holder read for teardown disclosures - fetched at gesture time by
+  // the delete/rebind confirm flows, never on a cadence.
+  "worktree.listHolders": { ...LATEST_SCHEDULING, poll: null },
   "speech.getModelStatus": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("speech.getModelStatus", {
