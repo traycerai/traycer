@@ -2080,6 +2080,10 @@ function NodeChevron(props: NodeChevronProps) {
   // already stops propagation, which is what keeps the row from opening.
   return (
     <span
+      // Same `aria-hidden` the glyph inside already carries: this wrapper adds
+      // hit area and nothing else, and expansion is reached from the row itself
+      // by keyboard, so exposing a second nameless control would be noise.
+      aria-hidden="true"
       onClick={onToggle}
       className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
     >
