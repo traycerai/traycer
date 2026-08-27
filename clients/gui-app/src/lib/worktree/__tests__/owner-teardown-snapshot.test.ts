@@ -81,16 +81,16 @@ describe("snapshotOwnerTeardownHolders", () => {
   });
 
   it("discloses a live PTY as a restart, not a loss", () => {
-    expect(snapshotOwnerTeardownHolders(input({ ptyLive: true }))).toMatchObject(
-      [
-        {
-          ownerRef: OWNER,
-          holdKind: "terminal-agent-pty",
-          activity: "working",
-          label: "Planner will restart in the new folder",
-        },
-      ],
-    );
+    expect(
+      snapshotOwnerTeardownHolders(input({ ptyLive: true })),
+    ).toMatchObject([
+      {
+        ownerRef: OWNER,
+        holdKind: "terminal-agent-pty",
+        activity: "working",
+        label: "Planner will restart in the new folder",
+      },
+    ]);
   });
 
   it("names a live shell on a dropped path by its command", () => {
@@ -480,8 +480,8 @@ describe("pathContainsDirectory", () => {
       true,
     );
     expect(pathContainsDirectory("C:\\wt\\old", "C:\\wt\\other")).toBe(false);
-    expect(
-      pathContainsDirectory("C:\\wt\\old", "C:\\wt\\old\\..\\other"),
-    ).toBe(false);
+    expect(pathContainsDirectory("C:\\wt\\old", "C:\\wt\\old\\..\\other")).toBe(
+      false,
+    );
   });
 });

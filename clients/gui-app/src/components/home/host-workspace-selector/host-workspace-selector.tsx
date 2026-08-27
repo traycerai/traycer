@@ -3130,9 +3130,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         failures={teardownDialog?.failures}
         immediatePending={teardownCommitPending}
         refusalReason={teardownDialog?.refusalReason}
-        deferContext={
-          surface.kind === "terminal-agent" ? "update" : "message"
-        }
+        deferContext={surface.kind === "terminal-agent" ? "update" : "message"}
         onImmediate={() => {
           void confirmImmediateCommit();
         }}
