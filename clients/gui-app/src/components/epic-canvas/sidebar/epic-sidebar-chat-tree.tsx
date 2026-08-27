@@ -681,6 +681,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const allRootIds = usePanelRootIds(panelId, comparator);
   const filterMatchIds = useChatFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
   // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
   // the selection actions before it ever considers the search row), so while
   // selection mode is on there is no search input to type into, to read a query
@@ -716,6 +718,25 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => expandMatchesToVisibleIds(narrowedMatchIds, tree.nodeById),
     [narrowedMatchIds, tree],
   );
+  // Reveal is a transient visibility exception. It must be able to surface the
+  // requested local row through the user's current narrowing without mutating
+  // their search or filter state; once the row scrolls into view, the request
+  // is consumed and the usual projection resumes.
+  const revealVisibleIds = useMemo(() => {
+    if (
+      revealRequest === null ||
+      !Object.hasOwn(tree.nodeById, revealRequest.nodeId)
+    ) {
+      return narrowedVisibleIds;
+    }
+    if (narrowedVisibleIds === null) return null;
+    const revealPathIds = expandMatchesToVisibleIds(
+      new Set([revealRequest.nodeId]),
+      tree.nodeById,
+    );
+    if (revealPathIds === null) return narrowedVisibleIds;
+    return new Set([...narrowedVisibleIds, ...revealPathIds]);
+  }, [narrowedVisibleIds, revealRequest, tree]);
   // Filter-only, still ancestor-expanded: the indicator query below reads this
   // one so it does not refetch on every keystroke.
   const filterVisibleIds = useMemo(
@@ -732,7 +753,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // `role="tree"`).
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   const treeRegionRef = useRef<HTMLDivElement>(null);
-  const revealRequest = useSidebarNodeRevealRequest(tabId);
   useEffect(() => {
     const region = treeRegionRef.current;
     if (region === null) return;
@@ -767,8 +787,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
   const filterRootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, narrowedVisibleIds),
-    [allRootIds, narrowedVisibleIds],
+    () => applyVisibleFilter(allRootIds, revealVisibleIds),
+    [allRootIds, revealVisibleIds],
   );
 
   // Indicators must be fetched BEFORE archive hiding is applied. Archived
@@ -812,26 +832,35 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     if (archiveVisibility !== CHAT_ARCHIVE_VISIBILITY.Unarchived) {
       return EMPTY_ALWAYS_VISIBLE_IDS;
     }
-    return indicatorChatIds.filter((chatId) => {
-      if (openTileContentIds.has(chatId)) return true;
-      const indicatorState = selectNotificationIndicatorState(
-        { byId: appLocalNotificationRows },
-        { epicId, chatId },
-        null,
-        notificationIndicators,
-      );
-      return (
-        chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
-      );
-    });
+    const revealedIds =
+      revealRequest === null
+        ? EMPTY_ALWAYS_VISIBLE_IDS
+        : [revealRequest.nodeId, ...ancestorIdsOfReveal];
+    return [
+      ...revealedIds,
+      ...indicatorChatIds.filter((chatId) => {
+        if (openTileContentIds.has(chatId)) return true;
+        const indicatorState = selectNotificationIndicatorState(
+          { byId: appLocalNotificationRows },
+          { epicId, chatId },
+          null,
+          notificationIndicators,
+        );
+        return (
+          chatDescendantKind(indicatorState, activityTiers.get(chatId)) !== null
+        );
+      }),
+    ];
   }, [
     activityTiers,
+    ancestorIdsOfReveal,
     appLocalNotificationRows,
     archiveVisibility,
     epicId,
     indicatorChatIds,
     notificationIndicators,
     openTileContentIds,
+    revealRequest,
   ]);
   const archiveHiddenIds = useMemo(
     () => revealArchiveHiddenIds(baseArchiveHiddenIds, alwaysVisibleIds, tree),
@@ -852,8 +881,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [filterRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(narrowedVisibleIds, archiveHiddenIds, tree),
-    [narrowedVisibleIds, archiveHiddenIds, tree],
+    () => combineSidebarVisibleIds(revealVisibleIds, archiveHiddenIds, tree),
+    [revealVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
@@ -950,13 +979,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       ),
     [unfoldedCloudChats, chatFilter, searchQuery],
   );
-  const visibleCloudChats = useMemo(
-    () =>
-      filterMatchingCloudChats.filter((chat) =>
-        cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
-      ),
-    [filterMatchingCloudChats, archiveVisibility],
-  );
+  const visibleCloudChats = useMemo(() => {
+    const visible = filterMatchingCloudChats.filter((chat) =>
+      cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
+    );
+    if (revealRequest === null) return visible;
+    const revealedCloudChat = unfoldedCloudChats.find(
+      (chat) => chat.identity.chatId === revealRequest.nodeId,
+    );
+    return revealedCloudChat === undefined ||
+      visible.includes(revealedCloudChat)
+      ? visible
+      : [...visible, revealedCloudChat];
+  }, [
+    archiveVisibility,
+    filterMatchingCloudChats,
+    revealRequest,
+    unfoldedCloudChats,
+  ]);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -1001,17 +1041,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
-  // Filter- and search-only: see `combineSidebarVisibleIds`. Archive hiding must
-  // never reach here. A search match nested under a collapsed parent forces that
-  // parent open for the same reason a filter match does.
+  // Filter-, search-, and reveal-only: see `combineSidebarVisibleIds`. Archive
+  // hiding must never reach here. A nested target forces its parent open for the
+  // same reason a filter match does.
   const forcedExpandedIds = useMemo(
     () =>
       mergeForcedExpanded(
         mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
-        narrowedVisibleIds,
+        revealVisibleIds,
       ),
-    [ancestorIdsOfActive, ancestorIdsOfReveal, narrowedVisibleIds],
+    [ancestorIdsOfActive, ancestorIdsOfReveal, revealVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -1039,22 +1078,13 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     if (revealRequest === null) return;
     const region = treeRegionRef.current;
     if (region === null) return;
-    const row = Array.from(
-      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
-    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
-    if (row === undefined) {
-      // A projected node absent from the rendered tree is hidden by the
-      // current filter/archive view. Do not retain a stale request that would
-      // unexpectedly scroll when the user changes that view later.
-      if (Object.hasOwn(tree.nodeById, revealRequest.nodeId)) {
-        clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
-      }
-      return;
-    }
-
     for (const ancestorId of ancestorIdsOfReveal) {
       expandAction(tabId, panelId, ancestorId);
     }
+    const row = Array.from(
+      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
+    if (row === undefined) return;
     row.scrollIntoView({ block: "nearest", inline: "nearest" });
     clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
   }, [
@@ -1065,6 +1095,7 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     revealRequest,
     tabId,
     tree,
+    visibleCloudChats,
   ]);
 
   const expansion = useMemo<ExpansionController>(
