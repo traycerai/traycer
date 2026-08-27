@@ -59,7 +59,10 @@ import {
   useWorkspaceFolderActionsForClient,
 } from "@/hooks/workspace/use-workspace-folder-actions";
 import { useWorkspaceRecordRecentWorkspace } from "@/hooks/workspace/use-workspace-record-recent-workspace-mutation";
-import type { LandingDraftWorkspaceSnapshot } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  type LandingDraftWorkspaceSnapshot,
+} from "@/stores/home/landing-draft-store";
 import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { locateReplaceBoundFolder } from "./locate-replace-bound-folder";
 import {
@@ -300,6 +303,13 @@ function HomeSurface(props: HomeSurfaceProps) {
   // have to agree on which machine they describe. That resolution is the
   // composer surface pin (pin ?? effective), so read the same primitive.
   const landingHostId = useComposerSurfaceHostPin().resolvedHostId;
+  const restoreDraftWorkspaceForHost = useLandingDraftStore(
+    (state) => state.restoreDraftWorkspaceForHost,
+  );
+  useEffect(() => {
+    if (props.draftId === null) return;
+    restoreDraftWorkspaceForHost(props.draftId, landingHostId);
+  }, [landingHostId, props.draftId, restoreDraftWorkspaceForHost]);
   const stagingKey = useMemo<WorktreeStagingKey>(
     () => ({
       surface: "landing",
