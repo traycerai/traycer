@@ -587,7 +587,7 @@ function shellSnapshot(
 ): OwnerTeardownSnapshot {
   const holder = shellHolder(label, ownerKind);
   return {
-    holders: [holder],
+    holders: [{ ...holder, holderKey: teardownHolderKey(holder) }],
     stopTargets: [
       {
         kind: "supervised-shell",
@@ -907,7 +907,10 @@ it("stops a chat turn once and does not re-stop expanded agent.stop-consequence 
   );
   const shell = shellHolder("sleep 1", "chat");
   teardownMocks.snapshot.mockImplementation(() => ({
-    holders: [turn, shell],
+    holders: [
+      { ...turn, holderKey: teardownHolderKey(turn) },
+      { ...shell, holderKey: teardownHolderKey(shell) },
+    ],
     stopTargets: [
       {
         kind: "chat-turn",
