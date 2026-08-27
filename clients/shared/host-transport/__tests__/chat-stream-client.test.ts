@@ -132,6 +132,16 @@ function completeHandshake(socket: StubStreamWebSocket): void {
  * this is how a black-box test forces a down-negotiated session without
  * touching production code.
  */
+/**
+ * The full-snapshot chat.subscribe line. Named here because the canonical
+ * version moved to the windowed 1.8 line: a test that wants the full-snapshot
+ * shape has to say so, or it silently gets the windowed one.
+ */
+const FULL_SNAPSHOT_VERSION: {
+  readonly major: number;
+  readonly minor: number;
+} = { major: 1, minor: 7 };
+
 function completeHandshakeAtVersion(
   socket: StubStreamWebSocket,
   schemaVersion: { readonly major: number; readonly minor: number },
@@ -498,16 +508,21 @@ describe("ChatStreamClient", () => {
       chatId: "chat-1",
       callbacks,
     });
-    completeHandshake(sockets[0]);
+    // Pinned to the FULL-SNAPSHOT line this test is about. `completeHandshake`
+    // echoes the client's own manifest, so it negotiates whatever the canonical
+    // chat.subscribe is - and since the windowed line opened as 1.8 that is a
+    // snapshot with no inline `chat.messages` at all, which is not the shape
+    // asserted below. The full-snapshot line is still a released line the
+    // client must serve, so this keeps testing it rather than being retargeted.
+    completeHandshakeAtVersion(sockets[0], FULL_SNAPSHOT_VERSION);
 
-    // The advertised version tracks the registry's canonical chat.subscribe
-    // line - a literal here rots every time a minor lands.
+    // The advertised version is the NEGOTIATED one, not the client's canonical
+    // - which is the point worth pinning: a client whose registry says 1.8 must
+    // still subscribe at 1.7 to a host that only offers 1.7.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "chat.subscribe",
-      schemaVersion: buildStreamManifest(hostStreamRpcRegistry)[
-        "chat.subscribe"
-      ],
+      schemaVersion: FULL_SNAPSHOT_VERSION,
       params: { epicId: "epic-1", chatId: "chat-1" },
     });
 
@@ -783,11 +798,12 @@ describe("ChatStreamClient shallow-vs-deep snapshot parse gating", () => {
         deliveredMessages.push(...frame.snapshot.chat.messages);
       }),
     });
-    // Default handshake echoes the client's own manifest verbatim, which
-    // negotiates to the client's canonical chat.subscribe version - today
-    // exactly `chatSubscribeFullSnapshotSchemaVersion` ({major:1, minor:7}). The
-    // shallow path does NOT run the 1.6 interview normalizer.
-    completeHandshake(sockets[0]);
+    // Pinned rather than defaulted: the default handshake negotiates the
+    // CANONICAL chat.subscribe, which is the windowed 1.8 line now, and a
+    // windowed snapshot carries no inline `chat.messages`. This test is about
+    // the full-snapshot shallow path, so it names that line. The shallow path
+    // does NOT run the 1.6 interview normalizer.
+    completeHandshakeAtVersion(sockets[0], FULL_SNAPSHOT_VERSION);
 
     sockets[0].fireText(
       snapshotFrameWithAssistantMessage(frozenPreImageAssistantMessage()),
