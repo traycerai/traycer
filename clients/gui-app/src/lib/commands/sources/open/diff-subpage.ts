@@ -36,6 +36,11 @@ import type {
   CommandItem,
   CommandSubpage,
 } from "@/lib/commands/types";
+import {
+  buildRankedPathItems,
+  buildPathTreeItems,
+  openerPathTreeId,
+} from "@/lib/commands/sources/open/path-tree-items";
 
 interface ChangedFileLeavesArgs {
   readonly ctx: CommandContext;
@@ -51,8 +56,12 @@ function changedFileLeaves(
   const { ctx, hostId, workspacePath, files, query } = args;
   const matched = files.filter((file) => matchesPathQuery(query, file.path));
   const shown = matched.slice(0, OPENER_RESULT_CAP);
-  const leaves = shown.map((file) =>
-    openerActionLeaf({
+  const leaves = shown.map((file) => ({
+    path: file.path,
+    displaySegments: null,
+    structuralSegments: null,
+    gitStatus: file.status,
+    item: openerActionLeaf({
       id: `open:diff:${workspacePath}:${file.path}:${file.stage}`,
       // Workspace-relative path (not just the basename) so duplicate filenames
       // are distinguishable; the row dims the directory, emphasizes the name.
@@ -71,11 +80,16 @@ function changedFileLeaves(
           navigateNestedFocus: ctx.router.navigateNestedFocus,
         }),
     }),
-  );
+  }));
+  const treeId = openerPathTreeId("diff", hostId, workspacePath);
+  const treeItems =
+    query.trim().length > 0
+      ? buildRankedPathItems(treeId, leaves)
+      : buildPathTreeItems(treeId, leaves, []);
   if (matched.length > shown.length) {
-    return [...leaves, openerTruncatedHint("diff", shown.length)];
+    return [...treeItems, openerTruncatedHint("diff", shown.length)];
   }
-  return leaves;
+  return treeItems;
 }
 
 function useDiffStepItems(

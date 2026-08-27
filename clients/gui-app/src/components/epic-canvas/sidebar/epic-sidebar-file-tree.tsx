@@ -222,6 +222,9 @@ function useFileTreeSource(args: {
     hostId: args.hostId,
     workspacePath: args.workspacePath,
     enabled: !useUnaryFallback,
+    streamClient: undefined,
+    expandedPathsOverride: null,
+    onPrunedOverride: null,
   });
   const search = useHostPathSearch({
     epicId: args.epicId,

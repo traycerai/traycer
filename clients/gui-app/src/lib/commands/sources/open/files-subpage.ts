@@ -21,6 +21,10 @@ import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
 import type { WorkspaceSearchSource } from "@traycer/protocol/host/workspace/unary-schemas";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
+import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
+import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import {
@@ -57,8 +61,19 @@ import type {
   CommandSubpage,
 } from "@/lib/commands/types";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
+import {
+  buildRankedPathItems,
+  buildPathTreeItems,
+  openerPathTreeId,
+} from "@/lib/commands/sources/open/path-tree-items";
+import { useWorkspaceFileListSubscription } from "@/hooks/workspace/use-workspace-file-list-subscription";
+import {
+  useOpenerFileTreeExpandedPaths,
+  useOpenerFileTreeStore,
+} from "@/stores/file-tree/opener-file-tree-store";
 
 const FILES_SEARCH_DEBOUNCE_MS = 150;
+const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
 // A stable source object so the search hook's query key is stable across
 // renders (the host derives the mirror root from the request `epicId`).
@@ -83,6 +98,7 @@ function openerNotice(id: string, label: string): CommandItem {
     shortcut: null,
     actionId: null,
     subpage: null,
+    disabled: true,
     run: () => undefined,
   };
 }
@@ -120,33 +136,85 @@ function codeFileLeaves(args: CodeFileLeavesArgs): ReadonlyArray<CommandItem> {
   const leaves = view.results.flatMap((result) => {
     if (result.kind !== "file") return [];
     return [
-      openerActionLeaf({
-        id: `open:files:${workspacePath}:${result.relPath}`,
-        // Workspace-relative path so duplicate basenames are distinguishable,
-        // and so the host-searched text is what cmdk re-filters on.
-        label: result.relPath,
-        keywords: [result.relPath, result.name],
-        run: () => {
-          const ref = workspaceFileRefFromTreePath(
-            hostId,
-            workspacePath,
-            result.relPath,
-            result.name,
-          );
-          if (ref === null) return;
-          openTileIntoTargetGroup({
-            tabId: ctx.activeTabId,
-            groupId: ctx.targetGroupId,
-            ref,
-            navigateNestedFocus: ctx.router.navigateNestedFocus,
-          });
-        },
-      }),
+      {
+        path: result.relPath,
+        displaySegments: null,
+        structuralSegments: null,
+        gitStatus: undefined,
+        item: openerActionLeaf({
+          id: `open:files:${workspacePath}:${result.relPath}`,
+          // Workspace-relative path so duplicate basenames are distinguishable,
+          // and so the host-searched text is what cmdk re-filters on.
+          label: result.relPath,
+          keywords: [result.relPath, result.name],
+          run: () => {
+            const ref = workspaceFileRefFromTreePath(
+              hostId,
+              workspacePath,
+              result.relPath,
+              result.name,
+            );
+            if (ref === null) return;
+            openTileIntoTargetGroup({
+              tabId: ctx.activeTabId,
+              groupId: ctx.targetGroupId,
+              ref,
+              navigateNestedFocus: ctx.router.navigateNestedFocus,
+            });
+          },
+        }),
+      },
     ];
   });
+  const treeItems = buildRankedPathItems(
+    openerPathTreeId("files", hostId, workspacePath),
+    leaves,
+  );
   return view.truncated
-    ? [...leaves, openerTruncatedHint("files", leaves.length)]
-    : leaves;
+    ? [...treeItems, openerTruncatedHint("files", leaves.length)]
+    : treeItems;
+}
+
+function liveCodeFileLeaves(args: {
+  readonly ctx: CommandContext;
+  readonly hostId: string;
+  readonly workspacePath: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly fileNameByPath: ReadonlyMap<string, string>;
+  readonly truncated: boolean;
+}): ReadonlyArray<CommandItem> {
+  const treeId = openerPathTreeId("files", args.hostId, args.workspacePath);
+  const leaves = [...args.fileNameByPath].map(([path, name]) => ({
+    path,
+    displaySegments: null,
+    structuralSegments: null,
+    gitStatus: undefined,
+    item: openerActionLeaf({
+      id: `open:files:${args.workspacePath}:${path}`,
+      label: path,
+      keywords: [path, name],
+      run: () => {
+        const ref = workspaceFileRefFromTreePath(
+          args.hostId,
+          args.workspacePath,
+          path,
+          name,
+        );
+        if (ref === null) return;
+        openTileIntoTargetGroup({
+          tabId: args.ctx.activeTabId,
+          groupId: args.ctx.targetGroupId,
+          ref,
+          navigateNestedFocus: args.ctx.router.navigateNestedFocus,
+        });
+      },
+    }),
+  }));
+  const directories = args.paths.filter((path) => path.endsWith("/"));
+  const items = buildPathTreeItems(treeId, leaves, directories);
+  return args.truncated
+    ? [...items, openerTruncatedHint("files", leaves.length)]
+    : items;
 }
 
 function useCodeRootStepItems(
@@ -157,33 +225,93 @@ function useCodeRootStepItems(
   // runs there, on the same host the leaves below bind their tiles to.
   const client = useHostClientForHostId(row.hostId);
   const query = usePaletteLiveQuery();
+  const isBrowsing = query.trim().length === 0;
+  const hostEntry = useHostDirectoryEntry(row.hostId);
+  const streamAuth = useStreamAuthRevalidator();
+  const streamClient = useHostStreamClientFor(
+    isBrowsing ? hostEntry : null,
+    streamAuth,
+  );
+  const streamSupport = useStreamMethodSupportFor(
+    streamClient,
+    WORKSPACE_FILE_LIST_METHOD,
+  );
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
   const source = useMemo<WorkspaceSearchSource>(
     () => ({ root: row.runningDir }),
     [row.runningDir],
   );
+  const treeId = openerPathTreeId("files", row.hostId, row.runningDir);
+  const expandedPaths = useOpenerFileTreeExpandedPaths(treeId);
+  const prune = useOpenerFileTreeStore((state) => state.prune);
+  const onPruned = (directoryPaths: ReadonlyArray<string>) => {
+    prune(treeId, directoryPaths);
+  };
+  const live = useWorkspaceFileListSubscription({
+    epicId,
+    hostId: row.hostId,
+    workspacePath: row.runningDir,
+    enabled:
+      ctx.activeEpicId !== null &&
+      isBrowsing &&
+      streamClient !== null &&
+      streamSupport !== "unsupported",
+    streamClient,
+    expandedPathsOverride: expandedPaths,
+    onPrunedOverride: onPruned,
+  });
   const search = useWorkspaceSearchPathsForSource({
     client,
     epicId,
     source,
     query: debouncedQuery,
     kinds: "files",
-    enabled: ctx.activeEpicId !== null,
+    enabled: ctx.activeEpicId !== null && query.trim().length > 0,
   });
   const view = readSearchPathsResponseForSource(search.data, epicId, source);
   const isError = search.isError;
-  return useMemo<ReadonlyArray<CommandItem>>(
-    () =>
-      codeFileLeaves({
-        ctx,
-        hostId: row.hostId,
-        workspacePath: row.runningDir,
-        view,
-        isError,
-      }),
-    [ctx, row.hostId, row.runningDir, view, isError],
-  );
+  if (query.trim().length > 0) {
+    return codeFileLeaves({
+      ctx,
+      hostId: row.hostId,
+      workspacePath: row.runningDir,
+      view,
+      isError,
+    });
+  }
+  if (streamClient === null || streamSupport === "unsupported") {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-unavailable`,
+        "File browsing is unavailable on this host",
+      ),
+    ];
+  }
+  if (live.error !== null) {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-error`,
+        "Files could not be loaded",
+      ),
+    ];
+  }
+  if (live.isPending) {
+    return [
+      openerNotice(
+        `open:files:ws:${row.runningDir}:browse-loading`,
+        "Loading files…",
+      ),
+    ];
+  }
+  return liveCodeFileLeaves({
+    ctx,
+    hostId: row.hostId,
+    workspacePath: row.runningDir,
+    paths: live.paths,
+    fileNameByPath: live.fileNameByPath,
+    truncated: live.truncated,
+  });
 }
 
 function makeCodeRootStepSubpage(
@@ -204,10 +332,11 @@ interface ArtifactLeavesArgs {
   readonly view: WorkspaceSearchPathsView | null;
   readonly isError: boolean;
   readonly pathIndex: ReadonlyMap<string, ArtifactPathEntry>;
+  readonly isSearching: boolean;
 }
 
 function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
-  const { ctx, defaultHostId, view, isError, pathIndex } = args;
+  const { ctx, defaultHostId, view, isError, pathIndex, isSearching } = args;
   if (isError) {
     return [
       openerNotice(
@@ -232,34 +361,44 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
     const entry = pathIndex.get(normalizeArtifactLogicalPath(result.relPath));
     if (entry === undefined) return [];
     return [
-      openerActionLeaf({
-        id: `open:files:artifacts:${entry.id}`,
-        // Ancestor-title path distinguishes duplicate leaf titles and reads
-        // better than the folder slug; the slug path rides in keywords so the
-        // host match survives cmdk's re-filter.
-        label: entry.titlePath.length > 0 ? entry.titlePath : entry.title,
-        keywords: [result.relPath, result.name, entry.title, entry.titlePath],
-        run: () => {
-          const ref: EpicArtifactRef = {
-            id: entry.id,
-            instanceId: uuidv4(),
-            type: entry.kind,
-            name: entry.title,
-            hostId: defaultHostId,
-          };
-          openTileIntoTargetGroup({
-            tabId: ctx.activeTabId,
-            groupId: ctx.targetGroupId,
-            ref,
-            navigateNestedFocus: ctx.router.navigateNestedFocus,
-          });
-        },
-      }),
+      {
+        path: entry.id,
+        displaySegments: entry.titleSegments,
+        structuralSegments: entry.idSegments,
+        gitStatus: undefined,
+        item: openerActionLeaf({
+          id: `open:files:artifacts:${entry.id}`,
+          // Ancestor-title path distinguishes duplicate leaf titles and reads
+          // better than the folder slug; the slug path rides in keywords so the
+          // host match survives cmdk's re-filter.
+          label: entry.titlePath.length > 0 ? entry.titlePath : entry.title,
+          keywords: [result.relPath, result.name, entry.title, entry.titlePath],
+          run: () => {
+            const ref: EpicArtifactRef = {
+              id: entry.id,
+              instanceId: uuidv4(),
+              type: entry.kind,
+              name: entry.title,
+              hostId: defaultHostId,
+            };
+            openTileIntoTargetGroup({
+              tabId: ctx.activeTabId,
+              groupId: ctx.targetGroupId,
+              ref,
+              navigateNestedFocus: ctx.router.navigateNestedFocus,
+            });
+          },
+        }),
+      },
     ];
   });
+  const treeId = `open:files:artifacts:${ctx.activeEpicId ?? ""}`;
+  const treeItems = isSearching
+    ? buildRankedPathItems(treeId, leaves)
+    : buildPathTreeItems(treeId, leaves, []);
   return view.truncated
-    ? [...leaves, openerTruncatedHint("files-artifacts", leaves.length)]
-    : leaves;
+    ? [...treeItems, openerTruncatedHint("files-artifacts", leaves.length)]
+    : treeItems;
 }
 
 function useArtifactsStepItems(
@@ -271,6 +410,7 @@ function useArtifactsStepItems(
   const client = useHostClientForHostId(activeEpicHostId);
   const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const query = usePaletteLiveQuery();
+  const isSearching = query.trim().length > 0;
   const debouncedQuery = useDebouncedValue(query, FILES_SEARCH_DEBOUNCE_MS);
   const epicId = ctx.activeEpicId ?? "";
   const projection = useActiveEpicProjection(ctx.activeEpicId);
@@ -296,8 +436,16 @@ function useArtifactsStepItems(
     [projection],
   );
   return useMemo<ReadonlyArray<CommandItem>>(
-    () => artifactLeaves({ ctx, defaultHostId, view, isError, pathIndex }),
-    [ctx, defaultHostId, view, isError, pathIndex],
+    () =>
+      artifactLeaves({
+        ctx,
+        defaultHostId,
+        view,
+        isError,
+        pathIndex,
+        isSearching,
+      }),
+    [ctx, defaultHostId, view, isError, pathIndex, isSearching],
   );
 }
 

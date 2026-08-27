@@ -63,6 +63,8 @@ describe("buildArtifactDisplayPathIndex", () => {
     expect(index.get("tickets/one")).toMatchObject({
       id: "c",
       title: "First",
+      titleSegments: ["Tickets", "First"],
+      idSegments: ["p", "c"],
       titlePath: "Tickets / First",
     });
   });

@@ -5,8 +5,8 @@ import type {
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
-  hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
-  type HostNotificationsCloudFeedRow,
+  hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
+  type HostNotificationsCloudFeedRowV11,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -34,7 +34,7 @@ export interface CloudNotificationsState {
    * activation still asks for it.
    */
   readonly rows: Readonly<
-    Partial<Record<string, HostNotificationsCloudFeedRow>>
+    Partial<Record<string, HostNotificationsCloudFeedRowV11>>
   >;
   readonly summary: HostNotificationsCloudFeedSummary | null;
   /** The cloud's per-user change sequence, as of the last snapshot. This is
@@ -69,10 +69,10 @@ export interface CloudNotificationsState {
   >;
   readonly connectionState: CloudNotificationsConnectionState;
   applySnapshot(input: {
-    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
+    readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): ReadonlyArray<HostNotificationsCloudFeedRow> | null;
+  }): ReadonlyArray<HostNotificationsCloudFeedRowV11> | null;
   /** Optimistic set-once marker application. A later authoritative snapshot
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
@@ -187,11 +187,13 @@ export function cloudNotificationFeedId(entryId: string): string {
   return `cloud:${encodeURIComponent(entryId)}`;
 }
 
-function rowKey(row: Pick<HostNotificationsCloudFeedRow, "entryId">): string {
+function rowKey(
+  row: Pick<HostNotificationsCloudFeedRowV11, "entryId">,
+): string {
   return cloudNotificationFeedId(row.entryId);
 }
 
-function isUnreadAttention(row: HostNotificationsCloudFeedRow): boolean {
+function isUnreadAttention(row: HostNotificationsCloudFeedRowV11): boolean {
   return (
     (row.entry.severity === "needs_action" ||
       row.entry.severity === "failure") &&
@@ -215,9 +217,10 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       // uses accepted snapshots to drive cross-plane completion reconciliation.
       if (currentVersion !== null && input.version < currentVersion)
         return null;
-      const arrivals: HostNotificationsCloudFeedRow[] = [];
+      const arrivals: HostNotificationsCloudFeedRowV11[] = [];
       set((state) => {
-        const rows: Partial<Record<string, HostNotificationsCloudFeedRow>> = {};
+        const rows: Partial<Record<string, HostNotificationsCloudFeedRowV11>> =
+          {};
         for (const row of input.rows) {
           const key = rowKey(row);
           rows[key] = row;
@@ -379,8 +382,8 @@ export function openCloudNotificationsStream(
   onEntitlementDenied: (() => void) | null,
   onSnapshot:
     | ((input: {
-        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
-        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRow>;
+        readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
+        readonly arrivals: ReadonlyArray<HostNotificationsCloudFeedRowV11>;
       }) => void)
     | null,
 ): () => void {
@@ -423,7 +426,7 @@ export function openCloudNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsCloudFeedSubscribeServerFrameSchemaV10.safeParse(
+        hostNotificationsCloudFeedSubscribeServerFrameSchemaV11.safeParse(
           envelope,
         );
       if (!parsed.success) {
