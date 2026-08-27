@@ -596,11 +596,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     ],
   );
   function openProviderSettings(): void {
+    // Settings has its own host scope. The picker may be following the
+    // app-wide default (`runTargetHostId === null`), so hand Settings the
+    // concrete host backing this picker rather than the follow-default
+    // sentinel; otherwise a remembered Settings scope could win instead.
+    const focusHostId =
+      runTargetClient === null
+        ? runTargetHostId
+        : runTargetClient.getActiveHostId();
     closeOnly();
     const focus = useProvidersFocusStore.getState();
     focus.setProfileFocus({
       harnessId: resolvedActiveProviderId,
-      hostId: runTargetHostId,
+      hostId: focusHostId,
       // Provider settings uses the wire profile identity. The picker uses
       // `null` for that same ambient row at commit sites, so restore its wire
       // sentinel before handing the one-shot focus intent across surfaces.
