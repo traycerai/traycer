@@ -9,6 +9,9 @@ import {
   type Message,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
+  assistantRowId,
+  assistantRowTurnKey,
+  assistantSliceRowId,
   planAssistantTurnRows,
   projectTranscriptRows,
   assistantTurnNeedsTrailingRow,
@@ -803,5 +806,34 @@ describe("what travels with a hydrated turn", () => {
     }
 
     expect(row.source.triggeringMessageId).toBe("m-1");
+  });
+});
+
+describe("assistantRowTurnKey", () => {
+  /**
+   * `TranscriptRowContext` is keyed by ROW id and a turn's context is shared by
+   * every row the turn produces, so a renderer holding a turn key needs the
+   * mapping in this direction. Pinned against the BUILDERS rather than against
+   * literals: the point of the function is that the two cannot drift.
+   */
+  it("inverts the row-id builders for split and unsplit turns", () => {
+    for (const turnKey of ["turn-1", "ts:1730000000000"]) {
+      expect(assistantRowTurnKey(assistantRowId(turnKey))).toBe(turnKey);
+      expect(assistantRowTurnKey(assistantSliceRowId(turnKey, 0, false))).toBe(
+        turnKey,
+      );
+      for (const chunkIndex of [0, 3, 17]) {
+        expect(
+          assistantRowTurnKey(assistantSliceRowId(turnKey, chunkIndex, true)),
+        ).toBe(turnKey);
+      }
+    }
+  });
+
+  it("declines every row id that does not name a turn", () => {
+    expect(assistantRowTurnKey("m-1")).toBeNull();
+    expect(assistantRowTurnKey("steer:queue-1")).toBeNull();
+    expect(assistantRowTurnKey("setup-card:chat-1:0:5")).toBeNull();
+    expect(assistantRowTurnKey("chat-event:e-1")).toBeNull();
   });
 });

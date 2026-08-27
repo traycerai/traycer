@@ -131,6 +131,7 @@ const displayContext: RenderedMessagesDisplayContext = {
 const CANONICAL_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,

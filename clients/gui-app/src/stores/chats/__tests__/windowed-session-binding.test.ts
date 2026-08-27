@@ -503,6 +503,170 @@ describe("windowed snapshot whose tail arrived empty", () => {
   });
 });
 
+describe("a deferred snapshot's auxiliary state", () => {
+  /**
+   * The wait-for-tail rule holds the whole frame, but only the TRANSCRIPT half
+   * of the fold is what the tail gates. Every other frame keeps being applied
+   * while the snapshot waits, and a range answer can ride the BULK lane and
+   * land well after them - so replaying the frame's own queue, turn and pending
+   * state at that point reinstates values those frames had already replaced.
+   *
+   * It reinstates them PERMANENTLY, because nothing re-sends them. An approval
+   * the agent is still blocked on disappears from the panel.
+   */
+  function approvalRequested(
+    approvalId: string,
+  ): Parameters<ChatStreamCallbacks["onApprovalRequested"]>[0] {
+    return {
+      kind: "approvalRequested",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      approval: {
+        approvalId,
+        toolName: "Bash",
+        description: "rm -rf /tmp/x",
+        input: null,
+        requestedAt: 12,
+        kind: "tool",
+        planId: null,
+        actions: [],
+      },
+    };
+  }
+
+  it("keeps what later frames delivered while the tail was outstanding", () => {
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 2,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(
+        isTailHydrated(harness.handle.store.getState().transcriptWindow),
+      ).toBe(false);
+
+      harness.callbacks().onApprovalRequested(approvalRequested("appr-1"));
+      harness.callbacks().onQueueChanged({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        queue: { status: "paused", items: [] },
+      });
+      expect(
+        harness.handle.store
+          .getState()
+          .pendingApprovals.map((approval) => approval.approvalId),
+      ).toEqual(["appr-1"]);
+
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      const state = harness.handle.store.getState();
+      // The fold ran - the tail is in and the transcript is published.
+      expect(state.messages.map((message) => message.messageId)).toEqual([
+        "m-0",
+        "m-1",
+      ]);
+      // ...without rewinding the frames that landed while it waited.
+      expect(
+        state.pendingApprovals.map((approval) => approval.approvalId),
+      ).toEqual(["appr-1"]);
+      expect(state.queue.status).toBe("paused");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("merges the snapshot's own aux with the frames that followed it", () => {
+    // The union, and the reason "just use whatever the store holds" is not the
+    // fix either: a deferred snapshot is the newer authority for everything no
+    // later frame replaced, so its approval has to survive beside the later
+    // frame's queue.
+    const harness = createWindowedHarness();
+    try {
+      const frame = windowedSnapshot({
+        epoch: 4,
+        rowCount: 2,
+        tailFromOrdinal: 2,
+        tailMessages: [],
+        accumulatedFileChangeCount: 0,
+      });
+      harness.callbacks().onWindowedSnapshot({
+        ...frame,
+        snapshot: {
+          ...frame.snapshot,
+          pendingApprovals: [
+            {
+              approvalId: "appr-snapshot",
+              toolName: "Bash",
+              description: "ls",
+              input: null,
+              requestedAt: 5,
+              kind: "tool",
+              planId: null,
+              actions: [],
+            },
+          ],
+        },
+      });
+      harness.callbacks().onQueueChanged({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        queue: { status: "paused", items: [] },
+      });
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      const state = harness.handle.store.getState();
+      expect(
+        state.pendingApprovals.map((approval) => approval.approvalId),
+      ).toEqual(["appr-snapshot"]);
+      expect(state.queue.status).toBe("paused");
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
 describe("an unanswered range request", () => {
   it("is retried once its wait runs out", () => {
     // The in-flight slot is the dedup key: while it holds a request for a

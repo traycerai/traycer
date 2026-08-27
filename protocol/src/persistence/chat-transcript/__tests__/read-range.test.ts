@@ -549,6 +549,33 @@ describe("sliceTranscriptTail", () => {
     expect(result.fromOrdinal).toBe(0);
   });
 
+  it("carries the served rows' projection context, and charges it", () => {
+    // The tail is the one hydration nothing ever repairs: the planner counts
+    // these rows hydrated, so no range is ever asked for them and a wrong
+    // elapsed time or profile label persists until they are evicted.
+    const withContext: readonly TranscriptRowDescriptor[] = THREE_ROWS.map(
+      (row) =>
+        row.rowId === "m-2"
+          ? { ...row, context: { legacyRowAnchorAt: 7 } }
+          : row,
+    );
+    const result = tail(withContext, THREE, [], TRANSCRIPT_TAIL_MAX_BYTES);
+
+    expect(result.rowContext).toEqual({ "m-2": { legacyRowAnchorAt: 7 } });
+
+    // The ceiling is HARD here, so an uncounted field would push a snapshot
+    // past the frame invariant with no over-budget exception to fall back on.
+    const budgetForTwo = tailBudgetFor([
+      { rowId: "m-1", records: [M1] },
+      { rowId: "m-2", records: [M2] },
+    ]);
+    expect(tail(THREE_ROWS, THREE, [], budgetForTwo).rowIds).toEqual([
+      "m-1",
+      "m-2",
+    ]);
+    expect(tail(withContext, THREE, [], budgetForTwo).rowIds).toEqual(["m-2"]);
+  });
+
   it("returns an EMPTY tail rather than break the ceiling for one huge row", () => {
     // The whole reason this is not `sliceTranscriptRange` with a flag. The
     // client paints one round trip later for this chat; the alternative is an

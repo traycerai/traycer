@@ -39,6 +39,7 @@ import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/
 // stopped-turn fold, and every row id.
 import {
   assistantRowId,
+  assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
   chatTranscriptEventRowId,
@@ -50,6 +51,7 @@ import {
   type AssistantTurnRowPlan,
   type TurnStoppedInfo,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   isNoOpCheckpointEntry,
   turnCheckpointManifestSchema,
@@ -134,6 +136,17 @@ export interface RenderedMessagesDisplayContext {
 export interface RenderedMessagesInput {
   readonly messages: ReadonlyArray<Message>;
   readonly events: ReadonlyArray<ChatEvent>;
+  /**
+   * `ChatSessionState.transcriptRowContext` - what the host says each hydrated
+   * row renders WITH, by row id (`row-context.ts`).
+   *
+   * The derivations below that look at the rows AROUND the one they are drawing
+   * cannot answer from a bounded window, so on the windowed line they read this
+   * instead and fall back to their own walk only where it says nothing. Empty on
+   * the legacy line, where the whole transcript is materialized and every walk
+   * is already correct.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
@@ -632,9 +645,22 @@ function profileLabelFromSessionAnchor(
  * new anchor, so the last anchor remains in effect until the host mints the
  * next one. The active turn needs an explicit mapping before its first
  * assistant record exists; its `userMessageId` identifies the initiating row.
+ *
+ * The running `currentAnchor` is exactly the "look at the rows around this one"
+ * derivation a bounded window cannot make: a turn whose anchor was established
+ * by a user record outside the hydrated span starts the walk with none and
+ * silently loses its saved label. `contextByTurnKey` is the host's own answer
+ * for that turn and outranks the walk wherever it speaks - the walk stays as
+ * the fallback for the legacy line and for any turn the projection said nothing
+ * about.
+ *
+ * The `harnessId` agreement gate applies either way. It is what stops a label
+ * minted for one provider from being shown against another's turn, and that is
+ * a property of the anchor rather than of where the anchor came from.
  */
 function profileLabelsByTurnKeyFromMessages(input: {
   readonly messages: ReadonlyArray<Message>;
+  readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly activeTurnId: string | null;
   readonly activeTurnUserMessageId: string | null;
   readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
@@ -654,11 +680,11 @@ function profileLabelsByTurnKeyFromMessages(input: {
       }
       continue;
     }
-    if (currentAnchor?.harnessId === message.sender.harnessId) {
-      labels.set(
-        assistantTurnKey(message),
-        profileLabelFromSessionAnchor(currentAnchor),
-      );
+    const turnKey = assistantTurnKey(message);
+    const anchor =
+      input.contextByTurnKey.get(turnKey)?.sessionAnchor ?? currentAnchor;
+    if (anchor?.harnessId === message.sender.harnessId) {
+      labels.set(turnKey, profileLabelFromSessionAnchor(anchor));
     }
   }
 
@@ -921,10 +947,25 @@ export function useRenderedMessages(
   const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
   const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
   const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
+  // carries the same context object, so the map is at most one entry per
+  // hydrated turn, and the derivations below all hold a turn key rather than a
+  // row id. Non-assistant rows drop out here and are read by row id where they
+  // are needed.
+  const contextByTurnKey = useMemo(() => {
+    const byTurnKey = new Map<string, TranscriptRowContext>();
+    for (const rowId of Object.keys(input.rowContext)) {
+      const turnKey = assistantRowTurnKey(rowId);
+      if (turnKey === null || turnKey === "") continue;
+      byTurnKey.set(turnKey, input.rowContext[rowId]);
+    }
+    return byTurnKey;
+  }, [input.rowContext]);
   const profileLabelsByTurnKey = useMemo(
     () =>
       profileLabelsByTurnKeyFromMessages({
         messages: input.messages,
+        contextByTurnKey,
         activeTurnId,
         activeTurnUserMessageId,
         activeTurnHarnessId,
@@ -932,6 +973,7 @@ export function useRenderedMessages(
       }),
     [
       input.messages,
+      contextByTurnKey,
       activeTurnId,
       activeTurnUserMessageId,
       activeTurnHarnessId,
@@ -1119,6 +1161,7 @@ export function useRenderedMessages(
       messages: partition.settled,
       userMessagesById,
       profileLabelsByTurnKey,
+      contextByTurnKey,
       liveAssistant: null,
       externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
       checkpointViews,
@@ -1137,6 +1180,7 @@ export function useRenderedMessages(
     partition,
     userMessagesById,
     profileLabelsByTurnKey,
+    contextByTurnKey,
     activeTurnSteeredMessageIds,
     retainedTurnKeys,
     checkpointViews,
@@ -1163,6 +1207,7 @@ export function useRenderedMessages(
             messages: partition.activeTurn,
             userMessagesById,
             profileLabelsByTurnKey,
+            contextByTurnKey,
             liveAssistant,
             externallyNestedSteeredMessageIds: NO_STEERED_IDS,
             checkpointViews,
@@ -1183,6 +1228,7 @@ export function useRenderedMessages(
       partition,
       userMessagesById,
       profileLabelsByTurnKey,
+      contextByTurnKey,
       liveAssistant,
       checkpointViews,
       activeTurnId,
@@ -1649,6 +1695,11 @@ interface PersistedMessagesRenderInput {
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
   /** Immutable profile-label snapshots keyed by assistant turn identity. */
   readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
+  /**
+   * The host's per-row projection context, re-keyed by turn - see
+   * `RenderedMessagesInput.rowContext`. Empty on the legacy line.
+   */
+  readonly contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>;
   readonly liveAssistant: LiveAssistantMessage | null;
   /**
    * Steered user ids nested inside turns OUTSIDE this partition; their user
@@ -1928,6 +1979,19 @@ interface AssistantTurnTimingInput {
   readonly lifecycle: TurnLifecycleTiming | null;
   readonly blocks: ReadonlyArray<ContentBlock>;
   readonly persistedStartedAt: number | null;
+  /**
+   * The projection's own anchor for a turn persisted before `startedAt`
+   * existed, when it carried one - see `TranscriptRowContext`.
+   *
+   * Ahead of {@link AssistantTurnTimingInput.lastUserTimestamp} because that is
+   * the re-derivation this replaces: the walk's running user stamp is `null` in
+   * a span that does not reach the preceding user row, and the anchor then
+   * collapses onto the assistant record's COMPLETION stamp, shrinking the
+   * displayed elapsed time - often to zero. Behind `persistedStartedAt` only
+   * for symmetry: the host carries this exclusively when `startedAt` is absent,
+   * so the two are never both present.
+   */
+  readonly legacyRowAnchorAt: number | null;
   readonly lastUserTimestamp: number | null;
   readonly persistedCompletedAt: number;
   readonly stoppedAt: number | null;
@@ -1952,6 +2016,7 @@ function assistantTurnTiming(
 ): AssistantTurnTiming {
   const fallbackStartedAt =
     input.persistedStartedAt ??
+    input.legacyRowAnchorAt ??
     input.lastUserTimestamp ??
     input.persistedCompletedAt;
   const fallbackCompletedAt = input.stoppedAt ?? input.persistedCompletedAt;
@@ -2001,6 +2066,20 @@ function assistantCompletionCacheToken(
   return `${state}:${timestamp}`;
 }
 
+/**
+ * The projection's own anchor for this turn, or `null` when it carried none.
+ *
+ * A named lookup rather than an inline chain: the turn renderer is at its
+ * complexity budget, and two more branches inside it is what a lint gate reads
+ * rather than what a reader does.
+ */
+function legacyRowAnchorFor(
+  contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
+  turnKey: string,
+): number | null {
+  return contextByTurnKey.get(turnKey)?.legacyRowAnchorAt ?? null;
+}
+
 function renderPersistedAssistantMessageTurn(
   args: PersistedAssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
@@ -2032,6 +2111,7 @@ function renderPersistedAssistantMessageTurn(
     lifecycle: lifecycleTiming,
     blocks: acc.blocks,
     persistedStartedAt: acc.startedAt,
+    legacyRowAnchorAt: legacyRowAnchorFor(input.contextByTurnKey, turnKey),
     lastUserTimestamp: args.lastUserTimestamp,
     persistedCompletedAt: acc.timestamp,
     stoppedAt: stopped?.stoppedAt ?? null,

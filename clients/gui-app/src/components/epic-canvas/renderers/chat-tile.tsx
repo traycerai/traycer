@@ -1366,6 +1366,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       access: s.access,
       messages: s.messages,
       events: s.events,
+      // Written in the same `set` as the two arrays above, so subscribing costs
+      // no extra render and no frame can render rows against the previous
+      // hydration's context.
+      transcriptRowContext: s.transcriptRowContext,
       // Both already change identity on every windowed frame (they are rebuilt
       // from the window), so subscribing to the window itself costs no extra
       // render. The revert-scope resolution needs it to know whether the two
@@ -1554,6 +1558,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     {
       messages: state.messages,
       events: state.events,
+      // Published in the same `set` as `messages`, so the rows and what they
+      // render WITH can never be a frame apart - see `row-context.ts`.
+      rowContext: state.transcriptRowContext,
       pendingUserMessages: state.pendingUserMessages,
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,

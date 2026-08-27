@@ -1462,6 +1462,143 @@ describe("what an overlap keeps", () => {
   });
 });
 
+describe("a record lives in exactly one span", () => {
+  /**
+   * A steered turn is MANY rows over ONE record set, and `SPAN_MERGE_MAX_BYTES`
+   * stops touching spans from always merging - so one turn's slices can sit in
+   * several spans, each holding its own copy of the turn's records. Nothing
+   * downstream picks between two copies by freshness: `hydratedRecords` dedupes
+   * in ORDINAL order, so the earliest span's copy wins however stale it is.
+   */
+  function spanCarrying(
+    window: TranscriptWindow,
+    input: {
+      readonly fromOrdinal: number;
+      readonly rowIds: readonly string[];
+      readonly messages: readonly Message[];
+    },
+  ): TranscriptWindow {
+    return applyRangeResponse(window, rangeResponse({ epoch: 1, ...input }));
+  }
+
+  it("drops an unmerged span still holding a record the incoming span re-served", () => {
+    const stale = spanCarrying(windowWithSkeleton(10), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [messageWithText(userMessage("shared", 1), "old")],
+    });
+    expect(stale.spans).toHaveLength(1);
+    // Disjoint from the first span (ordinals 2-3 are a gap), and carrying the
+    // same record - which is exactly the shape a turn straddling an evicted
+    // slice produces.
+    const reserved = spanCarrying(stale, {
+      fromOrdinal: 4,
+      rowIds: ["row-4", "row-5"],
+      messages: [messageWithText(userMessage("shared", 1), "new")],
+    });
+    expect(reserved.spans).toHaveLength(1);
+    expect(reserved.spans[0]?.fromOrdinal).toBe(4);
+    const records = hydratedRecords(reserved);
+    expect(records.messages).toHaveLength(1);
+    expect(JSON.stringify(records.messages[0])).toContain("new");
+  });
+
+  it("keeps an unmerged span that shares no record with the incoming one", () => {
+    const held = spanCarrying(windowWithSkeleton(10), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [userMessage("m-0", 1)],
+    });
+    const added = spanCarrying(held, {
+      fromOrdinal: 4,
+      rowIds: ["row-4", "row-5"],
+      messages: [userMessage("m-4", 5)],
+    });
+    expect(added.spans).toHaveLength(2);
+  });
+
+  it("a rewritten ordinal needs only its own span, because no other holds its records", () => {
+    // The reader is parked on an EARLIER slice of one turn while a later slice
+    // is rewritten. Geometry alone would leave this span holding a stale copy
+    // of the very record that changed, with no gap for the planner to notice.
+    // It cannot: seating the later slice took ownership of the shared records,
+    // so the earlier span is already gone by the time the rewrite lands.
+    const earlier = spanCarrying(windowWithSkeleton(10), {
+      fromOrdinal: 0,
+      rowIds: ["row-0", "row-1"],
+      messages: [messageWithText(userMessage("turn-record", 1), "old")],
+    });
+    const later = spanCarrying(earlier, {
+      fromOrdinal: 6,
+      rowIds: ["row-6", "row-7"],
+      messages: [messageWithText(userMessage("turn-record", 1), "new")],
+    });
+    expect(later.spans).toHaveLength(1);
+    const rewritten = applyIndexChange(later, {
+      epoch: 1,
+      rowCount: 10,
+      changes: [
+        {
+          type: "updated",
+          entries: [{ ordinal: 6, entry: skeletonEntry("row-6", 6) }],
+        },
+      ],
+    });
+    expect(rewritten.spans).toHaveLength(0);
+    expect(hydratedRecords(rewritten).messages).toHaveLength(0);
+  });
+});
+
+describe("the inline tail's row context", () => {
+  it("seats the row ids and context the tail names", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 5,
+      tail: {
+        fromOrdinal: 3,
+        rowIds: ["row-3", "row-4"],
+        messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
+        events: [],
+        rowContext: { "row-3": { legacyRowAnchorAt: 1234 } },
+      },
+    });
+    expect(window.spans[0]?.rowIds).toEqual(["row-3", "row-4"]);
+    expect(hydratedRecords(window).rowContext).toEqual({
+      "row-3": { legacyRowAnchorAt: 1234 },
+    });
+  });
+
+  it("falls back to the positional read when the tail names no rows", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 5,
+      tail: {
+        fromOrdinal: 3,
+        messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
+        events: [],
+      },
+    });
+    // Unverified ids: the snapshot precedes the skeleton, so there is nothing
+    // to fill them from yet.
+    expect(window.spans[0]?.rowIds).toEqual(["", ""]);
+    expect(hydratedRecords(window).rowContext).toEqual({});
+  });
+
+  it("treats a tail that named NO rows as no tail to seat", () => {
+    const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 5,
+      tail: {
+        fromOrdinal: 3,
+        rowIds: [],
+        messages: [userMessage("row-3", 3)],
+        events: [],
+      },
+    });
+    expect(window.spans).toHaveLength(0);
+  });
+});
+
 function messageWithText(message: Message, text: string): Message {
   if (message.role !== "user") return message;
   return {

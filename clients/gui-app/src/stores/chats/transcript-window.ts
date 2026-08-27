@@ -639,6 +639,31 @@ function dedupePreferringIncoming<T>(
 }
 
 /**
+ * Every record id a span holds, messages and events alike.
+ *
+ * One set rather than two, because every caller asks the same question of both
+ * halves - "does this span still own a copy of that record" - and the two id
+ * spaces do not collide in any way this module depends on.
+ */
+function spanRecordIds(span: HydratedSpan): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const message of span.messages) ids.add(message.messageId);
+  for (const event of span.events) ids.add(event.eventId);
+  return ids;
+}
+
+function spanSharesRecord(
+  span: HydratedSpan,
+  recordIds: ReadonlySet<string>,
+): boolean {
+  if (recordIds.size === 0) return false;
+  return (
+    span.messages.some((message) => recordIds.has(message.messageId)) ||
+    span.events.some((event) => recordIds.has(event.eventId))
+  );
+}
+
+/**
  * Insert one span, merging it with every span it touches or overlaps.
  *
  * Merging matters for more than tidiness: a reader scrolling upward produces a
@@ -650,30 +675,55 @@ function dedupePreferringIncoming<T>(
  * record bodies (see {@link dedupePreferringIncoming}). They came from a later
  * response under the same epoch, so where the two disagree the newer one is
  * the host's current answer.
+ *
+ * ## A record lives in exactly one span
+ *
+ * That rule used to follow from merging alone, and `SPAN_MERGE_MAX_BYTES` broke
+ * it: a steered turn is MANY rows over ONE record set, so its slices can sit in
+ * several touching spans that the cap refuses to merge, each holding its own
+ * copy of the same turn-level records. Two copies is not a tidiness problem,
+ * because nothing downstream picks between them by freshness -
+ * {@link hydratedRecords} dedupes in ORDINAL order, so the EARLIEST span's copy
+ * wins however old it is. A turn re-served with a new body then keeps rendering
+ * the previous one until the unrelated span happens to be evicted.
+ *
+ * So the incoming copy takes ownership: a span that did not merge and still
+ * holds one of the incoming records is dropped outright. Its rows become gaps
+ * the planner re-requests, which is the same price every other invalidation
+ * here pays, and it restores the invariant {@link holdsEveryRecordFrom} states.
  */
 function insertSpan(
   spans: readonly HydratedSpan[],
   incoming: HydratedSpan,
 ): readonly HydratedSpan[] {
+  const incomingRecordIds = spanRecordIds(incoming);
   const untouched: HydratedSpan[] = [];
   const overlapping: HydratedSpan[] = [];
   // Adjacency is absorbed only while the result stays a unit eviction can
   // reclaim (see SPAN_MERGE_MAX_BYTES). Overlap is not optional: two spans
   // covering one ordinal would place that row twice.
   let mergedBytes = incoming.bytes;
+  // Kept only while it owns no record the incoming span just re-served. Applied
+  // to the DISJOINT case as well as the merge-capped one, because adjacency is
+  // not what makes two spans share records: a gap in the middle of one turn -
+  // `[10,14]` held, `[15,17]` evicted, `[18,20]` re-fetched - leaves two spans
+  // that never touch and both carry that turn's whole record set.
+  const keepUnmerged = (span: HydratedSpan): void => {
+    if (!spanSharesRecord(span, incomingRecordIds)) untouched.push(span);
+  };
   for (const span of spans) {
     const disjoint =
       spanEnd(span) < incoming.fromOrdinal ||
       span.fromOrdinal > spanEnd(incoming);
     if (disjoint) {
-      untouched.push(span);
+      keepUnmerged(span);
       continue;
     }
     const touchesOnly =
       spanEnd(span) === incoming.fromOrdinal ||
       spanEnd(incoming) === span.fromOrdinal;
     if (touchesOnly && mergedBytes + span.bytes > SPAN_MERGE_MAX_BYTES) {
-      untouched.push(span);
+      keepUnmerged(span);
       continue;
     }
     mergedBytes += span.bytes;
@@ -788,13 +838,10 @@ export function applyWindowedSnapshot(
   const tailSpan: HydratedSpan = {
     fromOrdinal: input.tail.fromOrdinal,
     rowIds: tailRowIds,
-    // The inline tail carries no context of its own: the snapshot ships records
-    // and an ordinal, not row ids, so there is nothing to key one on. Its rows
-    // gain context when a range later re-serves them. The exposure that leaves
-    // is narrow - the tail is the newest rows, whose surrounding context is
-    // usually inside the tail - but it is real, and this is `{}` rather than an
-    // assertion that the tail needs none.
-    rowContext: {},
+    // Keyed by row id exactly as a range's is, so a tail seated on the
+    // positional ids `tailRowIdsFor` falls back to simply misses every lookup
+    // rather than seating context under the wrong row.
+    rowContext: input.tail.rowContext ?? {},
     messages: input.tail.messages,
     events: input.tail.events,
     bytes: recordsByteLength(input.tail.messages, input.tail.events),
@@ -830,11 +877,12 @@ function dropSpansOverlappingFrom(
 /**
  * Row ids for the tail the snapshot shipped inline.
  *
- * The tail is the one hydration that arrives WITHOUT row ids - it rides the
- * snapshot, which is emitted before the skeleton is streamed, so there are no
- * ids to carry that the client could check. Its extent is therefore taken
- * positionally, from `fromOrdinal` to `rowCount`, and its ids are filled from
- * the skeleton where the client already has it.
+ * The tail names its own rows when the host says so, exactly as a range does.
+ * A host that sends none falls back to the POSITIONAL read this path used
+ * before the field existed: the extent is `fromOrdinal` to `rowCount`, and the
+ * ids are filled from the skeleton where the client already has it - the empty
+ * string wherever it does not, which {@link reconcileSpansWithSkeleton} later
+ * adopts.
  *
  * `null` means "no tail to seat": an empty tail is a real answer (a last row
  * too large for the tail budget), and it is the case
@@ -852,6 +900,11 @@ function tailRowIdsFor(
   if (input.tail.messages.length === 0 && input.tail.events.length === 0) {
     return null;
   }
+  const declared = input.tail.rowIds;
+  // A host that named its rows is believed, including when it named NONE - a
+  // zero-extent span would claim an ordinal range it does not cover, and the
+  // planner is the thing that answers "the tail served nothing".
+  if (declared !== undefined) return declared.length === 0 ? null : declared;
   const rowIds: string[] = [];
   for (let index = 0; index < extent; index += 1) {
     rowIds.push(base.skeleton[input.tail.fromOrdinal + index]?.rowId ?? "");
@@ -1140,6 +1193,14 @@ export function applyIndexChange(
  * the span and dropping "the row" would mean guessing, and a wrong guess
  * leaves a stale body rendered as current.
  *
+ * The span is enough, and that rests on {@link insertSpan}'s ownership rule
+ * rather than on geometry. A rewritten row's records are held by every span its
+ * TURN reaches, which `SPAN_MERGE_MAX_BYTES` would otherwise allow to be
+ * several - and a sharing span left behind keeps drawing the pre-update body,
+ * with no gap for the planner to notice. Because no two spans may hold one
+ * record, the span containing the changed ordinal is the only one that can hold
+ * what changed.
+ *
  * The cost lands where it is cheapest: an `updated` almost always names the
  * streaming row at the tail, whose span the next snapshot re-seeds inline.
  */
@@ -1315,9 +1376,13 @@ export function isTailHydrated(window: TranscriptWindow): boolean {
  *
  * ## The condition
  *
- * A record lives in exactly one span - spans that touch are merged on insert,
- * so two disjoint spans cannot both hold one - which makes "everything after
- * it is held" precisely "its span runs to the end of the transcript".
+ * A record lives in exactly one span, so "everything after it is held" is
+ * precisely "its span runs to the end of the transcript". That used to follow
+ * from merging alone and no longer does - `SPAN_MERGE_MAX_BYTES` leaves
+ * touching spans unmerged, and one turn's record set reaches every span its
+ * rows do. {@link insertSpan} is what carries the invariant now: an unmerged
+ * span holding a record the incoming span re-served is dropped rather than kept
+ * as a second copy.
  *
  * A live record (accepted, not yet placed by the index) is newer than every
  * placed row by construction, so nothing in the transcript follows it except

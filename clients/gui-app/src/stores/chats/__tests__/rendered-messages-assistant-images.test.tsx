@@ -189,6 +189,7 @@ function consentEntry(source: string): ImageResolutionEntry {
 const CANONICAL_INPUT: RenderedMessagesInput = {
   messages: [],
   events: [],
+  rowContext: {},
   pendingUserMessages: [],
   liveAssistantMessage: null,
   activeTurn: null,

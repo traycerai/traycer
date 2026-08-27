@@ -406,8 +406,36 @@ export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
  */
 export const chatTranscriptWindowSchema = z.object({
   fromOrdinal: z.number().int().nonnegative(),
+  /**
+   * One ROW id per row in the tail, in order - the same identity echo a
+   * `range` carries, and read the same way.
+   *
+   * The tail is emitted BEFORE the skeleton streams, so the client cannot check
+   * these against an index it does not have yet. That is not what they are for
+   * here: without them the client has to take the tail's extent positionally
+   * (`fromOrdinal` to `rowCount`) and leave every id blank until a skeleton
+   * chunk supplies one, which also leaves {@link rowContext} with nothing to
+   * key on.
+   *
+   * Optional rather than defaulted, for the reason `row-context.ts` gives:
+   * absent is a producer that has nothing to say, not an empty answer. A host
+   * that predates the field leaves the client on the positional read it used
+   * before; an empty ARRAY would be indistinguishable from "this tail served no
+   * rows", which is a real and different state.
+   */
+  rowIds: z.array(z.string()).optional(),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema),
+  /**
+   * What the tail's rows render WITH, by row id - see
+   * {@link chatRangeResponseSchema}'s field of the same name.
+   *
+   * The tail needs this for the same reason a range does and with less chance
+   * of repair: the planner counts these rows hydrated, so no range is ever
+   * asked for them and a wrong elapsed time or profile label persists until the
+   * rows are evicted. Most tails have nothing to say and omit it.
+   */
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
 });
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
 

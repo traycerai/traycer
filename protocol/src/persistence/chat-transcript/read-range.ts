@@ -384,6 +384,19 @@ export interface TranscriptTailSlice {
   readonly rowIds: readonly string[];
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
+  /**
+   * Per-row projection context, by row id - exactly as a range carries it, and
+   * for exactly the same reason (see {@link TranscriptRangeSlice.rowContext}).
+   *
+   * The tail is not the exception it looks like. Its rows are the NEWEST, so
+   * the context they need is usually inside the tail - but "usually" is not
+   * "always": a legacy assistant turn whose anchor came from a user record
+   * below the tail boundary, or a session anchor established before it, is
+   * derived by the renderer from the bounded subset and comes out wrong. And
+   * the tail is the one hydration nothing ever repairs, because the planner
+   * counts these rows hydrated and no range is ever asked for them.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 }
 
 /**
@@ -420,6 +433,7 @@ export function sliceTranscriptTail(
   const rowIds: string[] = [];
   const messages: Message[] = [];
   const events: ChatEvent[] = [];
+  const rowContext: Record<string, TranscriptRowContext> = {};
   const seenMessageIds = new Set<string>();
   const seenEventIds = new Set<string>();
   let spent = 0;
@@ -430,6 +444,16 @@ export function sliceTranscriptTail(
     const freshMessages: Message[] = [];
     const freshEvents: ChatEvent[] = [];
     let cost = encodedElementBytes(rows[ordinal].rowId);
+    // Charged exactly as a range charges it - the tail's ceiling is HARD, so an
+    // uncounted field here would push a snapshot past the frame invariant with
+    // no over-budget exception to fall back on.
+    const context = rows[ordinal].context;
+    const hasContext = Object.keys(context).length > 0;
+    if (hasContext) {
+      cost +=
+        encodedElementBytes(rows[ordinal].rowId) +
+        utf8ByteLength(JSON.stringify(context));
+    }
     for (const messageId of needed.messageIds) {
       if (seenMessageIds.has(messageId)) continue;
       const message = lookup.messagesById.get(messageId);
@@ -449,6 +473,7 @@ export function sliceTranscriptTail(
     spent += cost;
     fromOrdinal = ordinal;
     rowIds.unshift(rows[ordinal].rowId);
+    if (hasContext) rowContext[rows[ordinal].rowId] = context;
     // Unshift each row's fresh records as a BLOCK, not one at a time. Walking
     // backward and unshifting individually reverses a row's own records, and
     // record order is load-bearing: the client rebuilds a folded turn by
@@ -461,5 +486,5 @@ export function sliceTranscriptTail(
     events.unshift(...freshEvents);
   }
 
-  return { fromOrdinal, rowIds, messages, events };
+  return { fromOrdinal, rowIds, messages, events, rowContext };
 }

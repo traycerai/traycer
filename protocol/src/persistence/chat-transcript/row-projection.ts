@@ -230,6 +230,29 @@ export function assistantSliceRowId(
   return `${assistantRowId(turnKey)}:part:${chunkIndex}`;
 }
 
+/**
+ * The turn key an assistant row id names, or `null` for any other row id.
+ *
+ * The inverse of {@link assistantSliceRowId}, and it lives beside it for the
+ * reason everything else in this file does: a consumer that stripped the split
+ * suffix by hand would be a second copy of the id format, and the two would
+ * disagree the first time one moved.
+ *
+ * What it is FOR: {@link TranscriptRowContext} is keyed by row id, and a turn's
+ * context is shared by every row the turn produces - so a renderer holding a
+ * turn key needs the mapping in this direction to read it. A turn key is a
+ * `turnId` or a `ts:<millis>` fallback (see `assistantTurnKey`), neither of
+ * which can end in `:part:<digits>`, so the strip is unambiguous.
+ */
+export function assistantRowTurnKey(rowId: string): string | null {
+  const prefix = assistantRowId("");
+  if (!rowId.startsWith(prefix)) return null;
+  const turnKey = rowId.slice(prefix.length).replace(/:part:\d+$/, "");
+  // The bare prefix names no turn. Answered here rather than left to callers,
+  // because an empty key is a map lookup that quietly matches nothing.
+  return turnKey === "" ? null : turnKey;
+}
+
 export function queueSteerRowId(queueItemId: string): string {
   return `steer:${queueItemId}`;
 }

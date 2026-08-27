@@ -187,6 +187,53 @@ type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
 >[0];
+/**
+ * The windowed snapshot fields a LATER frame can supersede.
+ *
+ * Exactly the ones `applyAuthoritativeSnapshot` copies across from
+ * `frame.snapshot` without consulting the transcript, plus `queue`, whose
+ * merge takes the authoritative list as an input. Everything else the fold
+ * produces is derived from the transcript or from store state the delta frames
+ * have already updated in place, so replaying it is not a regression.
+ *
+ * Listed rather than `Partial<...>` of the whole snapshot: a field added to the
+ * snapshot that a delta frame can also change has to be added here
+ * deliberately, and a `Partial` would silently accept the omission.
+ */
+type DeferredWindowedSnapshotAux = Pick<
+  ChatWindowedSnapshotFrame["snapshot"],
+  | "queue"
+  | "runStatus"
+  | "activeTurn"
+  | "turnInProgress"
+  | "backgroundItems"
+  | "pendingApprovals"
+  | "pendingFileEditApprovals"
+  | "pendingInterviews"
+  | "worktreeBinding"
+  | "missingWorktreePaths"
+  | "managedCommands"
+  | "heldUpdates"
+>;
+
+function deferredWindowedSnapshotAuxOf(
+  snapshot: ChatWindowedSnapshotFrame["snapshot"],
+): DeferredWindowedSnapshotAux {
+  return {
+    queue: snapshot.queue,
+    runStatus: snapshot.runStatus,
+    activeTurn: snapshot.activeTurn,
+    turnInProgress: snapshot.turnInProgress,
+    backgroundItems: snapshot.backgroundItems,
+    pendingApprovals: snapshot.pendingApprovals,
+    pendingFileEditApprovals: snapshot.pendingFileEditApprovals,
+    pendingInterviews: snapshot.pendingInterviews,
+    worktreeBinding: snapshot.worktreeBinding,
+    missingWorktreePaths: snapshot.missingWorktreePaths,
+    managedCommands: snapshot.managedCommands,
+    heldUpdates: snapshot.heldUpdates,
+  };
+}
 type ChatSessionSetState = StoreApi<ChatSessionState>["setState"];
 type ChatSessionGetState = StoreApi<ChatSessionState>["getState"];
 type SendActionInput = {
@@ -2286,6 +2333,50 @@ export function createChatSessionStoreWithNotificationDependencies(
     let deferredWindowedSnapshot: ChatWindowedSnapshotFrame | null = null;
 
     /**
+     * The held snapshot's AUX state, advanced by every frame that arrives while
+     * it waits.
+     *
+     * A deferred snapshot is authoritative about the transcript it was sent
+     * with, and about nothing that happened afterwards - but the frames that
+     * carry "afterwards" are applied immediately, because only the transcript
+     * half of the fold is what the tail gates. A range answer can ride the BULK
+     * lane and land well after a `queueChanged`, a `turnStateChanged` or an
+     * `approvalRequested`, so replaying the frame's own aux at that point
+     * reinstates values those frames had already replaced - and it does so
+     * PERMANENTLY, because nothing re-sends them. An approval can vanish from
+     * the panel while the agent stays blocked waiting for it.
+     *
+     * So the snapshot's aux is kept live rather than frozen: this starts as the
+     * frame's own copy and each later frame applies the SAME update to it that
+     * it applies to the store. Two baselines, one rule per site - never two
+     * copies of the rule. The result is the union the frames would have
+     * produced had they arrived in order, which neither "frame wins" nor "store
+     * wins" can express: the snapshot may add an approval the store has never
+     * seen while a later frame adds another the snapshot predates.
+     *
+     * `null` whenever nothing is deferred, which is the ordinary state - every
+     * advance below is then a no-op.
+     */
+    let deferredWindowedSnapshotAux: DeferredWindowedSnapshotAux | null = null;
+
+    const advanceDeferredSnapshotAux = (
+      update: (
+        aux: DeferredWindowedSnapshotAux,
+      ) => Partial<DeferredWindowedSnapshotAux>,
+    ): void => {
+      if (deferredWindowedSnapshotAux === null) return;
+      deferredWindowedSnapshotAux = {
+        ...deferredWindowedSnapshotAux,
+        ...update(deferredWindowedSnapshotAux),
+      };
+    };
+
+    const forgetDeferredWindowedSnapshot = (): void => {
+      deferredWindowedSnapshot = null;
+      deferredWindowedSnapshotAux = null;
+    };
+
+    /**
      * Whether this session negotiated the windowed line.
      *
      * Set by the first windowed snapshot rather than read from the transport,
@@ -2972,8 +3063,13 @@ export function createChatSessionStoreWithNotificationDependencies(
     const adaptWindowedSnapshot = (
       frame: ChatWindowedSnapshotFrame,
       window: TranscriptWindow,
+      // The frame's aux as of NOW rather than as of when it was sent - see
+      // {@link deferredWindowedSnapshotAux}. `null` for a snapshot applied on
+      // arrival, which is every snapshot whose tail was already in.
+      aux: DeferredWindowedSnapshotAux | null,
     ): ChatSnapshotFrame => {
       const records = hydratedRecords(window);
+      const current = aux ?? deferredWindowedSnapshotAuxOf(frame.snapshot);
       return {
         kind: "snapshot",
         hasBinaryPayload: false,
@@ -2986,19 +3082,19 @@ export function createChatSessionStoreWithNotificationDependencies(
             events: [...records.events],
           },
           access: frame.snapshot.access,
-          queue: frame.snapshot.queue,
-          runStatus: frame.snapshot.runStatus,
-          activeTurn: frame.snapshot.activeTurn,
-          pendingApprovals: frame.snapshot.pendingApprovals,
-          pendingInterviews: frame.snapshot.pendingInterviews,
-          worktreeBinding: frame.snapshot.worktreeBinding,
-          missingWorktreePaths: frame.snapshot.missingWorktreePaths,
-          pendingFileEditApprovals: frame.snapshot.pendingFileEditApprovals,
+          queue: current.queue,
+          runStatus: current.runStatus,
+          activeTurn: current.activeTurn,
+          pendingApprovals: current.pendingApprovals,
+          pendingInterviews: current.pendingInterviews,
+          worktreeBinding: current.worktreeBinding,
+          missingWorktreePaths: current.missingWorktreePaths,
+          pendingFileEditApprovals: current.pendingFileEditApprovals,
           accumulatedFileChanges: [],
-          backgroundItems: frame.snapshot.backgroundItems,
-          managedCommands: frame.snapshot.managedCommands,
-          heldUpdates: frame.snapshot.heldUpdates,
-          turnInProgress: frame.snapshot.turnInProgress,
+          backgroundItems: current.backgroundItems,
+          managedCommands: current.managedCommands,
+          heldUpdates: current.heldUpdates,
+          turnInProgress: current.turnInProgress,
         },
       };
     };
@@ -3036,17 +3132,30 @@ export function createChatSessionStoreWithNotificationDependencies(
           events: records.events,
           transcriptRowContext: records.rowContext,
         });
-        deferredWindowedSnapshot = frame;
+        // Re-entry with the frame already held keeps the supersessions
+        // collected since it arrived; a NEW snapshot replaces both, because its
+        // own aux is the newer authority for everything it carries.
+        if (frame !== deferredWindowedSnapshot) {
+          deferredWindowedSnapshot = frame;
+          deferredWindowedSnapshotAux = deferredWindowedSnapshotAuxOf(
+            frame.snapshot,
+          );
+        }
         return;
       }
-      deferredWindowedSnapshot = null;
+      const superseded =
+        frame === deferredWindowedSnapshot ? deferredWindowedSnapshotAux : null;
+      forgetDeferredWindowedSnapshot();
       // The adapted snapshot's records ARE `hydratedRecords(window)`, so its
       // context has to ride the same apply. Left out, a snapshot would seat
       // rows against whatever context the previous hydration published.
-      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window), {
-        ...aux,
-        transcriptRowContext: hydratedRowContext(window),
-      });
+      applyAuthoritativeSnapshot(
+        adaptWindowedSnapshot(frame, window, superseded),
+        {
+          ...aux,
+          transcriptRowContext: hydratedRowContext(window),
+        },
+      );
     };
 
     const callbacks: ChatStreamCallbacks = {
@@ -3075,7 +3184,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // still in the air describes a coordinate space nothing here can read.
         forgetOutstandingHydration();
         clearResnapshotRequest();
-        deferredWindowedSnapshot = null;
+        forgetDeferredWindowedSnapshot();
         applyAuthoritativeSnapshot(frame, {
           transcriptWindow: emptyTranscriptWindow(),
           transcriptDerived: null,
@@ -3095,6 +3204,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           worktreeBinding: frame.worktreeBinding,
           missingWorktreePaths: frame.missingWorktreePaths,
         });
+        advanceDeferredSnapshotAux(() => ({
+          worktreeBinding: frame.worktreeBinding,
+          missingWorktreePaths: frame.missingWorktreePaths,
+        }));
       },
       onManagedCommandsChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3103,6 +3216,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The frame carries the whole set, so a dropped one can never strand a
         // stale row - the next frame replaces everything either way.
         set({ managedCommands: frame.managedCommands });
+        advanceDeferredSnapshotAux(() => ({
+          managedCommands: frame.managedCommands,
+        }));
       },
       onHeldUpdatesChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3112,6 +3228,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // ABSENCE of a row, so a delta shape would need a removal frame the
         // host has no reason to send.
         set({ heldUpdates: frame.heldUpdates });
+        advanceDeferredSnapshotAux(() => ({ heldUpdates: frame.heldUpdates }));
       },
       // ─── The windowed line (`chat.subscribe@1.8`) ────────────────────────
       //
@@ -3627,6 +3744,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             pendingUserMessages: patch.pendingUserMessages,
           };
         });
+        // The AUTHORITATIVE queue, not the merged one the store now holds:
+        // that is what the deferred fold's own merge takes as its input, and
+        // handing it a list the optimistic items are already in would keep an
+        // item whose pending action has since settled.
+        advanceDeferredSnapshotAux(() => ({ queue: frame.queue }));
       },
       onTurnStateChanged: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3790,6 +3912,15 @@ export function createChatSessionStoreWithNotificationDependencies(
           handedBackForTurnState,
         );
         maybeDispatchPendingBackgroundSessionStop(set, get);
+        // Same `??` fallbacks as the updater above, against the deferred
+        // snapshot's own baseline rather than the store's: an older host omits
+        // both fields, and "omitted" means "unchanged", not "cleared".
+        advanceDeferredSnapshotAux((held) => ({
+          runStatus: frame.runStatus,
+          activeTurn: frame.activeTurn,
+          turnInProgress: frame.turnInProgress ?? held.turnInProgress,
+          backgroundItems: frame.backgroundItems ?? held.backgroundItems,
+        }));
       },
       onBlockDelta: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3866,6 +3997,11 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingApprovals: [
+            ...upsertApproval(held.pendingApprovals, frame.approval),
+          ],
+        }));
       },
       onApprovalResolved: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3873,6 +4009,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set((state) => ({
           pendingApprovals: state.pendingApprovals.filter(
+            (approval) => approval.approvalId !== frame.approvalId,
+          ),
+        }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingApprovals: held.pendingApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
@@ -3887,6 +4028,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.approval,
           ),
         }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingFileEditApprovals: [
+            ...upsertFileEditApproval(
+              held.pendingFileEditApprovals,
+              frame.approval,
+            ),
+          ],
+        }));
       },
       onFileEditApprovalResolved: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -3894,6 +4043,11 @@ export function createChatSessionStoreWithNotificationDependencies(
         }
         set((state) => ({
           pendingFileEditApprovals: state.pendingFileEditApprovals.filter(
+            (approval) => approval.approvalId !== frame.approvalId,
+          ),
+        }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingFileEditApprovals: held.pendingFileEditApprovals.filter(
             (approval) => approval.approvalId !== frame.approvalId,
           ),
         }));
@@ -3914,6 +4068,14 @@ export function createChatSessionStoreWithNotificationDependencies(
             blockId: frame.blockId,
             requestedAt: frame.requestedAt,
           }),
+        }));
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...upsertPendingInterview(held.pendingInterviews, {
+              blockId: frame.blockId,
+              requestedAt: frame.requestedAt,
+            }),
+          ],
         }));
       },
       onInterviewAnswered: (frame) => {
@@ -3963,6 +4125,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             null,
           ),
         });
+        // Unconditional, unlike the store write above. `resolvedPendingOwner`
+        // asks whether the STORE still listed this interview; a deferred
+        // snapshot is a different list and may still carry it. Settled is
+        // settled on either.
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
+          ],
+        }));
         if (resolvedPendingOwner) {
           useInterviewDraftStore
             .getState()
@@ -4016,6 +4187,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             null,
           ),
         });
+        // Unconditional, unlike the store write above. `resolvedPendingOwner`
+        // asks whether the STORE still listed this interview; a deferred
+        // snapshot is a different list and may still carry it. Settled is
+        // settled on either.
+        advanceDeferredSnapshotAux((held) => ({
+          pendingInterviews: [
+            ...withoutPendingInterview(held.pendingInterviews, frame.blockId),
+          ],
+        }));
         if (resolvedPendingOwner) {
           useInterviewDraftStore
             .getState()
