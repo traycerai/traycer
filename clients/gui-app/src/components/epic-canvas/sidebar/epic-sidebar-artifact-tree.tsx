@@ -978,8 +978,18 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
           retire("landed");
           // The tab snapshot only on settlement - it is a persisted fallback
           // with no rollback path, so a speculative write would preserve a
-          // rejected title across restarts. See `use-rename-canvas-tab.ts`.
-          renameArtifactInTab(tabId, nodeId, trimmed);
+          // rejected title across restarts - and only while this is still
+          // the LATEST stamped rename for the node: settles are unordered,
+          // and an older ack landing last must not overwrite the newer
+          // snapshot. See `use-rename-canvas-tab.ts`.
+          if (
+            requestId === null ||
+            epicHandle.store
+              .getState()
+              .isLatestPendingRename(nodeId, requestId)
+          ) {
+            renameArtifactInTab(tabId, nodeId, trimmed);
+          }
           setIsRenaming(false);
         },
         () => {

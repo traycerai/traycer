@@ -733,6 +733,17 @@ export interface OpenEpicState {
     requestId: string,
     outcome: "landed" | "failed",
   ) => boolean;
+  /**
+   * Whether `requestId` is still the LAST-STAMPED rename for its node - the
+   * guard the persisted canvas-tab snapshot writes on. RPC settles are not
+   * ordered: with two renames in flight, the older one's success arm can run
+   * after the newer one's, and writing its captured title into the snapshot
+   * would preserve the superseded value across cold renders. Also false when
+   * the chain is gone entirely (superseded by an off-anchor authoritative
+   * move, or the handle detached) - the row already wins there, and the
+   * snapshot has nothing newer to learn from a stale ack.
+   */
+  isLatestPendingRename: (nodeId: string, requestId: string) => boolean;
   /** Returns true when a delete actually happened. Reparents children. */
   deleteArtifact: (artifactId: string) => boolean;
   /**
@@ -3834,6 +3845,29 @@ export function createOpenEpicStore(
           });
         };
 
+        /**
+         * See the {@link OpenEpicState.isLatestPendingRename} contract. Walks
+         * the retained chain in stamp order; the last rename for the node is
+         * the only one whose success arm may write the persisted canvas-tab
+         * snapshot. A landed retire KEEPS its entry, so the arm that calls
+         * retire("landed") and then this still sees its own stamp; a chain
+         * deleted by supersession (or a detach-time retire) answers false,
+         * which correctly skips the write - the authoritative row has already
+         * won.
+         */
+        const isLatestPendingRename = (
+          nodeId: string,
+          requestId: string,
+        ): boolean => {
+          let latest: string | null = null;
+          for (const [id, mutation] of pendingMetadataMutations) {
+            if (mutation.kind !== "rename") continue;
+            if (mutation.nodeId !== nodeId) continue;
+            latest = id;
+          }
+          return latest === requestId;
+        };
+
         return {
           epicId,
           doc,
@@ -4312,6 +4346,7 @@ export function createOpenEpicStore(
           beginEpicTitleMutation,
           beginReparentMutation,
           retirePendingMutation,
+          isLatestPendingRename,
           deleteArtifact: deleteArtifactAction,
           reparentArtifact: reparentArtifactAction,
           setEpicTitle: setEpicTitleAction,

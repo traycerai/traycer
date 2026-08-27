@@ -85,6 +85,19 @@ export function useRenameCanvasTab(
         // live feedback (the overlay above is), and it has no rollback path -
         // written before the RPC, a terminal failure would leave the rejected
         // title to resurface from a cold render.
+        //
+        // And only while this is still the LATEST stamped rename for the
+        // node: RPC settles are not ordered, so with two renames in flight
+        // the older success arm can run after the newer one already wrote -
+        // its captured title would overwrite the newer snapshot and
+        // resurface on the next cold render. (A stamped-but-superseded chain
+        // also answers false: the row won, nothing to persist.)
+        if (
+          requestId !== null &&
+          !epicHandle.store.getState().isLatestPendingRename(id, requestId)
+        ) {
+          return;
+        }
         renameArtifactInTab(viewTabId, id, trimmed);
       };
       const failed = (): void => {

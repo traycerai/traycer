@@ -466,4 +466,145 @@ describe("useRenameCanvasTab", () => {
     renameArtifactInTabSpy.mockRestore();
     unmount();
   });
+
+  it("a race between two in-flight renames of one node: only the LATEST-STAMPED settle writes the persisted snapshot, regardless of settle order", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(artifactTile(id), "B");
+    });
+    act(() => {
+      result.current(artifactTile(id), "C");
+    });
+    expect(mocks.pendingSettles).toHaveLength(2);
+
+    // The NEWER rename ("C") settles FIRST - RPC settles are unordered, and
+    // this is the ordinary case, not even the regression: it must write.
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "C");
+
+    // The OLDER rename's success arm ("B") settles SECOND, after "C" already
+    // wrote. Before `isLatestPendingRename`, this unconditionally overwrote
+    // the snapshot with its own captured "B" - the persisted fallback would
+    // regress behind the row/overlay (both still showing "C") and resurface
+    // stale on the next cold render. The guard must suppress it.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "C");
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("resolving two in-flight renames in STAMP order still suppresses the older one - the guard reads stamp order, not settle order", async () => {
+    // The literal reverse of the race test above: proves the guard is not
+    // accidentally keyed on WHICH settle callback ran first. Both orderings
+    // of two CONCURRENTLY in-flight renames of one node produce exactly ONE
+    // write (the latest-stamped one) - the fix's whole point is that no
+    // interleaving of two in-flight renames ever produces two writes, since
+    // that unordered race between two live writes was the bug. A true
+    // "two writes" case needs the renames to not overlap at all - see the
+    // sequential test below.
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(artifactTile(id), "B");
+    });
+    act(() => {
+      result.current(artifactTile(id), "C");
+    });
+    expect(mocks.pendingSettles).toHaveLength(2);
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    // "B" was not the latest STAMPED rename at settle time ("C" already was),
+    // so it is suppressed even though it happens to settle first.
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(VIEW_TAB_ID, id, "C");
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("two SEQUENTIAL (non-overlapping) renames of one node both write - the guard must not suppress an ordinary, non-racing rename", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(artifactTile(id), "B");
+    });
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      1,
+      VIEW_TAB_ID,
+      id,
+      "B",
+    );
+
+    // Fired only AFTER the first fully settled, so the two chains never
+    // overlap - the second is trivially the only (and therefore latest)
+    // pending rename by the time it settles.
+    act(() => {
+      result.current(artifactTile(id), "C");
+    });
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(2);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      2,
+      VIEW_TAB_ID,
+      id,
+      "C",
+    );
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
 });
