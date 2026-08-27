@@ -89,7 +89,13 @@ export const whoamiCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       // The authority the token was just validated against - this build's
       // configured authn, not file content (the file carries no URL).
       authnBaseUrl: config.authnBaseUrl,
-      savedAt: creds.savedAt,
+      // No `savedAt` here, deliberately. This mode reports a SERVER-validated
+      // identity, and the credentials it returns are not always the ones on
+      // disk: a `superseded` write means a sibling's pair is in the file, and
+      // an unconfirmed commit means nobody knows whose is. A save time is only
+      // unambiguous when it comes from a file this command actually read, so
+      // it is reported by --local, which does exactly that, and by nothing
+      // else.
       validated: true,
       credentialUpdate: result.effect,
     },

@@ -450,11 +450,14 @@ describe("traycer CLI entrypoint registration", () => {
     }
   });
 
-  it("logout's --help discloses that a failed cache clear now exits 1", () => {
-    // Regression guard for the exit-code flip: logout used to exit 0 on a
-    // partial cleanup, and the help text said so explicitly ("Partial cleanup
-    // is still a successful sign-out ... exits 0"). It must not still claim
-    // that.
+  it("logout's --help discloses both exit-1 outcomes separately, including the still-signed-in one a script must not confuse with a completed sign-out", () => {
+    // Regression guard for two things: (1) the old exit-code flip ("Partial
+    // cleanup is still a successful sign-out ... exits 0" must not still be
+    // claimed), and (2) the follow-up correction - exit 1 does NOT always
+    // mean "signed out, cache failed"; a `signOut` outcome other than
+    // `deleted` throws before the cache is even touched, and the user is
+    // still signed in. A script branching on exit code alone needs the help
+    // to say both cases exist.
     const write = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(() => true);
@@ -465,8 +468,9 @@ describe("traycer CLI entrypoint registration", () => {
       const printedHelp = write.mock.calls
         .map(([chunk]) => String(chunk))
         .join("");
-      expect(printedHelp).toContain("1 signed out");
       expect(printedHelp).not.toContain("exits 0");
+      expect(printedHelp).toContain("STILL SIGNED IN");
+      expect(printedHelp).toContain("cache directory could");
     } finally {
       write.mockRestore();
     }

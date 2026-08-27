@@ -135,12 +135,12 @@ async function reconcileValidProfile(
   const persisted = result.outcome === "applied";
   // The stored access token validated to `nextUser`, so pair them in the
   // reported credentials whether or not the advisory persist landed (a sibling
-  // rotate/logout can supersede it). `whoami` reads `user` and `savedAt`.
+  // rotate/logout can supersede it). `whoami` reads `user`.
   //
-  // `savedAt` KEEPS the file's own stamp when the write did not confirm. It
-  // means "when the credentials on disk were last written", so minting a fresh
-  // timestamp here would report a save this process cannot vouch for - and
-  // `whoami` now surfaces this field.
+  // `savedAt` KEEPS the file's own stamp rather than minting `now` for a write
+  // that may not have happened. It is still not a reliable on-disk save time -
+  // a `superseded` outcome means the file holds a sibling's pair with its own
+  // stamp - which is why `whoami` does not report this field outside --local.
   const next: StoredCredentials =
     persisted && result.credentials !== null
       ? result.credentials

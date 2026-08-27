@@ -164,16 +164,29 @@ describe("validateStoredCredentials", () => {
 
   it("reports effect='none' and keeps the file's own savedAt when the advisory write is superseded (never attempted, not merely unconfirmed)", async () => {
     identityMock.mockResolvedValue({ kind: "valid", user: changedUser });
+    // `superseded` always carries the FILE's current pair - never `null` (see
+    // `protocol/src/config/credentials-mutation.ts`). A `null` fixture here
+    // would be an impossible shape that could hide a real bug in this branch
+    // (Codex review, PR #1501): give it a realistic sibling pair - a
+    // different token and a later `savedAt` than `storedCreds`, exactly what
+    // a sibling's rotation would leave in the file.
     updateProfileMock.mockResolvedValue({
       outcome: "superseded",
-      credentials: null,
+      credentials: {
+        token: "sibling-token",
+        refreshToken: "sibling-refresh",
+        savedAt: "2026-03-01T00:00:00.000Z",
+        user: storedCreds.user,
+      },
     });
 
     const outcome = await validateStoredCredentials();
 
     expect(outcome).toMatchObject({ kind: "valid", effect: "none" });
-    // A write that never landed must not report a save that did not happen -
-    // the timestamp has to stay the file's own, not a freshly minted one.
+    // A write that never ran must not report a save that did not happen -
+    // the timestamp has to stay the file's own, not a freshly minted one, and
+    // NOT the sibling's pair above (this branch ignores `result.credentials`
+    // entirely on a non-`applied` outcome).
     if (outcome.kind === "valid") {
       expect(outcome.credentials.savedAt).toBe(storedCreds.savedAt);
     }

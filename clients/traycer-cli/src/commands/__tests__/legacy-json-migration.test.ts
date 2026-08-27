@@ -243,11 +243,17 @@ describe("whoami runner migration", () => {
         user: { id: "u1", email: "user@example.com", name: "User One" },
         // whoami reports the CONFIGURED authn origin - the file carries no URL.
         authnBaseUrl: config.authnBaseUrl,
-        savedAt: "2026-05-15T00:00:00Z",
         validated: true,
         credentialUpdate: "none",
       },
     });
+    // `savedAt` is deliberately absent from validating mode: it is only
+    // unambiguous when it comes from a file this command actually read
+    // (`superseded` means the returned credentials are a sibling's pair with
+    // its own stamp). Pin the absence so a future change cannot quietly
+    // reintroduce an ambiguous field.
+    const data = (out.terminal?.data ?? {}) as Record<string, unknown>;
+    expect(data).not.toHaveProperty("savedAt");
     // No free-form stdout other than NDJSON.
     for (const line of out.stdoutLines) {
       expect(() => JSON.parse(line)).not.toThrow();
