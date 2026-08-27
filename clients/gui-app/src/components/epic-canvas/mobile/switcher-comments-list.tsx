@@ -40,7 +40,10 @@ export function SwitcherCommentsList(props: SwitcherCommentsListProps) {
 
   if (artifactId === null) {
     return (
-      <SwitcherListEmpty message="Open an artifact to see and add comments on it." />
+      <SwitcherListEmpty
+        message="Open an artifact to see and add comments on it."
+        description={null}
+      />
     );
   }
 
