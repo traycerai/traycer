@@ -2203,8 +2203,11 @@ describe("<EpicSessionProvider />", () => {
 
   it("keeps the create-host seed when the selection authority merely answers for the first time", async () => {
     const EPIC_ID = "epic-create-host-baseline-test";
-    // Detached: nobody has answered yet, matching the authority's own
-    // bootstrap default - NOT the same as "effective" naming no usable host.
+    // Bootstrap, on BOTH axes: nobody has answered yet. `(attached: false,
+    // id: null)` is the pair this file calls bootstrap, and it is the one the
+    // seed exists to survive - `(attached: true, id: null)` is the real ∅ and
+    // a different case entirely.
+    hostState.attached = false;
     hostState.id = null;
     markEpicCreatedThisSession(EPIC_ID, "host-create");
     const streams: ControlledEpicStream[] = [];
@@ -2237,9 +2240,10 @@ describe("<EpicSessionProvider />", () => {
     const firstHandle = seenHandles[0];
     expect(getEpicSessionHandleHostId(firstHandle)).toBe("host-create");
 
-    // The authority speaks for the FIRST time, naming a host that is NOT the
-    // create host - a baseline, not a move.
+    // The authority ATTACHES and speaks for the FIRST time, naming a host
+    // that is NOT the create host - a baseline, not a move.
     act(() => {
+      hostState.attached = true;
       hostState.id = "host-b";
       view.rerender(
         <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
