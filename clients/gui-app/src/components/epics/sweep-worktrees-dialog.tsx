@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
+import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
 import {
   useEpicSweepWorktreeCandidatesForClient,
   type EpicSweepWorktreeRow,
@@ -91,9 +92,11 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
  * The Sweep confirmation. EVERY worktree owned by the selected Task(s) is
  * listed once with Settings-grade detail (branch, tier pill, PR chips, path);
  * only the proven-safe rows (Landed / At base commit, exclusively owned by the
- * selection, not busy) start checked. Unproven or shared rows are unchecked but
- * deliberately checkable — sweeping them is the user's conscious call — while
- * busy and still-checking rows are disabled.
+ * selection, not busy) start checked. Unproven, shared, or in-use rows are
+ * unchecked but deliberately checkable — sweeping them is the user's conscious
+ * call — while still-checking rows are disabled. Selecting an in-use row
+ * surfaces the shared holder disclosure; confirm carries stopOwners for those
+ * paths.
  *
  * Self-contained: the History row, History's bulk selection, and the Epic
  * status row all render it with just a list of epic ids.
@@ -153,6 +156,9 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     return checkOverrides.get(row.entry.worktreePath) ?? row.defaultChecked;
   };
   const checkedRows = rows.filter(isRowChecked);
+  const selectedInUseHolders = checkedRows.flatMap((row) =>
+    row.entry.inUse ? row.holders : [],
+  );
   // Only THIS dialog's own run disables the whole form; a sweep of some other
   // Task's worktrees just removes its own paths from selection above.
   const isSweeping = sweepMutation.isPending;
@@ -170,6 +176,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
         worktreePath: row.entry.worktreePath,
         branch: row.entry.branch,
         repoIdentifier: row.entry.repoIdentifier,
+        stopOwners: row.entry.inUse,
       })),
     });
     onOpenChange(false);
@@ -221,6 +228,11 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
                 });
               }}
             />
+            {selectedInUseHolders.length > 0 ? (
+              <div className="mt-3 min-w-0">
+                <TeardownDisclosure holders={selectedInUseHolders} />
+              </div>
+            ) : null}
             <SweepWorktreesRefreshFooter
               checkedAt={checkedAt}
               refreshing={refresh.refreshing}

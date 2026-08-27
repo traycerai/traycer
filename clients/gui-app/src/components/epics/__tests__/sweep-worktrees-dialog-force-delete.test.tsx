@@ -1,0 +1,166 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
+
+const HOLDERS: readonly WorktreeBusyHolder[] = [
+  {
+    ownerRef: {
+      epicId: "epic-1",
+      ownerKind: "terminal-agent",
+      ownerId: "tui-1",
+    },
+    holdKind: "terminal-agent-pty",
+    activity: "working",
+    label: "Claude Code agent polite-ocelot is working",
+  },
+];
+
+const testState = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  rows: [] as Array<{
+    entry: WorktreeHostEntryV14;
+    tier: "merged" | "at-base-commit" | "in-use";
+    defaultChecked: boolean;
+    disabled: boolean;
+    note: "in-use" | null;
+    holders: readonly WorktreeBusyHolder[];
+  }>,
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidatesForClient: () => ({
+    hostId: "host-1",
+    rows: testState.rows,
+    isPending: false,
+    isError: false,
+    checkedAt: Date.now(),
+    canRefresh: true,
+    refresh: vi.fn(() => Promise.resolve()),
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: testState.mutate,
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
+vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
+  WorktreePrPills: () => null,
+}));
+
+import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
+
+function worktreeEntry(
+  over: Partial<WorktreeHostEntryV14> & { readonly worktreePath: string },
+): WorktreeHostEntryV14 {
+  return {
+    worktreePath: over.worktreePath,
+    branch: over.branch ?? "feat-busy",
+    repoLabel: "traycerai/traycer",
+    repoIdentifier: { owner: "traycerai", repo: "traycer" },
+    inUse: over.inUse ?? false,
+    uncommittedCount: 0,
+    gitRemovable: true,
+    scripts: null,
+    owners: [],
+    lastActivityAt: null,
+    branchStatus: null,
+    createdAt: null,
+    prState: "merged",
+    prNumber: 1,
+    prUrl: "https://example.test/pr/1",
+    mergedHeadShaMatches: true,
+    submodules: [],
+    atBaseCommit: false,
+    resolvedAt: Date.now(),
+  };
+}
+
+describe("SweepWorktreesDialog in-use force-delete", () => {
+  afterEach(() => {
+    cleanup();
+    testState.mutate.mockReset();
+  });
+
+  it("never pre-selects in-use rows, surfaces disclosure on deliberate select, and confirms with stopOwners", () => {
+    const idle = worktreeEntry({
+      worktreePath: "/wt/idle",
+      branch: "feat-idle",
+      inUse: false,
+    });
+    const busy = worktreeEntry({
+      worktreePath: "/wt/busy",
+      branch: "feat-busy",
+      inUse: true,
+    });
+    testState.rows = [
+      {
+        entry: idle,
+        tier: "merged",
+        defaultChecked: true,
+        disabled: false,
+        note: null,
+        holders: [],
+      },
+      {
+        entry: busy,
+        tier: "in-use",
+        defaultChecked: false,
+        disabled: false,
+        note: "in-use",
+        holders: HOLDERS,
+      },
+    ];
+
+    render(
+      <SweepWorktreesDialog
+        epicIds={["epic-1"]}
+        hostClient={null}
+        taskTitle="Task"
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    const idleBox = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-idle",
+    });
+    const busyBox = screen.getByRole("checkbox", {
+      name: "Sweep worktree feat-busy",
+    });
+    expect(idleBox.getAttribute("aria-checked")).toBe("true");
+    expect(busyBox.getAttribute("aria-checked")).toBe("false");
+    expect(busyBox.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("teardown-disclosure")).toBeNull();
+
+    fireEvent.click(busyBox);
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("Claude Code agent polite-ocelot is working");
+    expect(screen.getByTestId("teardown-disclosure").textContent).not.toMatch(
+      /\bbusy\b/i,
+    );
+
+    fireEvent.click(screen.getByTestId("sweep-worktrees-confirm"));
+    expect(testState.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      worktrees: [
+        {
+          worktreePath: "/wt/idle",
+          branch: "feat-idle",
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          stopOwners: false,
+        },
+        {
+          worktreePath: "/wt/busy",
+          branch: "feat-busy",
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          stopOwners: true,
+        },
+      ],
+    });
+  });
+});

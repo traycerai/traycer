@@ -60,16 +60,59 @@ const MAX_PARALLEL_CLEANUP_STREAMS = 2;
  * in-use after the dialog opened is declined and lands in `failed`, never
  * silently force-removed.
  */
+export interface WorktreeCleanupRequest {
+  readonly hostId: string;
+  readonly paths: ReadonlyArray<string>;
+  readonly source: WorktreeDeletionSource;
+  readonly stopOwnersPaths: ReadonlySet<string>;
+}
+
 export function runWorktreeCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
-  hostId: string,
-  paths: ReadonlyArray<string>,
-  source: WorktreeDeletionSource,
+  request: WorktreeCleanupRequest,
 ): Promise<WorktreeCleanupOutcome> {
   // No approved paths is not a command. Opening one would burn a `commandId`
   // and ask the host for a "you deleted nothing" notification row.
-  if (paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
-  return runCleanupCommand(openStreamTransport, hostId, paths, source);
+  if (request.paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
+  const forcePaths = request.paths.filter((path) =>
+    request.stopOwnersPaths.has(path),
+  );
+  const normalPaths = request.paths.filter(
+    (path) => !request.stopOwnersPaths.has(path),
+  );
+  if (forcePaths.length === 0) {
+    return runCleanupCommand(
+      openStreamTransport,
+      request.hostId,
+      normalPaths,
+      request.source,
+    );
+  }
+  if (normalPaths.length === 0) {
+    return runFallbackCleanup(
+      openStreamTransport,
+      request.hostId,
+      forcePaths,
+      true,
+    ).then((fallback) => ({
+      removed: fallback.removed,
+      failed: fallback.failed,
+      uncertain: [],
+    }));
+  }
+  return Promise.all([
+    runCleanupCommand(
+      openStreamTransport,
+      request.hostId,
+      normalPaths,
+      request.source,
+    ),
+    runFallbackCleanup(openStreamTransport, request.hostId, forcePaths, true),
+  ]).then(([normal, force]) => ({
+    removed: [...normal.removed, ...force.removed],
+    failed: [...normal.failed, ...force.failed],
+    uncertain: normal.uncertain,
+  }));
 }
 
 /**
@@ -124,7 +167,12 @@ function runCleanupCommand(
       requestClose(holder);
       const remaining = [...pending];
       pending.clear();
-      void runFallbackCleanup(openStreamTransport, hostId, remaining).then(
+      void runFallbackCleanup(
+        openStreamTransport,
+        hostId,
+        remaining,
+        false,
+      ).then(
         (fallback) =>
           resolve({
             removed: [...removed, ...fallback.removed],
@@ -262,6 +310,7 @@ async function runFallbackCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   paths: ReadonlyArray<string>,
+  stopOwners: boolean,
 ): Promise<{ removed: string[]; failed: string[] }> {
   const removed: string[] = [];
   const failed: string[] = [];
@@ -273,6 +322,7 @@ async function runFallbackCleanup(
         openStreamTransport,
         hostId,
         path,
+        stopOwners,
       );
       if (deleted) {
         removed.push(path);
@@ -300,6 +350,7 @@ function deleteOneWorktree(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   worktreePath: string,
+  stopOwners: boolean,
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const holder = newCloseHolder();
@@ -320,6 +371,7 @@ function deleteOneWorktree(
             wsStreamClient,
             worktreePath,
             scripts: null,
+            stopOwners,
             callbacks: {
               onStarted: () => {},
               onPhase: () => {},
