@@ -299,6 +299,21 @@ function backingRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
   return side.kind === "tab" ? side.ref : null;
 }
 
+/**
+ * The ref the active item is FOCUSED on, which is what an activation of that
+ * ref would already have produced. It differs from `backingRefOfLayout` in
+ * exactly one state - a split focused on its EMPTY side, where the route is
+ * still backed by the populated one - and there an activation is a real move,
+ * not a no-op.
+ */
+function focusedRefOfLayout(layout: PersistedTabStripLayout): TabRef | null {
+  const active = layout.items.find((item) => item.id === layout.activeItemId);
+  if (active === undefined) return null;
+  if (active.kind === "tab") return active.ref;
+  const side = active.focusedSide === "left" ? active.left : active.right;
+  return side.kind === "tab" ? side.ref : null;
+}
+
 function activeItemContainsRef(
   layout: PersistedTabStripLayout,
   ref: TabRef,
@@ -404,6 +419,24 @@ function intentForRef(
   }
   if (ref.kind === "history") return historyTabIntent();
   return settingsTabIntent(settingsSectionFromPath(pathname));
+}
+
+/**
+ * The pathname `intentForRef` should read when deriving an intent from the REF
+ * alone - the tab's own route, never whatever the caller happens to be looking
+ * at. Settings is the one kind that keeps view state in its path, and the
+ * strip already remembers that path; every other kind derives its intent from
+ * the ref and its source store, so the pathname it is handed is inert.
+ */
+function refOwnPathname(ref: TabRef): string {
+  if (ref.kind !== "settings") return "/";
+  const tab = useTabsStore.getState().systemTabs.settings;
+  const lastPath = tab === null ? null : tab.lastPath;
+  // Same guard the settings kind module applies before reading a section off a
+  // remembered path: one that is not a settings path names no section.
+  return lastPath !== null && isSettingsPath(lastPath)
+    ? lastPath
+    : SETTINGS_PATH_PREFIX;
 }
 
 function destinationForRef(ref: TabRef): TabNavigationDestination {
@@ -1281,13 +1314,7 @@ export class TabNavigationController {
         entry.expectedRef !== null && refsEqual(entry.expectedRef, ref),
     );
     const intent =
-      pendingRoute?.intent ??
-      route?.intent ??
-      intentForRef(
-        ref,
-        this.currentLocation?.pathname ?? "/",
-        this.currentLocation?.search,
-      );
+      pendingRoute?.intent ?? route?.intent ?? this.canonicalRefIntent(ref);
     if (intent === null) {
       return {
         destination: { kind: "route", pathname: "/" },
@@ -1307,6 +1334,28 @@ export class TabNavigationController {
       ref,
       options,
     };
+  }
+
+  /**
+   * The intent for `ref` when no remembered or pending route named one.
+   *
+   * `intentForRef` derives part of its answer from the pathname and search it
+   * is handed - the Settings SECTION comes from the path, an Epic's `focus*`
+   * from the search - so seeding it with a location that routes SOMEWHERE ELSE
+   * copies one tab's view state onto another tab's route. Every correction
+   * reaches here holding the location that just failed to resolve, so that
+   * seed is trusted only while it actually routes to `ref`; otherwise the
+   * intent is built from the ref and its source stores alone.
+   */
+  private canonicalRefIntent(ref: TabRef): TabNavigationIntent | null {
+    const location = this.currentLocation;
+    if (location !== null) {
+      const routed = routedTabTarget(location.pathname);
+      if (routed !== null && refsEqual(routed.ref, ref)) {
+        return intentForRef(ref, location.pathname, location.search);
+      }
+    }
+    return intentForRef(ref, refOwnPathname(ref), undefined);
   }
 
   private issueCorrection(
@@ -1436,6 +1485,20 @@ export class TabNavigationController {
     if (ref.kind !== "epic") return;
     const tab = useEpicCanvasStore.getState().tabsById[ref.id];
     if (tab !== undefined && tab.epicId === routed.epicId) {
+      // The layout is already focused on this exact tab, so there is nothing
+      // to activate - this is the same tab committing a new `search` (a
+      // tile-focus replace, say), which is the highest-traffic external path
+      // there is. Taking it through the command coordinator anyway is what
+      // makes it fail while a transaction is open ("Tab commands cannot be
+      // re-entered"), and a failure here corrects the URL away from a
+      // perfectly good epic route. Deliberately keyed on the FOCUSED ref
+      // rather than the backing one: a split focused on its empty side still
+      // backs this route, and re-focusing it there is a real move.
+      if (refsEqual(focusedRefOfLayout(currentLayout()), ref)) {
+        const intent = intentForRef(ref, location.pathname, location.search);
+        if (intent !== null) this.rememberRoute(ref, intent, location.search);
+        return;
+      }
       const activation = this.activateExternalTarget({ kind: "ref", ref });
       if (activation === null) {
         this.issueLandingCorrection(location, navigate);
@@ -1604,17 +1667,24 @@ export class TabNavigationController {
     }
   }
 
+  /**
+   * The correction for a location the resolver could not land on. It aims at
+   * what the strip is actually SHOWING, not at the literal landing: the tab
+   * strip renders from the layout, so replacing a live tab route with `/` over
+   * a populated layout moves the URL somewhere nothing on screen agrees with,
+   * and the drift stays invisible until the next thing to read the URL - a
+   * modal push and its `history.back()` - resolves against it.
+   *
+   * `backingNavigation()` already degrades to `/` when the layout has no
+   * backing ref or no intent for it, so a genuinely empty state still lands
+   * on Home.
+   */
   private issueLandingCorrection(
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
     this.issueCorrection(navigate, {
-      navigation: {
-        destination: { kind: "route", pathname: "/" },
-        intent: null,
-        ref: null,
-        options: { to: "/", replace: true },
-      },
+      navigation: this.backingNavigation(),
       kind: "landing-replace",
       attempt: 0,
       correctionKey: locationIdentity(location),
