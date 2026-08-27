@@ -322,7 +322,9 @@ const NODE = makeGitFileDiffTile({
   repositoryContext: null,
 });
 
-function RemountingPane(props: { readonly children: ReactNode }): ReactNode {
+function RemountingPane(props: {
+  readonly render: (active: boolean) => ReactNode;
+}): ReactNode {
   const [active, setActive] = useState(true);
   const [generation, setGeneration] = useState(0);
   const activation = usePaneActivationOwnership({
@@ -343,7 +345,7 @@ function RemountingPane(props: { readonly children: ReactNode }): ReactNode {
           onPointerCancelCapture={activation.onPointerCancelCapture}
           onPointerDownCapture={activation.onPointerDownCapture}
         >
-          <div key={generation}>{props.children}</div>
+          <div key={generation}>{props.render(active)}</div>
         </div>
       </PaneActivationFocusIntentContext.Provider>
     </>
@@ -965,7 +967,9 @@ function renderTileInRemountingPane(node: GitDiffTileRef): RenderResult {
   activeQueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(<RemountingPane>{tileElement(node, true)}</RemountingPane>);
+  return render(
+    <RemountingPane render={(active) => tileElement(node, active)} />,
+  );
 }
 
 // Reuses the QueryClient created by `renderTile` so `rendered.rerender(...)`
