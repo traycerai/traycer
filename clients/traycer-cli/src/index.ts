@@ -719,7 +719,9 @@ function registerHostCommands(program: Command): void {
   withRunner(
     host
       .command("status")
-      .description("Show host status (pid, websocket URL, recent activity)"),
+      .description(
+        "Show host status (pid, websocket URL, recent activity). Read-only: never installs, registers, or starts the host - use 'host ensure' for that",
+      ),
     () => hostStatusCommand,
   );
 

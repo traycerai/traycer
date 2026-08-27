@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -229,12 +235,13 @@ describe("runDoctor pending CLI upgrade surface", () => {
     ).toBeUndefined();
   });
 
-  it("folds in a 'swapped' post-finalize marker before checking pendingUpgrade - no CLI_UPGRADE_PENDING is emitted afterwards", async () => {
-    // The detached helper from a prior `host restart` succeeded and
-    // wrote a post-finalize marker. Doctor must consume that marker
-    // and clear pendingUpgrade *before* reading the manifest, so the
-    // user sees the resolved state immediately on next `host
-    // doctor` without first having to run another `host restart`.
+  // CLI-007: doctor used to fold a "swapped" marker into the manifest and
+  // delete it (`reconcilePostFinalizeMarker`), so a second `host doctor` run
+  // over the same disk state gave a different answer than the first - a
+  // diagnostic that destroys the evidence it reports. It now only READS the
+  // marker (`readPostFinalizeMarker`) and reports what it finds; folding the
+  // marker into the manifest is `host restart`'s job.
+  it("reports a 'swapped' post-finalize marker as CLI_UPGRADE_FINALIZED_UNRECONCILED without touching the marker or the manifest", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
@@ -247,40 +254,45 @@ describe("runDoctor pending CLI upgrade surface", () => {
     });
     // Helper marker written by a previous detached run.
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
-    writeFileSync(
-      markerPath,
-      JSON.stringify({
-        status: "swapped",
-        attemptedAt: "2026-05-11T00:00:00Z",
-        livePath: liveBinaryPath,
-        stagedBinaryPath,
-        errorMessage: null,
-        serviceStartError: null,
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    const markerBody = JSON.stringify({
+      status: "swapped",
+      attemptedAt: "2026-05-11T00:00:00Z",
+      livePath: liveBinaryPath,
+      stagedBinaryPath,
+      errorMessage: null,
+      serviceStartError: null,
+    });
+    writeFileSync(markerPath, markerBody, { encoding: "utf8", mode: 0o600 });
+    const manifestPath = join(workHome, ".traycer", "cli", "manifest.json");
+    const manifestBefore = readFileSync(manifestPath, "utf8");
 
     const { runDoctor } = await import("../engine");
     const result = await runDoctor({
       environment: "production",
       portConflictDeps: null,
     });
+
     expect(
       result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
     ).toBeUndefined();
-    // Marker was consumed.
-    const { existsSync } = await import("node:fs");
-    expect(existsSync(markerPath)).toBe(false);
-    // Manifest's pendingUpgrade has been cleared.
-    const manifestPath = join(workHome, ".traycer", "cli", "manifest.json");
-    const reread = JSON.parse(
-      (await import("node:fs")).readFileSync(manifestPath, "utf8"),
+    const settled = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
     );
-    expect(reread.pendingUpgrade).toBeNull();
-    expect(reread.version).toBe("1.5.0");
+    expect(settled).toBeDefined();
+    expect(settled?.severity).toBe("info");
+    expect(settled?.fixAction).toBe("host-restart");
+    expect(settled?.terminalCommand).toMatch(/traycer host restart/);
+    // `host doctor`'s exit code is keyed off error/fatal severities
+    // (commands/host-doctor.ts) - an `info` issue for an already-applied
+    // upgrade must not itself flip a doctor run to failing.
+    expect(settled?.severity).not.toBe("error");
+    expect(settled?.severity).not.toBe("fatal");
+    // Read-only: the marker and the manifest are untouched.
+    expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
   });
 
-  it("still emits CLI_UPGRADE_PENDING when the prior helper attempt was swap-failed (pending state retained)", async () => {
+  it("reports a 'swap-failed' post-finalize marker as CLI_UPGRADE_FINALIZE_FAILED without consuming the marker", async () => {
     stageDoctorMocks();
     const liveBinaryPath = join(workHome, "bin", "traycer");
     const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
@@ -292,30 +304,88 @@ describe("runDoctor pending CLI upgrade surface", () => {
       stagedExists: true,
     });
     const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
-    writeFileSync(
-      markerPath,
-      JSON.stringify({
-        status: "swap-failed",
-        attemptedAt: "2026-05-11T00:00:00Z",
-        livePath: liveBinaryPath,
-        stagedBinaryPath,
-        errorMessage: "MoveFileEx error 5: Access denied",
-        serviceStartError: null,
-      }),
-    );
+    const markerBody = JSON.stringify({
+      status: "swap-failed",
+      attemptedAt: "2026-05-11T00:00:00Z",
+      livePath: liveBinaryPath,
+      stagedBinaryPath,
+      errorMessage: "MoveFileEx error 5: Access denied",
+      serviceStartError: null,
+    });
+    writeFileSync(markerPath, markerBody);
 
     const { runDoctor } = await import("../engine");
     const result = await runDoctor({
       environment: "production",
       portConflictDeps: null,
     });
-    const issue = result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING");
-    expect(issue).toBeDefined();
-    expect(issue?.severity).toBe("warning");
-    expect(issue?.fixAction).toBe("host-restart");
-    // Marker still consumed so the next reconcile reads only fresh
-    // helper outcomes.
-    const { existsSync } = await import("node:fs");
-    expect(existsSync(markerPath)).toBe(false);
+
+    expect(
+      result.issues.find((i) => i.code === "CLI_UPGRADE_PENDING"),
+    ).toBeUndefined();
+    const failed = result.issues.find(
+      (i) => i.code === "CLI_UPGRADE_FINALIZE_FAILED",
+    );
+    expect(failed).toBeDefined();
+    expect(failed?.severity).toBe("warning");
+    expect(failed?.message).toContain("MoveFileEx error 5: Access denied");
+    // Not consumed - a diagnostic must be safe to run twice.
+    expect(readFileSync(markerPath, "utf8")).toBe(markerBody);
+  });
+
+  // The finding CLI-007 exists to prove: a diagnostic that destroys the
+  // evidence it reports cannot be trusted, and cannot be run twice. Running
+  // `runDoctor` twice back to back over the same real temp-dir marker and
+  // manifest files must leave both byte-identical.
+  it("running runDoctor twice leaves the marker file and the CLI manifest byte-identical", async () => {
+    stageDoctorMocks();
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writePendingManifest({
+      version: "1.5.0",
+      stagedBinaryPath,
+      liveBinaryPath,
+      stagedExists: true,
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    const markerBody = JSON.stringify({
+      status: "swapped",
+      attemptedAt: "2026-05-11T00:00:00Z",
+      livePath: liveBinaryPath,
+      stagedBinaryPath,
+      errorMessage: null,
+      serviceStartError: null,
+    });
+    writeFileSync(markerPath, markerBody, { encoding: "utf8", mode: 0o600 });
+    const manifestPath = join(workHome, ".traycer", "cli", "manifest.json");
+
+    const { runDoctor } = await import("../engine");
+    const firstResult = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+    const markerAfterFirst = readFileSync(markerPath, "utf8");
+    const manifestAfterFirst = readFileSync(manifestPath, "utf8");
+
+    const secondResult = await runDoctor({
+      environment: "production",
+      portConflictDeps: null,
+    });
+    const markerAfterSecond = readFileSync(markerPath, "utf8");
+    const manifestAfterSecond = readFileSync(manifestPath, "utf8");
+
+    expect(markerAfterSecond).toBe(markerAfterFirst);
+    expect(manifestAfterSecond).toBe(manifestAfterFirst);
+    // Same question, same answer - not just "the files didn't change".
+    expect(
+      secondResult.issues.find(
+        (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+      ),
+    ).toEqual(
+      firstResult.issues.find(
+        (i) => i.code === "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+      ),
+    );
   });
 });

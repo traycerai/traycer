@@ -32,11 +32,16 @@ import { compareHostVersions } from "@traycer-clients/shared/host-version/compar
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
 
-// The single host-provisioning core shared by `host ensure` (the
-// desktop's post-auth call) and `maybeAutoBootstrap` (the standalone CLI
-// first-run path used by `login` / `host status`). It reads the current
-// state, then does the minimal work to reach installed + registered +
-// running, reporting exactly what it did.
+// The single host-provisioning core behind `host ensure` (the desktop's
+// post-auth call and the CLI's convergent provisioning verb). It reads the
+// current state, then does the minimal work to reach installed + registered
+// + running, reporting exactly what it did.
+//
+// It once had a second caller, `maybeAutoBootstrap`, which ran this pipeline
+// implicitly from `traycer login` and `traycer host status`. Both were
+// removed - a sign-in and a status read must not install software (audit
+// finding CLI-001) - so every entry point into this core is now a command
+// that says provisioning is what it does.
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,

@@ -11,9 +11,18 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
   killCalls: [] as Array<{ pid: number; port: number; commandName: string }>,
-  killResult: { killed: true, killError: null } as {
+  killResult: {
+    killed: true,
+    killError: null,
+    release: "released",
+    releaseDetail: "pid 4242 exited after SIGTERM",
+    holderPid: null,
+  } as {
     killed: boolean;
     killError: string | null;
+    release: "released" | "still-held" | "unverified";
+    releaseDetail: string;
+    holderPid: number | null;
   },
   killThrows: null as Error | null,
 }));
@@ -115,14 +124,25 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(mocks.lockCalls).toEqual([{ reason: "host-free-port-and-restart" }]);
     expect(mocks.killCalls).toEqual([]);
     expect(mocks.controllerCalls).toEqual(["restart"]);
-    expect(result.data).toMatchObject({ pid: null, killed: false });
+    expect(result.data).toMatchObject({
+      pid: null,
+      killed: false,
+      release: null,
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("with a pid+port, kills then restarts inside the SAME cli-lock acquisition", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
     mocks.killCalls = [];
-    mocks.killResult = { killed: true, killError: null };
+    mocks.killResult = {
+      killed: true,
+      killError: null,
+      release: "released",
+      releaseDetail: "pid 4242 exited after SIGTERM",
+      holderPid: null,
+    };
 
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
@@ -135,7 +155,12 @@ describe("buildHostFreePortAndRestartCommand", () => {
       { pid: 4242, port: 51820, commandName: "host free-port-and-restart" },
     ]);
     expect(mocks.controllerCalls).toEqual(["restart"]);
-    expect(result.data).toMatchObject({ pid: 4242, killed: true });
+    expect(result.data).toMatchObject({
+      pid: 4242,
+      killed: true,
+      release: "released",
+    });
+    expect(result.exitCode).toBe(0);
   });
 
   it("rejects --pid without --port before ever acquiring the lock", async () => {
@@ -173,19 +198,76 @@ describe("buildHostFreePortAndRestartCommand", () => {
     mocks.killThrows = null;
   });
 
-  it("a failed SIGTERM still proceeds to restart and surfaces killError", async () => {
+  // Inverted from the pre-CLI-011 contract, kept in place rather than deleted
+  // so the diff shows the flip: a failed SIGTERM used to proceed to restart
+  // the host into a port a foreign process still held. It must now throw
+  // BEFORE the restart is ever attempted - the single most important
+  // assertion in this file is the restart mock's zero call count below.
+  it("a failed SIGTERM throws E_HOST_PORT_KILL_FAILED and never calls restart", async () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
     mocks.killCalls = [];
-    mocks.killResult = { killed: false, killError: "EPERM" };
+    mocks.killResult = {
+      killed: false,
+      killError: "EPERM",
+      release: "still-held",
+      releaseDetail: "SIGTERM was not delivered",
+      holderPid: 4242,
+    };
 
     const command = buildHostFreePortAndRestartCommand({
       pid: 4242,
       port: 51820,
     });
-    const result = await command(fakeCtx());
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: "E_HOST_PORT_KILL_FAILED",
+    });
+    expect(mocks.controllerCalls).toEqual([]);
+  });
 
-    expect(mocks.controllerCalls).toEqual(["restart"]);
-    expect(result.data).toMatchObject({ killed: false, killError: "EPERM" });
+  it("release: still-held throws E_HOST_PORT_STILL_HELD and never calls restart", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    mocks.killCalls = [];
+    mocks.killResult = {
+      killed: true,
+      killError: null,
+      release: "still-held",
+      releaseDetail:
+        "pid 4242 is still alive and still owns port 51820 5000ms after SIGTERM",
+      holderPid: 4242,
+    };
+
+    const command = buildHostFreePortAndRestartCommand({
+      pid: 4242,
+      port: 51820,
+    });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: "E_HOST_PORT_STILL_HELD",
+    });
+    expect(mocks.controllerCalls).toEqual([]);
+  });
+
+  it("release: unverified throws E_HOST_PORT_RELEASE_UNVERIFIED and never calls restart", async () => {
+    mocks.controllerCalls = [];
+    mocks.lockCalls = [];
+    mocks.killCalls = [];
+    mocks.killResult = {
+      killed: true,
+      killError: null,
+      release: "unverified",
+      releaseDetail:
+        "could not determine whether pid 4242 still owns port 51820 (probe=unsupported)",
+      holderPid: null,
+    };
+
+    const command = buildHostFreePortAndRestartCommand({
+      pid: 4242,
+      port: 51820,
+    });
+    await expect(command(fakeCtx())).rejects.toMatchObject({
+      code: "E_HOST_PORT_RELEASE_UNVERIFIED",
+    });
+    expect(mocks.controllerCalls).toEqual([]);
   });
 });

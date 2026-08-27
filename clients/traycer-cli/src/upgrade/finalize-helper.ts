@@ -446,6 +446,67 @@ function isPostFinalizeMarker(value: unknown): value is PostFinalizeMarker {
   return true;
 }
 
+// What a read-only caller learns from the post-finalize marker.
+// `"absent"` and `"invalid"` are kept distinct because they license
+// different statements: absent means the helper wrote nothing (it never
+// ran, or it is still running), while invalid means it wrote something
+// this CLI cannot interpret - a fault worth naming rather than silence.
+export type PostFinalizeMarkerRead =
+  | { readonly status: "absent" }
+  | { readonly status: "invalid"; readonly errorMessage: string }
+  | { readonly status: "present"; readonly marker: PostFinalizeMarker };
+
+// Read the marker WITHOUT consuming it or touching the manifest.
+//
+// This exists because `reconcilePostFinalizeMarker` below is a mutation, and
+// two very different callers wanted the same information. `host restart` is
+// entitled to mutate - it is a lifecycle command, and folding the helper's
+// outcome into the manifest between stop and start is part of its job.
+// `host doctor` is not: a command whose entire contract is "look at the
+// machine and tell me what you see" was deleting the marker file and
+// rewriting the CLI install manifest as a side effect of being asked a
+// question (audit finding CLI-007). A diagnostic that mutates the state it
+// diagnoses cannot be run twice and be trusted, and cannot be run at all by
+// someone who only wanted to look.
+//
+// So doctor reads through here and reports what it finds; reconciliation
+// stays in `host restart`, which is also the fix doctor points at.
+//
+// Never throws.
+export async function readPostFinalizeMarker(opts: {
+  readonly environment: Environment;
+}): Promise<PostFinalizeMarkerRead> {
+  const markerPath = cliPostFinalizeMarkerPath(opts.environment);
+  let raw: string;
+  try {
+    raw = await readFile(markerPath, "utf8");
+  } catch (err) {
+    if (isErrnoException(err) && err.code === "ENOENT") {
+      return { status: "absent" };
+    }
+    return {
+      status: "invalid",
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return {
+      status: "invalid",
+      errorMessage: `marker JSON parse failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!isPostFinalizeMarker(parsed)) {
+    return {
+      status: "invalid",
+      errorMessage: "marker payload does not match expected shape",
+    };
+  }
+  return { status: "present", marker: parsed };
+}
+
 export type ReconcileOutcome =
   | { readonly status: "no-marker" }
   | { readonly status: "marker-invalid"; readonly errorMessage: string }

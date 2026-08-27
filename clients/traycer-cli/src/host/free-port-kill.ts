@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { isProcessAlive } from "../store/cli-lock";
 
 // Bounded timeout for the `lsof`/`netstat` ownership probes below. Both now
 // run entirely inside `cli-lock` (Tech Plan, "Lifecycle lock coverage") -
@@ -30,12 +31,48 @@ const PORT_PROBE_MAX_OUTPUT_BYTES = 1024 * 1024;
 //      that happens to share an ID with the conflicting one (PIDs are
 //      reused aggressively on Linux) - and a hung probe can't wedge
 //      `cli-lock` forever.
-//   2. Send SIGTERM. A failure surfaces as `killError` in the result
-//      rather than a thrown error - the caller already has the user's
-//      "yes I want to kill this" confirmation, so a missed kill isn't
-//      promoted to a CLI error. `process.kill` is a synchronous syscall
+//   2. Send SIGTERM. A delivery failure surfaces as `killError` on the
+//      result rather than a thrown error, so the caller can shape its own
+//      command-specific CLI error. `process.kill` is a synchronous syscall
 //      (no subprocess, no I/O wait), so it has no analogous hang risk and
 //      needs no timeout of its own.
+//   3. VERIFY that the SIGTERM actually achieved anything, by polling until
+//      the target stops owning the port or `PORT_RELEASE_VERIFY_TIMEOUT_MS`
+//      elapses. Step 2 succeeding means "the signal was delivered", which is
+//      a much weaker claim than "the port conflict is resolved": a process
+//      that traps or ignores SIGTERM keeps its listener and the repair has
+//      done nothing. Callers turn a non-`released` verdict into a non-zero
+//      CLI error (audit finding CLI-011) - previously BOTH commands reported
+//      `exitCode: 0` with the failure demoted to a `killError` string, and
+//      `free-port-and-restart` went on to restart the host into a port the
+//      foreign listener still held, so Doctor and Desktop reported a
+//      completed repair over an unresolved conflict.
+//
+// WHAT "RELEASED" MEANS, and why it is not "the port is now unbound". This
+// command's job is to terminate the process the user confirmed, not to
+// guarantee the port stays empty afterwards. On a machine whose service
+// manager auto-respawns the host (launchd KeepAlive, systemd Restart=), the
+// host can legitimately claim the freed port within milliseconds of the kill
+// - the exact outcome the repair wants. Demanding an unbound port would
+// report that success as a failure, so the verdict is keyed to the TARGET:
+// released once `pid` no longer owns `port`, whoever holds it next.
+//
+// Nothing here escalates to SIGKILL. The user confirmed terminating a named
+// process, not force-killing it, and a repair that quietly escalates past
+// what was confirmed is worse than one that stops and says the process
+// ignored the signal.
+
+// Upper bound on the post-kill verification poll. A process that is going to
+// exit on SIGTERM does so in milliseconds; this is generous for a loaded
+// machine while staying well inside the 30s `cli-lock` wait callers hold.
+export const PORT_RELEASE_VERIFY_TIMEOUT_MS = 5_000;
+// 250ms rather than something tighter because every tick can cost a
+// subprocess (`lsof`, or two `netstat` invocations on Windows). The common
+// case settles on the first or second tick - SIGTERM is fast - so the
+// interval only governs how hard the RARE failure case polls, and ~20
+// iterations is a reasonable ceiling for a process that is ignoring the
+// signal anyway.
+const PORT_RELEASE_POLL_INTERVAL_MS = 250;
 
 export interface KillConflictingPortOwnerOptions {
   readonly pid: number;
@@ -45,9 +82,29 @@ export interface KillConflictingPortOwnerOptions {
   readonly commandName: string;
 }
 
+// Verdict of the post-kill verification poll.
+//   - "released"   - `pid` no longer owns `port`. The repair worked.
+//   - "still-held" - `pid` is still alive AND still the listener at the
+//                    deadline (it ignored or trapped SIGTERM), or the signal
+//                    was never delivered at all.
+//   - "unverified" - the ownership probe could not answer (binary missing,
+//                    hung past its own timeout, output overflow). NOT
+//                    success: the same "refuse to act blind" rule that
+//                    guards the pre-kill check applies to the post-kill one.
+export type PortReleaseStatus = "released" | "still-held" | "unverified";
+
 export interface KillConflictingPortOwnerResult {
   readonly killed: boolean;
   readonly killError: string | null;
+  readonly release: PortReleaseStatus;
+  // Human-readable evidence behind `release` - which probe answered, or why
+  // it could not. Callers put this in the error message and `details`.
+  readonly releaseDetail: string;
+  // Who holds the port at the end of verification, when the probe could see
+  // that far. `null` when nothing listens or the probe could not answer.
+  // Diagnostic only: a non-null value that differs from `pid` is compatible
+  // with `release: "released"` (see the auto-respawn note above).
+  readonly holderPid: number | null;
 }
 
 export async function killConflictingPortOwner(
@@ -103,13 +160,136 @@ export async function killConflictingPortOwner(
   }
   try {
     process.kill(opts.pid, "SIGTERM");
-    return { killed: true, killError: null };
   } catch (err) {
+    // The signal never left this process (EPERM on a foreign-user process,
+    // ESRCH on one that exited between the checks above and here). Nothing
+    // was verified because nothing was attempted, so report the port as
+    // still held rather than running a poll whose answer we already know.
     return {
       killed: false,
       killError: err instanceof Error ? err.message : String(err),
+      release: "still-held",
+      releaseDetail: "SIGTERM was not delivered",
+      holderPid: opts.pid,
     };
   }
+  const verification = await verifyPortReleased(opts.pid, opts.port);
+  return {
+    killed: true,
+    killError: null,
+    release: verification.release,
+    releaseDetail: verification.releaseDetail,
+    holderPid: verification.holderPid,
+  };
+}
+
+interface PortReleaseVerification {
+  readonly release: PortReleaseStatus;
+  readonly releaseDetail: string;
+  readonly holderPid: number | null;
+}
+
+// Poll until `pid` stops owning `port`, or the deadline passes.
+//
+// A dead pid owns no sockets, so process exit is a definitive release
+// verdict - and the common one, since exiting is what SIGTERM is for. On
+// POSIX that check is worth making first: `isProcessAlive` is a bare
+// `kill(pid, 0)` syscall, so a target that has already gone settles the
+// question without paying for a subprocess at all.
+//
+// It is deliberately SKIPPED on Windows, where `isProcessAlive` is not a
+// syscall but a synchronous `tasklist` spawn with a 3s timeout
+// (shared/host-lock/process-identity.ts). Polling it there would add a
+// blocking subprocess to every tick to answer a question `netstat` is about
+// to answer anyway - a pessimisation dressed as a fast path.
+//
+// A LIVE target still gets the ownership probe, because "alive" is not
+// "still holding the port": a well-behaved server closes its listener on
+// SIGTERM and then takes its time draining connections. Waiting for the
+// process to disappear would report those as failures.
+async function verifyPortReleased(
+  pid: number,
+  port: number,
+): Promise<PortReleaseVerification> {
+  const livenessProbeIsCheap = process.platform !== "win32";
+  const deadline = Date.now() + PORT_RELEASE_VERIFY_TIMEOUT_MS;
+  // Remembered so the timeout verdict can distinguish "we watched it keep the
+  // port" from "we never got a usable answer" - two different messages, and
+  // only the first names a process for the user to deal with.
+  let lastUnverifiedProbe: string | null = null;
+  for (;;) {
+    if (livenessProbeIsCheap && !isProcessAlive(pid)) {
+      return {
+        release: "released",
+        releaseDetail: `pid ${pid} exited after SIGTERM`,
+        holderPid: null,
+      };
+    }
+    // `pidOwnsPort` re-throws genuine probe failures (exit 2+, unexpected
+    // signal). Before the kill that is correct - the runner turns it into a
+    // structured error and nothing has happened yet. After the kill it is
+    // not: a process has already been signalled, and crashing the command
+    // with a raw subprocess error would lose that fact. Downgrade to
+    // "unverified", which callers already refuse to treat as success.
+    let ownership: PortOwnership;
+    try {
+      ownership = await pidOwnsPort(pid, port);
+    } catch (err) {
+      lastUnverifiedProbe = `threw: ${err instanceof Error ? err.message : String(err)}`;
+      if (Date.now() >= deadline) {
+        return {
+          release: "unverified",
+          releaseDetail: `could not determine whether pid ${pid} still owns port ${port} (probe=${lastUnverifiedProbe})`,
+          holderPid: null,
+        };
+      }
+      await delay(PORT_RELEASE_POLL_INTERVAL_MS);
+      continue;
+    }
+    // Probe-failure kinds report `owns: false` too, so they must be filtered
+    // out BEFORE `!owns` is read as "the target let go" - otherwise a missing
+    // `lsof` would certify every repair as successful.
+    if (
+      ownership.probe === "timeout" ||
+      ownership.probe === "unsupported" ||
+      ownership.probe === "output-overflow"
+    ) {
+      lastUnverifiedProbe = ownership.probe;
+    } else if (!ownership.owns) {
+      lastUnverifiedProbe = null;
+      return {
+        release: "released",
+        releaseDetail:
+          ownership.probe === "no-listener"
+            ? `pid ${pid} released port ${port} (no listener remains)`
+            : `pid ${pid} no longer owns port ${port}`,
+        holderPid: ownership.actualPid,
+      };
+    } else {
+      lastUnverifiedProbe = null;
+    }
+    if (Date.now() >= deadline) {
+      if (lastUnverifiedProbe !== null) {
+        return {
+          release: "unverified",
+          releaseDetail: `could not determine whether pid ${pid} still owns port ${port} (probe=${lastUnverifiedProbe})`,
+          holderPid: null,
+        };
+      }
+      return {
+        release: "still-held",
+        releaseDetail: `pid ${pid} is still alive and still owns port ${port} ${PORT_RELEASE_VERIFY_TIMEOUT_MS}ms after SIGTERM`,
+        holderPid: pid,
+      };
+    }
+    await delay(PORT_RELEASE_POLL_INTERVAL_MS);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 interface PortOwnership {

@@ -75,16 +75,25 @@ function optionalStringArray(
  * required-option enforcement, env-key regex, shell-args array shape).
  */
 export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
-  // `host status` is now a runner-aware command (Native Packaging
-  // cutover): it emits the shared NDJSON envelope and integrates Core
-  // Flow 7 auto-bootstrap. Desktop always passes `--no-bootstrap` here
-  // because the launch reconciler (`HostController`) and Settings → Host
-  // drive the install pipeline explicitly - host-status from Desktop is
-  // informational only (the renderer's boot card reads it for its
-  // `Show details` bootstrap.log tail) and must never implicitly install
-  // the host.
+  // `host status` is a runner-aware command (Native Packaging cutover): it
+  // emits the shared NDJSON envelope.
+  //
+  // This used to pass `--no-bootstrap`, because `host status` would
+  // otherwise install the host, register its OS service, and start it before
+  // answering - and host-status from Desktop is informational only (the
+  // renderer's boot card reads it for its `Show details` bootstrap.log tail),
+  // with the launch reconciler (`HostController`) and Settings → Host driving
+  // the install pipeline explicitly. The CLI now makes `host status`
+  // observational by construction (audit finding CLI-001), so the flag has
+  // nothing left to suppress and the guarantee no longer depends on every
+  // caller remembering to opt out of it.
+  //
+  // The token itself still parses - `addRunnerFlags` keeps it as a hidden
+  // deprecated no-op - which is what makes dropping it here safe even though
+  // `runTraycerCliJson` resolves through `discoverCli()` (manifest → PATH →
+  // bundled) and can therefore run a CLI older than this app.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostStatus, async () => {
-    return runTraycerCliJson(["host", "status", "--no-bootstrap"]);
+    return runTraycerCliJson(["host", "status"]);
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerConfigShellGet, async () => {

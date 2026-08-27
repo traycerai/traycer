@@ -12,10 +12,15 @@ import {
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
-// `host ensure` - the desktop's post-auth provisioning call. A thin
-// source-resolving wrapper over the shared `provisionHost` core
-// (host/provision.ts), which `maybeAutoBootstrap` (login / host status)
-// also routes through.
+// `host ensure` - the desktop's post-auth provisioning call, and now the
+// CLI's ONLY convergent install/register/start path. A thin source-resolving
+// wrapper over the shared `provisionHost` core (host/provision.ts).
+//
+// It used to share that core with `maybeAutoBootstrap`, which ran the same
+// pipeline implicitly off `traycer host status`. That was removed (audit
+// finding CLI-001): a status read must not install software. Anything that
+// wants a host to exist asks for it here, or via `host install` /
+// `host service install`.
 //
 // Source resolution order (offline-capable, self-contained when the host
 // ships beside the CLI):

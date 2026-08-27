@@ -1,11 +1,54 @@
+import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import {
   killConflictingPortOwner,
   PORT_PROBE_TIMEOUT_MS,
+  PORT_RELEASE_VERIFY_TIMEOUT_MS,
 } from "../free-port-kill";
+
+type SpawnOverride = (command: string, args: readonly string[]) => ChildProcess;
+
+const mocks = vi.hoisted(() => ({
+  isProcessAliveMock: vi.fn(),
+  // `null` delegates to the real `spawn` so the Finding 7 tests below (which
+  // launch genuine fake-`lsof` scripts off `PATH`) are untouched; only the
+  // "post-kill release verification" describe block sets this.
+  spawnOverride: null as SpawnOverride | null,
+}));
+
+vi.mock("../../store/cli-lock", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../store/cli-lock")>();
+  return { ...actual, isProcessAlive: mocks.isProcessAliveMock };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (
+      command: string,
+      args: readonly string[],
+      options: SpawnOptions,
+    ): ChildProcess => {
+      if (mocks.spawnOverride !== null) {
+        return mocks.spawnOverride(command, args);
+      }
+      return actual.spawn(command, args, options);
+    },
+  };
+});
 
 // Finding 7 (ticket-2 review round 1): the `lsof`/`netstat` ownership
 // probes now run entirely inside `cli-lock`. Before `PORT_PROBE_TIMEOUT_MS`
@@ -89,6 +132,200 @@ describe.skipIf(process.platform === "win32")(
         expect(Date.now() - start).toBeLessThan(PORT_PROBE_TIMEOUT_MS);
       },
       PORT_PROBE_TIMEOUT_MS,
+    );
+  },
+);
+
+// `verifyPortReleased` is not exported - exercised entirely through the
+// public `killConflictingPortOwner`, which requires a pre-kill ownership
+// check to pass and a SIGTERM to be "delivered" before the verification
+// loop it drives ever runs. `node:child_process.spawn` and `process.kill`
+// are stubbed so the loop's outcome is fully controlled without touching a
+// real process or a real port; `isProcessAlive` is stubbed separately since
+// it is the loop's first (cheaper) probe. Fake timers collapse the 5s
+// verification deadline used by the still-held/unverified cases below to
+// (near-)zero wall-clock time.
+interface StubProbeChild extends EventEmitter {
+  readonly pid: number;
+  readonly stdout: EventEmitter;
+  readonly stderr: EventEmitter;
+  kill: (signal: NodeJS.Signals) => boolean;
+}
+
+function makeStubProbeChild(): StubProbeChild {
+  const emitter = new EventEmitter() as StubProbeChild;
+  Object.assign(emitter, {
+    pid: 9999,
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    kill: () => true,
+  });
+  return emitter;
+}
+
+// The ONE place this file bridges `StubProbeChild` to `ChildProcess` (see
+// `host-start.test.ts`'s identical convention) - one reviewed bridge rather
+// than a scattered `as unknown as ChildProcess` at every call site.
+function asChildProcess(child: StubProbeChild): ChildProcess {
+  const bridged: unknown = child;
+  return bridged as ChildProcess;
+}
+
+type ProbeResponse =
+  | { readonly kind: "close"; readonly stdout: string; readonly code: number }
+  | { readonly kind: "error"; readonly err: Record<string, unknown> };
+
+// Fires after `spawn()` returns, so `executePortProbe` has already attached
+// its `stdout`/`close`/`error` listeners synchronously - matching a real
+// child process, whose I/O always arrives after the caller gets the handle.
+function scheduleProbeResponse(
+  child: StubProbeChild,
+  response: ProbeResponse,
+): void {
+  Promise.resolve().then(() => {
+    if (response.kind === "error") {
+      child.emit("error", response.err);
+      return;
+    }
+    if (response.stdout.length > 0) {
+      child.stdout.emit("data", Buffer.from(response.stdout));
+    }
+    child.emit("close", response.code, null);
+  });
+}
+
+// `lsof -Fpn` output: a line `p<pid>` per matching file descriptor.
+function ownsPort(pid: number): ProbeResponse {
+  return { kind: "close", stdout: `p${pid}\n`, code: 0 };
+}
+const NO_LISTENER: ProbeResponse = { kind: "close", stdout: "", code: 1 };
+const UNSUPPORTED: ProbeResponse = { kind: "error", err: { code: "ENOENT" } };
+const PROBE_TIMEOUT: ProbeResponse = { kind: "error", err: { killed: true } };
+const OUTPUT_OVERFLOW: ProbeResponse = {
+  kind: "error",
+  err: { killed: true, outputOverflow: true },
+};
+
+describe.skipIf(process.platform === "win32")(
+  "killConflictingPortOwner - post-kill release verification",
+  () => {
+    const TARGET_PID = 4242;
+    const PORT = 51820;
+    let killSpy: MockInstance;
+    let responseQueue: ProbeResponse[];
+    let defaultResponse: ProbeResponse | null;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      responseQueue = [];
+      defaultResponse = null;
+      mocks.isProcessAliveMock.mockReset();
+      mocks.isProcessAliveMock.mockReturnValue(true);
+      mocks.spawnOverride = () => {
+        const response = responseQueue.shift() ?? defaultResponse;
+        if (response === null || response === undefined) {
+          throw new Error(
+            "free-port-kill.test.ts: probe response queue exhausted - queue a response or set a default",
+          );
+        }
+        const child = makeStubProbeChild();
+        scheduleProbeResponse(child, response);
+        return asChildProcess(child);
+      };
+      // Neither the pre-kill liveness check (`signal: 0`) nor the SIGTERM
+      // delivery should touch a real process - both are asserted through
+      // the result, not through an actual signal.
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    });
+
+    afterEach(() => {
+      mocks.spawnOverride = null;
+      killSpy.mockRestore();
+      vi.useRealTimers();
+    });
+
+    it("released: process exits after SIGTERM", async () => {
+      // Pre-kill ownership check only - the loop never reaches a second
+      // probe because `isProcessAlive` reports dead on its first check.
+      responseQueue = [ownsPort(TARGET_PID)];
+      mocks.isProcessAliveMock.mockReturnValue(false);
+
+      const result = await killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+
+      expect(result.release).toBe("released");
+      expect(result.releaseDetail).toContain("exited after SIGTERM");
+      expect(result.holderPid).toBeNull();
+    });
+
+    it("released: probe reports no-listener", async () => {
+      responseQueue = [ownsPort(TARGET_PID), NO_LISTENER];
+
+      const result = await killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+
+      expect(result.release).toBe("released");
+      expect(result.releaseDetail).toContain("no listener remains");
+    });
+
+    it("released: a different pid now holds the port (service manager auto-respawn is not a failure)", async () => {
+      responseQueue = [ownsPort(TARGET_PID), ownsPort(7777)];
+
+      const result = await killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+
+      expect(result.release).toBe("released");
+      expect(result.holderPid).toBe(7777);
+    });
+
+    it("still-held: target stays alive and keeps the port past the deadline", async () => {
+      responseQueue = [ownsPort(TARGET_PID)];
+      defaultResponse = ownsPort(TARGET_PID);
+
+      const pending = killConflictingPortOwner({
+        pid: TARGET_PID,
+        port: PORT,
+        commandName: "host free-port",
+      });
+      await vi.advanceTimersByTimeAsync(PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000);
+      const result = await pending;
+
+      expect(result.release).toBe("still-held");
+      expect(result.holderPid).toBe(TARGET_PID);
+    });
+
+    it.each([
+      ["unsupported (probe binary missing)", UNSUPPORTED],
+      ["timeout (probe hung past its own bound)", PROBE_TIMEOUT],
+      ["output-overflow (probe exceeded the output budget)", OUTPUT_OVERFLOW],
+    ])(
+      "unverified, never released: probe stays %s throughout",
+      async (_label, errorResponse) => {
+        responseQueue = [ownsPort(TARGET_PID)];
+        defaultResponse = errorResponse;
+
+        const pending = killConflictingPortOwner({
+          pid: TARGET_PID,
+          port: PORT,
+          commandName: "host free-port",
+        });
+        await vi.advanceTimersByTimeAsync(
+          PORT_RELEASE_VERIFY_TIMEOUT_MS + 1_000,
+        );
+        const result = await pending;
+
+        expect(result.release).toBe("unverified");
+        expect(result.release).not.toBe("released");
+      },
     );
   },
 );

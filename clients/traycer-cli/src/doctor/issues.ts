@@ -45,6 +45,25 @@ export const DOCTOR_ISSUE_CODES = {
   RECENT_CRASH_MARKERS: "RECENT_CRASH_MARKERS",
   REGISTRY_NOT_IMPLEMENTED: "REGISTRY_NOT_IMPLEMENTED",
   CLI_UPGRADE_PENDING: "CLI_UPGRADE_PENDING",
+  // The detached finalize helper already swapped the staged binary onto the
+  // live path, but the install manifest still records the upgrade as pending.
+  //
+  // This state used to be unobservable, because doctor RECONCILED the
+  // helper's marker before reading the manifest - deleting the marker and
+  // rewriting the manifest as a side effect of a diagnostic (CLI-007). Doctor
+  // now only reads, so the drift between "disk is upgraded" and "manifest
+  // says pending" has to be reportable rather than silently repaired.
+  //
+  // Info, deliberately: the CLI the user invokes IS the new one, nothing is
+  // failing, and promoting it would flip `host doctor`'s exit code for a
+  // machine whose only fault is a stale record that the next `host restart`
+  // clears.
+  CLI_UPGRADE_FINALIZED_UNRECONCILED: "CLI_UPGRADE_FINALIZED_UNRECONCILED",
+  // The finalize helper ran and the swap itself failed - distinct from
+  // CLI_UPGRADE_PENDING, whose message ("the live binary is locked, restart
+  // to finalise") is actively wrong here: a helper already ran with the lock
+  // released. The operator needs the helper's own error, which this carries.
+  CLI_UPGRADE_FINALIZE_FAILED: "CLI_UPGRADE_FINALIZE_FAILED",
   // The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
   // Desktop app points into its own bundle; removing or replacing the app
   // leaves it dangling. `ls` (lstat) still shows the file while executing
