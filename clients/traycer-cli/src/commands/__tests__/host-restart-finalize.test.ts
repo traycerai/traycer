@@ -160,6 +160,7 @@ function writeManifest(opts: {
 
 interface RestartArgsBaseline {
   readonly environment: "production" | "dev";
+  readonly force: boolean;
   readonly controller: StubController;
   readonly label: { readonly id: string };
   readonly parentPid: number;
@@ -181,6 +182,7 @@ interface RestartArgsBaseline {
 function defaultArgs(controller: StubController): RestartArgsBaseline {
   return {
     environment: "production",
+    force: false,
     controller,
     label: {
       id: "ai.traycer.host.production",
@@ -202,6 +204,14 @@ function defaultArgs(controller: StubController): RestartArgsBaseline {
   };
 }
 
+function testActuators(args: RestartArgsBaseline) {
+  return {
+    stop: () => args.controller.stopForRestart(args.label as ServiceLabel),
+    relaunch: (stopped: RestartStop) =>
+      args.controller.relaunchAfterRestart(args.label as ServiceLabel, stopped),
+  };
+}
+
 describe("restartWithPendingCliUpgradeFinalize", () => {
   it("stops, finalises the staged binary, then starts (lifecycle order matters)", async () => {
     const liveBinaryPath = join(workHome, "bin", "traycer");
@@ -219,8 +229,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
+    const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
-      defaultArgs(controller) as never,
+      args as never,
+      testActuators(args),
     );
 
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
@@ -265,8 +277,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
+    const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
-      defaultArgs(controller) as never,
+      args as never,
+      testActuators(args),
     );
     expect(result.finalize.status).toBe("no-pending");
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
@@ -282,8 +296,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
+    const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
-      defaultArgs(controller) as never,
+      args as never,
+      testActuators(args),
     );
     expect(result.finalize.status).toBe("no-manifest");
     expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
@@ -331,12 +347,16 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       };
       const { restartWithPendingCliUpgradeFinalize } =
         await import("../host-restart");
-      const result = await restartWithPendingCliUpgradeFinalize({
+      const args = {
         ...defaultArgs(controller),
         platform: "win32",
         spawnImpl: spawnStub,
         writeImpl: writeStub,
-      } as never);
+      } as RestartArgsBaseline;
+      const result = await restartWithPendingCliUpgradeFinalize(
+        args as never,
+        testActuators(args),
+      );
       // controller.start() must be skipped - the helper takes over.
       expect(calls.calls).toEqual(["stopForRestart"]);
       expect(result.helper).not.toBeNull();
@@ -387,8 +407,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const controller = makeStubController(calls);
       const { restartWithPendingCliUpgradeFinalize } =
         await import("../host-restart");
+      const args = defaultArgs(controller);
       const result = await restartWithPendingCliUpgradeFinalize(
-        defaultArgs(controller) as never,
+        args as never,
+        testActuators(args),
       );
       expect(result.finalize.status).toBe("still-locked");
       expect(result.helper).toBeNull();
@@ -447,8 +469,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
+    const args = defaultArgs(controller);
     const result = await restartWithPendingCliUpgradeFinalize(
-      defaultArgs(controller) as never,
+      args as never,
+      testActuators(args),
     );
 
     expect(result.markerReconcile?.status).toBe("applied-swapped");
@@ -509,8 +533,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       const controller = makeStubController(calls);
       const { restartWithPendingCliUpgradeFinalize } =
         await import("../host-restart");
+      const args = defaultArgs(controller);
       const result = await restartWithPendingCliUpgradeFinalize(
-        defaultArgs(controller) as never,
+        args as never,
+        testActuators(args),
       );
       expect(result.markerReconcile?.status).toBe("applied-swap-failed");
       if (result.markerReconcile?.status === "applied-swap-failed") {

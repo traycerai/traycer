@@ -54,6 +54,12 @@ export const CLI_ERROR_CODES = {
   // compat probe) rather than treating it as a hard failure. Cleared with
   // `--force`.
   HOST_BUSY: "E_HOST_BUSY",
+  // A durable schema-v2 update attempt owns the mutation boundary. This is
+  // deliberately NOT HOST_BUSY: retrying with --force can override a live
+  // workload's cooperative stop, but it can never override attempt
+  // admission. Desktop uses this distinction to attach/yield rather than
+  // offering an ineffective force action.
+  HOST_UPDATE_ATTEMPT_ACTIVE: "E_HOST_UPDATE_ATTEMPT_ACTIVE",
   // The host is reachable but its RPC protocol is incompatible with this
   // CLI (version skew): the host answered with INCOMPATIBLE /
   // DOWNGRADE_UNSUPPORTED, or returned a response shape this CLI could not

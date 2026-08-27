@@ -6,6 +6,8 @@ export {
   hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 
 export {
@@ -29,6 +31,7 @@ export {
   hostUpdateCheckResponseSchema,
   hostUpdateInstallRequestSchema,
   hostUpdateInstallResponseSchema,
+  hostUpdateInstallResponseV11Schema,
   type HostAvailableManifest,
   type HostDoctorIssue,
   type DoctorTransportVantage,
@@ -47,4 +50,5 @@ export {
   type HostUpdateCheckResponse,
   type HostUpdateInstallRequest,
   type HostUpdateInstallResponse,
+  type HostUpdateInstallResponseV11,
 } from "./schemas";

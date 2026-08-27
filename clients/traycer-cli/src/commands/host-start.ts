@@ -48,6 +48,7 @@ import {
   prepareCrashReportsDir,
 } from "../host/crash-diagnostics";
 import { hostHomeDir } from "../store/paths";
+import { consumeHostStartAdoption } from "../host/host-start-adoption";
 import {
   hasActionableStopIntent,
   readStopIntentIdentity,
@@ -73,6 +74,10 @@ import {
   listEnvOverrides,
   type EnvOverrideValue,
 } from "../store/config-store";
+import {
+  withUpdateContender,
+  type UpdateContenderOutcome,
+} from "@traycer-clients/shared/host-update";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 
 // `traycer host start` is the long-running supervisor invoked by the OS
@@ -114,6 +119,8 @@ export type RunHostStartOptions =
       readonly cwd: string | null;
       /** Identity binding for an ordinary service start; no probe authority. */
       readonly serviceLabel: string;
+      /** Opaque grant supplied by the exact service launcher invocation. */
+      readonly adoptionNonce: string | null;
     }
   | {
       readonly environment: Environment;
@@ -321,7 +328,34 @@ export type SpawnImpl = (
   options: SpawnOptions,
 ) => ChildProcess;
 
+/**
+ * The last boundary before this supervisor turns `install.json` into an OS
+ * process. It intentionally owns the callback: an admission check followed by
+ * a later spawn would recreate the release-gap this module exists to close.
+ */
+export type AdmitHostStartSpawn = (
+  options: RunHostStartOptions,
+  run: () => Promise<ChildProcess>,
+) => Promise<UpdateContenderOutcome<ChildProcess>>;
+
+function describeHostStartAdmission(
+  outcome: Exclude<UpdateContenderOutcome<unknown>, { readonly kind: "ran" }>,
+): string {
+  switch (outcome.kind) {
+    case "busy":
+    case "held-in-process":
+      return "another update execution segment currently owns the restart boundary";
+    case "nonterminal-attempt":
+      return `attempt ${outcome.record.attemptId} is ${outcome.record.phase}/${outcome.record.execution}; supervisor relaunch is not a legal continuation`;
+    case "record-fail-closed":
+      return `update attempt evidence is ${outcome.record.kind}; supervisor relaunch refused`;
+    case "lock-not-live":
+      return `update attempt capability is ${outcome.verdict.kind}; supervisor relaunch refused`;
+  }
+}
+
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
+  readonly admitHostStartSpawn: AdmitHostStartSpawn;
   readonly spawn: SpawnImpl;
   // Injected so tests can drive the "another host already owns this data
   // dir" branch without a real pid.json or a live loopback listener.
@@ -413,6 +447,60 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
+  admitHostStartSpawn: async (options, run) => {
+    // A service controller that already owns the outer attempt capability
+    // publishes a one-shot, target-home-bound adoption proof immediately
+    // before asking the OS manager to launch this supervisor. Reacquiring
+    // here would make Windows wait-for-spawn and POSIX kickstart compose
+    // into a parent-lock/child-lock cycle. The proof is consumed once and
+    // revalidates the live parent holder; every standalone/crash relaunch
+    // falls through to the normal canonical admission below.
+    const serviceLabel =
+      "serviceLabel" in options ? options.serviceLabel : null;
+    const adoptionNonce =
+      "adoptionNonce" in options ? options.adoptionNonce : null;
+    const adoption = await consumeHostStartAdoption(
+      options.environment,
+      serviceLabel,
+      adoptionNonce,
+    );
+    if (adoption.kind !== "absent" && adoption.kind !== "grant") {
+      throw new Error(adoption.reason);
+    }
+    if (adoption.kind === "grant") {
+      let child: ChildProcess | null = null;
+      try {
+        child = await run();
+        if (!(await adoption.grant.acknowledgeSpawn())) {
+          child.kill("SIGTERM");
+          throw new Error(
+            "host-start adoption parent capability was lost before spawn acknowledgement",
+          );
+        }
+        return { kind: "ran", result: child };
+      } catch (error) {
+        try {
+          child?.kill("SIGTERM");
+        } catch {
+          // A failed/short-lived child is already refusing the unadmitted
+          // start. The supervisor still reports the parent-liveness failure.
+        }
+        throw error;
+      } finally {
+        await adoption.grant.abandon();
+      }
+    }
+    return withUpdateContender(
+      {
+        hostHomeDir: hostHomeDir(options.environment),
+        reason: "host-supervisor-spawn",
+        waitMs: 0,
+        pollIntervalMs: 50,
+        admission: "runtime-repair-maintenance",
+      },
+      async () => run(),
+    );
+  },
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
   findIncumbentHost: findLiveIncumbentHost,
   openLogFd: openBootstrapLogFd,
@@ -1009,14 +1097,13 @@ export async function runHostStart(
         rotation,
       });
 
-      // Create + prune the diagnostic-report destination BEFORE the spawn: the
-      // relative `--report-directory=crash-reports` in NODE_OPTIONS resolves
-      // against the child cwd, and a crash before the host's own runtime arming
-      // must still have somewhere to land. Never throws.
+      // The report directory is prepared in the admitted callback below,
+      // together with the fresh install-record read that chooses the child's
+      // cwd. Preparing it here would mutate an old slot before the contender
+      // can reject an active/parked attempt that has already selected newer
+      // bytes.
       crashReportsDirPath = crashReportsDirFor(target.cwd);
-      preexistingReportNames = new Set(
-        await deps.prepareCrashReportsDir(crashReportsDirPath),
-      );
+      preexistingReportNames = new Set();
 
       await writeMarkerBestEffort(
         deps,
@@ -1120,23 +1207,10 @@ export async function runHostStart(
     // received raw frames. Version skew is safe both ways: an N-1 host scans
     // argv and ignores the unknown flag, and a current host that is not given
     // the flag simply writes nothing.
-    const hostArgs = [
-      ...target.args,
-      "--layer0-attempt-id",
-      attemptId,
-      ...(attemptProbeContext === null
-        ? []
-        : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
-    ] as const;
-
-    // The `make dev-desktop` host runtime is a `.cmd` wrapper that execs
-    // `node <bundle>` (production is a real `.exe`). bun/Node launch a `.cmd`
-    // through cmd.exe but do NOT quote a wrapper path containing spaces (e.g.
-    // "C:\Users\Traycer Dev\..."), so cmd splits it and fails with
-    // "'C:\Users\Traycer' is not recognized". Invoke cmd.exe ourselves with a
-    // verbatim, fully-quoted command line on Windows; every other case spawns
-    // the executable directly.
-    const launch = resolveSpawnInvocation(target.executable, hostArgs);
+    // The install record is re-read and the OS invocation is derived inside
+    // the attempt-admission callback below. A check outside that callback
+    // would let an active/parked attempt swap `install.json` between this
+    // supervisor's initial diagnostic read and its eventual spawn.
 
     // Last look before committing to a child. BOTH halves of the
     // deliberate-stop guard are asked here, on EVERY attempt including the
@@ -1214,28 +1288,142 @@ export async function runHostStart(
     // Captured BEFORE the spawn: a loader-phase crash can write its diagnostic
     // report before any post-spawn statement runs, and the report scan treats
     // this as its lower bound (with additional slack for mtime granularity).
-    const childSpawnedAtMs = Date.now();
+    let childSpawnedAtMs = 0;
     let child: ChildProcess;
+    const spawnedWhileAdmitting: { child: ChildProcess | null } = {
+      child: null,
+    };
     try {
-      child = deps.spawn(launch.command, launch.args, {
-        cwd: target.cwd,
-        env,
-        // Index LAYER0_STATUS_FD of this vector IS the descriptor named by
-        // `--layer0-status-fd` above; the two must not drift apart. stdout
-        // stays on the log fd; stderr is piped so the supervisor can tee it -
-        // byte-for-byte into `host.log` BY PATH (a host-side log rotation
-        // strands an fd-bound copy in `host.log.1`) plus a bounded in-memory
-        // tail for the crash marker.
-        stdio:
-          attemptProbeContext === null
-            ? ["ignore", logFd, "pipe"]
-            : ["ignore", logFd, "pipe", "pipe"],
-        windowsHide: process.platform === "win32",
-        ...(launch.windowsVerbatimArguments
-          ? { windowsVerbatimArguments: true }
-          : {}),
+      const admission = await deps.admitHostStartSpawn(opts, async () => {
+        // Re-resolve the install record under the outer attempt boundary.
+        // This makes every initial, crash, and exit-87 relaunch choose its
+        // executable from a state the same contender just admitted.
+        target = await resolveHostStartTarget(opts, deps);
+        crashReportsDirPath = crashReportsDirFor(target.cwd);
+        preexistingReportNames = new Set(
+          await deps.prepareCrashReportsDir(crashReportsDirPath),
+        );
+        const hostArgs = [
+          ...target.args,
+          "--layer0-attempt-id",
+          attemptId,
+          ...(attemptProbeContext === null
+            ? []
+            : ["--layer0-status-fd", String(LAYER0_STATUS_FD)]),
+        ] as const;
+        // The `make dev-desktop` host runtime is a `.cmd` wrapper. Resolve
+        // it only after the admitted install-record re-read so a Windows
+        // path with spaces and a just-promoted target stay one invocation.
+        const launch = resolveSpawnInvocation(target.executable, hostArgs);
+        childSpawnedAtMs = Date.now();
+        spawnedWhileAdmitting.child = deps.spawn(launch.command, launch.args, {
+          cwd: target.cwd,
+          env,
+          stdio:
+            attemptProbeContext === null
+              ? ["ignore", logFd, "pipe"]
+              : ["ignore", logFd, "pipe", "pipe"],
+          windowsHide: process.platform === "win32",
+          ...(launch.windowsVerbatimArguments
+            ? { windowsVerbatimArguments: true }
+            : {}),
+        });
+        return spawnedWhileAdmitting.child;
       });
+      if (admission.kind !== "ran") {
+        // `withUpdateContender` performs a post-callback ownership check. If
+        // it detects a loss after `spawn()` synchronously returned, terminate
+        // that unadmitted child rather than letting it serve bytes selected
+        // from a record we can no longer prove authority over.
+        try {
+          spawnedWhileAdmitting.child?.kill("SIGTERM");
+        } catch {
+          // The child may already have failed; the terminal marker below still
+          // makes this supervisor's refusal visible.
+        }
+        const reason = describeHostStartAdmission(admission);
+        logger.warn("Host supervisor refused an unadmitted spawn", {
+          environment: opts.environment,
+          attemptId,
+          reason,
+        });
+        await writeMarkerBestEffort(
+          deps,
+          logger,
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: target.executable,
+              exitCode: undefined,
+              signal: undefined,
+              error: reason,
+            },
+            null,
+          ),
+        );
+        await deps.closeLogFd(logFd);
+        return exitSupervisor(0);
+      }
+      child = admission.result;
     } catch (cause) {
+      // The fresh record resolution happens inside admission. Preserve the
+      // supervisor's existing target-resolution contract if it fails there:
+      // a missing/invalid record is not a generic OS spawn failure, and its
+      // durable marker must retain the actionable CLI code.
+      if (cause instanceof CliError) {
+        await writeMarkerBestEffort(
+          deps,
+          logger,
+          opts.environment,
+          "failed-to-spawn",
+          markerFields(
+            attemptId,
+            supervisorPid,
+            {
+              shell: undefined,
+              args: undefined,
+              bundle: target.executable,
+              exitCode: undefined,
+              signal: undefined,
+              error: `${cause.code}: ${cause.message}`,
+            },
+            null,
+          ),
+        );
+        await deps.closeLogFd(logFd);
+        if (!isFirstAttempt || serviceStarted) {
+          const decision = await decideRelaunch({
+            deps,
+            logger,
+            environment: opts.environment,
+            reason: "target-resolution-failed-after-admission",
+            consecutiveRelaunches,
+            isShuttingDown: () => shuttingDown,
+            servedStopIntentAtStartup,
+            shutdownRequested,
+          });
+          if (decision.kind === "relaunch") {
+            consecutiveRelaunches = decision.consecutiveRelaunches;
+            continue;
+          }
+          if (decision.cause === "stop-requested") return exitSupervisor(0);
+        }
+        await writeProbeTerminalIfAttested({
+          context: attemptProbeContext,
+          attemptId,
+          supervisorPid,
+          reason: `target-resolution-${cause.code}-after-admission`,
+          deps,
+          environment: opts.environment,
+        });
+        deps.onError(`traycer host start: ${cause.code}: ${cause.message}`);
+        return exitSupervisor(cause.exitCode);
+      }
       const message = cause instanceof Error ? cause.message : String(cause);
       logger.error(
         "Host supervisor spawn failed",

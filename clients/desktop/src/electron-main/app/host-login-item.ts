@@ -119,6 +119,24 @@ export type HostLoginItemStatus =
 export type RegisterHostLoginItemResult =
   HostLoginItemStatus | "removed-by-user" | "deferred-busy";
 
+type LoginItemRegistrationSnapshot = {
+  readonly primary: HostLoginItemStatus | null;
+  readonly legacy: HostLoginItemStatus | null;
+  /** A raw legacy LaunchAgent cannot be restored exactly through Electron. */
+  /**
+   * Tri-state, deliberately NOT a boolean.
+   *
+   * Collapsing `unreadable` into "present" is what permanently parked the
+   * <=1.1.6 upgrade cohort: a present manifest is migration work this cycle
+   * exists to perform, while an unreadable one is the only state that is
+   * genuinely disqualifying. One bit could not tell them apart, so it refused
+   * both - and since `retireLegacyLabelRegistrations` (the only code that
+   * removes the manifest) runs AFTER the entry guard, the manifest was never
+   * removed, the guard never passed, and registration could never proceed.
+   */
+  readonly legacyManifest: "present" | "absent" | "unreadable";
+};
+
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop
 // owns registration (SMAppService) - and therefore passes
@@ -147,6 +165,25 @@ export async function hostManagesHostLoginItem(): Promise<boolean> {
  * cause (e.g. `requires-approval`).
  */
 export function readHostLoginItemStatus(): HostLoginItemStatus {
+  return readLoginItemStatus(HOST_SERVICE_NAME);
+}
+
+function readLoginItemStatus(serviceName: string): HostLoginItemStatus {
+  const evidence = readLoginItemStatusEvidence(serviceName);
+  if (evidence.kind === "read") return evidence.status;
+  // Existing observational callers retain their stable coarse projection.
+  // Destructive transaction snapshots use the evidence function directly and
+  // treat this path as un-restorable rather than folding it into absence.
+  return "not-registered";
+}
+
+type LoginItemStatusEvidence =
+  | { readonly kind: "read"; readonly status: HostLoginItemStatus }
+  | { readonly kind: "unreadable" };
+
+function readLoginItemStatusEvidence(
+  serviceName: string,
+): LoginItemStatusEvidence {
   // Electron's `getLoginItemSettings` is documented as non-throwing on the
   // agentService shape but its underlying SMAppService bridge has thrown
   // on broken BTM states in older macOS minor versions. We catch at this
@@ -156,12 +193,12 @@ export function readHostLoginItemStatus(): HostLoginItemStatus {
   try {
     const settings = app.getLoginItemSettings({
       type: "agentService",
-      serviceName: HOST_SERVICE_NAME,
+      serviceName,
     });
-    return normalizeStatus(settings.status);
+    return { kind: "read", status: normalizeStatus(settings.status) };
   } catch (err) {
     log.warn("[host-login-item] getLoginItemSettings threw", err);
-    return "not-registered";
+    return { kind: "unreadable" };
   }
 }
 
@@ -267,6 +304,21 @@ export function registerHostLoginItem(
   );
 }
 
+/**
+ * The contender facade supplies this verifier. Keeping the call immediately
+ * adjacent to every destructive edge prevents a capability lost while the
+ * registration lock was queued from authorizing the rest of a composite
+ * SMAppService cycle.
+ */
+async function mutationAllowed(
+  revalidateBeforeMutation: (() => Promise<boolean>) | null | undefined,
+): Promise<boolean> {
+  return revalidateBeforeMutation === null ||
+    revalidateBeforeMutation === undefined
+    ? true
+    : revalidateBeforeMutation();
+}
+
 async function registerHostLoginItemUnserialized(
   revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {
@@ -284,10 +336,7 @@ async function registerHostLoginItemUnserialized(
     return "removed-by-user";
   }
 
-  if (
-    revalidateBeforeBootout !== undefined &&
-    !(await revalidateBeforeBootout())
-  ) {
+  if (!(await mutationAllowed(revalidateBeforeBootout))) {
     log.info(
       "[host-login-item] register cycle deferred - caller's guard failed once dequeued from the registration lock (host is no longer idle)",
     );
@@ -295,12 +344,32 @@ async function registerHostLoginItemUnserialized(
   }
 
   const plistPath = inAppLaunchAgentPlistPath();
+  // Snapshot before the first legacy bootout/removal. It is authoritative
+  // evidence for deciding whether we may begin, but it is never used to
+  // compensate after authority loss: Electron exposes no BTM transaction/CAS
+  // and a stale process must not write a fresh registration.
+  const priorRegistration = await snapshotLoginItemRegistration();
+  if (!(await canBeginDestructiveRegistration(priorRegistration))) {
+    // We have no transaction primitive that can recreate an arbitrary BTM
+    // approval state, a loaded raw LaunchAgent, or a bundle whose helper
+    // identity changed under us. Do not pretend a plist digest is enough to
+    // undo those edges. Park before the first bootout and leave a newly
+    // admitted repair to make the next registration decision from current
+    // evidence.
+    log.warn(
+      "[host-login-item] registration parked: prior registration cannot be restored exactly",
+    );
+    return priorRegistration.primary ?? "not-registered";
+  }
 
   // Steps 1–3: retire every registration under the legacy shared label.
   // Runs only here - after both guards - so a deferred cycle leaves the
   // legacy registration fully intact (see the docstring's coupling
   // invariant).
-  await retireLegacyLabelRegistrations();
+  if (!(await retireLegacyLabelRegistrations(revalidateBeforeBootout))) {
+    parkRegistrationAfterAuthorityLoss("legacy registration retirement");
+    return "deferred-busy";
+  }
 
   // Step 4: flush BTM's stale LWCR for the agent label before touching
   // SMAppService. On macOS 26+ this is the load-bearing step —
@@ -308,9 +377,20 @@ async function registerHostLoginItemUnserialized(
   // bootout the subsequent register hands launchd a stale CDHash and every
   // spawn is SIGKILL'd inside dyld init. See the docstring above for the
   // full mechanism.
-  await bootoutStaleAgent(HOST_AGENT_LABEL);
+  if (!(await bootoutStaleAgent(HOST_AGENT_LABEL, revalidateBeforeBootout))) {
+    parkRegistrationAfterAuthorityLoss("primary launchctl bootout");
+    return "deferred-busy";
+  }
 
-  const clearedOk = trySetLoginItemSettings(false, HOST_SERVICE_NAME);
+  const clearedOk = await setLoginItemSettingsWithGuard(
+    false,
+    HOST_SERVICE_NAME,
+    revalidateBeforeBootout,
+  );
+  if (clearedOk === null) {
+    parkRegistrationAfterAuthorityLoss("primary SMAppService clear");
+    return "deferred-busy";
+  }
   if (!clearedOk) {
     return "not-registered";
   }
@@ -321,7 +401,19 @@ async function registerHostLoginItemUnserialized(
     status: cleared,
   });
 
-  const registeredOk = trySetLoginItemSettings(true, HOST_SERVICE_NAME);
+  const registeredOk = await setLoginItemSettingsWithGuard(
+    true,
+    HOST_SERVICE_NAME,
+    revalidateBeforeBootout,
+  );
+  if (registeredOk === null) {
+    // A clear may already have committed, but Electron offers no
+    // registration transaction/CAS. A stale contender must not recreate a
+    // login item from mutable current bundle bytes, so park for a freshly
+    // admitted repair instead of compensating after authority is gone.
+    parkRegistrationAfterAuthorityLoss("primary SMAppService register");
+    return "deferred-busy";
+  }
   if (!registeredOk) {
     return "not-registered";
   }
@@ -336,7 +428,14 @@ async function registerHostLoginItemUnserialized(
     // fast path applying a deferred install), the on-disk plist is now the
     // one active in launchd - any pending-revision marker the installer
     // left behind is resolved.
-    await clearPendingLoginItemRevision(config.environment);
+    const markerClearedUnderAuthority = await clearPendingLoginItemRevision(
+      config.environment,
+      revalidateBeforeBootout,
+    );
+    if (!markerClearedUnderAuthority) {
+      parkRegistrationAfterAuthorityLoss("pending login-item revision removal");
+      return "deferred-busy";
+    }
   }
   return status;
 }
@@ -362,14 +461,71 @@ async function registerHostLoginItemUnserialized(
  * does not depend on any of them, and a failed cleanup leaves the machine
  * no worse than before the cycle ran.
  */
-async function retireLegacyLabelRegistrations(): Promise<void> {
-  await removeCliLabelManifest();
-  await bootoutStaleAgent(CLI_HOST_LABEL);
-  const unregistered = trySetLoginItemSettings(false, LEGACY_HOST_SERVICE_NAME);
+/**
+ * Remove the raw CLI `RunAtLoad` manifest and PROVE it is gone.
+ *
+ * Shared by register and unregister, and sharing it is the point. Ticket 05
+ * made the destructive-entry guard permissive about a present legacy manifest
+ * - correctly, because a readable manifest is work to do, not a reason to
+ * refuse. But that guard is shared, while the retirement step was not: register
+ * removed the plist, unregister only booted out the jobs and cleared the
+ * SMAppService records. So on a migration machine, deregistering reported
+ * success with `~/Library/LaunchAgents/<cli-label>.plist` still on disk, and
+ * `RunAtLoad` started the host again at next login - silently undoing the
+ * user's explicit deregistration.
+ *
+ * Admission and retirement have to travel together. One helper, two callers.
+ */
+async function removeCliLabelManifestProvably(
+  revalidateBeforeMutation: (() => Promise<boolean>) | undefined,
+): Promise<boolean> {
+  const removed = await removeCliLabelManifest(revalidateBeforeMutation);
+  // `failed` parks exactly as `deferred` does. Letting it fall through was the
+  // second half of the same defect: the cycle would go on while a legacy
+  // manifest it could not remove was still on disk, which is the
+  // competing-`RunAtLoad`-host state this retirement exists to prevent.
+  // (`removeCliLabelManifest` already maps an unreadable probe to `failed`.)
+  if (removed === "deferred" || removed === "failed") return false;
+  if (removed === "removed") {
+    // Positively re-probe absence before anything downstream. `rm(force)`
+    // cannot distinguish "removed it" from "there was nothing there", and a
+    // manifest that reappears - a concurrent CLI install, a race with the
+    // launch repair - must not be discovered only after the caller has
+    // committed. Absence is proven here or the cycle parks.
+    const after = await probeCliLabelManifest(
+      userLaunchAgentPlistPath(CLI_HOST_LABEL),
+    );
+    if (after.kind !== "absent") {
+      log.warn(
+        "[host-login-item] CLI LaunchAgent manifest was not provably absent after removal - parking",
+        { probe: after.kind },
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
+async function retireLegacyLabelRegistrations(
+  revalidateBeforeMutation: (() => Promise<boolean>) | undefined,
+): Promise<boolean> {
+  if (!(await removeCliLabelManifestProvably(revalidateBeforeMutation))) {
+    return false;
+  }
+  if (!(await bootoutStaleAgent(CLI_HOST_LABEL, revalidateBeforeMutation))) {
+    return false;
+  }
+  const unregistered = await setLoginItemSettingsWithGuard(
+    false,
+    LEGACY_HOST_SERVICE_NAME,
+    revalidateBeforeMutation,
+  );
+  if (unregistered === null) return false;
   log.info("[host-login-item] retired legacy-label SMAppService registration", {
     serviceName: LEGACY_HOST_SERVICE_NAME,
     unregistered,
   });
+  return true;
 }
 
 // Whether the competing CLI manifest is there. Mirrors `ManifestProbe` in the
@@ -414,9 +570,9 @@ async function probeCliLabelManifest(
  * repair deliberately does not (see
  * `retireCompetingCliRegistrationAtLaunch`).
  */
-async function removeCliLabelManifest(): Promise<
-  "removed" | "absent" | "failed"
-> {
+async function removeCliLabelManifest(
+  revalidateBeforeRemoval: (() => Promise<boolean>) | null | undefined,
+): Promise<"removed" | "absent" | "failed" | "deferred"> {
   const manifest = userLaunchAgentPlistPath(CLI_HOST_LABEL);
   const probe = await probeCliLabelManifest(manifest);
   if (probe.kind === "absent") return "absent";
@@ -435,6 +591,7 @@ async function removeCliLabelManifest(): Promise<
     return "failed";
   }
   try {
+    if (!(await mutationAllowed(revalidateBeforeRemoval))) return "deferred";
     await rm(manifest, { force: true });
   } catch (err) {
     log.warn(
@@ -628,12 +785,29 @@ async function probeAgentWedgeForRetirement(): Promise<AgentWedgeProbeResult> {
  * never interleave on the CLI label.
  */
 export function retireCompetingCliRegistrationAtLaunch(): Promise<LaunchCompetingRegistrationRepair> {
-  return withHostLoginItemRegistrationLock(
-    retireCompetingCliRegistrationUnserialized,
+  return withHostLoginItemRegistrationLock(async () => {
+    const outcome = await retireCompetingCliRegistrationUnserialized(null);
+    // The null arm is reachable only when a contender guard was supplied.
+    // Keep this legacy no-guard API total without fabricating a retirement.
+    return outcome ?? "not-applicable";
+  });
+}
+
+/**
+ * Contender-only variant. `null` means the capability disappeared while the
+ * registration lock was queued; no manifest operation was performed.
+ */
+export async function retireCompetingCliRegistrationAtLaunchGuarded(
+  revalidateBeforeRemoval: () => Promise<boolean>,
+): Promise<LaunchCompetingRegistrationRepair | null> {
+  return withHostLoginItemRegistrationLock(() =>
+    retireCompetingCliRegistrationUnserialized(revalidateBeforeRemoval),
   );
 }
 
-async function retireCompetingCliRegistrationUnserialized(): Promise<LaunchCompetingRegistrationRepair> {
+async function retireCompetingCliRegistrationUnserialized(
+  revalidateBeforeRemoval: (() => Promise<boolean>) | null,
+): Promise<LaunchCompetingRegistrationRepair | null> {
   if (!(await hostManagesHostLoginItem())) return "not-applicable";
   // A host the user removed on this device must not be repaired back into
   // existence; `unregisterHostLoginItem` deliberately leaves the machine
@@ -648,7 +822,14 @@ async function retireCompetingCliRegistrationUnserialized(): Promise<LaunchCompe
     );
     return "agent-possibly-wedged";
   }
-  const outcome = await removeCliLabelManifest();
+  if (
+    revalidateBeforeRemoval !== null &&
+    !(await mutationAllowed(revalidateBeforeRemoval))
+  ) {
+    return null;
+  }
+  const outcome = await removeCliLabelManifest(revalidateBeforeRemoval);
+  if (outcome === "deferred") return null;
   if (outcome === "absent") return "nothing-to-retire";
   if (outcome === "failed") return "retire-failed";
   log.info(
@@ -708,12 +889,15 @@ export async function hasUnappliedPendingLoginItemRevision(
 
 async function clearPendingLoginItemRevision(
   environment: Environment,
-): Promise<void> {
+  revalidateBeforeRemoval: (() => Promise<boolean>) | undefined,
+): Promise<boolean> {
   const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
   try {
+    if (!(await mutationAllowed(revalidateBeforeRemoval))) return false;
     await rm(markerPath, { force: true });
     // Cleared cleanly - there is no lingering marker to suppress.
     appliedPendingRevisionMtimeMs = null;
+    return true;
   } catch (err) {
     // M-B: the marker for the revision we just applied could not be removed.
     // Latch its mtime so `hasUnappliedPendingLoginItemRevision` stops treating
@@ -727,6 +911,7 @@ async function clearPendingLoginItemRevision(
       "[host-login-item] failed to clear pending LaunchAgent revision marker",
       { err },
     );
+    return true;
   }
 }
 
@@ -744,32 +929,92 @@ async function clearPendingLoginItemRevision(
  * other build there is no SMAppService registration to remove.
  */
 export function unregisterHostLoginItem(): Promise<void> {
-  return withHostLoginItemRegistrationLock(unregisterHostLoginItemUnserialized);
+  return withHostLoginItemRegistrationLock(async () => {
+    await unregisterHostLoginItemUnserialized(undefined);
+  });
 }
 
-async function unregisterHostLoginItemUnserialized(): Promise<void> {
+/**
+ * Contender-aware variant used by the host update mutation facade. The guard
+ * is evaluated while the registration serialization lock is held and just
+ * before either bootout, so a capability that was released while queued
+ * cannot remove a live registration.
+ */
+export async function unregisterHostLoginItemGuarded(
+  revalidateBeforeBootout: () => Promise<boolean>,
+): Promise<boolean> {
+  return withHostLoginItemRegistrationLock(async () => {
+    return unregisterHostLoginItemUnserialized(revalidateBeforeBootout);
+  });
+}
+
+async function unregisterHostLoginItemUnserialized(
+  revalidateBeforeMutation: (() => Promise<boolean>) | undefined,
+): Promise<boolean> {
+  const priorRegistration = await snapshotLoginItemRegistration();
+  if (!(await canBeginDestructiveRegistration(priorRegistration))) {
+    log.warn(
+      "[host-login-item] unregister parked: prior registration cannot be restored exactly",
+    );
+    return false;
+  }
   // Both labels: the agent label is the live registration on post-split
   // builds; the CLI label covers machines mid-transition (a legacy/CLI job
   // still loaded, or an old-label SMAppService record not yet retired by a
   // register cycle).
-  await bootoutStaleAgent(HOST_AGENT_LABEL);
-  await bootoutStaleAgent(CLI_HOST_LABEL);
-  const cleared = trySetLoginItemSettings(false, HOST_SERVICE_NAME);
-  const clearedLegacy = trySetLoginItemSettings(
+  if (!(await bootoutStaleAgent(HOST_AGENT_LABEL, revalidateBeforeMutation))) {
+    parkRegistrationAfterAuthorityLoss("primary uninstall bootout");
+    return false;
+  }
+  if (!(await bootoutStaleAgent(CLI_HOST_LABEL, revalidateBeforeMutation))) {
+    parkRegistrationAfterAuthorityLoss("legacy uninstall bootout");
+    return false;
+  }
+  const cleared = await setLoginItemSettingsWithGuard(
+    false,
+    HOST_SERVICE_NAME,
+    revalidateBeforeMutation,
+  );
+  if (cleared === null) {
+    parkRegistrationAfterAuthorityLoss("primary uninstall clear");
+    return false;
+  }
+  const clearedLegacy = await setLoginItemSettingsWithGuard(
     false,
     LEGACY_HOST_SERVICE_NAME,
+    revalidateBeforeMutation,
   );
+  if (clearedLegacy === null) {
+    parkRegistrationAfterAuthorityLoss("legacy uninstall clear");
+    return false;
+  }
+  // The raw `RunAtLoad` manifest, retired with the same proof register
+  // demands. Booting out the jobs and clearing the SMAppService records does
+  // NOT remove this file, and while it is on disk launchd starts the host
+  // again at next login - so reporting teardown success without it is a lie
+  // that undoes the user's explicit deregistration one reboot later.
+  //
+  // Failure here is emphatically NOT cosmetic: it means the host WILL come
+  // back. Returning false parks the teardown rather than claiming a success
+  // the disk contradicts.
+  if (!(await removeCliLabelManifestProvably(revalidateBeforeMutation))) {
+    parkRegistrationAfterAuthorityLoss("legacy manifest retirement");
+    return false;
+  }
   log.info("[host-login-item] SMAppService registration torn down", {
     serviceName: HOST_SERVICE_NAME,
     cleared,
     clearedLegacy,
   });
+  return true;
 }
 
-function trySetLoginItemSettings(
+async function setLoginItemSettingsWithGuard(
   openAtLogin: boolean,
   serviceName: string,
-): boolean {
+  revalidateBeforeMutation: (() => Promise<boolean>) | null | undefined,
+): Promise<boolean | null> {
+  if (!(await mutationAllowed(revalidateBeforeMutation))) return null;
   try {
     app.setLoginItemSettings({
       openAtLogin,
@@ -785,6 +1030,49 @@ function trySetLoginItemSettings(
     });
     return false;
   }
+}
+
+async function snapshotLoginItemRegistration(): Promise<LoginItemRegistrationSnapshot> {
+  const primary = readLoginItemStatusEvidence(HOST_SERVICE_NAME);
+  const legacy = readLoginItemStatusEvidence(LEGACY_HOST_SERVICE_NAME);
+  const legacyManifest = await probeCliLabelManifest(
+    userLaunchAgentPlistPath(CLI_HOST_LABEL),
+  );
+  return {
+    primary: primary.kind === "read" ? primary.status : null,
+    legacy: legacy.kind === "read" ? legacy.status : null,
+    legacyManifest: legacyManifest.kind,
+  };
+}
+
+/**
+ * Electron exposes no registration transaction/CAS. We therefore reject
+ * states whose authoritative status cannot be read before the first
+ * destructive edge; once authority is lost later, the caller parks rather
+ * than attempting a stale restore against mutable bundle bytes.
+ */
+async function canBeginDestructiveRegistration(
+  snapshot: LoginItemRegistrationSnapshot,
+): Promise<boolean> {
+  return (
+    (snapshot.primary === "not-registered" || snapshot.primary === "enabled") &&
+    (snapshot.legacy === "not-registered" || snapshot.legacy === "enabled") &&
+    // A readable manifest - present OR absent - may enter. `present` is the
+    // work; `unreadable` is the only disqualifier, because we cannot retire
+    // what we cannot see and must not register a second label beside it.
+    snapshot.legacyManifest !== "unreadable"
+  );
+}
+
+function parkRegistrationAfterAuthorityLoss(edge: string): void {
+  // Do not call SMAppService after the attempt capability disappears. The
+  // registration may now belong to a newer holder and Electron exposes no
+  // compare-and-swap/transaction that could restore the prior BTM record
+  // without racing it. A later, freshly admitted repair reconstructs intent
+  // from current authoritative status instead.
+  log.warn("[host-login-item] registration parked after authority loss", {
+    edge,
+  });
 }
 
 async function pollRegisterStatusUntilSettled(): Promise<HostLoginItemStatus> {
@@ -853,9 +1141,13 @@ const BOOTOUT_TIMEOUT_MS = 5_000;
  * log and return so the caller's register cycle still runs. The worst
  * case is we degrade to the pre-fix behavior for this one call.
  */
-async function bootoutStaleAgent(labelId: string): Promise<void> {
-  if (process.platform !== "darwin") return;
-  if (typeof process.getuid !== "function") return;
+async function bootoutStaleAgent(
+  labelId: string,
+  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
+): Promise<boolean> {
+  if (!(await mutationAllowed(revalidateBeforeBootout))) return false;
+  if (process.platform !== "darwin") return true;
+  if (typeof process.getuid !== "function") return true;
   const uid = process.getuid();
   const target = `gui/${uid}/${labelId}`;
   // Wrap `spawn` so TypeScript resolves the (command, args, options)
@@ -876,6 +1168,7 @@ async function bootoutStaleAgent(labelId: string): Promise<void> {
       { target, err },
     );
   }
+  return true;
 }
 
 /**

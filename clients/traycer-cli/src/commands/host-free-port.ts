@@ -1,6 +1,9 @@
 import { killConflictingPortOwner } from "../host/free-port-kill";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+} from "../host/update-contender";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliLock } from "../store/cli-lock";
 
 // `traycer host free-port --pid <pid> --port <port>` - a kill-only
 // sibling of `host free-port-and-restart` (Host Update Layer Redesign
@@ -30,18 +33,27 @@ export function buildHostFreePortCommand(args: HostFreePortArgs): CommandFn {
       totalBytes: null,
       workUnits: null,
     });
-    const { killed, killError } = await withCliLock(
+    const { killed, killError } = await withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-free-port",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "recovery-maintenance",
       },
-      () =>
+      (capability) =>
         killConflictingPortOwner({
           pid: args.pid,
           port: args.port,
           commandName: "host free-port",
+          verifyMutationCapability: () =>
+            requireCliUpdateMutationCapability(capability, {
+              environment: ctx.runtime.environment,
+              reason: "host-free-port",
+              waitMs: 30_000,
+              pollIntervalMs: 100,
+              admission: "recovery-maintenance",
+            }),
         }),
     );
     const human =

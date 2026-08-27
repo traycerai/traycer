@@ -7,7 +7,10 @@ import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
 import { cliPostFinalizeMarkerPath } from "../store/paths";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import { startHostServiceWithAttempt } from "../host/update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
 import type { PostFinalizeMarker } from "../upgrade/finalize-helper";
 
 // `traycer cli finalize-upgrade` - hidden, internal-only command the
@@ -29,14 +32,22 @@ export const cliFinalizeUpgradeCommand: CommandFn = async (
 ): Promise<CommandResult> => {
   const environment = ctx.runtime.environment;
   try {
-    const outcome = await withCliLock(
+    const outcome = await withCliUpdateContender(
       {
         environment,
         reason: "cli-finalize-upgrade",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "service-maintenance",
       },
-      () => runFinalizeUpgradeSwap({ environment }),
+      (capability) =>
+        runFinalizeUpgradeSwapWithAttempt({ environment }, capability, {
+          environment,
+          reason: "cli-finalize-upgrade",
+          waitMs: 30_000,
+          pollIntervalMs: 100,
+          admission: "service-maintenance",
+        }),
     );
     return {
       data: outcome,
@@ -68,9 +79,34 @@ export type FinalizeSwapOutcome =
 // - installer/apply.ts, restartWithPendingCliUpgradeFinalize). Kept
 // separate from the command wrapper so tests can exercise it without
 // lock machinery.
-export async function runFinalizeUpgradeSwap(opts: {
-  readonly environment: Environment;
-}): Promise<FinalizeSwapOutcome> {
+export async function runFinalizeUpgradeSwap(
+  opts: {
+    readonly environment: Environment;
+  },
+  startService: () => Promise<void>,
+): Promise<FinalizeSwapOutcome> {
+  return runFinalizeUpgradeSwapWithStart(opts, startService);
+}
+
+async function runFinalizeUpgradeSwapWithAttempt(
+  opts: { readonly environment: Environment },
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<FinalizeSwapOutcome> {
+  return runFinalizeUpgradeSwapWithStart(opts, () =>
+    startHostServiceWithAttempt(
+      capability,
+      contenderOptions,
+      createServiceController(),
+      serviceLabelFor(opts.environment),
+    ),
+  );
+}
+
+async function runFinalizeUpgradeSwapWithStart(
+  opts: { readonly environment: Environment },
+  startService: () => Promise<void>,
+): Promise<FinalizeSwapOutcome> {
   const logger = createCliLogger(opts.environment);
   const markerPath = cliPostFinalizeMarkerPath(opts.environment);
   const swap = await finalizePendingCliUpgrade({
@@ -104,7 +140,7 @@ export async function runFinalizeUpgradeSwap(opts: {
   // swap.status === "finalised"
   let serviceStartError: string | null = null;
   try {
-    await createServiceController().start(serviceLabelFor(opts.environment));
+    await startService();
   } catch (err) {
     serviceStartError = err instanceof Error ? err.message : String(err);
     logger.warn("Finalize-upgrade service start failed after binary swap", {

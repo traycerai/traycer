@@ -5,6 +5,7 @@ import type { UninstallHostOptions } from "../../installer";
 import {
   runHostUninstall,
   stopServiceBeforeRuntimePurge,
+  type HostUninstallActuators,
   type RunHostUninstallDeps,
 } from "../host-uninstall";
 
@@ -35,21 +36,32 @@ const COMMAND_CONTEXT = {
   progress: () => undefined,
 };
 
+function testActuators(deps: RunHostUninstallDeps): HostUninstallActuators {
+  return {
+    uninstall: (controller, options) => controller.uninstall(options),
+    stop: (controller, label, options) => controller.stop(label, options),
+    verifyMutationCapability: async (): Promise<void> => undefined,
+  };
+}
+
 describe("stopServiceBeforeRuntimePurge", () => {
   it("allows runtime purge after stop confirms the host exited", async () => {
     const label = serviceLabelFor("dev");
 
     await expect(
-      stopServiceBeforeRuntimePurge({
-        controller: {
-          stop: async (receivedLabel) => {
-            expect(receivedLabel).toBe(label);
+      stopServiceBeforeRuntimePurge(
+        {
+          controller: {
+            stop: async (receivedLabel) => {
+              expect(receivedLabel).toBe(label);
+            },
           },
+          environment: "dev",
+          label,
+          logger: noopLogger,
         },
-        environment: "dev",
-        label,
-        logger: noopLogger,
-      }),
+        async () => undefined,
+      ),
     ).resolves.toBe(true);
   });
 
@@ -57,16 +69,21 @@ describe("stopServiceBeforeRuntimePurge", () => {
     const label = serviceLabelFor("production");
 
     await expect(
-      stopServiceBeforeRuntimePurge({
-        controller: {
-          stop: async () => {
-            throw new Error("host still running");
+      stopServiceBeforeRuntimePurge(
+        {
+          controller: {
+            stop: async () => {
+              throw new Error("host still running");
+            },
           },
+          environment: "production",
+          label,
+          logger: noopLogger,
         },
-        environment: "production",
-        label,
-        logger: noopLogger,
-      }),
+        async () => {
+          throw new Error("host still running");
+        },
+      ),
     ).resolves.toBe(false);
   });
 });
@@ -75,17 +92,23 @@ describe("runHostUninstall", () => {
   it("forwards runtime purge permission after a confirmed stop", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => undefined,
+      receivedOptions,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => undefined,
-        receivedOptions,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: true },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: true,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({ purgedRuntime: true });
   });
@@ -93,19 +116,25 @@ describe("runHostUninstall", () => {
   it("forwards runtime preservation after a failed stop", async () => {
     const receivedOptions: UninstallHostOptions[] = [];
 
+    const deps = commandDeps({
+      stop: async () => {
+        throw new Error("host still running");
+      },
+      receivedOptions,
+    });
     const result = await runHostUninstall(
       { all: true },
       COMMAND_CONTEXT,
-      commandDeps({
-        stop: async () => {
-          throw new Error("host still running");
-        },
-        receivedOptions,
-      }),
+      deps,
+      testActuators(deps),
     );
 
     expect(receivedOptions).toEqual([
-      { environment: "dev", purgeChannelRuntime: false },
+      expect.objectContaining({
+        environment: "dev",
+        purgeChannelRuntime: false,
+        verifyMutationCapability: expect.any(Function),
+      }),
     ]);
     expect(result.data).toMatchObject({ purgedRuntime: false });
   });

@@ -1,6 +1,9 @@
-import { applyHost, type ApplyHostOutcome } from "../installer/apply";
+import type { ApplyHostOutcome } from "../installer/apply";
+import { withCliUpdateContender } from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
+import { applyHostWithAttempt } from "../host/update-mutation";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliLock } from "../store/cli-lock";
 
 // `traycer host apply [--force] [--no-service]` - promotes the single-slot
 // staged tree over the current install (Host Update Layer Redesign Tech
@@ -18,6 +21,12 @@ export interface HostApplyArgs {
   readonly force: boolean;
   readonly noService: boolean;
   readonly expectedStageFingerprint: string | null;
+  /**
+   * Nonce naming a parent executor's live-lock proof, when this invocation was
+   * spawned from inside a held segment. `null` for every ordinary invocation,
+   * which keeps the acquire-or-refuse path exactly as it was.
+   */
+  readonly attemptAdoption: string | null;
 }
 
 export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
@@ -27,21 +36,39 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
       force: args.force,
       noService: args.noService,
     });
-    const outcome = await withCliLock(
+    const adoption = await resolveAttemptAdoptionFromNonce(
+      hostHomeDir(ctx.runtime.environment),
+      args.attemptAdoption,
+      Date.now(),
+    );
+    const outcome = await withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-apply",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "legacy-update-shadow",
+        adoption,
       },
-      () =>
-        applyHost({
-          environment: ctx.runtime.environment,
-          force: args.force,
-          noService: args.noService,
-          expectedStageFingerprint: args.expectedStageFingerprint,
-          onProgress: (info) => ctx.progress(info),
-        }),
+      (capability) =>
+        applyHostWithAttempt(
+          capability,
+          {
+            environment: ctx.runtime.environment,
+            reason: "host-apply",
+            waitMs: 30_000,
+            pollIntervalMs: 100,
+            admission: "legacy-update-shadow",
+            adoption,
+          },
+          {
+            environment: ctx.runtime.environment,
+            force: args.force,
+            noService: args.noService,
+            expectedStageFingerprint: args.expectedStageFingerprint,
+            onProgress: (info) => ctx.progress(info),
+          },
+        ),
     );
     ctx.runtime.logger.info("Host apply command completed", {
       environment: ctx.runtime.environment,

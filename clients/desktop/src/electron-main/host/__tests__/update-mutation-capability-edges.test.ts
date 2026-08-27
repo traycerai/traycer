@@ -1,0 +1,208 @@
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { hostStopIntentPath } from "@traycer/protocol/config/host-stop-intent";
+import {
+  withUpdateContender,
+  type UpdateMutationCapability,
+} from "@traycer-clients/shared/host-update";
+import {
+  publishRestartTombstoneWithAttempt,
+  writeSubstrateOwnerWithAttempt,
+} from "../update-mutation";
+import type { HostFsLayout } from "../host-paths";
+
+// The tombstone-ordering contract (design §3.4): the caller must never boot
+// the SMAppService job out unless `publishRestartTombstoneWithAttempt`
+// reports that the record durably landed - a call-order-only assertion would
+// pass a build that "calls publish" but never actually flushes anything to
+// disk. Every negative here is paired with a positive on the SAME fixture,
+// so a permanently no-op writer cannot satisfy the suite by never landing
+// anything (see the "negative assertion satisfied by permanent inaction"
+// class of bug).
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
+
+async function freshLayout(): Promise<HostFsLayout> {
+  const root = await mkdtemp(join(tmpdir(), "update-mutation-tombstone-test-"));
+  roots.push(root);
+  const rootDir = join(root, "host-home");
+  await mkdir(rootDir, { recursive: true });
+  return {
+    rootDir,
+    pidMetadataFile: join(rootDir, "pid.json"),
+    identityEnrollmentFile: join(rootDir, "identity", "enrollment.json"),
+    logFile: join(rootDir, "host.log"),
+    installDir: join(rootDir, "install"),
+    installRecordFile: join(rootDir, "install", "install.json"),
+    stagedDir: join(rootDir, "staged"),
+    stagedRecordFile: join(rootDir, "staged", "staged.json"),
+    pendingLoginItemRevisionFile: join(
+      rootDir,
+      "pending-login-item-revision.json",
+    ),
+    substrateFile: join(rootDir, "substrate.json"),
+    transitionJournalFile: join(rootDir, "transition.json"),
+    environment: "production",
+  };
+}
+
+describe("publishRestartTombstoneWithAttempt", () => {
+  it("publishes reason: restart at hostStopIntentPath, with content present the moment it returns", async () => {
+    const layout = await freshLayout();
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir: layout.rootDir,
+        reason: "tombstone-publish-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "attempt-executor",
+      },
+      async (capability) =>
+        publishRestartTombstoneWithAttempt(capability, layout),
+    );
+
+    expect(outcome).toMatchObject({
+      kind: "ran",
+      result: { kind: "published" },
+    });
+
+    const target = hostStopIntentPath(layout.rootDir);
+    const raw = await readFile(target, "utf8");
+    const parsed = JSON.parse(raw) as {
+      v: number;
+      reason: string;
+      requestedByPid: number;
+      requestedAt: string;
+    };
+    expect(parsed.v).toBe(1);
+    // `reason: "restart"` is the only value that promises a comeback; the
+    // host branches on this exact literal.
+    expect(parsed.reason).toBe("restart");
+    expect(parsed.requestedByPid).toBe(process.pid);
+    expect(Number.isNaN(Date.parse(parsed.requestedAt))).toBe(false);
+  });
+
+  it("reports not-published and leaves no tombstone when the durable rename cannot land - the SAME fixture publishes fine once the obstruction is removed", async () => {
+    const layout = await freshLayout();
+    const target = hostStopIntentPath(layout.rootDir);
+    // Obstruct the rename target with a non-empty directory so the final
+    // `rename(temp, target)` fails, regardless of process privilege - a
+    // portable stand-in for "the durable write did not land".
+    await mkdir(target, { recursive: true });
+    await mkdir(join(target, "occupied"), { recursive: true });
+
+    const blocked = await withUpdateContender(
+      {
+        hostHomeDir: layout.rootDir,
+        reason: "tombstone-blocked-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "attempt-executor",
+      },
+      async (capability) =>
+        publishRestartTombstoneWithAttempt(capability, layout),
+    );
+
+    expect(blocked).toMatchObject({ kind: "ran" });
+    if (blocked.kind === "ran") {
+      expect(blocked.result.kind).toBe("not-published");
+    }
+    // The obstruction is still a directory - no bytes replaced it - which is
+    // the caller's positive evidence that no bootout may proceed.
+    const stillADirectory = await stat(target);
+    expect(stillADirectory.isDirectory()).toBe(true);
+
+    await rm(join(target, "occupied"), { recursive: true, force: true });
+    await rm(target, { recursive: true, force: true });
+
+    const published = await withUpdateContender(
+      {
+        hostHomeDir: layout.rootDir,
+        reason: "tombstone-unblocked-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "attempt-executor",
+      },
+      async (capability) =>
+        publishRestartTombstoneWithAttempt(capability, layout),
+    );
+    expect(published).toMatchObject({
+      kind: "ran",
+      result: { kind: "published" },
+    });
+    const raw = await readFile(target, "utf8");
+    expect(JSON.parse(raw)).toMatchObject({ reason: "restart" });
+  });
+
+  it("refuses a forged/unissued capability outright and writes nothing", async () => {
+    const layout = await freshLayout();
+    const forged = { hostHomeDir: layout.rootDir } as UpdateMutationCapability;
+
+    await expect(
+      publishRestartTombstoneWithAttempt(forged, layout),
+    ).rejects.toMatchObject({ verdict: "not-issued" });
+
+    await expect(stat(hostStopIntentPath(layout.rootDir))).rejects.toThrow();
+  });
+});
+
+describe("writeSubstrateOwnerWithAttempt", () => {
+  it("commits a substrate.json recording the given owner and reason", async () => {
+    const layout = await freshLayout();
+
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir: layout.rootDir,
+        reason: "substrate-write-test",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "desktop-activation-maintenance",
+      },
+      async (capability) =>
+        writeSubstrateOwnerWithAttempt(
+          capability,
+          layout,
+          "smappservice",
+          "healthy-launch-backfill:enabled",
+        ),
+    );
+
+    expect(outcome.kind).toBe("ran");
+    const raw = await readFile(layout.substrateFile, "utf8");
+    const parsed = JSON.parse(raw) as {
+      v: number;
+      active: string;
+      reason: string;
+      since: string;
+    };
+    expect(parsed.v).toBe(1);
+    expect(parsed.active).toBe("smappservice");
+    expect(parsed.reason).toBe("healthy-launch-backfill:enabled");
+    expect(Number.isNaN(Date.parse(parsed.since))).toBe(false);
+  });
+
+  it("refuses a forged/unissued capability outright and writes nothing", async () => {
+    const layout = await freshLayout();
+    const forged = { hostHomeDir: layout.rootDir } as UpdateMutationCapability;
+
+    await expect(
+      writeSubstrateOwnerWithAttempt(
+        forged,
+        layout,
+        "smappservice",
+        "should-not-land",
+      ),
+    ).rejects.toMatchObject({ verdict: "not-issued" });
+
+    await expect(stat(layout.substrateFile)).rejects.toThrow();
+  });
+});

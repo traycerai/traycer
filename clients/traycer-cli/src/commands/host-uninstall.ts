@@ -14,7 +14,16 @@ import {
   type StopServiceOptions,
   type UninstallServiceOptions,
 } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContender,
+  type WithCliUpdateContenderOptions,
+} from "../host/update-contender";
+import {
+  stopHostServiceWithAttempt,
+  uninstallHostServiceWithAttempt,
+} from "../host/update-mutation";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 
 // `traycer host uninstall [--all]`:
 //   default → remove install dir + record only
@@ -51,15 +60,36 @@ interface StopServiceBeforeRuntimePurgeArgs {
   readonly logger: ILogger;
 }
 
+export interface HostUninstallActuators {
+  uninstall(
+    controller: HostUninstallServiceController,
+    options: UninstallServiceOptions,
+  ): Promise<void>;
+  stop(
+    controller: RuntimePurgeStopController,
+    label: ServiceLabel,
+    options: StopServiceOptions,
+  ): Promise<void>;
+  readonly verifyMutationCapability: () => Promise<void>;
+}
+
 // Runtime state belongs to the live host process, so deleting pid metadata or
 // rotating its active log is only safe after the service controller confirms
 // the process exited. Service deregistration/install removal remain
 // best-effort even when this confirmation fails.
 export async function stopServiceBeforeRuntimePurge(
   args: StopServiceBeforeRuntimePurgeArgs,
+  stop: () => Promise<void>,
+): Promise<boolean> {
+  return stopServiceBeforeRuntimePurgeWith(args, stop);
+}
+
+async function stopServiceBeforeRuntimePurgeWith(
+  args: StopServiceBeforeRuntimePurgeArgs,
+  stop: () => Promise<void>,
 ): Promise<boolean> {
   try {
-    await args.controller.stop(args.label, { force: false });
+    await stop();
     return true;
   } catch (err) {
     args.logger.warn("Host uninstall service stop failed; preserving runtime", {
@@ -77,15 +107,16 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
       environment: ctx.runtime.environment,
       all: args.all,
     });
-    return withCliLock(
+    return withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-uninstall",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "uninstall-maintenance",
       },
-      () =>
-        runHostUninstall(
+      (capability) =>
+        runHostUninstallWithAttempt(
           args,
           {
             environment: ctx.runtime.environment,
@@ -96,6 +127,7 @@ export function buildHostUninstallCommand(args: HostUninstallArgs): CommandFn {
             createServiceController,
             uninstallHost,
           },
+          capability,
         ),
     );
   };
@@ -105,6 +137,51 @@ export async function runHostUninstall(
   args: HostUninstallArgs,
   ctx: RunHostUninstallContext,
   deps: RunHostUninstallDeps,
+  actuators: HostUninstallActuators,
+): Promise<CommandResult> {
+  return runHostUninstallWithActuators(args, ctx, deps, actuators);
+}
+
+export async function runHostUninstallWithAttempt(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+  capability: UpdateMutationCapability,
+): Promise<CommandResult> {
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment: ctx.environment,
+    reason: "host-uninstall",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission: "uninstall-maintenance",
+  };
+  const verifyMutationCapability = (): Promise<void> =>
+    requireCliUpdateMutationCapability(capability, contenderOptions);
+  return runHostUninstallWithActuators(args, ctx, deps, {
+    uninstall: (controller, options) =>
+      uninstallHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        options,
+      ),
+    stop: (controller, label, options) =>
+      stopHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        controller,
+        label,
+        options,
+      ),
+    verifyMutationCapability,
+  });
+}
+
+async function runHostUninstallWithActuators(
+  args: HostUninstallArgs,
+  ctx: RunHostUninstallContext,
+  deps: RunHostUninstallDeps,
+  actuators: HostUninstallActuators,
 ): Promise<CommandResult> {
   let serviceUninstalled = false;
   let purgeChannelRuntime = false;
@@ -133,7 +210,7 @@ export async function runHostUninstall(
     // failed/crashed exit and launchd respawns the host before we
     // ever reach `uninstall`. Deregistering first removes that
     // supervision so no exit outcome can trigger a respawn.
-    await controller.uninstall({ label });
+    await actuators.uninstall(controller, { label });
     serviceUninstalled = true;
     ctx.logger.info("Host uninstall service deregistered", {
       environment: ctx.environment,
@@ -142,12 +219,15 @@ export async function runHostUninstall(
     // Install removal stays best-effort, but runtime files are preserved
     // unless stop confirms the process is gone. A failed stop can leave
     // the host actively writing its pid metadata and log.
-    purgeChannelRuntime = await stopServiceBeforeRuntimePurge({
+    const stopArgs = {
       controller,
       environment: ctx.environment,
       label,
       logger: ctx.logger,
-    });
+    };
+    purgeChannelRuntime = await stopServiceBeforeRuntimePurge(stopArgs, () =>
+      actuators.stop(controller, label, { force: false }),
+    );
   }
   ctx.progress({
     stage: "uninstall",
@@ -157,9 +237,11 @@ export async function runHostUninstall(
     totalBytes: null,
     workUnits: null,
   });
+  await actuators.verifyMutationCapability();
   const result = await deps.uninstallHost({
     environment: ctx.environment,
     purgeChannelRuntime,
+    verifyMutationCapability: actuators.verifyMutationCapability,
   });
   ctx.logger.info("Host uninstall command completed", {
     environment: ctx.environment,

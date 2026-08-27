@@ -1332,7 +1332,49 @@ export interface DownloadLaneStatus {
 export type HostActivationState =
   "activated" | "pendingActivation" | "activationUnknown" | "unavailable";
 
+/**
+ * The durable attempt record's facts, read from disk by desktop main.
+ *
+ * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
+ *
+ * The gap this closes is the host-DOWN window: with no host to answer
+ * `host.status`, the renderer had no observation at all, so an attempt sitting
+ * on disk rendered as a blank "state unknown" and the user could not tell
+ * "an update is mid-flight and the host is unreachable" from "nothing is
+ * happening".
+ *
+ * Desktop main can read that record without a host. What it must NOT do is
+ * decide what it MEANS: the qualified-stale vocabulary (`kind` / `qualified` /
+ * `lastKnownKind`) lives with the renderer's projector, and a second copy of it
+ * here would be the duplicated-policy class this epic has paid for repeatedly.
+ * So this carries the record's facts and nothing else; the renderer feeds them
+ * through the SAME projector it already uses for live reads.
+ *
+ * `updatedAt` is presentation only. Attempt ordering is
+ * `attemptId + generation + sequence` — never a timestamp, so two clocks can
+ * never disagree about which attempt is newer.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: string;
+  readonly continuation: string | null;
+  readonly updatedAt: string;
+}
+
 export interface HostControllerStatus {
+  /**
+   * The durable attempt on THIS machine, or `null` when there is none or the
+   * record could not be read.
+   *
+   * `null` is deliberately not "no attempt": an unreadable record is also
+   * `null`, and the renderer must treat absence as "we cannot say" rather than
+   * as "nothing is running". Fabricating idleness from a failed read is how a
+   * mid-flight update becomes invisible.
+   */
+  readonly localAttempt: LocalAttemptFacts | null;
   readonly download: DownloadLaneStatus | null;
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;

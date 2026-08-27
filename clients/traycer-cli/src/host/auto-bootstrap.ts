@@ -276,6 +276,10 @@ export async function maybeAutoBootstrap(
     const recordVersionOverride =
       isServiceOnly || !isOwnBuild ? null : config.version;
     const result = await provisionHost({
+      // First-install bootstrap is never spawned from inside a held executor
+      // segment, so there is no parent proof to adopt: it contends for the
+      // lock itself, exactly as it always has.
+      adoption: undefined,
       runtime: opts.runtime,
       resolveInstallSource: () => Promise.resolve(source),
       satisfaction,

@@ -201,8 +201,10 @@ import {
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
+  hostStatusV13,
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
+  hostStatusUpgradeV12ToV13,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -223,6 +225,8 @@ import {
   hostServiceStatusV10,
   hostUpdateCheckV10,
   hostUpdateInstallV10,
+  hostUpdateInstallV11,
+  hostUpdateInstallUpgradeV10ToV11,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   lifecycleClaimShutdownUpgradeV10ToV11,
@@ -3530,8 +3534,7 @@ export const workspacePrepareFoldersUpgradeV11ToV12 = defineUpgradePath<
   to: workspacePrepareFoldersV12.schemaVersion,
   upgradeRequest: (request) => ({
     ...request,
-    bumpRecency:
-      request.operation === "recordRecentWorkspace" ? true : null,
+    bumpRecency: request.operation === "recordRecentWorkspace" ? true : null,
   }),
   upgradeResponse: (response) => response,
 });
@@ -3755,7 +3758,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -3768,6 +3771,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: {
           contract: hostStatusV12,
           upgradeFromPreviousVersion: hostStatusUpgradeV11ToV12,
+        },
+        3: {
+          contract: hostStatusV13,
+          upgradeFromPreviousVersion: hostStatusUpgradeV12ToV13,
         },
       },
       downgradePathsFromLatest: {},
@@ -3857,11 +3864,32 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "host.update.install": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostUpdateInstallV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostUpdateInstallV11,
+          upgradeFromPreviousVersion: hostUpdateInstallUpgradeV10ToV11,
+          // The `dispatch-indeterminate` arm is response VALUE growth: a `@1.0`
+          // peer parses with its own schema, and a discriminated union refuses
+          // an unknown discriminator outright rather than ignoring it. So the
+          // arm is only safe if the host never sends it to such a peer, and
+          // this annotation is the reviewed claim that it does not.
+          //
+          // ⚠ TODAY THE CLAIM IS TRIVIALLY TRUE AND TOMORROW IT IS AN
+          // OBLIGATION. Nothing emits this arm yet — Ticket 06 added the
+          // decoder only, so that no `@1.1` peer generation exists that knows
+          // `attemptId` and cannot decode "there is no attempt id for this
+          // dispatch". When Ticket 07 wires the executor ACK and starts
+          // EMITTING it, that resolver must derive the arm from the version the
+          // caller negotiated and emit `cli-failed` (or whatever the ruling
+          // settles) to a `@1.0` caller. A post-hoc filter is not sufficient
+          // and neither is "we only call it from new clients": the validator
+          // cannot check this, which is exactly why it is written down here.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -6402,8 +6430,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         1: {
           contract: terminalPlainEnsureRunningV21,
-          upgradeFromPreviousVersion:
-            terminalPlainEnsureRunningUpgradeV10ToV21,
+          upgradeFromPreviousVersion: terminalPlainEnsureRunningUpgradeV10ToV21,
           semanticMajorBreakFromPreviousMajor: true,
         },
       },
@@ -6453,8 +6480,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         1: {
           contract: terminalPlainImportLegacyV21,
-          upgradeFromPreviousVersion:
-            terminalPlainImportLegacyUpgradeV10ToV21,
+          upgradeFromPreviousVersion: terminalPlainImportLegacyUpgradeV10ToV21,
           semanticMajorBreakFromPreviousMajor: true,
         },
       },

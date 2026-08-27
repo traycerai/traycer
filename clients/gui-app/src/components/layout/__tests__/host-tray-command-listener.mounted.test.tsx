@@ -83,6 +83,7 @@ const READY_STATUS: HostControllerStatus = {
   updateReady: true,
   activation: "activated",
   reachable: true,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-05-15T00:00:00Z",
 };

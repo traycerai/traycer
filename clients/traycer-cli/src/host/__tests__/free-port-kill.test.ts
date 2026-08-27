@@ -7,6 +7,8 @@ import {
   PORT_PROBE_TIMEOUT_MS,
 } from "../free-port-kill";
 
+const testMutationVerifier = async (): Promise<void> => undefined;
+
 // Finding 7 (ticket-2 review round 1): the `lsof`/`netstat` ownership
 // probes now run entirely inside `cli-lock`. Before `PORT_PROBE_TIMEOUT_MS`
 // existed, a wedged/hijacked probe binary would hang `execFileAsync`
@@ -56,6 +58,7 @@ describe.skipIf(process.platform === "win32")(
             pid: process.pid,
             port: 65535,
             commandName: "host free-port",
+            verifyMutationCapability: testMutationVerifier,
           }),
         ).rejects.toMatchObject({
           details: { probe: "timeout" },
@@ -81,6 +84,7 @@ describe.skipIf(process.platform === "win32")(
             pid: process.pid,
             port: 65535,
             commandName: "host free-port",
+            verifyMutationCapability: testMutationVerifier,
           }),
         ).rejects.toMatchObject({
           details: { probe: "output-overflow" },

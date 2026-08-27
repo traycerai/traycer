@@ -37,6 +37,20 @@ const tolerantNullableStringSchema = z.preprocess(
   z.string().nullable(),
 );
 
+// `executableSha256` was added after the original install/stage records had
+// shipped.  Keep older records readable for their existing lifecycle paths,
+// but normalize a missing or malformed attestation to `null` so recovery can
+// deliberately refuse to treat it as proof of placed bytes.
+const tolerantOptionalSha256Schema = z.preprocess(
+  (value) =>
+    typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null,
+  z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
+);
+
 /** The installed host record. Missing legacy `installId`/`runtimeVersion` read as null. */
 export const hostInstallRecordSchema = z.object({
   installId: tolerantNullableStringSchema,
@@ -51,6 +65,10 @@ export const hostInstallRecordSchema = z.object({
   signatureKeyId: z.string(),
   sizeBytes: z.number().finite(),
   executablePath: z.string(),
+  // Attests the extracted executable, not the source archive. New writers
+  // always populate it; a null legacy value is intentionally insufficient
+  // for crash recovery to conclude that a target generation is installed.
+  executableSha256: tolerantOptionalSha256Schema,
 });
 export type HostInstallRecord = z.infer<typeof hostInstallRecordSchema>;
 
@@ -98,6 +116,9 @@ export const hostStagedRecordSchema = z
     executablePath: z.string().min(1),
     platform: hostInstallPlatformSchema,
     arch: hostInstallArchSchema,
+    // Mirrors the install-side attestation. A stage without it can still be
+    // cleaned/replaced by legacy reconciliation but is never recovery proof.
+    executableSha256: tolerantOptionalSha256Schema,
   })
   .transform((record) => ({ ...record, stageId: record.stageId ?? null }));
 export type HostStagedRecord = z.infer<typeof hostStagedRecordSchema>;

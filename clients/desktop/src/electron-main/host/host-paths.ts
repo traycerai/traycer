@@ -151,6 +151,32 @@ export interface HostFsLayout {
   readonly stagedDir: string;
   readonly stagedRecordFile: string;
   readonly pendingLoginItemRevisionFile: string;
+  /**
+   * `substrate.json` - the durable CURRENT SERVICE-REGISTRATION OWNER
+   * (`{active: "smappservice" | "raw-fallback"}`), and the only durable answer
+   * to "who owns launchd for this host right now".
+   *
+   * Deliberately NOT `hostManagesHostLoginItem()`: that predicate is a
+   * capability of THIS Desktop build (darwin, not dev, in-bundle plist
+   * present) and stays true on a machine where the CLI owns a raw
+   * LaunchAgent. Reading capability as ownership is the dual-registration bug
+   * `inspectLaunchdOwnership` exists to prevent.
+   *
+   * Filename must stay in lockstep with the CLI's `hostSubstratePath`
+   * (`traycer-cli/src/store/paths.ts`); separate bundle, so it cannot be
+   * imported here. The shared schema/decoder ARE shared
+   * (`@traycer-clients/shared/host-lifecycle`), so only the path is duplicated.
+   */
+  readonly substrateFile: string;
+  /**
+   * `transition.json` - an in-flight ownership takeover between substrates.
+   * Its mere presence vetoes the owner projection to `unknown`: mid-transition
+   * neither substrate is authoritative, and guessing either way is how a
+   * contender boots out a job the other half is still registering.
+   *
+   * Lockstep with the CLI's `hostTransitionJournalPath`.
+   */
+  readonly transitionJournalFile: string;
   readonly environment: Environment;
 }
 
@@ -189,6 +215,8 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
       rootDir,
       "pending-login-item-revision.json",
     ),
+    substrateFile: join(rootDir, "substrate.json"),
+    transitionJournalFile: join(rootDir, "transition.json"),
     environment,
   };
 }

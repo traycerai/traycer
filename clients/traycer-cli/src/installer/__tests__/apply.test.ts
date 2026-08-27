@@ -124,7 +124,7 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
-import { applyHost } from "../apply";
+import { applyHost as applyHostWithAuthority } from "../apply";
 import { currentInstallArch, currentInstallPlatform } from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import {
@@ -134,6 +134,18 @@ import {
 } from "../../manifest/host-staged";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import type { HostInstallRecord } from "../../manifest/host-install";
+
+const testMutationVerifier = async (): Promise<void> => undefined;
+type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
+const applyHost = (
+  options: Omit<ApplyOptions, "verifyMutationCapability"> &
+    Partial<Pick<ApplyOptions, "verifyMutationCapability">>,
+) =>
+  applyHostWithAuthority({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+  });
 
 const ENV: Environment = "production";
 

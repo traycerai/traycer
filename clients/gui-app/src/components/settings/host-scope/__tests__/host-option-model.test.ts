@@ -3,10 +3,15 @@ import {
   AVAILABLE_HOST_ROW_SURFACE_STATE,
   hostOptionKindLabel,
   hostOptionStatusWord,
+  hostOptionUpdateBadge,
   isHostOptionSelectable,
 } from "@/components/settings/host-scope/host-option-model";
 import type { HostHealthState } from "@/components/settings/host-scope/host-health";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import {
+  UNKNOWN_FLEET_UPDATE_VIEW,
+  type FleetUpdateView,
+} from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
  * The picker row's status word, which had NO coverage at all — and that is
@@ -194,5 +199,65 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
         }),
       ),
     ).toBe("Host");
+  });
+});
+
+// G4: the selector row's update badge, decorated from `FleetUpdateView` alone.
+// The `unknown`-with-`lastKnownKind` case is the one the independent cold
+// review's finding 4 named directly: a pre-`@1.3` peer (`unknown`, no
+// retained phase) must render NOTHING — the noise case a blank badge exists
+// to avoid claiming.
+describe("hostOptionUpdateBadge", () => {
+  function viewOf(overrides: Partial<FleetUpdateView>): FleetUpdateView {
+    return { ...UNKNOWN_FLEET_UPDATE_VIEW, ...overrides };
+  }
+
+  it("a LIVE updating phase reads 'updating'", () => {
+    expect(hostOptionUpdateBadge(viewOf({ kind: "downloading" }))).toBe(
+      "updating",
+    );
+  });
+
+  it("a retained (last-known) updating phase reads 'last seen updating'", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "downloading" }),
+      ),
+    ).toBe("last seen updating");
+  });
+
+  it("a retained failed attempt reads 'last seen update failed'", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "failed" }),
+      ),
+    ).toBe("last seen update failed");
+  });
+
+  it("a LIVE failed attempt reads 'update failed' (no 'last seen' prefix — it is current)", () => {
+    expect(hostOptionUpdateBadge(viewOf({ kind: "failed" }))).toBe(
+      "update failed",
+    );
+  });
+
+  it("A BARE unknown with NO retained phase renders NULL — the pre-@1.3-peer noise case", () => {
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "unknown", lastKnownKind: null })),
+    ).toBeNull();
+  });
+
+  it("a retained terminal 'complete' or 'idle' phase also renders null — nothing worth badging about the past", () => {
+    expect(
+      hostOptionUpdateBadge(
+        viewOf({ kind: "unknown", lastKnownKind: "complete" }),
+      ),
+    ).toBeNull();
+    expect(
+      hostOptionUpdateBadge(viewOf({ kind: "unknown", lastKnownKind: "idle" })),
+    ).toBeNull();
+  });
+
+  it("an idle (up-to-date) host renders no badge at all", () => {
+    expect(hostOptionUpdateBadge(viewOf({ kind: "idle" }))).toBeNull();
   });
 });

@@ -1,9 +1,16 @@
 import { killConflictingPortOwner } from "../host/free-port-kill";
 import { attestInstallRuntime } from "../host/attested-install-runtime";
+import {
+  requireCliUpdateMutationCapability,
+  withCliUpdateContenderContext,
+} from "../host/update-contender";
+import {
+  restartHostServiceWithAttempt,
+  stopHostServiceWithAttempt,
+} from "../host/update-mutation";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { withCliLock } from "../store/cli-lock";
 
 // `traycer host free-port-and-restart --pid <pid> --port <port>` - the
 // CLI-owned mapping for Doctor's Free-Port-and-Restart fix. Hidden from
@@ -17,6 +24,16 @@ import { withCliLock } from "../store/cli-lock";
 export interface HostFreePortAndRestartArgs {
   readonly pid: number | null;
   readonly port: number | null;
+  /**
+   * Refuse without stopping when the canonical classification says the parked
+   * bytes make a generic restart unsafe.
+   *
+   * Same contract and same reasoning as `host restart --defer-if-parked`; this
+   * command reaches the identical `stop-only` branch from the port-conflict
+   * repair, so it is the same stop-without-relaunch hazard by another entry
+   * point rather than a separate concern.
+   */
+  readonly deferIfParked: boolean;
 }
 
 export function buildHostFreePortAndRestartCommand(
@@ -33,14 +50,21 @@ export function buildHostFreePortAndRestartCommand(
       });
     }
     const label = serviceLabelFor(ctx.runtime.environment);
-    const { killed, killError, attestation } = await withCliLock(
+    const {
+      killed,
+      killError,
+      restarted,
+      deferredForParkedActivation,
+      attestation,
+    } = await withCliUpdateContenderContext(
       {
         environment: ctx.runtime.environment,
         reason: "host-free-port-and-restart",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "recovery-maintenance",
       },
-      async () => {
+      async (capability, _cliLock, contenderContext) => {
         let killedInner = false;
         let killErrorInner: string | null = null;
         if (args.pid !== null && args.port !== null) {
@@ -56,32 +80,91 @@ export function buildHostFreePortAndRestartCommand(
             pid: args.pid,
             port: args.port,
             commandName: "host free-port-and-restart",
+            verifyMutationCapability: () =>
+              requireCliUpdateMutationCapability(capability, {
+                environment: ctx.runtime.environment,
+                reason: "host-free-port-and-restart",
+                waitMs: 30_000,
+                pollIntervalMs: 100,
+                admission: "recovery-maintenance",
+              }),
           });
           killedInner = result.killed;
           killErrorInner = result.killError;
         }
+        const contenderOptions = {
+          environment: ctx.runtime.environment,
+          reason: "host-free-port-and-restart",
+          waitMs: 30_000,
+          pollIntervalMs: 100,
+          admission: "recovery-maintenance" as const,
+        };
+        const controller = createServiceController();
+        const restart = contenderContext.recoveryAction === "restart-current";
+        // Classified under the same lock acquisition that guards the action
+        // below. Refusing beats stopping for a caller whose intent is "make
+        // this host reachable again": the port is already freed above, and
+        // stopping the service would add a down host to a parked update.
+        if (!restart && args.deferIfParked) {
+          return {
+            killed: killedInner,
+            killError: killErrorInner,
+            restarted: false,
+            deferredForParkedActivation: true,
+            attestation: await attestInstallRuntime(ctx.runtime.environment),
+          };
+        }
         ctx.progress({
-          stage: "service-restart",
-          message: `requesting restart for service '${label.id}'`,
+          stage: restart ? "service-restart" : "service-stop",
+          message: restart
+            ? `requesting restart for service '${label.id}'`
+            : `stopping service '${label.id}' without activating parked update bytes`,
           percent: null,
           bytes: null,
           totalBytes: null,
           workUnits: null,
         });
-        await createServiceController().restart(label);
+        if (restart) {
+          await restartHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            label,
+          );
+        } else {
+          await stopHostServiceWithAttempt(
+            capability,
+            contenderOptions,
+            controller,
+            label,
+            { force: false },
+          );
+        }
         return {
           killed: killedInner,
           killError: killErrorInner,
+          restarted: restart,
+          deferredForParkedActivation: false,
           attestation: await attestInstallRuntime(ctx.runtime.environment),
         };
       },
     );
+    // Both no-relaunch outcomes need distinct copy: one stopped the service,
+    // the other deliberately left it alone. Reporting them with one sentence
+    // would tell a user their host is down when it is still running.
+    const noRelaunch = deferredForParkedActivation
+      ? `left '${label.id}' untouched because a packaged update is waiting for its explicit activation`
+      : `stopped '${label.id}' without activating parked update bytes`;
     const human =
       killError !== null
         ? `restart requested; warning: failed to terminate pid ${args.pid ?? "?"}: ${killError}`
         : args.pid !== null
-          ? `terminated pid ${args.pid}; restart requested for service '${label.id}'`
-          : `restart requested for service '${label.id}'`;
+          ? restarted
+            ? `terminated pid ${args.pid}; restart requested for service '${label.id}'`
+            : `terminated pid ${args.pid}; ${noRelaunch}`
+          : restarted
+            ? `restart requested for service '${label.id}'`
+            : noRelaunch;
     return {
       data: {
         port: args.port,
@@ -89,7 +172,8 @@ export function buildHostFreePortAndRestartCommand(
         processName: null,
         killed,
         killError,
-        restartedLabel: label.id,
+        deferredForParkedActivation,
+        restartedLabel: restarted ? label.id : null,
         installGeneration: attestation.installGeneration,
         runtimeVersion: attestation.runtimeVersion,
         runtimeWasNull: attestation.runtimeWasNull,

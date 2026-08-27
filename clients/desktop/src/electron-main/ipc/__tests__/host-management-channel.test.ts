@@ -228,6 +228,7 @@ class FakeHostController implements IpcHostController {
     updateReady: false,
     activation: "unavailable",
     reachable: false,
+    localAttempt: null,
     removedByUser: false,
     checkedAt: "2026-01-01T00:00:00.000Z",
   };

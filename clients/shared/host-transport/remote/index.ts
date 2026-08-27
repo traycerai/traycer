@@ -23,6 +23,13 @@ export { RemoteStreamClient } from "./remote-stream-client";
 export {
   acquireRemoteSession,
   hasReadyRemoteSession,
+  hasBorrowableRemoteSession,
+  tryAcquireReadyRemoteSession,
+  type BorrowedRemoteSession,
+  // Part of the public surface since the borrower hands it back on
+  // `BorrowedRemoteSession.identity` - a consumer that stamps an observation
+  // with which connection answered needs to be able to name the type.
+  type RemoteSessionIdentity,
   remoteSessionCacheKey,
   retireAllRemoteSessions,
   subscribeRemoteSessionReadiness,

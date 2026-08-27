@@ -40,6 +40,11 @@ import type { StopIntentIdentity } from "../../host/stop-intent";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
+import type {
+  HostUpdateAttemptRecord,
+  UpdateContenderAdmission,
+  UpdateContenderOutcome,
+} from "@traycer-clients/shared/host-update";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -334,6 +339,12 @@ function makeRunStubs(
     // actual `~/.traycer/host/pid.json` and probes whatever host is live on
     // this machine. Every test below would then decline instead of spawning.
     findIncumbentHost: async () => null,
+    // Keep the legacy launch-path fixtures focused on host-start behavior;
+    // relaunch admission itself is covered by the dedicated table below.
+    admitHostStartSpawn: async (_environment, run) => ({
+      kind: "ran",
+      result: await run(),
+    }),
     // Same hazard class as `findIncumbentHost` above, now for the relaunch
     // loop:
     //   - unset, `hasStopIntent` falls through to the real implementation and
@@ -1688,6 +1699,152 @@ function startingAttemptIds(recorded: Recorded): string[] {
     .map((m) => String(m.fields.attemptId));
 }
 
+function hostStartAttemptRecord(
+  phase: HostUpdateAttemptRecord["phase"],
+  execution: HostUpdateAttemptRecord["execution"],
+): HostUpdateAttemptRecord {
+  return {
+    schemaVersion: 2,
+    attemptId: "attempt-host-start",
+    generation: 1,
+    sequence: 1,
+    trigger: "automatic",
+    targetVersion: "2.0.0",
+    phase,
+    execution,
+    continuation: phase === "waiting-to-activate" ? "activate" : null,
+    progress: null,
+    startedAt: "2026-08-25T00:00:00.000Z",
+    updatedAt: "2026-08-25T00:00:00.000Z",
+    completedAt: execution === "terminal" ? "2026-08-25T00:01:00.000Z" : null,
+    error: null,
+  };
+}
+
+function refusedHostStartAdmission(
+  admission: UpdateContenderAdmission,
+  record: HostUpdateAttemptRecord,
+): UpdateContenderOutcome<ChildProcess> {
+  return {
+    kind: "nonterminal-attempt",
+    disposition: "yield",
+    admission,
+    record,
+  };
+}
+
+function corruptHostStartAdmission(
+  admission: UpdateContenderAdmission,
+): UpdateContenderOutcome<ChildProcess> {
+  return {
+    kind: "record-fail-closed",
+    admission,
+    record: { kind: "corrupt" },
+  };
+}
+
+describe("runHostStart - attempt admission on every relaunch", () => {
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it.each([
+    [
+      "parked waiting-to-activate",
+      refusedHostStartAdmission(
+        "runtime-repair-maintenance",
+        hostStartAttemptRecord("waiting-to-activate", "parked"),
+      ),
+    ],
+    [
+      "corrupt attempt evidence",
+      corruptHostStartAdmission("runtime-repair-maintenance"),
+    ],
+  ] as const)(
+    "refuses a crash relaunch with %s evidence",
+    async (_name, refusal) => {
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const originalSpawn = deps.spawn;
+      if (originalSpawn === undefined)
+        throw new Error("test spawn dependency missing");
+      let spawnCount = 0;
+      let admissionCount = 0;
+      const admittedThenRefused: Partial<RunHostStartDeps> = {
+        ...deps,
+        maxRelaunches: 1,
+        spawn: (command, args, options) => {
+          const spawned = originalSpawn(command, args, options);
+          const code = spawnCount === 0 ? 7 : 0;
+          spawnCount += 1;
+          setImmediate(() => child.emit("exit", code, null));
+          return spawned;
+        },
+        admitHostStartSpawn: async (_environment, run) => {
+          admissionCount += 1;
+          if (admissionCount === 1) {
+            return { kind: "ran", result: await run() };
+          }
+          return refusal;
+        },
+      };
+
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            admittedThenRefused,
+          ),
+        recorded,
+      );
+
+      expect(admissionCount).toBe(2);
+      expect(recorded.spawnCalls).toHaveLength(1);
+      expect(recorded.exited).toBe(0);
+      expect(
+        recorded.markers.some(
+          (marker) =>
+            marker.phase === "failed-to-spawn" &&
+            /attempt evidence|attempt-host-start is/.test(
+              String(marker.fields.error),
+            ),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("allows a terminal record to participate in an ordinary crash relaunch", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined)
+      throw new Error("test spawn dependency missing");
+    let spawnCount = 0;
+    let admissionCount = 0;
+    const terminalAllowed: Partial<RunHostStartDeps> = {
+      ...deps,
+      maxRelaunches: 1,
+      spawn: (command, args, options) => {
+        const spawned = originalSpawn(command, args, options);
+        const code = spawnCount === 0 ? 7 : 0;
+        spawnCount += 1;
+        setImmediate(() => child.emit("exit", code, null));
+        return spawned;
+      },
+      admitHostStartSpawn: async (_environment, run) => {
+        admissionCount += 1;
+        return { kind: "ran", result: await run() };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart({ environment: "production", cwd: null }, terminalAllowed),
+      recorded,
+    );
+
+    expect(admissionCount).toBe(2);
+    expect(recorded.spawnCalls).toHaveLength(2);
+    expect(recorded.exited).toBe(0);
+  });
+});
+
 describe("runHostStart - crash relaunch loop", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 
@@ -2527,7 +2684,7 @@ describe("runHostStart - crash relaunch loop", () => {
     expect(recorded.exited).toBe(0);
   });
 
-  it("re-resolves the install target on every attempt", async () => {
+  it("re-resolves the install target before each attempt and inside admission", async () => {
     // An install swap renames `install/` aside mid-life. A supervisor holding
     // the first attempt's path would relaunch a binary that has moved - today a
     // fresh launchd-spawned supervisor re-resolves, and the loop must keep that.
@@ -2548,7 +2705,7 @@ describe("runHostStart - crash relaunch loop", () => {
             maxRelaunches: 5,
             readInstallRecord: async () => {
               reads += 1;
-              return sampleRecord(reads === 1 ? exec : moved);
+              return sampleRecord(reads <= 2 ? exec : moved);
             },
             pathExists: async () => true,
           },
@@ -2556,7 +2713,10 @@ describe("runHostStart - crash relaunch loop", () => {
       recorded,
     );
 
-    expect(reads).toBe(2);
+    // The outer setup resolves once for diagnostics, then the admitted
+    // callback resolves again before each spawn to bind the selected binary
+    // to the live contender boundary.
+    expect(reads).toBe(4);
     expect(recorded.spawnCalls[0]?.command).toBe(exec);
     expect(recorded.spawnCalls[1]?.command).toBe(moved);
   });

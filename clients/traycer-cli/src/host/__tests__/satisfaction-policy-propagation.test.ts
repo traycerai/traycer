@@ -64,6 +64,7 @@ function makeEnsureOptions(
     noServiceRegister: false,
     force: false,
     onProgress: null,
+    adoption: undefined,
     beforeMutate: null,
     ...overrides,
   };

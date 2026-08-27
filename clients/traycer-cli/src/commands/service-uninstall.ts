@@ -1,6 +1,7 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import { uninstallHostServiceWithAttempt } from "../host/update-mutation";
 
 // `traycer host service uninstall` - deregister the OS service for the
 // current environment. Idempotent: a not-installed service resolves
@@ -12,14 +13,15 @@ export const serviceUninstallCommand: CommandFn = async (
   ctx.runtime.logger.info("Service uninstall command started", {
     environment: ctx.runtime.environment,
   });
-  return withCliLock(
+  return withCliUpdateContender(
     {
       environment: ctx.runtime.environment,
       reason: "service-uninstall",
       waitMs: 30_000,
       pollIntervalMs: 100,
+      admission: "service-maintenance",
     },
-    async () => {
+    async (capability) => {
       const label = serviceLabelFor(ctx.runtime.environment);
       ctx.runtime.logger.debug("Service uninstall label resolved", {
         environment: ctx.runtime.environment,
@@ -33,7 +35,18 @@ export const serviceUninstallCommand: CommandFn = async (
         totalBytes: null,
         workUnits: null,
       });
-      await createServiceController().uninstall({ label });
+      await uninstallHostServiceWithAttempt(
+        capability,
+        {
+          environment: ctx.runtime.environment,
+          reason: "service-uninstall",
+          waitMs: 30_000,
+          pollIntervalMs: 100,
+          admission: "service-maintenance",
+        },
+        createServiceController(),
+        { label },
+      );
       ctx.runtime.logger.info("Service uninstall command completed", {
         environment: ctx.runtime.environment,
         label: label.id,

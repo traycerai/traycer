@@ -39,6 +39,16 @@ vi.mock("../../installer", () => ({
   discardStagedHostInstallSource: mocks.discardStagedHostInstallSourceMock,
 }));
 
+// `commitHostInstallSourceWithAttempt` (update-mutation.ts) imports
+// `commitHostInstallSource` straight from `../../installer/install`, not
+// the barrel above - that direct import bypasses the barrel mock, so the
+// REAL committer (and the real attempt-lock machinery it drives) would
+// otherwise run against this process's actual host home. Mirror the same
+// fake here.
+vi.mock("../../installer/install", () => ({
+  commitHostInstallSource: mocks.commitHostInstallSourceMock,
+}));
+
 vi.mock("../../installer/bundled-host", () => ({
   resolveBundledHostArchive: mocks.resolveBundledHostArchiveMock,
 }));
@@ -66,6 +76,18 @@ vi.mock("../../store/cli-lock", () => ({
 
 vi.mock("../busy-check", () => ({
   assertHostNotBusy: vi.fn(async () => undefined),
+}));
+
+// The real `publishHostStartAdoption` waits (up to 30s) for a service-
+// manager child to ack a spawn that never happens under a stubbed
+// controller. This suite pins `maybeAutoBootstrap`'s orchestration, not the
+// adoption handshake (that's `host-start-adoption.test.ts`), so replace it
+// with an immediately-satisfied lease.
+vi.mock("../host-start-adoption", () => ({
+  publishHostStartAdoption: async () => ({
+    waitForSpawn: async () => undefined,
+    cancel: async () => undefined,
+  }),
 }));
 
 const {
@@ -112,6 +134,7 @@ function makeFakeServiceController(state: FakeServiceControllerState): {
     start: Mock;
     stop: Mock;
     restart: Mock;
+    hostStartAdoptionLabel: Mock;
   };
   state: FakeServiceControllerState;
 } {
@@ -142,6 +165,7 @@ function makeFakeServiceController(state: FakeServiceControllerState): {
     restart: vi.fn(async () => {
       state.state = "running";
     }),
+    hostStartAdoptionLabel: vi.fn(async (label: { id: string }) => label.id),
   };
   return { controller, state };
 }

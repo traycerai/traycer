@@ -148,8 +148,8 @@ vi.mock("../../store/paths", async () => {
 });
 
 import {
-  commitHostInstallSource,
-  commitInstallFromSource,
+  commitHostInstallSource as commitHostInstallSourceWithAuthority,
+  commitInstallFromSource as commitInstallFromSourceWithAuthority,
   currentInstallArch,
   currentInstallPlatform,
   installHost,
@@ -164,6 +164,32 @@ import { createCliLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 
 const ENV: Environment = "production";
+
+const testMutationVerifier = async (): Promise<void> => undefined;
+type CommitHostOptions = Parameters<
+  typeof commitHostInstallSourceWithAuthority
+>[0];
+const commitHostInstallSource = (
+  options: Omit<CommitHostOptions, "verifyMutationCapability"> &
+    Partial<Pick<CommitHostOptions, "verifyMutationCapability">>,
+) =>
+  commitHostInstallSourceWithAuthority({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+  });
+type CommitSourceOptions = Parameters<
+  typeof commitInstallFromSourceWithAuthority
+>[0];
+const commitInstallFromSource = (
+  options: Omit<CommitSourceOptions, "verifyMutationCapability"> &
+    Partial<Pick<CommitSourceOptions, "verifyMutationCapability">>,
+) =>
+  commitInstallFromSourceWithAuthority({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+  });
 
 function writeLocalHostSource(sourceDir: string, marker: string): void {
   mkdirSync(sourceDir, { recursive: true });
@@ -201,7 +227,12 @@ describe("sweepOldTrash", () => {
     mocks.forceRmFailureForPath = asideDir;
 
     const logger = createCliLogger(ENV);
-    await sweepOldTrash(installDir, "install.json", logger);
+    await sweepOldTrash(
+      installDir,
+      "install.json",
+      logger,
+      testMutationVerifier,
+    );
 
     expect(existsSync(asideDir)).toBe(false);
     // Not restorable by a subsequent sweep either - nothing is left under
@@ -533,28 +564,35 @@ describe("atomicSwap - swap-lock recovery", () => {
     ]);
   });
 
-  it("gives the rollback restore the SAME recovery-aware plan as the forward renames, not the bare default", async () => {
+  it("gives rollback the same verified retry schedule without re-killing from compensation", async () => {
     // CodeRabbit finding on PR #829: the restore rename (trash -> target,
     // the worst failure path - it runs when the swap-in itself already
     // failed, and its own failure leaves NO install dir at all) used the
-    // plain `renameWithRetry` default (~2.5s, no re-kill hook) while a
-    // comment claimed it "gets the same retry" as the forward renames.
+    // plain `renameWithRetry` default (~2.5s) while a comment claimed it
+    // "gets the same retry" as the forward renames. Rollback now shares the
+    // bounded schedule and per-attempt verifier, but deliberately does not
+    // re-kill: compensation may restore old bytes, never kill another process
+    // on behalf of a stale forward transaction.
     // Both the swap-in and the restore target the SAME destination
     // (`target`), so one shared call-count gate drives both: calls 1-4
     // fail, call 5+ succeeds.
     //   - swap-in: 3 calls (attempt, retry, retry) against a 2-entry test
     //     schedule - exhausts and throws, invoking the kill hook twice.
-    //   - restore: call 4 fails (kill hook #3), call 5 succeeds.
-    // A regression back to the plain `renameWithRetry` restore would still
-    // retry (it has its own default schedule) but would NEVER invoke the
-    // kill hook, since that path hardcodes `onRetry: null` - so the fixed
-    // code is distinguished by the kill call COUNT, not merely by success.
+    //   - restore: call 4 fails without a kill hook, call 5 succeeds.
+    // The successful fifth call distinguishes the shared test schedule from
+    // a one-shot restore; the kill count pins the no-destructive-compensation
+    // invariant.
     await installVersion("v1", "1.0.0");
     setSwapRenameDelaysForTests([1, 1]);
     mocks.forceRenameFailureForDestination = installDirFor(ENV);
     mocks.forceRenameFailureCode = "EBUSY";
     mocks.forceRenameFailureUntilCall = 4;
-    const kill = vi.fn(async () => {});
+    const killAfterRenameAttempts: number[] = [];
+    const kill = vi.fn(async () => {
+      killAfterRenameAttempts.push(
+        mocks.renameCallCountByDestination.get(installDirFor(ENV)) ?? 0,
+      );
+    });
 
     const sourceDir = join(sandboxRoot, "source-v2");
     writeLocalHostSource(sourceDir, "v2");
@@ -582,8 +620,17 @@ describe("atomicSwap - swap-lock recovery", () => {
     expect((thrown as CliError).message).toContain(
       "failed to swap staging dir into place",
     );
-    // 2 re-kills for the exhausted swap-in + 1 for the restore's own retry.
-    expect(kill).toHaveBeenCalledTimes(3);
+    // The forward swap re-kills after its first and second failed attempts.
+    expect(killAfterRenameAttempts.filter((attempt) => attempt < 4)).toEqual([
+      1, 2,
+    ]);
+    // Compensation may restore old bytes but must never kill another process
+    // as part of a stale forward transaction. The restore's first failure is
+    // destination attempt 4; no kill may occur at or after that boundary.
+    expect(killAfterRenameAttempts.filter((attempt) => attempt >= 4)).toEqual(
+      [],
+    );
+    expect(mocks.renameCallCountByDestination.get(installDirFor(ENV))).toBe(5);
     // The restore itself succeeded (on its 2nd call) - the previous
     // install is back in place rather than stranded as `install.old-*`.
     expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(

@@ -1,6 +1,7 @@
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { createServiceController, serviceLabelFor } from "../service";
-import { withCliLock } from "../store/cli-lock";
+import { withCliUpdateContender } from "../host/update-contender";
+import { stopHostServiceWithAttempt } from "../host/update-mutation";
 
 // `traycer host stop` - asks the OS service manager to stop the
 // host. Idempotent: a not-running host resolves cleanly.
@@ -24,14 +25,28 @@ export interface HostStopArgs {
 export function buildHostStopCommand(args: HostStopArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const label = serviceLabelFor(ctx.runtime.environment);
-    await withCliLock(
+    await withCliUpdateContender(
       {
         environment: ctx.runtime.environment,
         reason: "host-stop",
         waitMs: 30_000,
         pollIntervalMs: 100,
+        admission: "service-maintenance",
       },
-      () => createServiceController().stop(label, { force: args.force }),
+      (capability) =>
+        stopHostServiceWithAttempt(
+          capability,
+          {
+            environment: ctx.runtime.environment,
+            reason: "host-stop",
+            waitMs: 30_000,
+            pollIntervalMs: 100,
+            admission: "service-maintenance",
+          },
+          createServiceController(),
+          label,
+          { force: args.force },
+        ),
     );
     return {
       data: { stopped: true, label: label.id, forced: args.force },

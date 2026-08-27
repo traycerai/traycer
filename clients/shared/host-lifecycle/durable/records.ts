@@ -4,6 +4,7 @@
 // own semantics — T3 only decodes.
 
 /** `substrate.json` — active registration substrate (macOS dual-substrate). */
+import type { TransitionPhase } from "../transition/types";
 export type SubstrateRecord = {
   readonly active: "smappservice" | "raw-fallback";
   readonly since: string;
@@ -20,7 +21,7 @@ export type TransitionJournal = {
   readonly probeNonce: string;
   readonly from: "smappservice" | "raw-fallback";
   readonly to: "smappservice" | "raw-fallback";
-  readonly phase: string;
+  readonly phase: TransitionPhase;
   readonly expectedIdentities: readonly string[];
   readonly compensation: string | null;
   readonly startedAt: string;

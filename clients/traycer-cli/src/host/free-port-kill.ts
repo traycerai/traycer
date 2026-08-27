@@ -43,6 +43,8 @@ export interface KillConflictingPortOwnerOptions {
   // Prefixes error messages ("host free-port" vs "host
   // free-port-and-restart") so callers keep their own command's voice.
   readonly commandName: string;
+  /** Revalidated immediately before SIGTERM after ownership probing. */
+  readonly verifyMutationCapability: () => Promise<void>;
 }
 
 export interface KillConflictingPortOwnerResult {
@@ -101,6 +103,10 @@ export async function killConflictingPortOwner(
       exitCode: 1,
     });
   }
+  // Authority loss is not a failed SIGTERM. Let it propagate so the caller
+  // cannot report a recoverable kill error and continue a restart after its
+  // attempt capability has gone away.
+  await opts.verifyMutationCapability();
   try {
     process.kill(opts.pid, "SIGTERM");
     return { killed: true, killError: null };

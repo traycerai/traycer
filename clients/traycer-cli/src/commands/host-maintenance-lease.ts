@@ -1,0 +1,560 @@
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import {
+  rebindUpdateMutationCapabilityLiveness,
+  type UpdateMutationCapability,
+} from "@traycer-clients/shared/host-update";
+import { createCliLogger } from "../logger";
+import {
+  requireCliUpdateMutationCapability,
+  withCliAttemptMutation,
+  withCliUpdateExecutionSegment,
+  type WithCliUpdateContenderOptions,
+} from "../host/update-contender";
+import {
+  runHostUninstallWithAttempt,
+  type HostUninstallArgs,
+} from "./host-uninstall";
+import { uninstallHost } from "../installer";
+import { createServiceController, serviceLabelFor } from "../service";
+import { withMacosMaintenanceServiceUid } from "../service/platforms/macos";
+import { stopHostServiceWithAttempt } from "../host/update-mutation";
+import type { Environment } from "../runner/environment";
+import {
+  parseHostMaintenanceLeaseTarget,
+  type HostMaintenanceLeaseTarget,
+} from "./host-maintenance-target";
+
+export {
+  isHostMaintenanceTargetPath,
+  parseHostMaintenanceLeaseTarget,
+} from "./host-maintenance-target";
+export type { HostMaintenanceLeaseTarget } from "./host-maintenance-target";
+
+/**
+ * Versioned line protocol used only by the internal root install scripts.
+ * The child keeps both lock levels live while the root process performs its
+ * platform-owned work, and requires a fresh capability check before each
+ * named actuator. An older CLI neither advertises nor speaks this protocol,
+ * so scripts fail closed instead of treating an arbitrary zero exit as a
+ * transferable admission lease.
+ */
+export const HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION = 1;
+
+export type HostMaintenanceLeaseAdmission =
+  "desktop-activation-maintenance" | "uninstall-maintenance";
+
+type HostMaintenanceLeaseAction = "host-stop" | "host-uninstall-all";
+
+type RootMaintenanceOperation =
+  | "cloud-macos-install"
+  | "cloud-platform-install"
+  | "cloud-uninstall"
+  | "standalone-uninstall";
+
+type RootMaintenanceExecutor = {
+  readonly runtime: string;
+  readonly script: string;
+  readonly operation: RootMaintenanceOperation;
+  readonly payload: Record<string, unknown>;
+};
+
+type LeaseRequest =
+  | {
+      readonly v: number;
+      readonly id: string;
+      readonly kind: "verify";
+      readonly operation: string;
+    }
+  | {
+      readonly v: number;
+      readonly id: string;
+      readonly kind: "execute";
+      readonly action: HostMaintenanceLeaseAction;
+    }
+  | {
+      readonly v: number;
+      readonly id: string;
+      readonly kind: "execute-root";
+      readonly executor: RootMaintenanceExecutor;
+    }
+  | { readonly v: number; readonly id: string; readonly kind: "release" };
+
+type LeaseResponse =
+  | { readonly v: number; readonly kind: "ready" }
+  | { readonly v: number; readonly id: string; readonly kind: "verified" }
+  | { readonly v: number; readonly id: string; readonly kind: "executed" }
+  | {
+      readonly v: number;
+      readonly id: string;
+      readonly kind: "root-executed";
+      readonly value: unknown;
+    }
+  | { readonly v: number; readonly id: string; readonly kind: "released" }
+  | {
+      readonly v: number;
+      readonly id: string | null;
+      readonly kind: "refused";
+      readonly message: string;
+    };
+
+export async function runHostMaintenanceLease(
+  environment: Environment,
+  admission: HostMaintenanceLeaseAdmission,
+  target: HostMaintenanceLeaseTarget,
+): Promise<void> {
+  const contenderOptions: WithCliUpdateContenderOptions = {
+    environment,
+    hostHomeDir: target.hostHomeDir,
+    reason: "host-maintenance-lease",
+    waitMs: 30_000,
+    pollIntervalMs: 100,
+    admission,
+  };
+  // A privileged root helper must never let the macOS controller fall back to
+  // its effective uid (`gui/0`). The root script supplied and this endpoint
+  // validated the target desktop uid; bind it in an AsyncLocalStorage scope
+  // rather than trusting a caller-controlled environment variable.
+  await withMacosMaintenanceServiceUid(target.serviceUid, () =>
+    // The root script can spend time copying an app bundle or waiting for a
+    // platform uninstaller. Hold only the outer attempt capability for that
+    // whole segment; `executeAction` takes the legacy CLI lock only around
+    // the actual service/install-tree mutation. This retains attempt-lock →
+    // cli-lock ordering without turning the CLI lock into a root-script lease.
+    withCliUpdateExecutionSegment(contenderOptions, (capability) =>
+      serveMaintenanceLease(capability, contenderOptions),
+    ),
+  );
+}
+
+async function serveMaintenanceLease(
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<void> {
+  writeProtocol({ v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION, kind: "ready" });
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of lines) {
+    const request = parseRequest(line);
+    if (request === null) {
+      writeProtocol({
+        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+        id: null,
+        kind: "refused",
+        message: "malformed maintenance lease request",
+      });
+      continue;
+    }
+    if (request.kind === "release") {
+      writeProtocol({
+        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+        id: request.id,
+        kind: "released",
+      });
+      return;
+    }
+    try {
+      await requireCliUpdateMutationCapability(capability, contenderOptions);
+      if (request.kind === "verify") {
+        writeProtocol({
+          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+          id: request.id,
+          kind: "verified",
+        });
+        continue;
+      }
+      if (request.kind === "execute") {
+        await executeAction(request.action, capability, contenderOptions);
+        writeProtocol({
+          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+          id: request.id,
+          kind: "executed",
+        });
+      } else {
+        const value = await superviseRootMaintenanceExecutor(
+          request.executor,
+          capability,
+          contenderOptions,
+        );
+        writeProtocol({
+          v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+          id: request.id,
+          kind: "root-executed",
+          value,
+        });
+      }
+    } catch (err) {
+      writeProtocol({
+        v: HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION,
+        id: request.id,
+        kind: "refused",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+  }
+}
+
+/**
+ * The lock owner starts and waits for the root-platform executor. The root
+ * caller can request only a closed operation name; it cannot obtain a bare
+ * "verified" token and then run launchctl/rm/dpkg itself. The executor asks
+ * us to revalidate before each individual edge over stdio, so a capability
+ * loss aborts its remaining work. When this helper dies, the executor's
+ * parent-liveness monitor terminates its active actuator before the lock can
+ * become breakable.
+ */
+async function superviseRootMaintenanceExecutor(
+  executor: RootMaintenanceExecutor,
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<unknown> {
+  // C is about to own the published liveness envelope for D's raw platform
+  // work. Revalidate at that spawn edge rather than relying on the protocol
+  // dispatch check above: parsing, target validation, and previous requests
+  // can all have yielded before this particular executor is created.
+  await requireCliUpdateMutationCapability(capability, contenderOptions);
+  const child = spawn(
+    executor.runtime,
+    [
+      executor.script,
+      "--root-maintenance-supervisor",
+      executor.operation,
+      JSON.stringify(executor.payload),
+    ],
+    {
+      stdio: ["pipe", "pipe", "inherit"],
+      env: {
+        ...process.env,
+        TRAYCER_ROOT_MAINTENANCE_PARENT_PID: String(process.pid),
+        TRAYCER_ROOT_MAINTENANCE_EXECUTOR: "1",
+      },
+    },
+  );
+  if (child.stdin === null || child.stdout === null) {
+    child.kill("SIGTERM");
+    throw new Error("maintenance executor could not establish protocol pipes");
+  }
+  if (child.pid === undefined) {
+    child.kill("SIGTERM");
+    throw new Error("maintenance executor did not expose a process identity");
+  }
+  const supervisorPid = child.pid;
+  // C is only a liveness publisher, not a capability recipient. Until it
+  // obtains D's detached group and receives B's acknowledgement, D is held
+  // at its start gate and cannot run a raw actuator. The later group-bound
+  // publication closes the hard-C-death interval without retaining a lock
+  // forever for a supervisor that died before starting any work.
+  await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let completedValue: unknown | undefined;
+    let buffer = "";
+    let actuatorGroupId: number | null = null;
+    const refuse = (message: string): void => {
+      if (!child.stdin.destroyed) {
+        child.stdin.write(`${JSON.stringify({ kind: "refused", message })}\n`);
+      }
+    };
+    const finish = (value: unknown): void => {
+      if (settled || completedValue !== undefined) return;
+      completedValue = value;
+    };
+    const restoreHolder = async (): Promise<void> => {
+      await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {});
+    };
+    const settleFailure = async (error: Error): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      if (actuatorGroupId !== null) {
+        if (process.platform === "win32") {
+          // Node has no Job-object membership proof. Keep the token published
+          // with retain-on-death so release refuses to unlink it; a repair can
+          // resolve this fail-closed state, but no contender can race an
+          // actuator whose tree we cannot positively enumerate.
+          reject(error);
+          return;
+        }
+        await terminateAndReapProcessGroup(actuatorGroupId);
+      }
+      await restoreHolder();
+      reject(error);
+    };
+    child.once("error", (error) => {
+      void settleFailure(error).catch(reject);
+    });
+    child.once("exit", (code, signal) => {
+      if (settled) return;
+      if (completedValue !== undefined && code === 0) {
+        settled = true;
+        void (async () => {
+          if (actuatorGroupId !== null && process.platform !== "win32") {
+            await waitForProcessGroupExit(actuatorGroupId);
+          }
+          await restoreHolder();
+          resolve(completedValue);
+        })().catch(reject);
+        return;
+      }
+      void settleFailure(
+        new Error(
+          `maintenance executor exited (${code ?? "null"}, ${signal ?? "none"})`,
+        ),
+      ).catch(reject);
+    });
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buffer += chunk;
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline === -1) return;
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        let request: unknown;
+        try {
+          request = JSON.parse(line);
+        } catch {
+          refuse("maintenance executor emitted malformed protocol data");
+          continue;
+        }
+        void handleRootExecutorRequest(
+          request,
+          capability,
+          contenderOptions,
+          child.stdin,
+          finish,
+          refuse,
+          supervisorPid,
+          (groupId) => {
+            actuatorGroupId = groupId;
+          },
+        ).catch((err) =>
+          refuse(err instanceof Error ? err.message : String(err)),
+        );
+      }
+    });
+  });
+}
+
+async function handleRootExecutorRequest(
+  request: unknown,
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+  stdin: NodeJS.WritableStream,
+  finish: (value: unknown) => void,
+  refuse: (message: string) => void,
+  supervisorPid: number,
+  setActuatorGroup: (groupId: number) => void,
+): Promise<void> {
+  if (
+    request === null ||
+    typeof request !== "object" ||
+    Array.isArray(request)
+  ) {
+    refuse("maintenance executor request was malformed");
+    return;
+  }
+  const value = request as Record<string, unknown>;
+  if (value.kind === "complete") {
+    finish(value.value);
+    return;
+  }
+  if (
+    value.kind === "bind-actuator" &&
+    typeof value.pid === "number" &&
+    Number.isSafeInteger(value.pid) &&
+    value.pid > 0
+  ) {
+    await requireCliUpdateMutationCapability(capability, contenderOptions);
+    // C remains the publisher, while D's detached group supplies supplemental
+    // kernel liveness after a hard C death. D waits at its start gate until
+    // this atomic token-preserving publication succeeds, so B always knows
+    // the exact group before any irreversible edge can run.
+    await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {
+      supervisedProcessGroupId: value.pid,
+      retainOnPublisherDeath: true,
+    });
+    setActuatorGroup(value.pid);
+    stdin.write(`${JSON.stringify({ kind: "actuator-bound" })}\n`);
+    return;
+  }
+  if (value.kind === "verify" && typeof value.operation === "string") {
+    await requireCliUpdateMutationCapability(capability, contenderOptions);
+    stdin.write(`${JSON.stringify({ kind: "verified" })}\n`);
+    return;
+  }
+  if (
+    value.kind === "execute" &&
+    (value.action === "host-stop" || value.action === "host-uninstall-all")
+  ) {
+    await executeAction(value.action, capability, contenderOptions);
+    stdin.write(`${JSON.stringify({ kind: "executed" })}\n`);
+    return;
+  }
+  refuse("maintenance executor requested an unsupported action");
+}
+
+async function terminateAndReapProcessGroup(groupId: number): Promise<void> {
+  try {
+    process.kill(-groupId, "SIGTERM");
+  } catch {
+    // The group may have completed while C was reporting its failure. The
+    // liveness wait below, not a failed signal, is the proof it is safe to
+    // hand publication back to B.
+  }
+  const escalationAt = Date.now() + 2_000;
+  let escalated = false;
+  for (;;) {
+    const liveness = processGroupLiveness(groupId);
+    if (liveness === "gone") return;
+    if (liveness === "indeterminate") {
+      throw new Error("could not prove supervised actuator group exited");
+    }
+    if (!escalated && Date.now() >= escalationAt) {
+      escalated = true;
+      try {
+        process.kill(-groupId, "SIGKILL");
+      } catch {
+        // Re-probe on the next iteration; this can mean the group exited.
+      }
+    }
+    await waitForMaintenanceProcessGroupPoll();
+  }
+}
+
+async function waitForProcessGroupExit(groupId: number): Promise<void> {
+  for (;;) {
+    const liveness = processGroupLiveness(groupId);
+    if (liveness === "gone") return;
+    if (liveness === "indeterminate") {
+      throw new Error("could not prove supervised actuator group exited");
+    }
+    await waitForMaintenanceProcessGroupPoll();
+  }
+}
+
+function processGroupLiveness(
+  groupId: number,
+): "live" | "gone" | "indeterminate" {
+  try {
+    process.kill(-groupId, 0);
+    return "live";
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error)) {
+      return "indeterminate";
+    }
+    if (error.code === "ESRCH") return "gone";
+    if (error.code === "EPERM") return "live";
+    return "indeterminate";
+  }
+}
+
+function waitForMaintenanceProcessGroupPoll(): Promise<void> {
+  return new Promise((resolvePoll) => setTimeout(resolvePoll, 25));
+}
+
+async function executeAction(
+  action: HostMaintenanceLeaseAction,
+  capability: UpdateMutationCapability,
+  contenderOptions: WithCliUpdateContenderOptions,
+): Promise<void> {
+  await withCliAttemptMutation(capability, contenderOptions, async () => {
+    const environment = contenderOptions.environment;
+    if (action === "host-stop") {
+      await stopHostServiceWithAttempt(
+        capability,
+        contenderOptions,
+        createServiceController(),
+        serviceLabelFor(environment),
+        { force: false },
+      );
+      return;
+    }
+    const args: HostUninstallArgs = { all: true };
+    await runHostUninstallWithAttempt(
+      args,
+      {
+        environment,
+        logger: createCliLogger(environment),
+        progress: () => undefined,
+      },
+      { createServiceController, uninstallHost },
+      capability,
+    );
+  });
+}
+
+function parseRequest(line: string): LeaseRequest | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const value = parsed as Record<string, unknown>;
+  if (
+    value.v !== HOST_MAINTENANCE_LEASE_PROTOCOL_VERSION ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.kind !== "string"
+  ) {
+    return null;
+  }
+  if (
+    value.kind === "execute-root" &&
+    isRootMaintenanceExecutor(value.executor)
+  ) {
+    return {
+      v: value.v,
+      id: value.id,
+      kind: "execute-root",
+      executor: value.executor,
+    };
+  }
+  if (value.kind === "verify" && typeof value.operation === "string") {
+    return {
+      v: value.v,
+      id: value.id,
+      kind: "verify",
+      operation: value.operation,
+    };
+  }
+  if (
+    value.kind === "execute" &&
+    (value.action === "host-stop" || value.action === "host-uninstall-all")
+  ) {
+    return { v: value.v, id: value.id, kind: "execute", action: value.action };
+  }
+  if (value.kind === "release") {
+    return { v: value.v, id: value.id, kind: "release" };
+  }
+  return null;
+}
+
+function isRootMaintenanceExecutor(
+  value: unknown,
+): value is RootMaintenanceExecutor {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const executor = value as Record<string, unknown>;
+  return (
+    typeof executor.runtime === "string" &&
+    executor.runtime.length > 0 &&
+    typeof executor.script === "string" &&
+    executor.script.length > 0 &&
+    (executor.operation === "cloud-macos-install" ||
+      executor.operation === "cloud-platform-install" ||
+      executor.operation === "cloud-uninstall" ||
+      executor.operation === "standalone-uninstall") &&
+    executor.payload !== null &&
+    typeof executor.payload === "object" &&
+    !Array.isArray(executor.payload)
+  );
+}
+
+function writeProtocol(response: LeaseResponse): void {
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+}

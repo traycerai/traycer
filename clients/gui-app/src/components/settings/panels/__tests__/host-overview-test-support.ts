@@ -180,6 +180,10 @@ export function buildOverviewHostFixture(options: {
         busySessionCount: options.busySessionCount ?? 0,
         updateProgress: null,
         busyBreakdown: options.busyBreakdown ?? null,
+        // `null` = this fixture's host did not report the durable attempt,
+        // which is exactly what host.status@1.2-and-older peers send.
+        updateOperation: null,
+        updateTransaction: null,
       };
     },
     "host.identity.get": () => ({ ...identity }),
@@ -213,7 +217,10 @@ export function buildOverviewHostFixture(options: {
         versions: [],
       },
     }),
-    "host.update.install": () => ({ outcome: "accepted" as const }),
+    "host.update.install": () => ({
+      outcome: "accepted" as const,
+      attemptId: null,
+    }),
     // Answered by default so the Advanced disclosure's OS service section
     // renders its normal shape. Left unanswered, the query rejects and every
     // suite that opens Advanced would read the "couldn't be read" copy — a
@@ -293,6 +300,7 @@ const NOT_INSTALLED_CONTROLLER_STATUS: HostControllerStatus = {
   updateReady: false,
   activation: "unavailable",
   reachable: false,
+  localAttempt: null,
   removedByUser: false,
   checkedAt: "2026-08-12T00:00:00Z",
 };
