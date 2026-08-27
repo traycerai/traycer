@@ -1232,6 +1232,122 @@ describe("MobileRunnerHost", () => {
       dispose();
     });
 
+    it("a snapshot HELD across a resume can never become trusted - the late background-era callback seeds, not fires", async () => {
+      capacitorEventMocks.holdNetworkSeed = true;
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const changes: number[] = [];
+      const subscription = host.onNetworkPathChanged(() => changes.push(1));
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
+      );
+      // A resolves (Wi-Fi, captured at call); B is now called and parks,
+      // its Wi-Fi value captured on THIS side of the suspend.
+      capacitorEventMocks.releaseNextSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // The app suspends; the path moves to cellular while suspended; the
+      // callback for it is still queued. The resume owns this recovery.
+      fireAppPause();
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "cellular",
+      };
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      // Old B resolves AFTER the resume - cross-epoch. Reconciliation may
+      // place it as the baseline but must NOT trust it; the post-resume
+      // rebaseline (which reads the cellular truth) establishes trust.
+      capacitorEventMocks.releaseNetworkSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The background-era cellular callback lands arbitrarily late. With
+      // cross-epoch B trusted this would confirm cellular against trusted
+      // Wi-Fi and duplicate the resume-owned recovery.
+      fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // Genuine edges flow from the rebaselined truth.
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
+      subscription.dispose();
+    });
+
+    it("B failing with an empty buffer cannot leave pre-resume A trusted across the epoch", async () => {
+      capacitorEventMocks.holdNetworkSeed = true;
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const changes: number[] = [];
+      const subscription = host.onNetworkPathChanged(() => changes.push(1));
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
+      );
+
+      // The suspend crosses bootstrap while A is still parked; B will FAIL,
+      // leaving the chain as pre-resume A alone - the tail the trust branch
+      // would otherwise bless via its empty-buffer arm.
+      fireAppPause();
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "cellular",
+      };
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      capacitorEventMocks.networkStatusFailQueue.push(true);
+      capacitorEventMocks.releaseNetworkSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The late background-era cellular callback: against a trusted
+      // pre-resume Wi-Fi baseline this would duplicate the resume-owned
+      // recovery.
+      fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
+      subscription.dispose();
+    });
+
+    it("held bootstrap: a callback delivered AFTER the resume is still owned by it - no reconcile emit", async () => {
+      capacitorEventMocks.holdNetworkSeed = true;
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const changes: number[] = [];
+      const subscription = host.onNetworkPathChanged(() => changes.push(1));
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
+      );
+
+      // The reorder of the held-bootstrap arm: background -> resume FIRST,
+      // the buffered observation arrives after the foreground flip.
+      fireAppPause();
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      capacitorEventMocks.releaseNetworkSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The resume owns the episode's recovery whichever side of it the
+      // delivery landed on.
+      expect(changes).toEqual([]);
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
+      subscription.dispose();
+    });
+
     it("two callbacks racing before either confirmation resolves commit exactly once - FIFO completion", async () => {
       const host = runner(null);
       const { changes, dispose } = await subscribeNetwork(host);
@@ -1415,9 +1531,17 @@ describe("MobileRunnerHost", () => {
       fireAppPause();
       fireAppResume();
       expect(resumes).toEqual([1, 1]);
-      // Resolve the STALE first read, then the owning second.
+      // Resolve the STALE first read...
       capacitorEventMocks.releaseNextSeed();
       await new Promise((resolve) => setTimeout(resolve, 0));
+      // ...and deliver a callback BEFORE the owning read resolves. The stale
+      // read must not have closed the quarantine: this observation folds
+      // silently. A mutant that clears the window in the stale branch routes
+      // it through live confirmation and fires against the pre-suspend
+      // baseline.
+      fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
       capacitorEventMocks.releaseNetworkSeed();
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(changes).toEqual([]);

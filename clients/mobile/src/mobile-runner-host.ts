@@ -1803,7 +1803,12 @@ class MobileNetworkPathWatcher {
     if (chain.length === 0) {
       // Nothing observed at all (reads failed, no callbacks): the first live
       // callback will seed the baseline, exactly as an unbuffered listener
-      // would have.
+      // would have. A resume seen during bootstrap still needs its
+      // rebaseline started - nothing else will.
+      if (this.bootstrapSawResume) {
+        this.baselineTrusted = false;
+        this.beginRebaseline();
+      }
       return;
     }
     let sawForegroundRecovery = false;
@@ -1821,15 +1826,24 @@ class MobileNetworkPathWatcher {
       }
     }
     this.lastStatus = chain[chain.length - 1].status;
+    if (this.bootstrapSawResume) {
+      // A resume completed while bootstrap was reconciling: every bootstrap
+      // observation is CROSS-EPOCH - snapshot B may have been captured on
+      // the far side of the suspend and resolved after it, so trusting it
+      // would let a late background-era callback confirm the new path
+      // against a stale trusted baseline and duplicate the resume-owned
+      // recovery. The newest observation still places the baseline, but
+      // only as untrusted, and the post-resume rebaseline (deferred until
+      // this walk placed its baseline) establishes the trusted one.
+      this.baselineTrusted = false;
+      this.beginRebaseline();
+      return;
+    }
     // Trust follows provenance: a SNAPSHOT tail (quiet B, or A with nothing
     // after it) is a confirmed read; a buffered-callback tail is raw, so the
     // first live confirmation re-seeds from it silently.
     this.baselineTrusted = snapshotB !== null || buffered.length === 0;
-    if (
-      !sawForegroundRecovery ||
-      this.bootstrapSawResume ||
-      this.systemResume.isBackgrounded()
-    ) {
+    if (!sawForegroundRecovery || this.systemResume.isBackgrounded()) {
       return;
     }
     this.emitPathChanged();
@@ -1850,9 +1864,22 @@ class MobileNetworkPathWatcher {
     this.liveCommitSeq += 1;
     this.resumeGeneration += 1;
     if (this.preSeedObservations !== null) {
+      // Bootstrap is still reconciling: record the epoch handoff. The
+      // reconcile walk consumes this by refusing to trust ANY bootstrap
+      // snapshot (they may straddle the suspend) and by starting the
+      // post-resume rebaseline itself once its baseline is placed.
       this.bootstrapSawResume = true;
       return;
     }
+    this.beginRebaseline();
+  }
+
+  /**
+   * Starts the generation-owned post-resume rebaseline read. The newest
+   * resume generation owns both the adopted baseline and the closing of the
+   * quarantine window; a superseded read does neither.
+   */
+  private beginRebaseline(): void {
     this.rebaselineActive = true;
     const generation = this.resumeGeneration;
     void this.settleQuietRead().then((status) => {
