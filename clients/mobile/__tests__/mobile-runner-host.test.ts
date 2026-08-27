@@ -37,6 +37,26 @@ const capacitorEventMocks = vi.hoisted(() => ({
   rejectAppListeners: false,
   /** Event names whose `App.addListener` registration rejects (partial-pair). */
   rejectAppListenerEvents: new Set<string>(),
+  /** Event names whose registration parks until `releaseHeldAppRegistration`. */
+  holdAppListenerEvents: new Set<string>(),
+  heldAppRegistrations: new Map<string, { reject: (error: Error) => void }>(),
+  releaseHeldAppRegistrationWithError: (event: string) => {
+    const held = capacitorEventMocks.heldAppRegistrations.get(event);
+    if (held !== undefined) {
+      capacitorEventMocks.heldAppRegistrations.delete(event);
+      held.reject(new Error("no plugin bridge"));
+    }
+  },
+  /** How `handle.remove()` behaves for App listener handles. */
+  appHandleRemoveMode: "immediate" as "immediate" | "held" | "reject",
+  pendingAppHandleRemovals: new Array<() => void>(),
+  releaseAppHandleRemovals: () => {
+    for (const release of capacitorEventMocks.pendingAppHandleRemovals.splice(
+      0,
+    )) {
+      release();
+    }
+  },
   networkListeners: new Array<
     (status: { connected: boolean; connectionType: string }) => void
   >(),
@@ -95,6 +115,11 @@ vi.mock("@capacitor/app", () => ({
       ) {
         return Promise.reject(new Error("no plugin bridge"));
       }
+      if (capacitorEventMocks.holdAppListenerEvents.has(event)) {
+        return new Promise((_resolve, reject) => {
+          capacitorEventMocks.heldAppRegistrations.set(event, { reject });
+        });
+      }
       if (event === "pause") {
         capacitorEventMocks.pauseListeners.push(handler as () => void);
       } else if (event === "resume") {
@@ -104,7 +129,19 @@ vi.mock("@capacitor/app", () => ({
           handler as (state: { isActive: boolean }) => void,
         );
       }
-      return Promise.resolve({ remove: () => Promise.resolve() });
+      return Promise.resolve({
+        remove: () => {
+          if (capacitorEventMocks.appHandleRemoveMode === "reject") {
+            return Promise.reject(new Error("remove failed"));
+          }
+          if (capacitorEventMocks.appHandleRemoveMode === "held") {
+            return new Promise<void>((resolve) => {
+              capacitorEventMocks.pendingAppHandleRemovals.push(resolve);
+            });
+          }
+          return Promise.resolve();
+        },
+      });
     },
   },
 }));
@@ -303,6 +340,10 @@ describe("MobileRunnerHost", () => {
     capacitorEventMocks.networkStatusFailQueue.length = 0;
     capacitorEventMocks.rejectNetworkListener = false;
     capacitorEventMocks.rejectAppListenerEvents.clear();
+    capacitorEventMocks.holdAppListenerEvents.clear();
+    capacitorEventMocks.heldAppRegistrations.clear();
+    capacitorEventMocks.appHandleRemoveMode = "immediate";
+    capacitorEventMocks.pendingAppHandleRemovals.length = 0;
     capacitorEventMocks.holdNetworkSeed = false;
     capacitorEventMocks.pendingSeedReleases.length = 0;
     nativeMocks.storage.clear();
@@ -632,10 +673,60 @@ describe("MobileRunnerHost", () => {
       subscription.dispose();
     });
 
-    it("iOS: a HALF-registered pair is retired before DOM fallback - the surviving callback is inert", async () => {
-      // `pause` registers; `resume` rejects. The pair is unusable, but one
-      // real native listener exists and the bridge may already have queued
-      // its events.
+    it("iOS: a HALF-registered pair is retired the instant failure is known - before removals settle", async () => {
+      // `pause` registers with a HELD removal; `resume`'s registration is
+      // held and then rejected by the test. This drives the full order Sol
+      // specified: state written pre-failure is reset, the surviving
+      // callback is inert DURING the pending removal (token, not cleanup, is
+      // the boundary), DOM owns nothing until cleanup settles, and exactly
+      // one null-dwell episode follows.
+      capacitorEventMocks.appHandleRemoveMode = "held";
+      capacitorEventMocks.holdAppListenerEvents.add("resume");
+      const host = runner(null);
+      const dwells: Array<number | null> = [];
+      const subscription = host.onSystemResumed((event) =>
+        dwells.push(event.backgroundedForMs),
+      );
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.pauseListeners).toHaveLength(1),
+      );
+      const retiredPause = capacitorEventMocks.pauseListeners[0];
+
+      // Before the peer rejection, the pair is presumed good: a real pause
+      // legitimately writes background state. (Kills the deleted-state-reset
+      // mutation: without the reset, this write survives the fallback.)
+      retiredPause();
+
+      // The peer registration now fails. Ownership must flip synchronously
+      // with the failure being known - removals are still HELD.
+      capacitorEventMocks.releaseHeldAppRegistrationWithError("resume");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The retired callback fires WHILE its removal is pending. Inertness
+      // here is the token, not the (unfinished) cleanup - the mutation that
+      // moves invalidation after removal fails on this call.
+      retiredPause();
+
+      // DOM owns nothing yet: cleanup has not settled, so a visibility
+      // cycle produces no episode.
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(dwells).toEqual([]);
+
+      // Cleanup settles; the DOM pair installs and owns episodes.
+      capacitorEventMocks.releaseAppHandleRemovals();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      setVisibility("hidden");
+      setVisibility("visible");
+      // Exactly one episode, and its dwell is null - the pre-failure native
+      // stamp was reset, the retired callbacks wrote nothing after.
+      expect(dwells).toEqual([null]);
+
+      subscription.dispose();
+    });
+
+    it("iOS: a rejected handle removal still completes the fallback to a working DOM pair", async () => {
+      capacitorEventMocks.appHandleRemoveMode = "reject";
       capacitorEventMocks.rejectAppListenerEvents.add("resume");
       const host = runner(null);
       const dwells: Array<number | null> = [];
@@ -646,33 +737,16 @@ describe("MobileRunnerHost", () => {
         expect(capacitorEventMocks.pauseListeners).toHaveLength(1),
       );
       const retiredPause = capacitorEventMocks.pauseListeners[0];
-      // Let the fallback settle (ownership bump, handle removal, DOM pair).
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // The retired owner's callback fires anyway - a queued event delivered
-      // late. It must write NOTHING: no background state, no numeric stamp.
       retiredPause();
-      const networkChanges: number[] = [];
-      const networkSubscription = host.onNetworkPathChanged(() =>
-        networkChanges.push(1),
-      );
-      await vi.waitFor(() =>
-        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
-      );
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      // The network gate reads foreground - the retired pause did not stick
-      // the tracker in background.
-      fireNetworkStatus({ connected: true, connectionType: "cellular" });
-      await vi.waitFor(() => expect(networkChanges).toEqual([1]));
-
-      // The DOM pair owns episodes now, and its dwell contract is null -
-      // a native-stamped number must never ride out through it.
       setVisibility("hidden");
       setVisibility("visible");
+      // The failed removal is cleanup, not the safety boundary: DOM owns the
+      // (single, null-dwell) episode and the retired callback wrote nothing.
       expect(dwells).toEqual([null]);
 
       subscription.dispose();
-      networkSubscription.dispose();
     });
 
     it("Android: pause under a dialog neither backgrounds nor stamps - appStateChange owns the pair with numeric dwell", () => {
@@ -1155,6 +1229,206 @@ describe("MobileRunnerHost", () => {
       fireNetworkStatus({ connected: true, connectionType: "cellular" });
       await vi.waitFor(() => expect(changes).toEqual([1]));
 
+      dispose();
+    });
+
+    it("two callbacks racing before either confirmation resolves commit exactly once - FIFO completion", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+      // Establish a trusted offline baseline (a loss fires nothing).
+      fireNetworkStatus({ connected: false, connectionType: "none" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // Both regain callbacks arrive back-to-back, synchronously - no
+      // macrotask serialization - with every confirmation read HELD.
+      capacitorEventMocks.holdNetworkSeed = true;
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "wifi",
+      };
+      fireNetworkCallbackOnly({ connected: true, connectionType: "wifi" });
+      fireNetworkCallbackOnly({ connected: true, connectionType: "wifi" });
+      // FIFO completion: the FIRST callback's read resolves first. Without a
+      // single commit owner, both confirmations would compare the same
+      // offline baseline against the online truth and force twice.
+      capacitorEventMocks.releaseNetworkSeed();
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([1]);
+      // Baseline is the newest truth: a re-announce is not an edge.
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([1]);
+
+      dispose();
+    });
+
+    it("two callbacks racing commit exactly once - OUT-OF-ORDER completion", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+      fireNetworkStatus({ connected: false, connectionType: "none" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      capacitorEventMocks.holdNetworkSeed = true;
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "wifi",
+      };
+      fireNetworkCallbackOnly({ connected: true, connectionType: "wifi" });
+      fireNetworkCallbackOnly({ connected: true, connectionType: "wifi" });
+      // The SECOND callback's read resolves first: pop the first parked read
+      // out of order by resolving from the tail.
+      const parked = capacitorEventMocks.pendingSeedReleases.splice(0);
+      expect(parked.length).toBeGreaterThanOrEqual(2);
+      const lastParked = parked[parked.length - 1];
+      lastParked();
+      for (const release of parked.slice(0, -1)) {
+        release();
+      }
+      capacitorEventMocks.releaseNetworkSeed();
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([1]);
+
+      dispose();
+    });
+
+    it("a failed confirmation marks the baseline untrusted - the next confirmed status seeds without a false edge", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      // A stale offline callback whose confirmation READ fails: the raw
+      // observation may move the baseline, but only as untrusted.
+      capacitorEventMocks.networkStatusFailQueue.push(true);
+      fireNetworkCallbackOnly({ connected: false, connectionType: "none" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // The next CONFIRMED status re-seeds silently. Promoting the
+      // unconfirmed offline into a trusted predecessor would fire a false
+      // offline -> online regain right here.
+      fireNetworkCallbackOnly({ connected: true, connectionType: "wifi" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // Genuine edges flow again from the re-seeded baseline.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      dispose();
+    });
+
+    it("a confirmation held across background/resume cannot fire a second wake after the resume's own", async () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      // The path moves and its confirmation read parks...
+      capacitorEventMocks.holdNetworkSeed = true;
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "cellular",
+      };
+      fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
+      // ...then the app suspends and resumes while the read is in flight.
+      // The resume bumps the commit sequence in the pre-handler seam, so the
+      // stale confirmation resolving in the foreground cannot compare the
+      // pre-resume baseline and double the resume's wake.
+      fireAppPause();
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      capacitorEventMocks.releaseNetworkSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // The rebaseline adopted the new truth: re-announce is silent, a real
+      // later move fires.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
+      dispose();
+    });
+
+    it("a FAILED resume rebaseline retires the pre-background baseline - a late background-era callback seeds, never forces", async () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      fireAppPause();
+      // The path moves while suspended; the callback is still queued.
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "cellular",
+      };
+      // The post-resume rebaseline read FAILS - nothing confirmed describes
+      // the new network, and the pre-background baseline must not survive as
+      // a trusted predecessor.
+      capacitorEventMocks.networkStatusFailQueue.push(true);
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The background-era callback lands arbitrarily late, in foreground,
+      // and confirms against the CURRENT truth. With the stale wifi baseline
+      // still trusted this would be a wifi -> cellular forced wake - the
+      // exact double-recovery the resume already owns.
+      fireNetworkCallbackOnly({ connected: true, connectionType: "cellular" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
+      dispose();
+    });
+
+    it("a second resume supersedes the first rebaseline owner - the stale read neither seeds nor closes the window", async () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      capacitorEventMocks.holdNetworkSeed = true;
+      // First suspend/resume: its rebaseline read parks, capturing cellular.
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "cellular",
+      };
+      fireAppPause();
+      fireAppResume();
+      // Second suspend/resume while the first read is in flight: the newer
+      // generation owns the window. Its read captures wifi.
+      capacitorEventMocks.networkStatus = {
+        connected: true,
+        connectionType: "wifi",
+      };
+      fireAppPause();
+      fireAppResume();
+      expect(resumes).toEqual([1, 1]);
+      // Resolve the STALE first read, then the owning second.
+      capacitorEventMocks.releaseNextSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      capacitorEventMocks.releaseNetworkSeed();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([]);
+
+      // The baseline is the SECOND read's wifi: a cellular move is a real
+      // edge. Had the stale first read seeded cellular, this would be a
+      // silent re-announce and the edge would vanish.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      await vi.waitFor(() => expect(changes).toEqual([1]));
+
+      resumeSubscription.dispose();
       dispose();
     });
 

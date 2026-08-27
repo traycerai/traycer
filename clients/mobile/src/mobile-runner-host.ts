@@ -1532,6 +1532,33 @@ class MobileNetworkPathWatcher {
    * recovery owner.
    */
   private rebaselineActive = false;
+  /**
+   * THE single commit owner for live confirmations. Bumped on every live
+   * callback arrival and on every resume boundary; a confirmation may only
+   * commit (write the baseline, fire the wake) if the sequence it captured
+   * at arrival is still current when its read settles. This is what makes
+   * overlapping confirmations converge on exactly one commit - without it,
+   * two raced callbacks could each compare the same stale baseline against
+   * the current truth and force twice, and an OLDER confirmation exhausting
+   * its quiet reads could overwrite a newer observation.
+   */
+  private liveCommitSeq = 0;
+  /**
+   * Whether `lastStatus` was established by a CONFIRMED read (a quiet
+   * snapshot or a confirmed commit) rather than a raw callback adopted when
+   * confirmation was unavailable. An untrusted baseline may be superseded
+   * but never serve as the predecessor of a forced wake: the next confirmed
+   * status SEEDS from it silently. Without this, a failed confirmation would
+   * promote its own unconfirmed observation into a trusted predecessor and
+   * the following confirmed status could ride a false edge.
+   */
+  private baselineTrusted = true;
+  /**
+   * Which resume owns the current rebaseline read. A second resume during
+   * the read supersedes the first: only the newest generation may adopt the
+   * post-resume baseline and close the quarantine window.
+   */
+  private resumeGeneration = 0;
   private listening = false;
 
   constructor(private readonly systemResume: MobileSystemResume) {}
@@ -1589,15 +1616,37 @@ class MobileNetworkPathWatcher {
    * observation into the baseline WITHOUT forcing (conservative: an
    * unconfirmable edge must not tear down a possibly-healthy mux).
    */
-  private async confirmAndApply(observed: ConnectionStatus): Promise<void> {
-    const previous = this.lastStatus;
+  private async confirmAndApply(
+    observed: ConnectionStatus,
+    commitSeq: number,
+  ): Promise<void> {
     const confirmed = await this.settleQuietRead();
-    if (confirmed === null) {
-      this.lastStatus = observed;
+    if (commitSeq !== this.liveCommitSeq) {
+      // A newer callback - or a resume boundary - owns the commit now. This
+      // confirmation writes NOTHING: committing here would either double the
+      // wake (both raced confirmations comparing the same stale baseline) or
+      // let an older observation overwrite a newer one after its quiet reads
+      // ran out.
       return;
     }
+    if (confirmed === null) {
+      // No quiet read - but the ownership check above just proved this IS
+      // the newest observation, so it may move the baseline. It moves it as
+      // UNTRUSTED: an unconfirmed raw callback must never become the
+      // predecessor a later confirmed status fires against.
+      this.lastStatus = observed;
+      this.baselineTrusted = false;
+      return;
+    }
+    // `previous` is read AT COMMIT, not at arrival: an arrival-time capture
+    // is exactly what let two overlapping confirmations both see the old
+    // baseline.
+    const previous = this.lastStatus;
+    const previousTrusted = this.baselineTrusted;
     this.lastStatus = confirmed;
-    if (previous === null) {
+    this.baselineTrusted = true;
+    if (previous === null || !previousTrusted) {
+      // Seeding (or re-seeding after an untrusted interval): adopt silently.
       return;
     }
     if (!MobileNetworkPathWatcher.isRecoveryTransition(previous, confirmed)) {
@@ -1651,7 +1700,8 @@ class MobileNetworkPathWatcher {
           this.lastStatus = status;
           return;
         }
-        void this.confirmAndApply(status);
+        this.liveCommitSeq += 1;
+        void this.confirmAndApply(status, this.liveCommitSeq);
       },
     );
     void (async () => {
@@ -1771,6 +1821,10 @@ class MobileNetworkPathWatcher {
       }
     }
     this.lastStatus = chain[chain.length - 1].status;
+    // Trust follows provenance: a SNAPSHOT tail (quiet B, or A with nothing
+    // after it) is a confirmed read; a buffered-callback tail is raw, so the
+    // first live confirmation re-seeds from it silently.
+    this.baselineTrusted = snapshotB !== null || buffered.length === 0;
     if (
       !sawForegroundRecovery ||
       this.bootstrapSawResume ||
@@ -1790,26 +1844,37 @@ class MobileNetworkPathWatcher {
    * re-announced as a second forced wake against the freshly recovered mux.
    */
   private onResumed(): void {
+    // Every resume is a commit boundary: confirmations already in flight
+    // belong to the epoch the app just left and must not commit against the
+    // post-resume world.
+    this.liveCommitSeq += 1;
+    this.resumeGeneration += 1;
     if (this.preSeedObservations !== null) {
       this.bootstrapSawResume = true;
       return;
     }
-    if (this.rebaselineActive) {
-      return;
-    }
     this.rebaselineActive = true;
-    void this.settleQuietRead()
-      .then((status) => {
-        if (status !== null) {
-          this.lastStatus = status;
-        }
-        // A null read means callbacks kept arriving (each already folded into
-        // the baseline by the listener) or the read failed - either way the
-        // newest observation stands.
-      })
-      .finally(() => {
-        this.rebaselineActive = false;
-      });
+    const generation = this.resumeGeneration;
+    void this.settleQuietRead().then((status) => {
+      if (generation !== this.resumeGeneration) {
+        // A newer resume superseded this read; that resume's own rebaseline
+        // owns the baseline and the window.
+        return;
+      }
+      if (status !== null) {
+        this.lastStatus = status;
+        this.baselineTrusted = true;
+      } else {
+        // The read never went quiet (or failed). Whatever the baseline holds
+        // - the newest quarantine fold, or, with no folds at all, the
+        // PRE-background status - it does not describe a confirmed
+        // post-resume network. Mark it untrusted: the next confirmed
+        // observation seeds silently instead of firing a second forced wake
+        // against a baseline from the wrong side of the suspend.
+        this.baselineTrusted = false;
+      }
+      this.rebaselineActive = false;
+    });
   }
 }
 
