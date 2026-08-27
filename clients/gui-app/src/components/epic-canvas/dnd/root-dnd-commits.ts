@@ -289,7 +289,12 @@ export function resolveCanvasDropPreview(
       index: getArtifactTabDropIndexFromPoint(target, targetRect, point.x) ?? 0,
     };
   }
-  return getEpicCanvasDropPreview(target, targetRect, point);
+  return getEpicCanvasDropPreview(
+    target,
+    targetRect,
+    point,
+    source.kind === ARTIFACT_TAB_DND_TYPE,
+  );
 }
 
 type LeftPanelRailDragSource = Extract<
@@ -379,8 +384,8 @@ function commitArtifactTabDrop(
   target: EpicCanvasDropTargetData,
   preview: NonNullable<EpicCanvasDropPreview>,
   navigateNested: NavigateNestedFocus,
-): void {
-  if (preview.kind === "empty-shell") return;
+): boolean {
+  if (preview.kind === "empty-shell") return false;
   const canvasStore = useEpicCanvasStore.getState();
   if (preview.kind === "artifact-tab-strip") {
     navigateNested(source.epicId, source.viewTabId, () =>
@@ -391,6 +396,7 @@ function commitArtifactTabDrop(
         targetIndex: preview.index,
       }),
     );
+    return true;
   }
   if (
     preview.kind === "artifact-tab-group-body" &&
@@ -405,6 +411,7 @@ function commitArtifactTabDrop(
           target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
       }),
     );
+    return true;
   }
   if (
     preview.kind === "artifact-tab-group-body" &&
@@ -419,7 +426,9 @@ function commitArtifactTabDrop(
         position,
       }),
     );
+    return true;
   }
+  return false;
 }
 
 /**
@@ -438,30 +447,30 @@ function placeResolvedCanvasTile(
     readonly preview: NonNullable<EpicCanvasDropPreview>;
   },
   navigateNested: NavigateNestedFocus,
-): void {
+): boolean {
   const { epicId, tile, target, preview } = resolved;
   if (
     preview.kind === "left-panel-rail" ||
     preview.kind === "left-panel-rail-list" ||
     preview.kind === "left-panel-section"
   ) {
-    return;
+    return false;
   }
   const canvasStore = useEpicCanvasStore.getState();
   if (preview.kind === "empty-shell") {
-    if (target.kind !== "empty-shell") return;
+    if (target.kind !== "empty-shell") return false;
     navigateNested(epicId, target.viewTabId, () =>
       canvasStore.prepareOpenTileInTabFocusTarget(target.viewTabId, tile),
     );
-    return;
+    return true;
   }
-  if (target.kind === "empty-shell") return;
+  if (target.kind === "empty-shell") return false;
   if (
     target.kind === "left-panel-rail-item" ||
     target.kind === "left-panel-rail-list" ||
     target.kind === "left-panel-group"
   ) {
-    return;
+    return false;
   }
   if (preview.kind === "artifact-tab-strip") {
     navigateNested(epicId, target.viewTabId, () =>
@@ -472,7 +481,7 @@ function placeResolvedCanvasTile(
         tile,
       ),
     );
-    return;
+    return true;
   }
   if (preview.position === "center") {
     navigateNested(epicId, target.viewTabId, () =>
@@ -483,7 +492,7 @@ function placeResolvedCanvasTile(
         tile,
       ),
     );
-    return;
+    return true;
   }
   const position = preview.position;
   navigateNested(epicId, target.viewTabId, () =>
@@ -494,22 +503,22 @@ function placeResolvedCanvasTile(
       tile,
     ),
   );
+  return true;
 }
 
 export function commitResolvedCanvasDrop(
   drop: ResolvedEpicCanvasDrop,
   navigateNested: NavigateNestedFocus,
-): void {
-  if (drop.preview === null) return;
-  if (!isCanvasDropCompatible(drop.source, drop.target)) return;
+): boolean {
+  if (drop.preview === null) return false;
+  if (!isCanvasDropCompatible(drop.source, drop.target)) return false;
   if (drop.source.kind === ARTIFACT_TAB_DND_TYPE) {
-    commitArtifactTabDrop(
+    return commitArtifactTabDrop(
       drop.source,
       drop.target,
       drop.preview,
       navigateNested,
     );
-    return;
   }
   if (drop.source.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
     const leftPanelStore = useLeftPanelStore.getState();
@@ -520,12 +529,13 @@ export function commitResolvedCanvasDrop(
     );
     if (nextGroups !== null) {
       leftPanelStore.applyPanelGroups(nextGroups);
+      return true;
     }
-    return;
+    return false;
   }
   const tile = sourceToTileRef(drop.source);
   if (tile !== null) {
-    placeResolvedCanvasTile(
+    return placeResolvedCanvasTile(
       {
         epicId: drop.source.epicId,
         tile,
@@ -535,6 +545,7 @@ export function commitResolvedCanvasDrop(
       navigateNested,
     );
   }
+  return false;
 }
 
 export interface HeaderStripDropResult {
