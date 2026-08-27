@@ -696,10 +696,19 @@ describe("useRenameCanvasTab", () => {
     const handle = newSession();
     mocks.handle.current = handle;
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const beginRenameMutationSpy = vi.spyOn(
-      handle.store.getState(),
-      "beginRenameMutation",
-    );
+    // A typed pass-through capture rather than reading
+    // `spy.mock.results[0].value`, which the lint config flags as an unsafe
+    // `any` read: the hook does not expose its request id, and the stamp is
+    // what the tombstone assertion below needs.
+    const stampedRequestIds: Array<string | null> = [];
+    const realBeginRenameMutation = handle.store.getState().beginRenameMutation;
+    const beginRenameMutationSpy = vi
+      .spyOn(handle.store.getState(), "beginRenameMutation")
+      .mockImplementation((nodeId, nextTitle) => {
+        const stamped = realBeginRenameMutation(nodeId, nextTitle);
+        stampedRequestIds.push(stamped);
+        return stamped;
+      });
     const renameArtifactInTabSpy = vi.spyOn(
       useEpicCanvasStore.getState(),
       "renameArtifactInTab",
@@ -711,8 +720,8 @@ describe("useRenameCanvasTab", () => {
     act(() => {
       result.current(artifactTile(id), "B");
     });
-    const requestId = beginRenameMutationSpy.mock.results[0]?.value;
-    if (requestId === undefined || requestId === null) {
+    const requestId = stampedRequestIds[0] ?? null;
+    if (requestId === null) {
       throw new Error("expected a request id");
     }
 
