@@ -1871,7 +1871,9 @@ describe("what a span charges the byte budget", () => {
 
     expect(seeded.hydratedBytes).toBeGreaterThan(budget);
 
-    const evicted = evictTranscriptWindowToBudget(seeded, budget, null);
+    // Nothing visible and nothing required, so the only thing standing between
+    // this span and eviction is whether the budget can see what it holds.
+    const evicted = evictTranscriptWindowToBudget(seeded, budget, null, []);
 
     expect(evicted.spans).toHaveLength(0);
   });
