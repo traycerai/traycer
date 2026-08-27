@@ -633,6 +633,10 @@ describe("accumulated-change chunks", () => {
         state.accumulatedFileChangeCount -
           state.accumulatedFileChangeSummaries.length,
       ).toBe(3);
+      // Dropping alone would strand the panel: the host streams these chunks
+      // only while rebuilding an index, so nothing on the ordinary path sends
+      // them again. The resnapshot is the restart.
+      expect(harness.resnapshotCount()).toBe(1);
     } finally {
       harness.handle.dispose();
     }

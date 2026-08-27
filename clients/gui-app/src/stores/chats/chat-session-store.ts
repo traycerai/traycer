@@ -2278,6 +2278,29 @@ export function createChatSessionStoreWithNotificationDependencies(
     let resnapshotRequestedForEpoch: number | null = null;
 
     /** Ask for whatever the window says is missing, if anything. */
+    /**
+     * Ask the host to start the accumulated-summary stream over.
+     *
+     * A `resnapshot`, because there is no narrower request: the summaries are
+     * emitted while the host rebuilds a subscriber's index, and a resnapshot
+     * is what puts it back into that state (it clears the host's per-subscriber
+     * record of which set this client holds, so the reconcile actually
+     * re-streams instead of short-circuiting on an identity match).
+     *
+     * Deduped on the same `resnapshotRequestedForEpoch` latch the invalidated
+     * index uses, and deliberately the SAME latch rather than a second one:
+     * one resnapshot repairs both, so two independent latches would send two
+     * for a frame that stales both at once.
+     */
+    const requestSummaryRestream = (): void => {
+      const client = streamClient;
+      if (client === null) return;
+      const epoch = get().transcriptWindow.epoch;
+      if (resnapshotRequestedForEpoch === epoch) return;
+      resnapshotRequestedForEpoch = epoch;
+      client.requestResnapshot();
+    };
+
     const requestPlannedHydration = (): void => {
       const client = streamClient;
       if (client === null) return;
@@ -2855,12 +2878,17 @@ export function createChatSessionStoreWithNotificationDependencies(
           // entry from here on sits at an index below the one the host gave
           // it, and the panel's rows are then attributed to the wrong files.
           //
-          // Dropped rather than seated at the wrong offset. The list stays
-          // short, `undeliveredChangeCount` stays positive, and the panel
-          // reports the shortfall it already knows how to report - including
-          // holding "Review all" back, since a bundle built from a
-          // misattributed prefix is worse than one that is unavailable.
-          if (frame.chunk.fromIndex > assembled.length) return {};
+          // Dropped rather than seated at the wrong offset - but dropping
+          // alone is not a recovery. The host streams these chunks only while
+          // REBUILDING a subscriber's index, so nothing on the ordinary path
+          // will send them again: the panel would stay permanently short, with
+          // "Review all" held back, for the rest of the connection. A
+          // resnapshot is what restarts the stream, and it is the same
+          // recovery a void index uses.
+          if (frame.chunk.fromIndex > assembled.length) {
+            requestSummaryRestream();
+            return {};
+          }
           const summaries = [
             ...assembled.slice(0, frame.chunk.fromIndex),
             ...frame.chunk.summaries,

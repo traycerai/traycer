@@ -218,7 +218,15 @@ export function ChatAccumulatedChangesPanel(
                   gate={gate}
                   pending={restore.restoreActionPending}
                   clickHandlers={
-                    opener === null ? null : opener.cumulative(change.filePath)
+                    // `hasContents: false` (a `diffSource: "none"` summary) is
+                    // a row with no before/after to show at all: the fetch
+                    // list excludes it by construction and the windowed
+                    // inline-change array is empty, so an advertised click
+                    // opens a tile that can only say source-unavailable.
+                    // Rendered as the plain row the contract describes.
+                    opener === null || !change.hasContents
+                      ? null
+                      : opener.cumulative(change.filePath)
                   }
                   onUndo={() =>
                     // A per-row Undo targets this exact path, so artifacts are
