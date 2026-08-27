@@ -17,6 +17,7 @@ import {
   openTileInBackgroundTab,
   openTileInPane,
   promotePreview,
+  restorePreview,
   renameArtifact,
   resizeSplit,
   setActivePane,
@@ -280,6 +281,29 @@ describe("openTile (preview open)", () => {
     const paneId = rootPane(a).id;
     const promoted = promotePreview(a, paneId);
     expect(rootPane(promoted).previewTabId).toBeNull();
+  });
+
+  it("restorePreview puts back a promotion a cancelled drag should undo", () => {
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const previewTabId = rootPane(a).previewTabId;
+    expect(previewTabId).not.toBeNull();
+    const promoted = promotePreview(a, paneId);
+    expect(rootPane(promoted).previewTabId).toBeNull();
+    const restored = restorePreview(promoted, paneId, previewTabId ?? "");
+    expect(rootPane(restored).previewTabId).toBe(previewTabId);
+    expectCanvasInvariants(restored);
+  });
+
+  it("restorePreview refuses to resurrect a preview for a departed tab", () => {
+    // A cancel must not conjure a preview slot pointing at a tile that is no
+    // longer in the pane - that would be a residual of its own.
+    const a = openPreview(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(a).id;
+    const promoted = promotePreview(a, paneId);
+    const restored = restorePreview(promoted, paneId, "not-in-this-pane");
+    expect(rootPane(restored).previewTabId).toBeNull();
+    expect(restored).toBe(promoted);
   });
 });
 

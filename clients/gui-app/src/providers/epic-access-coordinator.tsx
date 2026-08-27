@@ -6,6 +6,10 @@ import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-qu
 import { epicAccessToast } from "@/lib/toast/channels";
 import { subscribeDeletedEpicNotifications } from "@/lib/epics/deleted-epic-events";
 import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
+import {
+  CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
+  wasEpicCreatedRecentlyThisSession,
+} from "@/lib/epics/session-created-epics";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
@@ -68,6 +72,27 @@ export function EpicAccessCoordinator() {
     const registry = getOpenEpicRegistry();
     const perHandleUnsub = new Map<string, () => void>();
     const handled = new Set<string>();
+    // Set by the effect's cleanup. `evaluate` defers its verdict to a
+    // microtask, so a signal that lands just before unmount can fire that
+    // microtask AFTER teardown - where acting would navigate/mutate stores
+    // from a dead coordinator, or park a grace timer in a map teardown has
+    // already swept. The replacement coordinator instance re-walks every open
+    // session on mount (`reconcile` + its dead-at-subscribe catch), so a
+    // bailed verdict is re-derived, never lost.
+    let disposed = false;
+    // Attempts already spent (and the pending timer, if any) of the
+    // created-this-session `unavailable` grace. Attempts are deliberately
+    // never reset on recovery: the budget exists to absorb ONE create's
+    // replication lag, and a session that later turns `unavailable` again
+    // with the budget spent gets the ordinary eject.
+    const createGraceAttempts = new Map<string, number>();
+    const createGraceTimers = new Map<string, number>();
+    const clearCreateGraceTimer = (epicId: string): void => {
+      const timer = createGraceTimers.get(epicId);
+      if (timer === undefined) return;
+      window.clearTimeout(timer);
+      createGraceTimers.delete(epicId);
+    };
     // Last resident-set signature reconcile acted on, so the per-keystroke
     // eligibility emits the registry fires (which don't change membership)
     // short-circuit instead of re-walking every open session.
@@ -178,18 +203,83 @@ export function EpicAccessCoordinator() {
       // the canvas store and disposes the session, which must not run
       // re-entrantly inside the emit that triggered it.
       queueMicrotask(() => {
+        if (disposed) return;
         // Re-derive at fire time: the tab may have been closed by the user, the
         // session released, or a TRANSIENT `unavailable` error cleared on a
         // successful reconnect between scheduling and now. Acting on the stale
         // captured reason would force-close a tab that recovered (or toast for
         // one already gone). Drop the latch so a fresh signal re-evaluates.
         const current = registry.peek(epicId);
+        const currentState = current === null ? null : current.store.getState();
         const reason =
-          current === null ? null : deadEpicReason(current.store.getState());
+          currentState === null ? null : deadEpicReason(currentState);
         const stillOpen = collectOpenEpicIds().includes(epicId);
         if (reason === null || !stillOpen) {
           handled.delete(epicId);
           return;
+        }
+        // Create-race grace: an `unavailable` (cloud NOT_FOUND) on an epic
+        // this renderer created SECONDS AGO is far more likely the create
+        // host's background cloud connect still in flight than a real
+        // delete, so spend the bounded retry schedule re-subscribing before
+        // believing it. The latch is dropped so the retry's own failure (a
+        // fresh `snapshotFetchError`) re-enters this evaluation and takes
+        // the next slot; past the last slot, the eject below runs as usual.
+        //
+        // Scoped to the race window, not the session: `requestFreshSnapshot`
+        // is DESTRUCTIVE (it clears the unsynced queue and replaces the
+        // replica), and an epic created hours ago has had every chance to
+        // accumulate work a transient NOT_FOUND must not silently erase.
+        // `holdsUnsyncedWork` is the second half of that guarantee - inside
+        // the window there is nothing to lose yet, and if there somehow is,
+        // the ordinary announced close runs instead of a silent discard.
+        if (
+          reason.kind === "unavailable" &&
+          wasEpicCreatedRecentlyThisSession(epicId) &&
+          !holdsUnsyncedWork(currentState)
+        ) {
+          // A pending retry owns this epic's verdict until it fires; a signal
+          // landing meanwhile must neither double-schedule nor fall through
+          // to the eject below.
+          if (createGraceTimers.has(epicId)) {
+            handled.delete(epicId);
+            return;
+          }
+          const attempts = createGraceAttempts.get(epicId) ?? 0;
+          if (attempts < CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS.length) {
+            const delay = CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS[attempts];
+            createGraceAttempts.set(epicId, attempts + 1);
+            handled.delete(epicId);
+            const timer = window.setTimeout(() => {
+              createGraceTimers.delete(epicId);
+              const live = registry.peek(epicId);
+              if (live === null) return;
+              // Re-derive at fire time, exactly like the eject path above: a
+              // session that recovered (or died for a DIFFERENT, first-hand
+              // reason) must not be torn down and re-dialed by a stale grace.
+              const liveState = live.store.getState();
+              const liveReason = deadEpicReason(liveState);
+              if (liveReason === null || liveReason.kind !== "unavailable") {
+                return;
+              }
+              // Re-check the destructive precondition too: local work can
+              // appear during the delay (an offline edit, a dirty artifact
+              // room), and `requestFreshSnapshot` would discard it with no
+              // trace. Hand the verdict back to the announced close instead -
+              // what this epic would have got without the grace.
+              if (holdsUnsyncedWork(liveState)) {
+                if (!collectOpenEpicIds().includes(epicId)) return;
+                // Re-arm the latch the grace dropped, so `runClose` stays
+                // once-per-epic against the emits its own teardown fires.
+                handled.add(epicId);
+                runClose(epicId, liveReason);
+                return;
+              }
+              live.requestFreshSnapshot();
+            }, delay);
+            createGraceTimers.set(epicId, timer);
+            return;
+          }
         }
         runClose(epicId, reason);
       });
@@ -234,6 +324,11 @@ export function EpicAccessCoordinator() {
         perHandleUnsub.delete(epicId);
         // Allow a reopened (e.g. re-granted) epic to be evaluated afresh.
         handled.delete(epicId);
+        // A departed tab's pending grace retry must not re-dial a session the
+        // user already left; the spent-attempts record goes with it so a
+        // reopen starts the schedule over.
+        clearCreateGraceTimer(epicId);
+        createGraceAttempts.delete(epicId);
       }
     };
 
@@ -258,11 +353,16 @@ export function EpicAccessCoordinator() {
       });
 
     return () => {
+      disposed = true;
       unsubscribeRegistry();
       unsubscribeCanvas();
       unsubscribeDeletedEpicNotifications();
       for (const unsubscribe of perHandleUnsub.values()) unsubscribe();
       perHandleUnsub.clear();
+      for (const timer of createGraceTimers.values()) {
+        window.clearTimeout(timer);
+      }
+      createGraceTimers.clear();
     };
   }, [navigate, queryClient]);
 
@@ -294,6 +394,18 @@ function deadEpicReason(state: OpenEpicState): DeadEpicReason | null {
     return { kind: "unavailable" };
   }
   return null;
+}
+
+/**
+ * Whether the replica holds local work that has not reached the host -
+ * offline-buffered ops (`unsyncedQueueSize`) or an un-flushed dirty signal
+ * over the root doc or any artifact room (`isDirty`). Both are exactly what
+ * `requestFreshSnapshot` throws away, so the create-race grace refuses to run
+ * while either is set. `null` (no live handle) holds nothing by definition.
+ */
+function holdsUnsyncedWork(state: OpenEpicState | null): boolean {
+  if (state === null) return false;
+  return state.isDirty || state.unsyncedQueueSize > 0;
 }
 
 /**

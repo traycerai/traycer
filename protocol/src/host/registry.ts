@@ -354,6 +354,7 @@ import {
   epicGrantAccessV10,
   epicChatBackupStatusV10,
   epicChatReplicaReadV10,
+  epicFetchArtifactAttachmentV10,
   epicListChatRecordsV10,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsUpgradeV10ToV20,
@@ -406,10 +407,15 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV20,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
-import { epicListTuiAgentsV10 } from "@traycer/protocol/host/epic/tui-agent-records";
+import {
+  epicListTuiAgentsUpgradeV10ToV11,
+  epicListTuiAgentsV10,
+  epicListTuiAgentsV11,
+} from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   workspaceBrowseFoldersV10,
   workspaceBrowseFoldersV11,
@@ -6471,6 +6477,24 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // Artifact attachment bytes still live in the root-doc attachment map, but
+  // @2 does not replicate that map to clients. This optional read keeps the
+  // artifact/epic authorization subject on the request; a hash alone is never
+  // a capability. Older hosts continue serving attachments through their @1
+  // root-doc replicas, so absence degrades cleanly to that existing path.
+  "epic.fetchArtifactAttachment": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicFetchArtifactAttachmentV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   // The per-chat run-settings tuple the record row above summarises down to a
   // harness id. Optional and host-LOCAL for the same reason as the list - it
   // answers out of this host's own chat store, the only place the tuple lives
@@ -6513,11 +6537,44 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // surface of its own. Never on the unary released floor.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicListTuiAgentsV11,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV10ToV11,
+          // 1.1 grows BOTH halves, and only the request half needs anything
+          // from this table.
+          //
+          // REQUEST: `hasDocReplica` is required at 1.1, and the upgrade path
+          // fills it for a 1.0 caller. That fill is load-bearing rather than
+          // cosmetic - it is what decides whether the caller is served the
+          // doc-resident rows at all - and it is safe because the dispatcher
+          // validates params against the NEGOTIATED contract and hands the
+          // resolver the upgraded value, so a 1.0 peer can neither send the
+          // field nor be read as having sent one. Same shape as
+          // `epic.subscribe@1.3`'s `seedOffer`.
+          //
+          // RESPONSE: NO `responseGrowthProjectionGated`, and the reason is
+          // worth stating because the instinct to add it is strong: 1.1 does
+          // return MORE ROWS than 1.0 (the doc-resident remainder).
+          //
+          // But that annotation is not about rows. It covers response VALUE
+          // growth an older peer's schema would actively REFUSE - a new enum
+          // member, a new union arm. `docResident` is a plain added object
+          // key, which zod strips unconditionally, so 1.0 is safe with no
+          // gate to declare. Row COUNT is not something the validator can see
+          // at all; the resolver's request-driven gate is the entire
+          // mechanism, and it needs no registry annotation.
+          //
+          // Declaring it anyway is not inert: `assertSchemaCompatibility`
+          // rejects an annotation it cannot justify, and it runs at MODULE
+          // IMPORT, so the registry throws for every consumer - the app, not
+          // just a test. `bun run compile` passes clean through that, because
+          // it is a runtime assertion over registry values, not a type.
         },
       },
       downgradePathsFromLatest: {},
@@ -8333,6 +8390,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         3: {
           contract: epicSubscribeV13,
+        },
+      },
+    },
+    // @2 replaces the root Y.Doc and eager room fan-out with a typed metadata
+    // plane plus explicit per-artifact body attaches. @1 remains installed for
+    // released peers; the multi-major handshake selects the shared line before
+    // a resolver is constructed.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSubscribeV20,
         },
       },
     },

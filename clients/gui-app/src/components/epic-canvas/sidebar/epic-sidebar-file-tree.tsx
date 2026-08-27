@@ -29,7 +29,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type MouseEvent,
   type RefObject,
 } from "react";
@@ -41,7 +40,6 @@ import type {
   FileTreeItemHandle,
   GitStatusEntry,
 } from "@pierre/trees";
-import { Search } from "lucide-react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import type {
   WorkspaceListFileTreeResponse,
@@ -62,11 +60,7 @@ import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tr
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
@@ -639,12 +633,9 @@ function FileTreeBodyForResolvedHost(
       handlersRef.current.onSelect(selectedPath);
     },
   });
-  const handleSearchQueryChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      setSearchQuery(event.target.value);
-    },
-    [],
-  );
+  const handleSearchQueryChange = useCallback((next: string) => {
+    setSearchQuery(next);
+  }, []);
 
   // Runs BEFORE the path reset below, deliberately. Clearing the tree
   // adapter's filter restores the expansion it captured when the filter was
@@ -779,29 +770,35 @@ function FileTreeBodyForResolvedHost(
       {/* The sidebar's 28px filter row is below the touch target every other
           phone control meets, and this one is a text field the user has to hit
           precisely rather than a control with room for invisible hit-slop. */}
-      <InputGroup
-        className={cn("mb-1.5 shrink-0", isMobileViewport ? "h-11" : "h-7")}
-      >
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
+      <div className="mb-1.5 shrink-0">
+        <PanelSearchField
           value={searchQuery}
-          onChange={handleSearchQueryChange}
+          onValueChange={handleSearchQueryChange}
+          onClear={clearSearchQuery}
+          onClose={null}
+          onKeyDown={null}
+          ref={null}
+          combobox={null}
           placeholder="Filter files by name…"
-          aria-label="Filter files by name"
-          className="text-ui-sm"
+          label="Filter files by name"
+          clearLabel="Clear file filter"
+          closeLabel=""
+          testIdPrefix="epic-file-tree-filter"
+          className="h-7"
         />
-      </InputGroup>
+      </div>
       {/* `data-vaul-no-drag`: inside the mobile switcher sheet this tree is a
-          vaul drawer descendant, and vaul decides scroll-vs-dismiss by climbing
-          `parentElement` from the touch target looking for a scroller. Pierre's
-          scroller lives in a SHADOW ROOT, and a touch inside one retargets to
-          the host - so that climb sees no scrollable element and claims the
-          gesture as a drawer drag, leaving the tree unscrollable. The attribute
-          states the fact vaul cannot observe: this subtree scrolls itself.
-          Inert on desktop, which mounts no drawer. */}
+          vaul drawer descendant, and vaul's `shouldDrag` walks up from the
+          touch target looking for a scroller. Pierre's scroller lives in a
+          SHADOW ROOT and a touch inside one retargets to the host, so that walk
+          sees nothing scrollable and would claim a downward swipe as a drawer
+          dismiss. The attribute states what vaul cannot observe: this subtree
+          owns its own scrolling.
+
+          It governs the DISMISS path only. An upward finger returns earlier via
+          `isDraggingInDirection` and never reaches the walk - and this marker is
+          NOT what makes the tree scroll on touch, which remains an open defect
+          tracked separately. Inert on desktop, which mounts no drawer. */}
       <div
         {...bridge.wrapperProps}
         data-vaul-no-drag=""

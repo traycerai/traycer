@@ -26,10 +26,10 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host1",
 }));
 
-// `PrRow` pulls in the per-Epic Y.doc-backed owner-label chain
-// (`useChatById` / `useEpicTerminalAgent`, which need a live
-// `OpenEpicStoreHandle`) that has nothing to do with the panel wiring under
-// test here. Stub it to a minimal clickable row that still exercises the
+// `PrRow` pulls in the per-Epic owner-label chain (`useChatById` /
+// `useEpicTerminalAgent`, which resolve titles off `OpenEpicState.chats` and so
+// need a live `OpenEpicStoreHandle`) that has nothing to do with the panel
+// wiring under test here. Stub it to a minimal clickable row that still exercises the
 // REAL row-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS
 // transport as the only faked external boundary plus this one unrelated
 // presentational seam. Linked (nested submodule) rows render as their own
