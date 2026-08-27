@@ -714,7 +714,6 @@ import {
   providersListResponseSchemaV50,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
-  providersListResponseSchemaV71,
   isProfileEnabled,
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
@@ -731,7 +730,7 @@ import {
   downgradeProviderCliStateListToV40,
   downgradeProviderCliStateListToV50,
   downgradeProviderCliStateListToV60,
-  downgradeProviderCliStateListToV71,
+  downgradeProviderCliStateListToV70,
   providersInstallPackVersionRequestSchema,
   providersInstallPackVersionResponseSchema,
   providersRemovePackVersionRequestSchema,
@@ -756,7 +755,6 @@ import {
   providersSetEnabledRequestSchemaV10,
   providersSetEnabledRequestSchemaV20,
   providersSetEnabledRequestSchemaV21,
-  providersSetEnabledRequestSchemaV22,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV10,
   providersSetEnabledResponseSchemaV20,
@@ -1783,11 +1781,16 @@ export const providersListV60 = defineRpcContract({
 // THE FREEZE DESCRIBED ABOVE HAS NOW BEEN TAKEN, one line earlier than that
 // text anticipates and for a reason it explicitly discounts. Read both.
 //
-// v7.1 opened for the auth-aware enablement fields (`enablementMode`,
+// A v7.1 opened for the auth-aware enablement fields (`enablementMode`,
 // `enablementSource` on `providerCliStateBaseShape`), so v7.0 stopped being the
 // head and is pinned to `providersListResponseSchemaV70` - the real v7.0
 // freeze, taken under the `V70` names reserved for it above, sitting beside the
-// untouched `*V70Preimage` shapes exactly as instructed.
+// untouched `*V70Preimage` shapes exactly as instructed. THE FREEZE STANDS; the
+// 7.1 line above it does not. Those two fields were that minor's entire delta,
+// and they were removed with the tri-state enablement model before any tag
+// shipped them, which left an empty minor - so v8.0 upgrades straight from
+// v7.0. The v7.0 pin is unaffected: it is what the rc peers negotiate, whatever
+// sits above it.
 //
 // The head-line note above says an UNRELEASED line widens in place, and by
 // `scripts/compat/support-floor.json` (`includeReleaseCandidates: false`) v7.0
@@ -1801,14 +1804,9 @@ export const providersListV60 = defineRpcContract({
 // regenerate to green" exists to stop, so the fixture was NOT regenerated over
 // this line - v7.0's row now names the frozen schema and dumps identically.
 //
-// Note the enablement line is a MINOR. The text above says "open v8.0", which is right
-// for the growth it had in mind (ids/enums, breaking host->client) and wrong
-// here: `versioned-rpc.ts`'s cross-major check REJECTS a major bump that is not
-// a breaking change, and two optional fields are not one. Additive growth on a
-// frozen head takes the next minor; the six v7 -> older downgrades then have to
-// start at 7.1, which the registry validator enforces. Profile eligibility
-// subsequently opened v8.0: v7.1 is frozen without per-profile eligibility,
-// and v8.0 is now the sole live response line.
+// Profile eligibility then opened v8.0, which is a real major (the response
+// grows a per-profile `enabled` a v7 peer must not silently ignore) and is now
+// the sole live response line. v7.0 is the last frozen line under it.
 export const providersListV70 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 7, minor: 0 } as const,
@@ -1821,18 +1819,6 @@ export const providersListV70 = defineRpcContract({
   responseSchema: providersListResponseSchemaV70,
 });
 
-export const providersListV71 = defineRpcContract({
-  method: "providers.list",
-  schemaVersion: { major: 7, minor: 1 } as const,
-  requestSchema: providersListRequestSchema,
-  // Frozen at the v7.0 PROVIDER ID SET, not the live one - see
-  // `providersListResponseSchemaV71`'s comment. v7.0 is released, and a minor
-  // may not grow a response enum over its predecessor, so no minor of major 7
-  // can carry a provider id v7.0 lacks. The REQUEST stays live for the reason
-  // v7.0's does.
-  responseSchema: providersListResponseSchemaV71,
-});
-
 export const providersListV80 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 8, minor: 0 } as const,
@@ -1840,11 +1826,11 @@ export const providersListV80 = defineRpcContract({
   responseSchema: providersListResponseSchema,
 });
 
-export const providersListUpgradeV71ToV80 = defineUpgradePath<
-  typeof providersListV71,
+export const providersListUpgradeV70ToV80 = defineUpgradePath<
+  typeof providersListV70,
   typeof providersListV80
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 8, minor: 0 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
@@ -1970,23 +1956,6 @@ export const providersListUpgradeV6ToV7 = defineUpgradePath<
   }),
 });
 
-export const providersListUpgradeV70ToV71 = defineUpgradePath<
-  typeof providersListV70,
-  typeof providersListV71
->({
-  from: { major: 7, minor: 0 },
-  to: { major: 7, minor: 1 },
-  // Request shape is identical. On the response, 7.1 adds `enablementMode` /
-  // `enablementSource`, and NOTHING is filled: both are `.optional()` so that
-  // "this host predates auto enablement" stays distinguishable from every
-  // concrete value, and a v7.0 host is exactly such a host. Its `enabled` is
-  // already the boolean the client renders, so a fill would only invent an
-  // intent (and a derivation reason) the host never had - the client falls
-  // back to its binary switch on absence instead.
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
-});
-
 export const providersListDowngradeV6ToV5 = defineDowngradePath<
   typeof providersListV60,
   typeof providersListV50
@@ -2064,10 +2033,10 @@ export const providersListDowngradeV6ToV1 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV6 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV60
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 6, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2094,10 +2063,10 @@ export const providersListDowngradeV7ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV5 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV50
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 5, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2118,10 +2087,10 @@ export const providersListDowngradeV7ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV4 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV40
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 4, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2142,10 +2111,10 @@ export const providersListDowngradeV7ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV3 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV30
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 3, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2166,10 +2135,10 @@ export const providersListDowngradeV7ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV2 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV20
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 2, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2190,10 +2159,10 @@ export const providersListDowngradeV7ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV7ToV1 = defineDowngradePath<
-  typeof providersListV71,
+  typeof providersListV70,
   typeof providersListV10
 >({
-  from: { major: 7, minor: 1 },
+  from: { major: 7, minor: 0 },
   to: { major: 1, minor: 0 },
   // v7.x is the only line whose request models `native`; every target below
   // it is pinned to `providersListRequestSchemaBeforeV70`. Re-parsed field by
@@ -2224,19 +2193,19 @@ function enabledProviderProfilesOnly(
 
 export const providersListDowngradeV8ToV7 = defineDowngradePath<
   typeof providersListV80,
-  typeof providersListV71
+  typeof providersListV70
 >({
   from: { major: 8, minor: 0 },
-  to: { major: 7, minor: 1 },
+  to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
     value: providersListRequestSchema.parse(request),
   }),
   downgradeResponse: (response) => ({
     ok: true,
-    value: providersListResponseSchemaV71.parse({
+    value: providersListResponseSchemaV70.parse({
       ...response,
-      providers: downgradeProviderCliStateListToV71(response.providers),
+      providers: downgradeProviderCliStateListToV70(response.providers),
     }),
   }),
 });
@@ -3317,75 +3286,11 @@ export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
   },
 });
 
-// `providers.setEnabled@2.2` - the optional tri-state `mode` the three-way
-// Auto/On/Off settings control sends. `enabled` stays required, so a 2.1
-// caller's wire is untouched and the 2.1 -> 2.2 upgrade is identity.
-//
-// This is the method's own enablement semantic, so it rides a minor here
-// rather than `providers.nativeMutate` - the doctrine that froze 2.1 and
-// routes additions to that method is about provider-NATIVE config
-// pass-through. See `providersSetEnabledRequestSchemaV22` for the full
-// reasoning; it is stated there so it sits beside the schema a reviewer reads
-// first.
-//
-// The RESPONSE stays `providersSetEnabledResponseSchema`, i.e. the state echo
-// pinned to `providerCliStateBaseShapeV40` - it does NOT carry
-// `enablementMode`/`enablementSource`. That is deliberate and matches the echo
-// doctrine in `provider-schemas.ts` ("add them to the live
-// `providerCliStateBaseShape` and let `providers.list` publish them"): the
-// client's invalidation refetches `providers.list@7.1` and
-// `agent.gui.listHarnesses@7.1`, which are the carriers.
-export const providersSetEnabledV22 = defineRpcContract({
-  method: "providers.setEnabled",
-  schemaVersion: { major: 2, minor: 2 } as const,
-  requestSchema: providersSetEnabledRequestSchemaV22,
-  responseSchema: providersSetEnabledResponseSchema,
-});
-
-export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
-  typeof providersSetEnabledV21,
-  typeof providersSetEnabledV22
->({
-  from: { major: 2, minor: 1 },
-  to: { major: 2, minor: 2 },
-  // Nothing to fill in either direction. `mode` is absent for a 2.1 caller,
-  // and absence is exactly what the host reads as "legacy binary caller" -
-  // it maps `enabled` to sticky on/off, which is the semantic 2.1 always had.
-  // Filling `mode` here would turn every legacy toggle into an explicit
-  // tri-state choice the caller never made.
-  upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
-});
-
-// Registered bridge from major 2's latest minor (now 2.2) down to the frozen
-// v1.0; `providersSetEnabledDowngradeV21ToV10` below is its 2.1-era
-// predecessor, kept for the compat suites that assert the 2.1 wire.
-export const providersSetEnabledDowngradeV22ToV10 = defineDowngradePath<
-  typeof providersSetEnabledV22,
-  typeof providersSetEnabledV10
->({
-  from: { major: 2, minor: 2 },
-  to: { major: 1, minor: 0 },
-  // Project field by field rather than passing through: v1.0's request is a
-  // STRICT object that knows neither `profileAction` nor `mode`, so anything
-  // extra fails its parse and drops the whole downgrade. A v1.0 peer only ever
-  // had the binary flag, and `enabled` already carries the effective value.
-  downgradeRequest: (request) =>
-    downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, {
-      providerId: request.providerId,
-      enabled: request.enabled,
-    }),
-  downgradeResponse: (response) => {
-    const state = downgradeProviderStateForV10(response.state);
-    if (!state.ok) return state;
-    return {
-      ok: true,
-      value: providersSetEnabledResponseSchemaV10.parse({
-        state: state.value,
-      }),
-    };
-  },
-});
+// THERE IS NO `providers.setEnabled@2.2`. It was opened to carry an optional
+// tri-state `mode` for a three-way Auto/On/Off settings control; `mode` was
+// its entire delta over 2.1, and both went away with that control. 2.1 is the
+// head minor again, and `providersSetEnabledDowngradeV21ToV10` above is once
+// more the registered bridge down to the frozen v1.0.
 
 export const providersSetApiKeyV10 = defineRpcContract({
   method: "providers.setApiKey",
@@ -7715,15 +7620,11 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
     },
     7: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: providersListV70,
           upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
-        },
-        1: {
-          contract: providersListV71,
-          upgradeFromPreviousVersion: providersListUpgradeV70ToV71,
         },
       },
       // Every older major needs its own entry: `downgradePathsFromLatest` is
@@ -7744,7 +7645,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersListV80,
-          upgradeFromPreviousVersion: providersListUpgradeV71ToV80,
+          upgradeFromPreviousVersion: providersListUpgradeV70ToV80,
         },
       },
       downgradePathsFromLatest: {
@@ -8294,7 +8195,7 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 2,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersSetEnabledV20,
@@ -8304,13 +8205,9 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
           contract: providersSetEnabledV21,
           upgradeFromPreviousVersion: providersSetEnabledUpgradeV20ToV21,
         },
-        2: {
-          contract: providersSetEnabledV22,
-          upgradeFromPreviousVersion: providersSetEnabledUpgradeV21ToV22,
-        },
       },
       downgradePathsFromLatest: {
-        1: providersSetEnabledDowngradeV22ToV10,
+        1: providersSetEnabledDowngradeV21ToV10,
       },
     },
   },
