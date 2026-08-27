@@ -97,6 +97,60 @@ describe("root maintenance executor completion is a box, not a value sentinel", 
     expect(guardIdx).toBeGreaterThan(recordIdx);
     expect(guardIdx).toBeLessThan(nextEventSubscriptionIdx);
   });
+
+  it("captures stdout chunks at spawn — before the liveness rebind, not after", () => {
+    // The stdout `data` subscription is attached in the same unbroken
+    // subscription block as `error`/`close`, before the rebind await below
+    // it. A `data` handler attached only after that filesystem round trip
+    // would miss whatever the executor wrote while it was in flight.
+    const dataIdx = supervisor.indexOf('child.stdout.on("data"');
+    const firstAwaitIdx = supervisor.indexOf(
+      "await rebindUpdateMutationCapabilityLiveness",
+    );
+    expect(dataIdx).toBeGreaterThan(-1);
+    expect(firstAwaitIdx).toBeGreaterThan(-1);
+    expect(dataIdx).toBeLessThan(firstAwaitIdx);
+  });
+
+  it("subscribes to close/error before every throwing guard, not only before the rebind await", () => {
+    // The pid guard is not the only throw in this function: the pipe guard
+    // above it throws synchronously too, for a spawn that can still emit
+    // `error` asynchronously. Listeners must precede it as well.
+    const errorIdx = supervisor.indexOf('child.once("error"');
+    const closeIdx = supervisor.indexOf('child.once("close"');
+    const pipeGuardIdx = supervisor.indexOf(
+      'throw new Error("maintenance executor could not establish protocol pipes")',
+    );
+    expect(errorIdx).toBeGreaterThan(-1);
+    expect(closeIdx).toBeGreaterThan(-1);
+    expect(pipeGuardIdx).toBeGreaterThan(-1);
+    expect(errorIdx).toBeLessThan(pipeGuardIdx);
+    expect(closeIdx).toBeLessThan(pipeGuardIdx);
+  });
+
+  it("the stdout data handler defers dispatch until dispatch is armed", () => {
+    // Chunks are captured unconditionally into `buffer`; frames are only
+    // drained once `frameDispatchArmed` is set. Pinning the literal guards
+    // against a rewrite that drains eagerly on every chunk again.
+    expect(supervisor).toContain("if (frameDispatchArmed) drainFrames();");
+  });
+
+  it("arms dispatch, drains, and only then reconciles the recorded termination — in that order", () => {
+    // A completed executor that died mid-rebind has its `complete` frame
+    // sitting in the buffer and its `close` already recorded in
+    // `termination`. Draining before reconciling is what lets the
+    // classification see the completion it earned; reordering either step
+    // resurrects the "confident failure over finished root work" defect.
+    const armIdx = supervisor.indexOf("frameDispatchArmed = true;");
+    const drainIdx = supervisor.indexOf("drainFrames();", armIdx);
+    const reconcileIdx = supervisor.indexOf(
+      "if (termination !== null) onTermination();",
+      drainIdx,
+    );
+    expect(armIdx).toBeGreaterThan(-1);
+    expect(drainIdx).toBeGreaterThan(armIdx);
+    expect(reconcileIdx).toBeGreaterThan(drainIdx);
+  });
 });
 
 describe("assertPathHelpersBoundToTarget", () => {

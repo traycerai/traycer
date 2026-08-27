@@ -1845,6 +1845,92 @@ describe("runHostStart - attempt admission on every relaunch", () => {
   });
 });
 
+describe("runHostStart - a child ending during admission's own post-spawn await", () => {
+  // `admitHostStartSpawn` owns real awaits AFTER `run()` returns the spawned
+  // child - an adoption grant's `acknowledgeSpawn()`, or
+  // `withUpdateContender`'s post-callback capability verification. The
+  // child's terminal-evidence listeners are attached synchronously inside
+  // `run()`, at the spawn site itself, precisely so an ending emitted in
+  // that window is not lost: an `error` used to be an uncaught event that
+  // crashed the supervisor, and an `exit` here left `await childEnding`
+  // pending forever with the attempt lock held.
+  const exec = "/opt/traycer/host/install/traycer-host";
+
+  it("settles a spawn-error emitted during admission's post-spawn await as a normal spawn failure", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const admitWithPostSpawnGap: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async (_environment, run) => {
+        const spawned = await run();
+        // The simulated round trip: the child is already spawned and
+        // listened to, but admission has not returned yet.
+        await new Promise<void>((resolve) => {
+          setImmediate(() => {
+            child.emit("error", new Error("ENOENT: spawn traycer-host"));
+            resolve();
+          });
+        });
+        return { kind: "ran", result: spawned };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          admitWithPostSpawnGap,
+        ),
+      recorded,
+    );
+
+    // Reaches the normal async-spawn-failure path - a marker and a stable
+    // exit code - instead of hanging or taking the test process down with
+    // an uncaught exception.
+    expect(recorded.exited).toBe(66);
+    expect(
+      recorded.markers.some(
+        (marker) =>
+          marker.phase === "failed-to-spawn" &&
+          String(marker.fields.error).includes("ENOENT"),
+      ),
+    ).toBe(true);
+  });
+
+  it("settles an exit emitted during admission's post-spawn await instead of hanging forever", async () => {
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const admitWithPostSpawnGap: Partial<RunHostStartDeps> = {
+      ...deps,
+      admitHostStartSpawn: async (_environment, run) => {
+        const spawned = await run();
+        await new Promise<void>((resolve) => {
+          setImmediate(() => {
+            child.emit("exit", 0, null);
+            resolve();
+          });
+        });
+        return { kind: "ran", result: spawned };
+      },
+    };
+
+    await runUntilExit(
+      () =>
+        runHostStart(
+          { environment: "production", cwd: null },
+          admitWithPostSpawnGap,
+        ),
+      recorded,
+    );
+
+    // A clean exit recorded before `childEnding` even had listeners of its
+    // own must still reach the terminal-marker path, not strand the
+    // supervisor waiting on an ending it will never observe again.
+    expect(recorded.exited).toBe(0);
+    expect(recorded.markers.some((marker) => marker.phase === "exited")).toBe(
+      true,
+    );
+  });
+});
+
 describe("runHostStart - crash relaunch loop", () => {
   const exec = "/opt/traycer/host/install/traycer-host";
 

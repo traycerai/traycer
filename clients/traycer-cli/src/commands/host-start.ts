@@ -1307,6 +1307,23 @@ export async function runHostStart(
     const spawnedWhileAdmitting: { child: ChildProcess | null } = {
       child: null,
     };
+    // The child's ending, recorded from the instant of spawn rather than
+    // observed by listeners attached later. Between the `spawn()` inside the
+    // admission callback and the `childEnding` construction below sit real
+    // awaits — the adoption grant's `acknowledgeSpawn()` and
+    // `withUpdateContender`'s post-callback capability verification — and
+    // child events are emitted once, never replayed. An ENOENT `error`
+    // emitted in that window was an uncaught event that took the supervisor
+    // down instead of settling as a spawn failure; an early `exit` was
+    // emitted into no listener, leaving `await childEnding` pending forever.
+    // First evidence wins, mirroring `childFinalized` below.
+    let recordedEnding: ChildEnding | null = null;
+    let onRecordedEnding: (() => void) | null = null;
+    const recordEnding = (value: ChildEnding): void => {
+      if (recordedEnding !== null) return;
+      recordedEnding = value;
+      onRecordedEnding?.();
+    };
     try {
       const admission = await deps.admitHostStartSpawn(opts, async () => {
         // Re-resolve the install record under the outer attempt boundary.
@@ -1342,6 +1359,15 @@ export async function runHostStart(
             ? { windowsVerbatimArguments: true }
             : {}),
         });
+        // Attached SYNCHRONOUSLY, before this callback returns into
+        // admission's remaining awaits — see `recordEnding`'s doc for what an
+        // ending emitted during those awaits used to do.
+        spawnedWhileAdmitting.child.once("error", (cause: Error) =>
+          recordEnding({ kind: "spawn-error", cause }),
+        );
+        spawnedWhileAdmitting.child.once("exit", (code, signal) =>
+          recordEnding({ kind: "exit", code, signal }),
+        );
         return spawnedWhileAdmitting.child;
       });
       if (admission.kind !== "ran") {
@@ -1620,25 +1646,22 @@ export async function runHostStart(
     // about to exit anyway.
     currentChild = child;
     let childFinalized = false;
-    // Constructed SYNCHRONOUSLY, so both listeners are attached before the
-    // intent re-read below can yield. A child that died during that await
-    // would otherwise emit `exit` with nothing listening, and this promise
-    // would never settle.
+    // Constructed SYNCHRONOUSLY, and fed by `recordEnding` — whose listeners
+    // were attached inside the admission callback, at the spawn itself —
+    // rather than by listeners of its own. The recorder is what closes the
+    // admission-await window; this promise only has to consume an ending
+    // that may already have been recorded (the reconcile call below) or may
+    // arrive later (the callback assignment).
     const childEnding = new Promise<ChildEnding>((resolve) => {
       const settle = (value: ChildEnding): void => {
         if (childFinalized) return;
         childFinalized = true;
         resolve(value);
       };
-      // `spawn()` may report a failure asynchronously (notably ENOENT on some
-      // platforms). It is an EventEmitter error, not a throw from spawn, so it
-      // needs the same terminal-evidence path as a synchronous failure.
-      child.once("error", (cause: Error) =>
-        settle({ kind: "spawn-error", cause }),
-      );
-      child.once("exit", (code, signal) =>
-        settle({ kind: "exit", code, signal }),
-      );
+      onRecordedEnding = () => {
+        if (recordedEnding !== null) settle(recordedEnding);
+      };
+      if (recordedEnding !== null) settle(recordedEnding);
     });
 
     // The pre-spawn guard closes the window it can see, but not a CROSS-PROCESS

@@ -273,34 +273,30 @@ async function superviseRootMaintenanceExecutor(
       },
     },
   );
-  if (child.stdin === null || child.stdout === null) {
-    child.kill("SIGTERM");
-    throw new Error("maintenance executor could not establish protocol pipes");
-  }
-  if (child.pid === undefined) {
-    child.kill("SIGTERM");
-    throw new Error("maintenance executor did not expose a process identity");
-  }
-  const supervisorPid = child.pid;
-  // Terminal evidence is recorded from the instant of spawn. `error` and
-  // `close` are emitted once and never replayed: with the first subscription
-  // sitting after the liveness rebind below — a filesystem round trip — an
-  // executor that failed to exec or died immediately emitted into no
-  // listener. The `error` became an uncaught event that killed this process
-  // mid-lease; the exit left the supervision promise pending forever with the
-  // attempt lock held. Record the first terminal event here, synchronously
-  // (Node cannot deliver either event while this setup runs), and let the
-  // supervision promise reconcile it AFTER the rebind lands — reconciling
-  // earlier would let `restoreHolder` race the very publication it restores
-  // from.
+  // EVERY subscription — terminal evidence AND the stdout parser — is
+  // attached here, from the instant of spawn: before the guards below (which
+  // throw), and before any await. `error`, `close`, and the stream's chunks
+  // are emitted once and never replayed, so where these subscriptions sit
+  // decides what is observable at all:
   //
-  // `close`, not `exit`, deliberately: `exit` can be delivered while the
-  // final stdout chunk — the one carrying the executor's `complete` frame —
-  // is still in the pipe. Classifying there reads `completed === null` for an
-  // executor that did complete, and reports failure over root platform work
-  // that already finished. `close` fires only after the stdout stream has
-  // ended, and a stream's events are ordered, so every `data` callback (and
-  // therefore `finish`) has run before classification.
+  // - The pid guard below throws synchronously for a spawn that will still
+  //   emit ENOENT asynchronously; with no `error` listener that emission is
+  //   an uncaught event that kills the lease process on exactly the failure
+  //   the guard reports politely.
+  // - With the first terminal subscription after the liveness rebind — a
+  //   filesystem round trip — an executor that died in that window emitted
+  //   into no listener: the error crashed the process, the exit left the
+  //   supervision promise pending forever with the attempt lock held.
+  // - With the `data` subscription after that same await, a short-lived
+  //   executor's `complete` frame sat in a paused stream while the recorded
+  //   `close` was reconciled, so a completed operation classified as
+  //   `completed === null` — a confident failure over finished root work.
+  //
+  // `close`, not `exit`, for the terminal event: `exit` can be delivered
+  // while the final stdout chunk is still in the pipe; `close` fires only
+  // after the stdout stream has ended, and a stream's events are ordered, so
+  // every `data` callback (and therefore `finish`) has run before
+  // classification.
   type ExecutorTermination =
     | { readonly kind: "spawn-error"; readonly error: Error }
     | {
@@ -323,11 +319,89 @@ async function superviseRootMaintenanceExecutor(
   child.once("close", (code, signal) => {
     recordTermination({ kind: "closed", code, signal });
   });
+  if (child.stdin === null || child.stdout === null) {
+    child.kill("SIGTERM");
+    throw new Error("maintenance executor could not establish protocol pipes");
+  }
   // A refusal or acknowledgement can land on an executor that just died, and
   // stdin reports that EPIPE asynchronously on its own emitter — an unhandled
   // stream `error` is a throw. Deliberately inert: the `close` above carries
   // the exit evidence an EPIPE does not.
   child.stdin.on("error", () => undefined);
+  if (child.pid === undefined) {
+    child.kill("SIGTERM");
+    throw new Error("maintenance executor did not expose a process identity");
+  }
+  const supervisorPid = child.pid;
+  let settled = false;
+  // A BOX, not the value itself. `undefined` was doing double duty as "no
+  // completion frame has arrived", which made an actuator that legitimately
+  // completes with `undefined` indistinguishable from one that never
+  // completed at all — and `JSON.stringify({ value: undefined })` drops the
+  // key outright, so that is exactly what an executor returning nothing
+  // sends. The close handler would then take the failure path on a clean
+  // exit 0 and report `maintenance executor exited (0, none)` for a
+  // successful operation.
+  //
+  // `null` is not usable as the sentinel either: it is a legitimate actuator
+  // result with its own meaning (the Linux platform install returns it for
+  // "left for the developer to install by hand"). Only a wrapper can say
+  // "completed" without also claiming something about the value.
+  let completed: { readonly value: unknown } | null = null;
+  let buffer = "";
+  let actuatorGroupId: number | null = null;
+  const refuse = (message: string): void => {
+    if (!child.stdin.destroyed) {
+      child.stdin.write(`${JSON.stringify({ kind: "refused", message })}\n`);
+    }
+  };
+  const finish = (value: unknown): void => {
+    if (settled || completed !== null) return;
+    completed = { value };
+  };
+  // Chunks are CAPTURED from spawn; frames are DISPATCHED only once the
+  // initial liveness rebind below has landed. The split is deliberate: a
+  // `bind-actuator` arriving mid-rebind would run its own group-bound
+  // publication concurrently with the plain one, and whichever landed second
+  // would win — the plain one landing last would strip
+  // `retainOnPublisherDeath` from a group already released to run. Deferring
+  // dispatch keeps the publication order the protocol assumes, while the
+  // early capture means no frame is ever lost to the await.
+  let frameDispatchArmed = false;
+  const drainFrames = (): void => {
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      let request: unknown;
+      try {
+        request = JSON.parse(line);
+      } catch {
+        refuse("maintenance executor emitted malformed protocol data");
+        continue;
+      }
+      void handleRootExecutorRequest(
+        request,
+        capability,
+        contenderOptions,
+        child.stdin,
+        finish,
+        refuse,
+        supervisorPid,
+        (groupId) => {
+          actuatorGroupId = groupId;
+        },
+      ).catch((err) =>
+        refuse(err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    buffer += chunk;
+    if (frameDispatchArmed) drainFrames();
+  });
   // C is only a liveness publisher, not a capability recipient. Until it
   // obtains D's detached group and receives B's acknowledgement, D is held
   // at its start gate and cannot run a raw actuator. The later group-bound
@@ -335,32 +409,6 @@ async function superviseRootMaintenanceExecutor(
   // forever for a supervisor that died before starting any work.
   await rebindUpdateMutationCapabilityLiveness(capability, supervisorPid, {});
   return new Promise((resolve, reject) => {
-    let settled = false;
-    // A BOX, not the value itself. `undefined` was doing double duty as "no
-    // completion frame has arrived", which made an actuator that legitimately
-    // completes with `undefined` indistinguishable from one that never
-    // completed at all — and `JSON.stringify({ value: undefined })` drops the
-    // key outright, so that is exactly what an executor returning nothing
-    // sends. The exit handler would then take the failure path on a clean
-    // exit 0 and report `maintenance executor exited (0, none)` for a
-    // successful operation.
-    //
-    // `null` is not usable as the sentinel either: it is a legitimate actuator
-    // result with its own meaning (the Linux platform install returns it for
-    // "left for the developer to install by hand"). Only a wrapper can say
-    // "completed" without also claiming something about the value.
-    let completed: { readonly value: unknown } | null = null;
-    let buffer = "";
-    let actuatorGroupId: number | null = null;
-    const refuse = (message: string): void => {
-      if (!child.stdin.destroyed) {
-        child.stdin.write(`${JSON.stringify({ kind: "refused", message })}\n`);
-      }
-    };
-    const finish = (value: unknown): void => {
-      if (settled || completed !== null) return;
-      completed = { value };
-    };
     const restoreHolder = async (): Promise<void> => {
       await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {});
     };
@@ -407,37 +455,13 @@ async function superviseRootMaintenanceExecutor(
         ),
       ).catch(reject);
     };
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      buffer += chunk;
-      for (;;) {
-        const newline = buffer.indexOf("\n");
-        if (newline === -1) return;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        let request: unknown;
-        try {
-          request = JSON.parse(line);
-        } catch {
-          refuse("maintenance executor emitted malformed protocol data");
-          continue;
-        }
-        void handleRootExecutorRequest(
-          request,
-          capability,
-          contenderOptions,
-          child.stdin,
-          finish,
-          refuse,
-          supervisorPid,
-          (groupId) => {
-            actuatorGroupId = groupId;
-          },
-        ).catch((err) =>
-          refuse(err instanceof Error ? err.message : String(err)),
-        );
-      }
-    });
+    // Arm dispatch and drain whatever the capture accumulated during the
+    // rebind, IN THIS ORDER — frames first, then the recorded termination.
+    // A completed executor that died mid-rebind has its `complete` frame in
+    // the buffer and its `close` in `termination`; draining first is what
+    // lets the classification below see the completion it earned.
+    frameDispatchArmed = true;
+    drainFrames();
     // The executor can have terminated while the liveness rebind above was in
     // flight; the recorded evidence is reconciled here, once the supervision
     // promise owns settlement.
