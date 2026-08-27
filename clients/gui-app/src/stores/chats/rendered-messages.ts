@@ -54,6 +54,7 @@ import {
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   isNoOpCheckpointEntry,
+  overlappingCheckpointIds,
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -1015,8 +1016,8 @@ export function useRenderedMessages(
   // Event-derived views change only when the event log changes, never per
   // streamed delta - memoize them so a delta doesn't re-scan the events.
   const checkpointViews = useMemo(
-    () => checkpointManifestViewsFromEvents(input.events),
-    [input.events],
+    () => checkpointManifestViewsFromEvents(input.events, contextByTurnKey),
+    [input.events, contextByTurnKey],
   );
   const steeredMessageIds = useMemo(
     () => steeredMessageIdsFromEvents(input.events),
@@ -3556,22 +3557,47 @@ interface CheckpointManifestView {
   readonly hasLaterOverlappingChanges: boolean;
 }
 
+/**
+ * The restore affordance's per-turn view, and the ONE derivation here that a
+ * window can get wrong.
+ *
+ * `hasLaterOverlappingChanges` is a whole-history fact: it asks whether a LATER
+ * checkpoint rewrites a file this one touches. Deriving it from `events` is
+ * correct on the legacy line, where that array is the whole log, and wrong on
+ * the windowed line, where it is whatever is hydrated - a span holding an old
+ * turn but none of the later checkpoints concludes `false` and the restore
+ * dialog silently drops its warning that later turns' files will also be
+ * rewound. On an irreversible action.
+ *
+ * So the projection carries the answer per row and it wins here. The local
+ * derivation is kept, not replaced, because it is still the only answer on the
+ * legacy line - and it runs through the SHARED `overlappingCheckpointIds`, so
+ * the two lines cannot reach different verdicts from the same input.
+ *
+ * Reading `=== true` rather than a truthy check is the row-context contract:
+ * an ABSENT field is the projection declining to speak, not an assertion of
+ * `false`, so absence falls through to the derivation below.
+ */
 function checkpointManifestViewsFromEvents(
   events: ReadonlyArray<ChatEvent>,
+  contextByTurnKey: ReadonlyMap<string, TranscriptRowContext>,
 ): ReadonlyMap<string, CheckpointManifestView> {
   const checkpoints = events.flatMap((event) => {
     const checkpoint = checkpointManifestFromEvent(event);
     return isParsedCheckpointManifest(checkpoint) ? [checkpoint] : [];
   });
-  const overlappingCheckpointIds = overlappingCheckpointIdsFor(checkpoints);
+  const overlapping = overlappingCheckpointIds(
+    checkpoints.map((checkpoint) => checkpoint.manifest),
+  );
   return new Map(
     checkpoints.map((checkpoint) => [
       checkpoint.turnId,
       {
         manifest: checkpoint.manifest,
-        hasLaterOverlappingChanges: overlappingCheckpointIds.has(
-          checkpoint.manifest.checkpointId,
-        ),
+        hasLaterOverlappingChanges:
+          contextByTurnKey.get(checkpoint.turnId)
+            ?.hasLaterOverlappingChanges === true ||
+          overlapping.has(checkpoint.manifest.checkpointId),
       },
     ]),
   );
@@ -3591,38 +3617,6 @@ function isParsedCheckpointManifest(
   value: ParsedCheckpointManifest | null,
 ): value is ParsedCheckpointManifest {
   return value !== null;
-}
-
-function overlappingCheckpointIdsFor(
-  checkpoints: ReadonlyArray<ParsedCheckpointManifest>,
-): ReadonlySet<string> {
-  // Only real changes drive the "modified again in later turns" note:
-  // a no-op entry isn't part of this turn's change set and isn't restored,
-  // so an overlap with one would make the cumulative warning misleading.
-  //
-  // Record, per file path, the index of the last checkpoint that touches it.
-  // A checkpoint then overlaps iff any path it touches is touched again by a
-  // later checkpoint - i.e. that path's last-touch index is past this one.
-  // One forward pass plus one scan keeps this O(checkpoints * entries) instead
-  // of the quadratic pairwise comparison this hook reran on every event.
-  const lastTouchIndexByPath = new Map<string, number>();
-  checkpoints.forEach((checkpoint, index) => {
-    checkpoint.manifest.entries
-      .filter((entry) => !isNoOpCheckpointEntry(entry))
-      .forEach((entry) => {
-        lastTouchIndexByPath.set(entry.filePath, index);
-      });
-  });
-  return new Set(
-    checkpoints.flatMap((checkpoint, index) => {
-      const touchedLater = checkpoint.manifest.entries.some(
-        (entry) =>
-          !isNoOpCheckpointEntry(entry) &&
-          (lastTouchIndexByPath.get(entry.filePath) ?? index) > index,
-      );
-      return touchedLater ? [checkpoint.manifest.checkpointId] : [];
-    }),
-  );
 }
 
 function groupFileChangeRuns(

@@ -11,6 +11,11 @@ import {
   type TranscriptRowContext,
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
+import {
+  overlappingCheckpointIds,
+  turnCheckpointManifestSchema,
+} from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+
 import { assistantTurnKey } from "@traycer/protocol/persistence/chat-transcript/fork-boundary";
 import {
   compareCanonicalRowOrder,
@@ -578,6 +583,50 @@ function pauseCorrelationKey(event: ChatEvent): string | null {
  * lifecycle is the one exception, and it is correlated rather than keyed; see
  * {@link PAUSE_OPEN_EVENT_TYPES}.
  */
+/**
+ * Turn keys whose checkpoint has a file a LATER checkpoint touches again.
+ *
+ * Computed here, over the whole event log, because the renderer cannot: it
+ * derives this from the events it holds, and on the windowed line that is
+ * whatever subset is hydrated. A span containing an old turn but none of the
+ * later checkpoints concludes `false`, and the restore dialog drops its
+ * warning that files modified in later turns will also be rewound - a missing
+ * warning on an irreversible action, which is why
+ * {@link TranscriptRowContext.hasLaterOverlappingChanges} was specified for it.
+ *
+ * Keyed by TURN, not by checkpoint id, because that is what the row carries;
+ * the checkpoint id is an implementation detail of the overlap rule.
+ *
+ * Order is load-bearing - "later" means later in the event log - so this walks
+ * `events` in its given order and never sorts.
+ */
+export function turnKeysWithLaterOverlappingChanges(
+  events: readonly ChatEvent[],
+): ReadonlySet<string> {
+  const parsed = events.flatMap((event) => {
+    if (event.type !== "checkpoint.captured") return [];
+    if (event.turnId === null || event.metadata === null) return [];
+    const manifest = turnCheckpointManifestSchema.safeParse(event.metadata);
+    // A manifest this reader cannot parse is one whose overlap it cannot judge.
+    // Dropping it is the same answer the restore path gives a version mismatch
+    // ("cannot restore"), and it keeps an unreadable entry from silently
+    // reading as "touches nothing" and clearing a warning it should have kept.
+    if (!manifest.success) return [];
+    return [{ turnId: event.turnId, manifest: manifest.data }];
+  });
+  if (parsed.length === 0) return EMPTY_TURN_KEYS;
+  const overlapping = overlappingCheckpointIds(
+    parsed.map((entry) => entry.manifest),
+  );
+  return new Set(
+    parsed.flatMap((entry) =>
+      overlapping.has(entry.manifest.checkpointId) ? [entry.turnId] : [],
+    ),
+  );
+}
+
+const EMPTY_TURN_KEYS: ReadonlySet<string> = new Set<string>();
+
 export function decoratingEventIdsByTurn(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, readonly string[]> {
@@ -695,6 +744,7 @@ export function projectTranscriptRows(
   const nestedSteered = nestedSteeredMessageIds(turns.values(), usersById);
   const stoppedByTurnKey = turnStoppedInfoByTurnKey(input.events);
   const decoratingEventIdsByTurnKey = decoratingEventIdsByTurn(input.events);
+  const overlappingTurnKeys = turnKeysWithLaterOverlappingChanges(input.events);
 
   const base: TranscriptRowDescriptor[] = [];
   const emittedTurns = new Set<string>();
@@ -742,6 +792,7 @@ export function projectTranscriptRows(
         stopped: stoppedByTurnKey.get(turnKey) ?? null,
         decoratingEventIdsByTurnKey,
         sessionAnchor: currentSessionAnchor,
+        hasLaterOverlappingChanges: overlappingTurnKeys.has(turnKey),
       }),
     );
   }
@@ -809,6 +860,8 @@ function describeTurnRows(input: {
   readonly decoratingEventIdsByTurnKey: ReadonlyMap<string, readonly string[]>;
   /** The anchor in effect at this turn - see {@link TranscriptRowContext}. */
   readonly sessionAnchor: ChatSessionAnchor | null;
+  /** Whole-history overlap - see {@link turnKeysWithLaterOverlappingChanges}. */
+  readonly hasLaterOverlappingChanges: boolean;
 }): readonly TranscriptRowDescriptor[] {
   const { turn } = input;
   // Every branch of the renderer's timing derivation returns this same anchor;
@@ -830,11 +883,20 @@ function describeTurnRows(input: {
   // anchor. For a modern turn the renderer reads `startedAt` off the record it
   // already has and cannot get it wrong, so speaking would be noise on every
   // row of every chat.
+  //
+  // `hasLaterOverlappingChanges` is carried only when TRUE, for the reason the
+  // schema gives: an absent field is the projection declining to speak, and the
+  // renderer falls back to its own derivation. `false` is what that derivation
+  // already produces from an isolated span, so speaking it would be bytes
+  // asserting the answer the reader would have reached anyway.
   const context: TranscriptRowContext = {
     ...(turn.startedAt === null ? { legacyRowAnchorAt: rowAnchorAt } : {}),
     ...(input.sessionAnchor === null
       ? {}
       : { sessionAnchor: input.sessionAnchor }),
+    ...(input.hasLaterOverlappingChanges
+      ? { hasLaterOverlappingChanges: true }
+      : {}),
   };
 
   const rows: TranscriptRowDescriptor[] = plan.entries.map((entry) => {

@@ -837,3 +837,170 @@ describe("assistantRowTurnKey", () => {
     expect(assistantRowTurnKey("chat-event:e-1")).toBeNull();
   });
 });
+
+function checkpointEvent(fields: {
+  eventId: string;
+  turnId: string;
+  timestamp: number;
+  checkpointId: string;
+  filePaths: readonly string[];
+}): ChatEvent {
+  return chatEventSchema.parse({
+    eventId: fields.eventId,
+    type: "checkpoint.captured",
+    timestamp: fields.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: fields.turnId,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: {
+      schemaVersion: 1,
+      checkpointId: fields.checkpointId,
+      capturingUserId: "u-1",
+      capturingHostId: "h-1",
+      allowedRoots: ["/w"],
+      workingDirectory: "/w",
+      capturedAt: fields.timestamp,
+      entries: fields.filePaths.map((filePath) => ({
+        filePath,
+        operation: "edit" as const,
+        // Distinct hashes: `isNoOpCheckpointEntry` treats an undoable entry
+        // whose before/after agree as a no-op, and a no-op is excluded from
+        // the overlap rule - so equal hashes here would make the fixture
+        // assert nothing.
+        beforeHash: `${filePath}:before`,
+        afterHash: `${filePath}:after`,
+        undoable: true,
+        reason: null,
+        artifact: null,
+      })),
+    },
+  });
+}
+
+/**
+ * The one derived value on a row that a WINDOW can silently invert.
+ *
+ * `hasLaterOverlappingChanges` answers "does a later turn rewrite a file this
+ * checkpoint touches", and the renderer used to derive it from the events it
+ * held. On the windowed line that is whatever is hydrated, so a span holding
+ * the EARLIER turn and not the later one concludes `false` and the restore
+ * dialog drops its warning that later turns' files will also be rewound - a
+ * missing warning on an irreversible action.
+ *
+ * The projection sees whole history, so it answers once and carries it.
+ */
+describe("row context: whole-history checkpoint overlap", () => {
+  const overlappingEvents: readonly ChatEvent[] = [
+    checkpointEvent({
+      eventId: "e-cp-1",
+      turnId: "t-1",
+      timestamp: 1_100,
+      checkpointId: "cp-1",
+      filePaths: ["/w/a.ts"],
+    }),
+    checkpointEvent({
+      eventId: "e-cp-2",
+      turnId: "t-2",
+      timestamp: 2_100,
+      checkpointId: "cp-2",
+      filePaths: ["/w/a.ts"],
+    }),
+  ];
+
+  const twoTurns: readonly Message[] = [
+    userMessage({ messageId: "m-u1", timestamp: 1_000 }),
+    assistantMessage({
+      messageId: "m-a1",
+      timestamp: 1_050,
+      turnId: "t-1",
+      startedAt: 1_000,
+      blocks: [textBlock("b-1", 1_050)],
+    }),
+    userMessage({ messageId: "m-u2", timestamp: 2_000 }),
+    assistantMessage({
+      messageId: "m-a2",
+      timestamp: 2_050,
+      turnId: "t-2",
+      startedAt: 2_000,
+      blocks: [textBlock("b-2", 2_050)],
+    }),
+  ];
+
+  function contextForTurn(
+    events: readonly ChatEvent[],
+    turnId: string,
+  ): boolean | undefined {
+    const rows = projectTranscriptRows({
+      chatId: "c-1",
+      messages: twoTurns,
+      events,
+      activeTurnId: null,
+    });
+    const row = rows.find(
+      (candidate) =>
+        candidate.source.kind === "assistant-slice" &&
+        candidate.source.turnKey === turnId,
+    );
+    if (row === undefined) throw new Error(`no row for turn ${turnId}`);
+    return row.context.hasLaterOverlappingChanges;
+  }
+
+  it("marks the EARLIER turn whose file a later checkpoint rewrites", () => {
+    expect(contextForTurn(overlappingEvents, "t-1")).toBe(true);
+  });
+
+  it("leaves the LAST checkpoint unmarked - nothing comes after it", () => {
+    // The discriminating half. A projection that marked every checkpoint in an
+    // overlapping set would pass the assertion above while saying nothing about
+    // the rule, since "later" is the entire content of it.
+    expect(contextForTurn(overlappingEvents, "t-2")).toBeUndefined();
+  });
+
+  it("says nothing when the two turns touch DIFFERENT files", () => {
+    const disjoint: readonly ChatEvent[] = [
+      checkpointEvent({
+        eventId: "e-cp-1",
+        turnId: "t-1",
+        timestamp: 1_100,
+        checkpointId: "cp-1",
+        filePaths: ["/w/a.ts"],
+      }),
+      checkpointEvent({
+        eventId: "e-cp-2",
+        turnId: "t-2",
+        timestamp: 2_100,
+        checkpointId: "cp-2",
+        filePaths: ["/w/b.ts"],
+      }),
+    ];
+    expect(contextForTurn(disjoint, "t-1")).toBeUndefined();
+  });
+
+  it("is ABSENT rather than false, so the renderer's own derivation still runs", () => {
+    // The row-context contract: an absent field is the projection declining to
+    // speak, never an assertion of `false`. A legacy peer holding the whole log
+    // must keep deriving this for itself, and it can only do that if silence
+    // stays distinguishable from a negative answer.
+    const rows = projectTranscriptRows({
+      chatId: "c-1",
+      messages: twoTurns,
+      events: overlappingEvents,
+      activeTurnId: null,
+    });
+    const later = rows.find(
+      (candidate) =>
+        candidate.source.kind === "assistant-slice" &&
+        candidate.source.turnKey === "t-2",
+    );
+    if (later === undefined) throw new Error("no row for t-2");
+    expect(Object.hasOwn(later.context, "hasLaterOverlappingChanges")).toBe(
+      false,
+    );
+  });
+});
