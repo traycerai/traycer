@@ -531,4 +531,19 @@ describe("TerminalSessionRegistry", () => {
       ),
     ).toBe("inst-host");
   });
+
+  it("membershipIdsForHost lists instance ids of that host only", () => {
+    const registry = new TerminalSessionRegistry();
+    const hostA = createHandle("terminal");
+    const hostB = createHandle("terminal");
+    const hostless = createHandle("terminal-agent");
+
+    registry.acquire("inst-a", () => hostA.handle, "host-a");
+    registry.acquire("inst-b", () => hostB.handle, "host-b");
+    registry.acquire("inst-hostless", () => hostless.handle, null);
+
+    expect(registry.membershipIdsForHost("host-a")).toEqual(["inst-a"]);
+    expect(registry.membershipIdsForHost("host-b")).toEqual(["inst-b"]);
+    expect(registry.membershipIdsForHost("host-none")).toEqual([]);
+  });
 });

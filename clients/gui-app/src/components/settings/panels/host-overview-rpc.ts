@@ -120,8 +120,8 @@ export function useHostOverviewStatusQuery(input: {
 }
 
 /**
- * Refetch `host.status` when this window's chat or terminal session
- * registries change membership.
+ * Refetch `host.status` when THIS host's chat or terminal session
+ * membership changes.
  *
  * Overview has no busy subscription — only a 10s poll — so a terminal-agent
  * that just started can sit invisible on the chip until the next tick.
@@ -129,6 +129,11 @@ export function useHostOverviewStatusQuery(input: {
  * exactly when host-side `busyBreakdown` is likely to have moved. Per-handle
  * status changes on an already-registered session still wait for the poll;
  * that lag is host-side accounting, not a missing client invalidation.
+ *
+ * Registries are process-wide, so a notify fires for every host. Invalidating
+ * host A's `host.status` on host B's membership momentarily voids SETTLED
+ * busy (and can disable "Apply now"). Compare a host-scoped snapshot and
+ * skip the invalidate when this host's entries did not move.
  */
 export function useRefreshOverviewStatusOnSessionActivity(input: {
   readonly hostId: string | null;
@@ -140,7 +145,13 @@ export function useRefreshOverviewStatusOnSessionActivity(input: {
       return;
     }
     const hostId = input.hostId;
+    // Snapshot BEFORE subscribe so a StrictMode remount (cleanup + re-setup)
+    // with unchanged membership does not invalidate.
+    let lastSignature = scopedSessionMembershipSignature(hostId);
     const refresh = (): void => {
+      const next = scopedSessionMembershipSignature(hostId);
+      if (next === lastSignature) return;
+      lastSignature = next;
       void queryClient.invalidateQueries({
         queryKey: hostQueryKeys.methodScope(hostId, "host.status"),
       });
@@ -152,6 +163,14 @@ export function useRefreshOverviewStatusOnSessionActivity(input: {
       unsubChat();
     };
   }, [input.enabled, input.hostId, queryClient]);
+}
+
+function scopedSessionMembershipSignature(hostId: string): string {
+  const terminals = getTerminalSessionRegistry()
+    .membershipIdsForHost(hostId)
+    .join(",");
+  const chats = getChatSessionRegistry().membershipIdsForHost(hostId).join(",");
+  return `t:${terminals}|c:${chats}`;
 }
 
 /**
