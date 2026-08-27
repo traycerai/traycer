@@ -28,24 +28,65 @@ const nativeMocks = vi.hoisted(() => ({
  * events from the same jsdom document and make the dedupe untestable.
  */
 const capacitorEventMocks = vi.hoisted(() => ({
+  /** What `Capacitor.getPlatform()` reports; per-test overridable. */
+  platform: "ios",
   pauseListeners: new Array<() => void>(),
   resumeListeners: new Array<() => void>(),
+  appStateListeners: new Array<(state: { isActive: boolean }) => void>(),
+  /** When true, `App.addListener` rejects - the no-bridge dev/web shape. */
+  rejectAppListeners: false,
   networkListeners: new Array<
     (status: { connected: boolean; connectionType: string }) => void
   >(),
   networkStatus: { connected: true, connectionType: "wifi" },
-  /** When set, `Network.getStatus()` never settles until released. */
+  /**
+   * Per-call `getStatus()` answers, consumed in order; when empty,
+   * `networkStatus` answers. Lets a test give the read-listen-read bootstrap
+   * DIFFERENT before/after snapshots (the unobservable-gap transition).
+   */
+  networkStatusQueue: new Array<{
+    connected: boolean;
+    connectionType: string;
+  }>(),
+  /** When true, `getStatus()` promises park until released. */
   holdNetworkSeed: false,
-  releaseNetworkSeed: () => {},
+  pendingSeedReleases: new Array<() => void>(),
+  releaseNetworkSeed: () => {
+    capacitorEventMocks.holdNetworkSeed = false;
+    for (const release of capacitorEventMocks.pendingSeedReleases.splice(0)) {
+      release();
+    }
+  },
 }));
+
+vi.mock("@capacitor/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@capacitor/core")>();
+  return {
+    ...actual,
+    Capacitor: {
+      ...actual.Capacitor,
+      getPlatform: () => capacitorEventMocks.platform,
+    },
+  };
+});
 
 vi.mock("@capacitor/app", () => ({
   App: {
-    addListener: (event: string, handler: () => void) => {
+    addListener: (
+      event: string,
+      handler: ((state: { isActive: boolean }) => void) | (() => void),
+    ) => {
+      if (capacitorEventMocks.rejectAppListeners) {
+        return Promise.reject(new Error("no plugin bridge"));
+      }
       if (event === "pause") {
-        capacitorEventMocks.pauseListeners.push(handler);
+        capacitorEventMocks.pauseListeners.push(handler as () => void);
       } else if (event === "resume") {
-        capacitorEventMocks.resumeListeners.push(handler);
+        capacitorEventMocks.resumeListeners.push(handler as () => void);
+      } else if (event === "appStateChange") {
+        capacitorEventMocks.appStateListeners.push(
+          handler as (state: { isActive: boolean }) => void,
+        );
       }
       return Promise.resolve({ remove: () => Promise.resolve() });
     },
@@ -55,13 +96,16 @@ vi.mock("@capacitor/app", () => ({
 vi.mock("@capacitor/network", () => ({
   Network: {
     getStatus: () => {
+      const answer = (): { connected: boolean; connectionType: string } =>
+        capacitorEventMocks.networkStatusQueue.shift() ??
+        capacitorEventMocks.networkStatus;
       if (!capacitorEventMocks.holdNetworkSeed) {
-        return Promise.resolve(capacitorEventMocks.networkStatus);
+        return Promise.resolve(answer());
       }
       return new Promise((resolve) => {
-        capacitorEventMocks.releaseNetworkSeed = () => {
-          resolve(capacitorEventMocks.networkStatus);
-        };
+        capacitorEventMocks.pendingSeedReleases.push(() => {
+          resolve(answer());
+        });
       });
     },
     addListener: (
@@ -83,6 +127,12 @@ function fireAppPause(): void {
 function fireAppResume(): void {
   for (const handler of capacitorEventMocks.resumeListeners) {
     handler();
+  }
+}
+
+function fireAppState(isActive: boolean): void {
+  for (const handler of capacitorEventMocks.appStateListeners) {
+    handler({ isActive });
   }
 }
 
@@ -198,15 +248,19 @@ function phoneRunner(input: {
 describe("MobileRunnerHost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capacitorEventMocks.platform = "ios";
+    capacitorEventMocks.rejectAppListeners = false;
     capacitorEventMocks.pauseListeners.length = 0;
     capacitorEventMocks.resumeListeners.length = 0;
+    capacitorEventMocks.appStateListeners.length = 0;
     capacitorEventMocks.networkListeners.length = 0;
     capacitorEventMocks.networkStatus = {
       connected: true,
       connectionType: "wifi",
     };
+    capacitorEventMocks.networkStatusQueue.length = 0;
     capacitorEventMocks.holdNetworkSeed = false;
-    capacitorEventMocks.releaseNetworkSeed = () => {};
+    capacitorEventMocks.pendingSeedReleases.length = 0;
     nativeMocks.storage.clear();
     nativeMocks.storageKeys.mockImplementation(async () => ({
       value: [...nativeMocks.storage.keys()],
@@ -412,202 +466,7 @@ describe("MobileRunnerHost", () => {
       subscription.dispose();
     });
 
-    it("does not fire on subscribe when the document is already visible", () => {
-      state = "visible";
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      expect(resumes).toEqual([]);
-      subscription.dispose();
-    });
-
-    it("fires exactly once on the hidden -> visible edge", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      setVisibility("hidden");
-      expect(resumes).toEqual([]);
-      setVisibility("visible");
-      expect(resumes).toEqual([1]);
-
-      subscription.dispose();
-    });
-
-    it("does not fire on the visible -> hidden edge", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      setVisibility("hidden");
-      expect(resumes).toEqual([]);
-
-      subscription.dispose();
-    });
-
-    it("does not fire when a visibilitychange arrives with the state unchanged", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      // Already visible - a repeat "visible" event is not a real edge.
-      setVisibility("visible");
-      expect(resumes).toEqual([]);
-
-      subscription.dispose();
-    });
-
-    it("fires twice across two suspend/resume cycles", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      setVisibility("hidden");
-      setVisibility("visible");
-      setVisibility("hidden");
-      setVisibility("visible");
-
-      expect(resumes).toEqual([1, 1]);
-      subscription.dispose();
-    });
-
-    it("delivers the same resume to every subscriber", () => {
-      const host = runner(null);
-      const firstResumes: number[] = [];
-      const secondResumes: number[] = [];
-      const first = host.onSystemResumed(() => firstResumes.push(1));
-      const second = host.onSystemResumed(() => secondResumes.push(1));
-
-      setVisibility("hidden");
-      setVisibility("visible");
-
-      expect(firstResumes).toEqual([1]);
-      expect(secondResumes).toEqual([1]);
-
-      first.dispose();
-      second.dispose();
-    });
-
-    it("stops notifying a disposed subscriber while a still-live one keeps receiving", () => {
-      const host = runner(null);
-      const disposedResumes: number[] = [];
-      const liveResumes: number[] = [];
-      const disposedSubscription = host.onSystemResumed(() =>
-        disposedResumes.push(1),
-      );
-      const liveSubscription = host.onSystemResumed(() => liveResumes.push(1));
-
-      setVisibility("hidden");
-      setVisibility("visible");
-      disposedSubscription.dispose();
-
-      setVisibility("hidden");
-      setVisibility("visible");
-
-      expect(disposedResumes).toEqual([1]);
-      expect(liveResumes).toEqual([1, 1]);
-
-      liveSubscription.dispose();
-    });
-
-    it("keeps notifying the other subscribers when one throws", () => {
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      const host = runner(null);
-      const liveResumes: number[] = [];
-      const throwing = host.onSystemResumed(() => {
-        throw new Error("subscriber failure");
-      });
-      const live = host.onSystemResumed(() => liveResumes.push(1));
-
-      setVisibility("hidden");
-      setVisibility("visible");
-
-      expect(liveResumes).toEqual([1]);
-      expect(errorSpy).toHaveBeenCalledTimes(1);
-
-      throwing.dispose();
-      live.dispose();
-      errorSpy.mockRestore();
-    });
-
-    it("fires on the native pause/resume pair when the DOM visibility edge never arrives", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-      expect(capacitorEventMocks.pauseListeners).toHaveLength(1);
-      expect(capacitorEventMocks.resumeListeners).toHaveLength(1);
-
-      // The missed-DOM-edge suspend: the OS backgrounds and foregrounds the
-      // app, and the WebView never raises visibilitychange for either side.
-      fireAppPause();
-      expect(resumes).toEqual([]);
-      fireAppResume();
-      expect(resumes).toEqual([1]);
-
-      subscription.dispose();
-    });
-
-    it("delivers ONE resume per app switch however the two sources interleave", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      // Native-first ordering.
-      fireAppPause();
-      setVisibility("hidden");
-      fireAppResume();
-      setVisibility("visible");
-      expect(resumes).toEqual([1]);
-
-      // DOM-first ordering, foreground reports crossed.
-      setVisibility("hidden");
-      fireAppPause();
-      setVisibility("visible");
-      fireAppResume();
-      expect(resumes).toEqual([1, 1]);
-
-      subscription.dispose();
-    });
-
-    it("a native-backed episode completes on the OS's own resume, not on the DOM edge", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      setVisibility("hidden");
-      fireAppPause();
-      // The WebView repainting (visible) is not the OS saying the app is
-      // back: the episode stays open, and the network gate stays closed.
-      setVisibility("visible");
-      expect(resumes).toEqual([]);
-      fireAppResume();
-      expect(resumes).toEqual([1]);
-
-      subscription.dispose();
-    });
-
-    it("ignores a native resume with no background to resume from, and duplicate foreground reports", () => {
-      const host = runner(null);
-      const resumes: number[] = [];
-      const subscription = host.onSystemResumed(() => resumes.push(1));
-
-      // Cold start noise.
-      fireAppResume();
-      expect(resumes).toEqual([]);
-
-      fireAppPause();
-      fireAppResume();
-      expect(resumes).toEqual([1]);
-      // Duplicates after completion find no open episode.
-      fireAppResume();
-      setVisibility("visible");
-      expect(resumes).toEqual([1]);
-
-      subscription.dispose();
-    });
-
-    it("measures dwell from the native pause stamp", () => {
+    it("iOS: one pause/resume pair emits exactly one resume with a numeric dwell", () => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(100_000);
@@ -616,6 +475,12 @@ describe("MobileRunnerHost", () => {
         const subscription = host.onSystemResumed((event) =>
           dwells.push(event.backgroundedForMs),
         );
+        expect(capacitorEventMocks.pauseListeners).toHaveLength(1);
+        expect(capacitorEventMocks.resumeListeners).toHaveLength(1);
+        // iOS selects the native lifecycle pair exclusively - the
+        // appStateChange inactivity event must not be registered at all, or
+        // Face ID / Control Center dwell would count as background.
+        expect(capacitorEventMocks.appStateListeners).toHaveLength(0);
 
         fireAppPause();
         vi.setSystemTime(100_000 + 7_500);
@@ -628,74 +493,29 @@ describe("MobileRunnerHost", () => {
       }
     });
 
-    it("a DOM-only episode reports an UNKNOWN dwell, never a fabricated one", () => {
-      // Without the OS's own pause there is no reliable real-background entry
-      // stamp - the WebView going hidden proves invisibility, not
-      // backgrounding - so the duration gate must fall back to its
-      // conservative default rather than force-drop on invented evidence.
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(100_000);
-        const host = runner(null);
-        const dwells: Array<number | null> = [];
-        const subscription = host.onSystemResumed((event) =>
-          dwells.push(event.backgroundedForMs),
-        );
-
-        setVisibility("hidden");
-        vi.setSystemTime(100_000 + 60_000);
-        setVisibility("visible");
-
-        expect(dwells).toEqual([null]);
-        subscription.dispose();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("stamps a DOM-opened episode the moment native pause confirms it", () => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(100_000);
-        const host = runner(null);
-        const dwells: Array<number | null> = [];
-        const subscription = host.onSystemResumed((event) =>
-          dwells.push(event.backgroundedForMs),
-        );
-
-        setVisibility("hidden");
-        vi.setSystemTime(100_000 + 1_000);
-        fireAppPause();
-        vi.setSystemTime(100_000 + 9_000);
-        fireAppResume();
-
-        // Measured from the native confirmation, not the earlier DOM edge.
-        expect(dwells).toEqual([8_000]);
-        subscription.dispose();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it("rejects a source's lagging background replay from an already-completed episode", () => {
+    it("iOS: DOM visibility events are not participants - noise in every order is inert", () => {
       const host = runner(null);
       const resumes: number[] = [];
       const subscription = host.onSystemResumed(() => resumes.push(1));
 
-      // A full episode both sources contributed to, completed by the OS.
+      // DOM edges alone: no episode. (On iOS the WebView's visibility says
+      // nothing the OS lifecycle does not say better, and fusing the two is
+      // what allowed phantom/duplicate episodes.)
       setVisibility("hidden");
+      setVisibility("visible");
+      expect(resumes).toEqual([]);
+
+      // DOM noise interleaved with the real pair changes nothing.
       fireAppPause();
+      setVisibility("hidden");
+      setVisibility("visible");
       fireAppResume();
       expect(resumes).toEqual([1]);
 
-      // The event queue replays the DOM's hidden from THAT episode after the
-      // app is provably active again; its own visible never arrived. Without
-      // rejection this would reopen the episode and strand the tracker in
-      // background - suppressing network recovery for good.
+      // A delayed DOM `hidden` after the completed episode opens nothing:
+      // the network gate stays foreground and no phantom resume can follow.
       setVisibility("hidden");
       expect(resumes).toEqual([1]);
-      // The tracker still reads foreground: a real network change fires.
-      // (Asserted indirectly - a NEW native episode still works end to end.)
       fireAppPause();
       fireAppResume();
       expect(resumes).toEqual([1, 1]);
@@ -703,10 +523,125 @@ describe("MobileRunnerHost", () => {
       subscription.dispose();
     });
 
-    it("reports a null dwell when the shell booted hidden and never saw the background edge", () => {
-      // Seeded hidden at first subscribe: the state says backgrounded, but
-      // there is no entry stamp to measure from - the honest answer is null,
-      // which keeps the conservative default probe downstream.
+    it("iOS: a missed DOM foreground cannot strand the tracker - only the selected pair owns state", async () => {
+      const host = runner(null);
+      const changes: number[] = [];
+      const resumes: number[] = [];
+      const resumeSubscription = host.onSystemResumed(() => resumes.push(1));
+      const networkSubscription = host.onNetworkPathChanged(() =>
+        changes.push(1),
+      );
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // DOM goes hidden and NEVER reports visible again (the dropped-edge
+      // WebView). The selected pair completes regardless, and the network
+      // suppression gate follows the selected pair - not the dead DOM state.
+      setVisibility("hidden");
+      fireAppPause();
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      expect(changes).toEqual([1]);
+
+      resumeSubscription.dispose();
+      networkSubscription.dispose();
+    });
+
+    it("iOS: duplicate pause and duplicate/cold resume reports are level-filtered", () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const subscription = host.onSystemResumed(() => resumes.push(1));
+
+      fireAppResume();
+      expect(resumes).toEqual([]);
+
+      fireAppPause();
+      fireAppPause();
+      fireAppResume();
+      fireAppResume();
+      expect(resumes).toEqual([1]);
+
+      subscription.dispose();
+    });
+
+    it("iOS: failed native registration falls back to the DOM pair exclusively", async () => {
+      capacitorEventMocks.rejectAppListeners = true;
+      const host = runner(null);
+      const dwells: Array<number | null> = [];
+      const subscription = host.onSystemResumed((event) =>
+        dwells.push(event.backgroundedForMs),
+      );
+      // The rejected registrations resolve asynchronously; the DOM fallback
+      // installs after the catch runs.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      setVisibility("hidden");
+      setVisibility("visible");
+      // Degraded to DOM means degraded to UNKNOWN dwell - never a number.
+      expect(dwells).toEqual([null]);
+
+      subscription.dispose();
+    });
+
+    it("Android: pause under a dialog neither backgrounds nor stamps - appStateChange owns the pair with numeric dwell", () => {
+      capacitorEventMocks.platform = "android";
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(100_000);
+        const host = runner(null);
+        const dwells: Array<number | null> = [];
+        const subscription = host.onSystemResumed((event) =>
+          dwells.push(event.backgroundedForMs),
+        );
+        // Android must not register the pause/resume pair at all: Activity
+        // onPause fires while the app can be fully visible (multi-window, a
+        // dialog), so its dwell is not background evidence.
+        expect(capacitorEventMocks.pauseListeners).toHaveLength(0);
+        expect(capacitorEventMocks.resumeListeners).toHaveLength(0);
+        expect(capacitorEventMocks.appStateListeners).toHaveLength(1);
+
+        // A long dialog: pause-shaped events would have faked a >=10s dwell
+        // and force-dropped a healthy mux. Nothing happens.
+        vi.setSystemTime(100_000 + 60_000);
+        expect(dwells).toEqual([]);
+
+        // The real pair: onStop -> onResume, numeric.
+        fireAppState(false);
+        vi.setSystemTime(100_000 + 72_000);
+        fireAppState(true);
+        expect(dwells).toEqual([12_000]);
+
+        subscription.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("Web: DOM owns the pair with unknown dwell, and no native listeners are registered", () => {
+      capacitorEventMocks.platform = "web";
+      const host = runner(null);
+      const dwells: Array<number | null> = [];
+      const subscription = host.onSystemResumed((event) =>
+        dwells.push(event.backgroundedForMs),
+      );
+      // The Web App plugin emits pause/resume FROM the same DOM visibility
+      // event - registering it would double every episode.
+      expect(capacitorEventMocks.pauseListeners).toHaveLength(0);
+      expect(capacitorEventMocks.resumeListeners).toHaveLength(0);
+      expect(capacitorEventMocks.appStateListeners).toHaveLength(0);
+
+      setVisibility("hidden");
+      setVisibility("visible");
+      expect(dwells).toEqual([null]);
+
+      subscription.dispose();
+    });
+
+    it("Web: boot-hidden reports a null dwell on the first visible", () => {
+      capacitorEventMocks.platform = "web";
       state = "hidden";
       const host = runner(null);
       const dwells: Array<number | null> = [];
@@ -718,6 +653,47 @@ describe("MobileRunnerHost", () => {
 
       expect(dwells).toEqual([null]);
       subscription.dispose();
+    });
+
+    it("delivers the same resume to every subscriber and drops only the disposed one", () => {
+      const host = runner(null);
+      const firstResumes: number[] = [];
+      const secondResumes: number[] = [];
+      const first = host.onSystemResumed(() => firstResumes.push(1));
+      const second = host.onSystemResumed(() => secondResumes.push(1));
+
+      fireAppPause();
+      fireAppResume();
+      expect(firstResumes).toEqual([1]);
+      expect(secondResumes).toEqual([1]);
+
+      first.dispose();
+      fireAppPause();
+      fireAppResume();
+      expect(firstResumes).toEqual([1]);
+      expect(secondResumes).toEqual([1, 1]);
+
+      second.dispose();
+    });
+
+    it("keeps notifying the other subscribers when one throws", () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const host = runner(null);
+      const liveResumes: number[] = [];
+      const throwing = host.onSystemResumed(() => {
+        throw new Error("subscriber failure");
+      });
+      const live = host.onSystemResumed(() => liveResumes.push(1));
+
+      fireAppPause();
+      fireAppResume();
+
+      expect(liveResumes).toEqual([1]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      throwing.dispose();
+      live.dispose();
+      errorSpy.mockRestore();
     });
   });
 
@@ -736,12 +712,7 @@ describe("MobileRunnerHost", () => {
       Reflect.deleteProperty(document, "visibilityState");
     });
 
-    function setVisibility(next: DocumentVisibilityState): void {
-      state = next;
-      document.dispatchEvent(new Event("visibilitychange"));
-    }
-
-    /** Subscribes and lets the async seed (`Network.getStatus`) settle. */
+    /** Subscribes and lets the read-listen-read bootstrap settle. */
     async function subscribeNetwork(host: MobileRunnerHost): Promise<{
       readonly changes: number[];
       readonly dispose: () => void;
@@ -751,7 +722,7 @@ describe("MobileRunnerHost", () => {
       await vi.waitFor(() =>
         expect(capacitorEventMocks.networkListeners).toHaveLength(1),
       );
-      // One macrotask beat for the `getStatus` seed promise to land.
+      // A macrotask beat for the two snapshots + reconcile to land.
       await new Promise((resolve) => setTimeout(resolve, 0));
       return { changes, dispose: () => subscription.dispose() };
     }
@@ -789,12 +760,33 @@ describe("MobileRunnerHost", () => {
       dispose();
     });
 
-    it("buffers a change racing the baseline read - connectivity regained is not eaten as bootstrap", async () => {
-      capacitorEventMocks.networkStatus = {
+    it("a transition INSIDE the registration gap - visible only as A != B - still signals once", async () => {
+      // Snapshot A sees the boot network; the transition lands before the JS
+      // listener exists (no callback anywhere); snapshot B sees the result.
+      capacitorEventMocks.networkStatusQueue.push(
+        { connected: true, connectionType: "wifi" },
+        { connected: true, connectionType: "cellular" },
+      );
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      expect(changes).toEqual([1]);
+      // ...and the baseline adopted B, so a callback re-announcing it is not
+      // a second edge.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      expect(changes).toEqual([1]);
+
+      dispose();
+    });
+
+    it("a buffered callback and snapshot B describing the same transition signal once", async () => {
+      capacitorEventMocks.holdNetworkSeed = true;
+      // Snapshot A (queued answer) sees the offline boot; snapshot B falls
+      // back to the live status, which by then reports the regain.
+      capacitorEventMocks.networkStatusQueue.push({
         connected: false,
         connectionType: "none",
-      };
-      capacitorEventMocks.holdNetworkSeed = true;
+      });
       const host = runner(null);
       const changes: number[] = [];
       const subscription = host.onNetworkPathChanged(() => changes.push(1));
@@ -802,18 +794,18 @@ describe("MobileRunnerHost", () => {
         expect(capacitorEventMocks.networkListeners).toHaveLength(1),
       );
 
-      // The real transition lands while `getStatus()` is still in flight.
-      // Unbuffered, it would BECOME the baseline and the edge would vanish.
+      // The regain arrives as a live callback while the snapshots are held,
+      // and B (resolved after release) reports the same post-transition
+      // state.
       fireNetworkStatus({ connected: true, connectionType: "wifi" });
       expect(changes).toEqual([]);
-
       capacitorEventMocks.releaseNetworkSeed();
       await vi.waitFor(() => expect(changes).toEqual([1]));
 
       subscription.dispose();
     });
 
-    it("buffers a type-change racing the baseline read", async () => {
+    it("a transient flap observed in the buffer still signals once - the socket it killed stays dead", async () => {
       capacitorEventMocks.holdNetworkSeed = true;
       const host = runner(null);
       const changes: number[] = [];
@@ -822,16 +814,20 @@ describe("MobileRunnerHost", () => {
         expect(capacitorEventMocks.networkListeners).toHaveLength(1),
       );
 
+      // wifi -> cellular -> wifi while bootstrap is held: A and B agree, but
+      // the path provably moved twice in between.
       fireNetworkStatus({ connected: true, connectionType: "cellular" });
-      expect(changes).toEqual([]);
-
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
       capacitorEventMocks.releaseNetworkSeed();
       await vi.waitFor(() => expect(changes).toEqual([1]));
+      // Exactly once, not once per hop.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(changes).toEqual([1]);
 
       subscription.dispose();
     });
 
-    it("a buffered callback matching the baseline stays silent", async () => {
+    it("a quiet bootstrap - snapshots and callbacks all agreeing - signals nothing", async () => {
       capacitorEventMocks.holdNetworkSeed = true;
       const host = runner(null);
       const changes: number[] = [];
@@ -840,7 +836,6 @@ describe("MobileRunnerHost", () => {
         expect(capacitorEventMocks.networkListeners).toHaveLength(1),
       );
 
-      // The plugin re-announcing the boot status is bootstrap, not a change.
       fireNetworkStatus({ connected: true, connectionType: "wifi" });
       capacitorEventMocks.releaseNetworkSeed();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -853,7 +848,8 @@ describe("MobileRunnerHost", () => {
       const host = runner(null);
       const { changes, dispose } = await subscribeNetwork(host);
 
-      setVisibility("hidden");
+      // iOS: the selected background evidence is the native pause.
+      fireAppPause();
       // A backgrounded phone hopping networks must not reopen a splice
       // nobody is looking at.
       fireNetworkStatus({ connected: true, connectionType: "cellular" });
@@ -861,7 +857,7 @@ describe("MobileRunnerHost", () => {
 
       // The tracked status still advanced, so the return itself replays
       // nothing - recovery on resume belongs to the resume edge.
-      setVisibility("visible");
+      fireAppResume();
       expect(changes).toEqual([]);
 
       // ...but the NEXT foreground change fires against the updated baseline.
@@ -904,14 +900,14 @@ describe("MobileRunnerHost", () => {
       subscription.dispose();
     });
 
-    it("fires exactly once on the hidden -> visible edge", () => {
+    it("fires exactly once on the background -> foreground edge", () => {
       const host = runner(null);
       const callbacks: number[] = [];
       const subscription = host.onAuthCallback(() => callbacks.push(1));
 
-      setVisibility("hidden");
+      fireAppPause();
       expect(callbacks).toEqual([]);
-      setVisibility("visible");
+      fireAppResume();
       expect(callbacks).toEqual([1]);
 
       subscription.dispose();
@@ -922,14 +918,14 @@ describe("MobileRunnerHost", () => {
       const callbacks: number[] = [];
       const subscription = host.onAuthCallback(() => callbacks.push(1));
 
-      setVisibility("hidden");
-      setVisibility("visible");
+      fireAppPause();
+      fireAppResume();
       expect(callbacks).toEqual([1]);
 
       subscription.dispose();
 
-      setVisibility("hidden");
-      setVisibility("visible");
+      fireAppPause();
+      fireAppResume();
       expect(callbacks).toEqual([1]);
     });
 
@@ -942,8 +938,8 @@ describe("MobileRunnerHost", () => {
         systemResumes.push(1),
       );
 
-      setVisibility("hidden");
-      setVisibility("visible");
+      fireAppPause();
+      fireAppResume();
 
       expect(authCallbacks).toEqual([1]);
       expect(systemResumes).toEqual([1]);
@@ -1019,14 +1015,14 @@ describe("MobileRunnerHost", () => {
       const changes: number[] = [];
       const subscription = pushPermission.onChange(() => changes.push(1));
 
-      setVisibility("hidden");
+      fireAppPause();
       expect(changes).toEqual([]);
-      setVisibility("visible");
+      fireAppResume();
       expect(changes).toEqual([1]);
 
       subscription.dispose();
-      setVisibility("hidden");
-      setVisibility("visible");
+      fireAppPause();
+      fireAppResume();
       expect(changes).toEqual([1]);
     });
 

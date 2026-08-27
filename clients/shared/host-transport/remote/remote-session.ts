@@ -1303,18 +1303,22 @@ export class RemoteSession<
       this.pullRedialToNow(reason);
       return;
     }
-    if (this.phase === "reconnecting" && this.backoffTimer !== null) {
+    if (this.backoffTimer !== null) {
+      // An armed backoff timer is the truth REGARDLESS of phase: the
+      // pre-dial landers (a failed grant mint, a thrown connect path) arm it
+      // while the phase still reads `connecting`, and a force landing just
+      // after one of them has no future failure lander left to spend a
+      // recorded intent - the pending wait itself is what must move.
       this.pullRedialToNow(reason);
       return;
     }
-    // connecting/handshaking, or reconnecting with a dial already in flight:
-    // an attach is running, bounded by its own phase timers - which fire
-    // immediately on unfreeze if the runtime slept through them. It is not
-    // interrupted (one dial owner at a time), but the demand is NOT dropped
-    // either: record it against this exact generation, so if this attempt
-    // fails its loss redials immediately instead of arming the rung the
-    // caller was trying to skip. Success consumes the intent - a fresh
-    // attach is everything a force could have bought.
+    // A dial/handshake/revalidation is genuinely in flight with no timer
+    // armed: it is not interrupted (one dial owner at a time), but the
+    // demand is NOT dropped either - record it against this exact
+    // generation, so if this attempt fails its loss redials immediately
+    // instead of arming the rung the caller was trying to skip. Success
+    // consumes the intent - a fresh attach is everything a force could have
+    // bought.
     this.pendingForceGeneration = this.connectGeneration;
   }
 
@@ -1555,7 +1559,7 @@ export class RemoteSession<
         this.dialAttemptId(generation),
         "indeterminate",
       );
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `could not mint an attach grant: ${provision.detail}`,
         // The per-attempt text goes in the CONTEXT, never the cause: a server
@@ -2462,17 +2466,8 @@ export class RemoteSession<
     }
     this.dropConnection(cause);
     this.syncReadinessLatch();
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
-    if (this.pendingForceGeneration === generation) {
-      // A force arrived while THIS generation's dial was in flight. The rung
-      // above was armed first, so attempt accounting and the failure log see
-      // the ordinary schedule - and only then is the recorded demand spent,
-      // by pulling this one wait to zero. Generation-scoped on both sides:
-      // a newer dial's loss can never spend an older intent.
-      this.pendingForceGeneration = null;
-      this.pullRedialToNow("pending-forced-redial");
-    }
     // THE host-plane funnel: every relay-socket close, Noise/handshake
     // rejection, `peer_gone`, and phase timeout arrives here. This is the one
     // site in the remote loop that observes the HOST rather than the cloud, so
@@ -2655,7 +2650,12 @@ export class RemoteSession<
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
     this.dropConnection("session-fatal-unauthorized");
-    void this.revalidateThenReconnect(auth, details, rejectedBearer);
+    void this.revalidateThenReconnect(
+      generation,
+      auth,
+      details,
+      rejectedBearer,
+    );
   }
 
   /**
@@ -2672,11 +2672,19 @@ export class RemoteSession<
    * the host keeps rejecting) is bounded and goes terminal to stop looping.
    */
   private async revalidateThenReconnect(
+    generation: number,
     auth: StreamAuthRevalidator,
     details: FatalErrorDetails,
     rejectedBearer: string | null,
   ): Promise<void> {
     const outcome = await this.revalidateWithinBudget(auth);
+    if (generation !== this.connectGeneration) {
+      // A stale completion: the generation this revalidation was recovering
+      // has been superseded while it was in flight. It owns nothing now - it
+      // must neither schedule a redial for the new owner nor spend an intent
+      // recorded against a different generation.
+      return;
+    }
     if (this.phase !== "reconnecting" || this.connection !== null) {
       // Closed - or a competing path already owns reconnection - while the
       // revalidation was in flight.
@@ -2688,7 +2696,7 @@ export class RemoteSession<
     }
     if (outcome === "network-error") {
       this.noProgressUnauthorizedReconnects = 0;
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause:
           "the host rejected the session bearer (UNAUTHORIZED) and revalidating the credential hit a network error",
@@ -2718,7 +2726,7 @@ export class RemoteSession<
     } else {
       this.noProgressUnauthorizedReconnects = 0;
     }
-    const retryInMs = this.scheduleReconnect();
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({
       cause:
         "the host rejected the session bearer (UNAUTHORIZED); redialing after credential revalidation",
@@ -2777,6 +2785,10 @@ export class RemoteSession<
     );
     this.terminalFatalDetails = details;
     this.phase = "closed";
+    // Terminal means every recorded demand dies with the loop - the field's
+    // contract says terminal close clears it, and BOTH terminal transitions
+    // (caller `close()` and this fatal) must honor that, not just one.
+    this.pendingForceGeneration = null;
     this.restoredStreamIds.clear();
     this.clearAllTimers();
     this.teardownConnection("session-fatal");
@@ -3056,6 +3068,42 @@ export class RemoteSession<
   }
 
   /**
+   * Spends a force recorded against `generation`, pulling the backoff that
+   * generation's failure just armed to zero. Called after EVERY path that
+   * arms a reconnect for a failed attempt - the connection-loss funnel and
+   * the direct schedulers (grant-provision failure, a thrown connect path,
+   * UNAUTHORIZED revalidation) alike - so whether the demand is honored does
+   * not depend on which lander a failure happens to take. The rung is always
+   * armed first: attempt accounting and the failure log see the ordinary
+   * schedule, and only then is the one wait pulled to zero.
+   * Generation-scoped on both sides: a newer dial's loss can never spend an
+   * older intent.
+   */
+  private consumePendingForce(generation: number): void {
+    if (this.pendingForceGeneration !== generation) {
+      return;
+    }
+    this.pendingForceGeneration = null;
+    this.pullRedialToNow("pending-forced-redial");
+  }
+
+  /**
+   * THE reconnect scheduler for a failed attempt: arms the ordinary rung
+   * (attempt accounting, jitter, and the failure log all see the ordinary
+   * delay, which is returned for that log) and then spends a force recorded
+   * against exactly `generation` by pulling that newly armed wait to zero.
+   * Every retryable failure lander must come through here - the loss funnel,
+   * the grant-provision failure, the thrown connect path, and both
+   * UNAUTHORIZED revalidation arms - so whether a recorded demand is honored
+   * cannot depend on which lander a failure happens to take.
+   */
+  private scheduleReconnectForFailedGeneration(generation: number): number {
+    const retryInMs = this.scheduleReconnect();
+    this.consumePendingForce(generation);
+    return retryInMs;
+  }
+
+  /**
    * Clears a pending backoff wait and dials NOW. Distinct from
    * {@link collapseBackoff} on both axes that make collapse safe to wire to
    * free-firing signals: no jitter (the callers are single-device,
@@ -3068,7 +3116,13 @@ export class RemoteSession<
    * redials.
    */
   private pullRedialToNow(reason: string): void {
-    if (this.phase !== "reconnecting" || this.backoffTimer === null) {
+    // Keyed on the ARMED TIMER, not on a phase: the pre-dial landers (a
+    // failed grant mint, a thrown connect path) arm their backoff while the
+    // phase still reads `connecting`, and a pull that insisted on
+    // `reconnecting` silently no-opped for exactly the failures the pending
+    // force exists to hurry. A pending wait is a pending wait; `closed` is
+    // the only state whose timer must never be revived.
+    if (this.phase === "closed" || this.backoffTimer === null) {
       return;
     }
     clearTimeout(this.backoffTimer);
@@ -3127,7 +3181,7 @@ export class RemoteSession<
         return;
       }
       this.dropConnection("connect-path-threw");
-      const retryInMs = this.scheduleReconnect();
+      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `the connect path threw before dialing: ${
           cause instanceof Error ? cause.message : String(cause)

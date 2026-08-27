@@ -222,6 +222,60 @@ describe("RelaySocket.pokeKeepalive", () => {
     }
   });
 
+  it("a retired arm's captured deadline callback is inert against the fresh arm", () => {
+    vi.useFakeTimers();
+    const scheduledCallbacks: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      (callback: () => void, delayMs: number): NodeJS.Timeout => {
+        scheduledCallbacks.push(callback);
+        return originalSetTimeout(callback, delayMs);
+      },
+    );
+    try {
+      vi.setSystemTime(0);
+      const handlers = buildHandlers();
+      const relaySocket = new RelaySocket({
+        attachBaseUrl: "wss://relay.test/attach",
+        grantJws: "grant-jws",
+        webSocketFactory: factory,
+        handlers,
+      });
+      socket.onopen?.({ type: "open" });
+
+      // Arm A with a short deadline and a strong policy, then answer it.
+      const beforeArmA = scheduledCallbacks.length;
+      relaySocket.pokeKeepalive(1_000, true);
+      expect(scheduledCallbacks.length).toBe(beforeArmA + 1);
+      const armADeadline = scheduledCallbacks[beforeArmA];
+      socket.onmessage?.({ type: "text", data: "relay-pong" });
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // Arm B: longer deadline, weaker policy.
+      relaySocket.pokeKeepalive(5_000, false);
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // The stale capture of A's deadline fires anyway - a runtime is free to
+      // deliver it however late. Manual invocation (not timer advancement) is
+      // the point: `clearTimeout` would hide a broken token guard.
+      armADeadline();
+      expect(handlers.closeEvents).toEqual([]);
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // B still runs to ITS OWN deadline, producing exactly one close.
+      vi.advanceTimersByTime(4_999);
+      expect(handlers.closeEvents).toEqual([]);
+      vi.advanceTimersByTime(2);
+      expect(handlers.closeEvents).toEqual([
+        { code: 4006, reason: "relay-wake-probe-timeout" },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("arms a fresh probe after an earlier one was answered", () => {
     vi.useFakeTimers();
     try {

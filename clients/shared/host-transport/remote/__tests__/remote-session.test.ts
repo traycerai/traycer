@@ -3186,7 +3186,7 @@ describe("RemoteSession wake", () => {
         timeoutMs: 250,
         immediateRedialOnFailure: false,
       });
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       expect(relay.openBearers).toHaveLength(3);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 8_000,
@@ -3265,7 +3265,7 @@ describe("RemoteSession wake", () => {
       // loss and waits out its rung - the discriminating arm against the
       // inherit-on-unanswered case above.
       relay.dropCurrentConnection();
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       expect(relay.openBearers).toHaveLength(3);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 8_000,
@@ -3302,7 +3302,7 @@ describe("RemoteSession wake", () => {
       // escalated rung (jittered floor 1s past the ~250ms probe). Still only
       // three opens at the window where the latched arm above had four - the
       // two arms MUST read differently or the gate is decorative.
-      await new Promise((resolve) => setTimeout(resolve, 900));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       expect(relay.openBearers).toHaveLength(3);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 8_000,
@@ -3801,13 +3801,371 @@ describe("RemoteSession forceReconnect", () => {
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
       relay.stallOpens = false;
       await relay.releaseStalledOpens();
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       // Still one open: a never-ready session's first failure arms the
       // jittered initial rung (floor 500ms), which the forced arm above
       // provably beat.
       expect(relay.openBearers).toHaveLength(1);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
       expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a force during a stalled GRANT mint is spent when that pre-dial path fails - not only the loss funnel", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    // A grant provider the test releases by hand: first mint hangs until
+    // released and then FAILS (the pre-dial lander that schedules its
+    // reconnect directly, without ever reaching the connection-loss funnel);
+    // every later mint succeeds.
+    let releaseFirstMint = (): void => undefined;
+    const firstMint = new Promise<void>((resolve) => {
+      releaseFirstMint = resolve;
+    });
+    let mintIndex = 0;
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: async () => {
+        mintIndex += 1;
+        if (mintIndex === 1) {
+          await firstMint;
+          return {
+            kind: "unavailable" as const,
+            detail: "authn 503",
+            context: "",
+          };
+        }
+        return {
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        };
+      },
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
+      // The demand lands while the mint is still in flight - same iOS
+      // ordering as the stalled-attach case, different failure lander.
+      session.forceReconnect("network-path-changed");
+      const releasedAt = Date.now();
+      releaseFirstMint();
+      // The failed mint arms the first rung (jittered floor 500ms); the
+      // retained force must pull that wait to zero from THIS lander too.
+      await vi.waitFor(() => expect(mintIndex).toBe(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      expect(Date.now() - releasedAt).toBeLessThan(400);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("without a force, the failed grant mint waits its rung - the pre-dial control arm", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    let mintIndex = 0;
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: async () => {
+        mintIndex += 1;
+        if (mintIndex === 1) {
+          return {
+            kind: "unavailable" as const,
+            detail: "authn 503",
+            context: "",
+          };
+        }
+        return {
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        };
+      },
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      // Inside the rung's jittered floor (500ms): no forced demand, no early
+      // dial - the discriminating control for the forced grant arm above.
+      expect(mintIndex).toBe(1);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a force during a stalled PRE-SOCKET rejection (grant provider throws) is spent on that lander too", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    let releaseFirstMint = (): void => undefined;
+    const firstMint = new Promise<void>((resolve) => {
+      releaseFirstMint = resolve;
+    });
+    let mintIndex = 0;
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: async () => {
+        mintIndex += 1;
+        if (mintIndex === 1) {
+          await firstMint;
+          // The awaited pre-socket path REJECTS - the `beginConnectGuarded`
+          // catch lander, distinct from a structured `unavailable` result.
+          throw new Error("grant fetch transport failure");
+        }
+        return {
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        };
+      },
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      const releasedAt = Date.now();
+      releaseFirstMint();
+      await vi.waitFor(() => expect(mintIndex).toBe(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      expect(Date.now() - releasedAt).toBeLessThan(400);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a force arriving AFTER a pre-dial lander already armed its rung pulls that timer now", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    let mintIndex = 0;
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      grantProvider: async () => {
+        mintIndex += 1;
+        if (mintIndex === 1) {
+          return {
+            kind: "unavailable" as const,
+            detail: "authn 503",
+            context: "",
+          };
+        }
+        return {
+          kind: "ok" as const,
+          grant: { grant: "grant-jws", expiresInSeconds: 300 },
+        };
+      },
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(mintIndex).toBe(1), WAIT);
+      // Let the lander finish arming its rung. The phase still reads
+      // `connecting` here - a force keyed on `reconnecting` would fall
+      // through to pending ownership with no future failure left to spend it.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const forcedAt = Date.now();
+      session.forceReconnect("user-retry");
+      await vi.waitFor(() => expect(mintIndex).toBe(2), {
+        timeout: 300,
+        interval: 10,
+      });
+      expect(Date.now() - forcedAt).toBeLessThan(300);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a spent force skips ONE wait without pardoning the ladder - the next failure waits its escalated rung", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    // A never-ready pair: the forced attempt and the one after it both fail,
+    // so the ladder is the only thing pacing the third dial.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      // The forced skip: the second dial lands immediately.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      // Its failure was UNFORCED, and the first failure already spent attempt
+      // #1 - so this wait is the second rung (jittered [1s, 2s)). A helper
+      // that pardoned `reconnectAttempt` when spending the force would land
+      // the third dial inside the first rung's [500ms, 1s) window instead.
+      const secondFailureAt = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(relay.openBearers).toHaveLength(2);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      expect(Date.now() - secondFailureAt).toBeGreaterThanOrEqual(950);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("multiple forces during one in-flight generation buy exactly one skip", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex === 0
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      session.forceReconnect("user-retry");
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 400,
+        interval: 10,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      // One skip, one redial - a burst of demands is not a dial storm.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(relay.openBearers).toHaveLength(2);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a force during an in-flight UNAUTHORIZED revalidation is spent on both outcome arms", async () => {
+    for (const outcome of ["network-error", "rotated"] as const) {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      // First open: UNAUTHORIZED (recoverable via the revalidator); later
+      // opens succeed.
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      let releaseRevalidation = (): void => undefined;
+      const revalidationHeld = new Promise<void>((resolve) => {
+        releaseRevalidation = resolve;
+      });
+      const session = buildSession(relay, lease, {
+        revalidateForReconnect: async () => {
+          await revalidationHeld;
+          // "rotated" must present a DIFFERENT bearer than the rejected one
+          // or the no-progress bound trips; rotate the lease in place.
+          if (outcome === "rotated") {
+            lease.rotate("token-rotated");
+          }
+          return outcome;
+        },
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+        // The revalidation is now in flight (the UNAUTHORIZED fatal dropped
+        // the connection first). A resume/network force lands here.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        session.forceReconnect("network-path-changed");
+        const releasedAt = Date.now();
+        releaseRevalidation();
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+          timeout: 400,
+          interval: 10,
+        });
+        expect(Date.now() - releasedAt).toBeLessThan(400);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    }
+  }, 20_000);
+
+  it("without a force, both revalidation arms wait their rung - the discriminating controls", async () => {
+    for (const outcome of ["network-error", "rotated"] as const) {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("token", "user-1");
+      relay.decideOpen = (_bearer, openIndex) =>
+        openIndex === 0
+          ? { kind: "fatal", details: unauthorizedDetails() }
+          : { kind: "ack" };
+      let releaseRevalidation = (): void => undefined;
+      const revalidationHeld = new Promise<void>((resolve) => {
+        releaseRevalidation = resolve;
+      });
+      const session = buildSession(relay, lease, {
+        revalidateForReconnect: async () => {
+          await revalidationHeld;
+          if (outcome === "rotated") {
+            lease.rotate("token-rotated");
+          }
+          return outcome;
+        },
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        releaseRevalidation();
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        // Inside the rung's jittered floor: no force, no early dial.
+        expect(relay.openBearers).toHaveLength(1);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    }
+  }, 20_000);
+
+  it("a force during the handshake followed by a terminal fatal clears the intent and stays closed", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.stallOpens = true;
+    relay.decideOpen = () => ({
+      kind: "fatal",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "manifest mismatch",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      // Terminal means every recorded demand died with the loop: no zombie
+      // dial fires on the pulled-forward intent.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(relay.openBearers).toHaveLength(1);
+      expect(session.isClosed()).toBe(true);
     } finally {
       session.close();
     }
@@ -3836,14 +4194,14 @@ describe("RemoteSession forceReconnect", () => {
       relay.dropCurrentConnection();
       await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
       const failedAt = Date.now();
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       expect(relay.openBearers).toHaveLength(2);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 8_000,
         interval: 50,
       });
       expect(relay.openBearers).toHaveLength(3);
-      expect(Date.now() - failedAt).toBeGreaterThanOrEqual(400);
+      expect(Date.now() - failedAt).toBeGreaterThanOrEqual(250);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
