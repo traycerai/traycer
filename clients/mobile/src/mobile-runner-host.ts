@@ -1,5 +1,5 @@
 import { App } from "@capacitor/app";
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";
 import { Network, type ConnectionStatus } from "@capacitor/network";
 import { SecureStoragePlugin } from "capacitor-secure-storage-plugin";
@@ -1262,6 +1262,17 @@ class MobileSystemResume {
   private background = false;
   /** Stamped only by the numeric modes; `null` dwell everywhere else. */
   private enteredAt: number | null = null;
+  /**
+   * Ownership token for the native pair. Every native callback checks it
+   * before acting, and the FIRST registration failure bumps it SYNCHRONOUSLY -
+   * so a successfully-registered half whose handle removal is still in
+   * flight, or whose events were already queued, is retired the instant the
+   * pair is known broken, before the DOM fallback can take over. Without
+   * this there is a real interval with two owners: a late partial `pause`
+   * could stamp numeric state under DOM ownership, sticking the network gate
+   * or making the null-dwell fallback report a number.
+   */
+  private nativeOwnerToken = 0;
 
   constructor(private readonly mode: ResumeEvidenceMode) {}
 
@@ -1297,12 +1308,29 @@ class MobileSystemResume {
     this.enteredAt = stampDwell ? Date.now() : null;
   }
 
+  /**
+   * Invoked synchronously on every background -> foreground transition,
+   * BEFORE any resume handler runs. The network watcher registers here: its
+   * quarantine generation must be open before the resume wake is issued, or
+   * a queued network callback delivered between the wake and the watcher's
+   * own (unordered) resume handler could fire a second forced drop against
+   * the mux that wake just recovered.
+   */
+  private epochBoundaryListener: (() => void) | null = null;
+
+  setEpochBoundaryListener(listener: () => void): void {
+    this.epochBoundaryListener = listener;
+  }
+
   private noteForeground(): void {
     if (!this.background) {
       // A duplicate foreground, or a cold start's first active report.
       return;
     }
     this.background = false;
+    if (this.epochBoundaryListener !== null) {
+      this.epochBoundaryListener();
+    }
     const enteredAt = this.enteredAt;
     this.enteredAt = null;
     const event: SystemResumeEvent = {
@@ -1365,18 +1393,36 @@ class MobileSystemResume {
    * two sources can never own one episode.
    */
   private installNativePair(mode: "ios-lifecycle" | "android-app-state"): void {
+    const token = ++this.nativeOwnerToken;
+    const owned = (callback: () => void) => (): void => {
+      if (token !== this.nativeOwnerToken) {
+        // A retired owner's callback - a queued event from a half-registered
+        // pair, delivered after fallback. Inert by contract.
+        return;
+      }
+      callback();
+    };
     const registrations =
       mode === "ios-lifecycle"
         ? [
-            App.addListener("pause", () => {
-              this.noteBackground(true);
-            }),
-            App.addListener("resume", () => {
-              this.noteForeground();
-            }),
+            App.addListener(
+              "pause",
+              owned(() => {
+                this.noteBackground(true);
+              }),
+            ),
+            App.addListener(
+              "resume",
+              owned(() => {
+                this.noteForeground();
+              }),
+            ),
           ]
         : [
             App.addListener("appStateChange", (state) => {
+              if (token !== this.nativeOwnerToken) {
+                return;
+              }
               if (state.isActive) {
                 this.noteForeground();
               } else {
@@ -1384,18 +1430,39 @@ class MobileSystemResume {
               }
             }),
           ];
-    void Promise.all(registrations).catch((error: unknown) => {
-      console.warn(
-        "[mobile] native lifecycle listeners unavailable - falling back to DOM visibility",
-        error,
-      );
-      for (const registration of registrations) {
-        void registration
-          .then((handle) => handle.remove())
-          .catch(() => undefined);
+    void (async () => {
+      try {
+        await Promise.all(registrations);
+        return;
+      } catch (error) {
+        console.warn(
+          "[mobile] native lifecycle listeners unavailable - falling back to DOM visibility",
+          error,
+        );
       }
+      // Ownership changes FIRST, synchronously with learning of the failure:
+      // every native callback above is inert from this line on, however long
+      // the handle removals below take and whatever the bridge already
+      // queued.
+      this.nativeOwnerToken += 1;
+      // Reset anything a partial native callback wrote before retirement -
+      // the DOM pair must seed from a clean slate, and a native-stamped
+      // number must never ride out through the null-dwell fallback.
+      this.background = false;
+      this.enteredAt = null;
+      const settled = await Promise.allSettled(registrations);
+      await Promise.allSettled(
+        settled
+          .filter(
+            (
+              outcome,
+            ): outcome is PromiseFulfilledResult<PluginListenerHandle> =>
+              outcome.status === "fulfilled",
+          )
+          .map((outcome) => outcome.value.remove()),
+      );
       this.installDomPair();
-    });
+    })();
   }
 }
 
@@ -1438,11 +1505,33 @@ class MobileNetworkPathWatcher {
   private readonly handlers = new Set<() => void>();
   private lastStatus: ConnectionStatus | null = null;
   /**
-   * Change callbacks that arrived before the `getStatus()` baseline settled;
-   * `null` once seeding is complete (resolved OR rejected) and callbacks flow
-   * straight through.
+   * Observations buffered during bootstrap, each tagged with the lifecycle
+   * tracker's state AT ARRIVAL - a transition observed while backgrounded
+   * belongs to that background episode, and the resume edge (not this
+   * watcher) owns that episode's recovery. `null` once bootstrap has
+   * reconciled and callbacks flow straight through.
    */
-  private preSeedStatuses: ConnectionStatus[] | null = [];
+  private preSeedObservations: Array<{
+    readonly status: ConnectionStatus;
+    readonly backgrounded: boolean;
+  }> | null = [];
+  /**
+   * Bumped on EVERY callback arrival, buffered or live. A snapshot may be
+   * adopted as a baseline only if it resolved with no intervening callback
+   * (its captured value could otherwise be OLDER than an already-delivered
+   * observation - the native read races the event stream).
+   */
+  private callbackRevision = 0;
+  /** Whether a resume completed while bootstrap was still reconciling. */
+  private bootstrapSawResume = false;
+  /**
+   * True from a resume event until the post-resume rebaseline read settles.
+   * Callbacks arriving inside this window are retired into the baseline
+   * silently: they describe (or race with) the background episode the resume
+   * just recovered from, and the resume wake is that episode's single
+   * recovery owner.
+   */
+  private rebaselineActive = false;
   private listening = false;
 
   constructor(private readonly systemResume: MobileSystemResume) {}
@@ -1470,18 +1559,7 @@ class MobileNetworkPathWatcher {
     return regained || pathMoved;
   }
 
-  private noteStatus(status: ConnectionStatus): void {
-    const previous = this.lastStatus;
-    this.lastStatus = status;
-    if (previous === null) {
-      return;
-    }
-    if (!MobileNetworkPathWatcher.isRecoveryTransition(previous, status)) {
-      return;
-    }
-    if (this.systemResume.isBackgrounded()) {
-      return;
-    }
+  private emitPathChanged(): void {
     for (const handler of Array.from(this.handlers)) {
       try {
         handler();
@@ -1490,6 +1568,45 @@ class MobileNetworkPathWatcher {
         console.error("[mobile] network-path handler threw", error);
       }
     }
+  }
+
+  /**
+   * Applies one live observation with CONFIRMATION: the observed status is
+   * validated against a revision-guarded current read before it may change
+   * the baseline or force a redial. JS delivery order is not occurrence
+   * order - a native event queued during a background episode can be
+   * delivered long after resume, and a stale `offline` followed by a late
+   * `online` must collapse against the confirmed current status instead of
+   * manufacturing a recovery edge. Confirmation is UNIVERSAL rather than
+   * scoped to a could-still-be-stale window because no callback-side
+   * property bounds that window; the cost is one native round trip per
+   * (rare) network event. The accepted trade: a genuine flap shorter than
+   * that round trip also collapses - the resume/probe machinery, not this
+   * edge, owns sub-roundtrip blips.
+   *
+   * A read that never goes quiet means newer callbacks are already in
+   * flight and each will run its own confirmation - this one folds the raw
+   * observation into the baseline WITHOUT forcing (conservative: an
+   * unconfirmable edge must not tear down a possibly-healthy mux).
+   */
+  private async confirmAndApply(observed: ConnectionStatus): Promise<void> {
+    const previous = this.lastStatus;
+    const confirmed = await this.settleQuietRead();
+    if (confirmed === null) {
+      this.lastStatus = observed;
+      return;
+    }
+    this.lastStatus = confirmed;
+    if (previous === null) {
+      return;
+    }
+    if (!MobileNetworkPathWatcher.isRecoveryTransition(previous, confirmed)) {
+      return;
+    }
+    if (this.systemResume.isBackgrounded()) {
+      return;
+    }
+    this.emitPathChanged();
   }
 
   private ensureListening(): void {
@@ -1497,86 +1614,202 @@ class MobileNetworkPathWatcher {
       return;
     }
     this.listening = true;
-    // The backgrounded gate below reads the resume tracker's state; make sure
-    // that state is live even when no resume consumer ever subscribed.
+    // The resume edge is this watcher's epoch boundary, wired through the
+    // tracker's SYNCHRONOUS pre-handler seam rather than an ordinary resume
+    // subscription: the quarantine below must already be open when the
+    // resume wake is issued, and subscriber iteration order guarantees
+    // nothing.
+    this.systemResume.setEpochBoundaryListener(() => {
+      this.onResumed();
+    });
     this.systemResume.ensureTracking();
-    // Read-listen-read bootstrap with one reconciliation - see the class doc.
-    const before = Network.getStatus();
+    // Failure-isolated read-listen-read bootstrap; see the class doc. The
+    // rejection handler attaches to snapshot A IMMEDIATELY - a listener
+    // registration failure must not leave A as an unhandled rejection.
+    const snapshotARead: Promise<ConnectionStatus | null> =
+      Network.getStatus().catch((error: unknown): null => {
+        console.warn("[mobile] network snapshot A unavailable", error);
+        return null;
+      });
     const listenerReady = Network.addListener(
       "networkStatusChange",
       (status) => {
-        if (this.preSeedStatuses !== null) {
-          // Bootstrap has not settled - hold the observation for the single
-          // reconciliation walk instead of letting it BECOME the baseline.
-          this.preSeedStatuses.push(status);
+        this.callbackRevision += 1;
+        if (this.preSeedObservations !== null) {
+          // Bootstrap has not reconciled - hold the observation, tagged with
+          // the lifecycle state it arrived under, instead of letting it
+          // BECOME the baseline.
+          this.preSeedObservations.push({
+            status,
+            backgrounded: this.systemResume.isBackgrounded(),
+          });
           return;
         }
-        this.noteStatus(status);
+        if (this.rebaselineActive) {
+          // Inside the post-resume quarantine: retire into the baseline. The
+          // resume wake owns this episode's recovery.
+          this.lastStatus = status;
+          return;
+        }
+        void this.confirmAndApply(status);
       },
     );
     void (async () => {
-      let snapshotA: ConnectionStatus | null = null;
-      let snapshotB: ConnectionStatus | null = null;
+      let listenerInstalled = false;
       try {
         await listenerReady;
-        snapshotA = await before;
-        snapshotB = await Network.getStatus();
+        listenerInstalled = true;
       } catch (error) {
-        console.warn("[mobile] network bootstrap unavailable", error);
+        console.warn(
+          "[mobile] networkStatusChange listener unavailable",
+          error,
+        );
       }
+      const snapshotA = await snapshotARead;
+      // Snapshot B exists to close the A-to-registration gap, so it is
+      // attempted whenever the listener actually installed - INDEPENDENT of
+      // whether A failed. A quiet read (no callback landing during its round
+      // trip) is required before its value may serve as an ordering anchor.
+      const snapshotB = listenerInstalled ? await this.settleQuietRead() : null;
       this.reconcileBootstrap(snapshotA, snapshotB);
     })();
   }
 
   /**
+   * Bounds the quiet-read retry loop: after this many reads that each raced
+   * a callback, the newest CALLBACK is simply the freshest observation there
+   * is, and it becomes the baseline instead.
+   */
+  private static readonly QUIET_READ_ATTEMPTS = 3;
+
+  /**
+   * Reads the current status until one read completes with NO callback
+   * arriving during its native round trip, or the attempt bound is hit
+   * (`null` - the caller falls back to the newest buffered/live callback).
+   * The revision check is what makes adoption LINEARIZABLE: a snapshot's
+   * value is captured native-side at call time, so a callback delivered
+   * before the promise resolves can be NEWER than the snapshot - adopting
+   * such a read as the baseline would resurrect a state the event stream
+   * already superseded.
+   */
+  private async settleQuietRead(): Promise<ConnectionStatus | null> {
+    for (
+      let attempt = 0;
+      attempt < MobileNetworkPathWatcher.QUIET_READ_ATTEMPTS;
+      attempt += 1
+    ) {
+      const revisionAtCall = this.callbackRevision;
+      let value: ConnectionStatus;
+      try {
+        value = await Network.getStatus();
+      } catch (error) {
+        console.warn("[mobile] network snapshot unavailable", error);
+        return null;
+      }
+      if (this.callbackRevision === revisionAtCall) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  /**
    * The single bootstrap walk: chain the observations in order (snapshot A,
-   * every buffered callback, snapshot B), emit at most ONE recovery signal if
-   * any adjacent step qualifies, and adopt the newest observation as the live
-   * baseline. A flap that returned to the starting state still signals - the
-   * socket it killed stays dead - and a callback that merely re-announces a
-   * snapshot contributes no step.
+   * every buffered callback, quiet snapshot B), emit at most ONE recovery
+   * signal, and adopt the newest observation as the live baseline. A flap
+   * that returned to the starting state still signals - the socket it killed
+   * stays dead - and a callback that merely re-announces a snapshot
+   * contributes no step.
+   *
+   * A step is signal-worthy only if BOTH its endpoints were observed in the
+   * foreground and no resume completed during bootstrap: an observation made
+   * (or raced) under a background episode belongs to that episode, and the
+   * resume edge is that episode's single recovery owner - reconciliation
+   * re-baselines from it, never re-announces it.
    */
   private reconcileBootstrap(
     snapshotA: ConnectionStatus | null,
     snapshotB: ConnectionStatus | null,
   ): void {
-    const buffered = this.preSeedStatuses ?? [];
-    this.preSeedStatuses = null;
-    const chain: ConnectionStatus[] = [];
+    const buffered = this.preSeedObservations ?? [];
+    this.preSeedObservations = null;
+    const chain: Array<{
+      readonly status: ConnectionStatus;
+      readonly backgrounded: boolean;
+    }> = [];
     if (snapshotA !== null) {
-      chain.push(snapshotA);
+      chain.push({
+        status: snapshotA,
+        backgrounded: this.systemResume.isBackgrounded(),
+      });
     }
     chain.push(...buffered);
     if (snapshotB !== null) {
-      chain.push(snapshotB);
+      chain.push({
+        status: snapshotB,
+        backgrounded: this.systemResume.isBackgrounded(),
+      });
     }
     if (chain.length === 0) {
-      // Nothing observed at all (both reads failed, no callbacks): the first
-      // live callback will seed the baseline, exactly as an unbuffered
-      // listener would have.
+      // Nothing observed at all (reads failed, no callbacks): the first live
+      // callback will seed the baseline, exactly as an unbuffered listener
+      // would have.
       return;
     }
-    let sawRecoveryTransition = false;
+    let sawForegroundRecovery = false;
     for (let i = 1; i < chain.length; i += 1) {
       if (
-        MobileNetworkPathWatcher.isRecoveryTransition(chain[i - 1], chain[i])
+        !chain[i - 1].backgrounded &&
+        !chain[i].backgrounded &&
+        MobileNetworkPathWatcher.isRecoveryTransition(
+          chain[i - 1].status,
+          chain[i].status,
+        )
       ) {
-        sawRecoveryTransition = true;
+        sawForegroundRecovery = true;
         break;
       }
     }
-    this.lastStatus = chain[chain.length - 1];
-    if (!sawRecoveryTransition || this.systemResume.isBackgrounded()) {
+    this.lastStatus = chain[chain.length - 1].status;
+    if (
+      !sawForegroundRecovery ||
+      this.bootstrapSawResume ||
+      this.systemResume.isBackgrounded()
+    ) {
       return;
     }
-    for (const handler of Array.from(this.handlers)) {
-      try {
-        handler();
-      } catch (error) {
-        // One bad subscriber must not cost the others the signal.
-        console.error("[mobile] network-path handler threw", error);
-      }
+    this.emitPathChanged();
+  }
+
+  /**
+   * The resume edge's hand-off: the completed background episode's recovery
+   * belongs to the resume wake, so the network baseline is re-read (quietly,
+   * same linearizable rule as bootstrap) and every observation delivered in
+   * the window - including the episode's own queued callbacks arriving after
+   * the foreground flip - is retired into the baseline rather than
+   * re-announced as a second forced wake against the freshly recovered mux.
+   */
+  private onResumed(): void {
+    if (this.preSeedObservations !== null) {
+      this.bootstrapSawResume = true;
+      return;
     }
+    if (this.rebaselineActive) {
+      return;
+    }
+    this.rebaselineActive = true;
+    void this.settleQuietRead()
+      .then((status) => {
+        if (status !== null) {
+          this.lastStatus = status;
+        }
+        // A null read means callbacks kept arriving (each already folded into
+        // the baseline by the listener) or the read failed - either way the
+        // newest observation stands.
+      })
+      .finally(() => {
+        this.rebaselineActive = false;
+      });
   }
 }
 

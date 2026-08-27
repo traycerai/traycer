@@ -3985,6 +3985,11 @@ describe("RemoteSession forceReconnect", () => {
   }, 10_000);
 
   it("a spent force skips ONE wait without pardoning the ladder - the next failure waits its escalated rung", async () => {
+    // Deterministic jitter: with `Math.random()` pinned at 0.5, the rungs
+    // are exact - rung 0 waits 750ms, rung 1 waits 1500ms - so the pardoning
+    // mutation cannot hide in the random tail (an un-stubbed [500ms, 1s)
+    // rung-0 draw can exceed a fixed probe window and stay green).
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
     const relay = new FakeRelayHost();
     const lease = new MutableBearerLease("token", "user-1");
     relay.stallOpens = true;
@@ -4007,23 +4012,84 @@ describe("RemoteSession forceReconnect", () => {
         interval: 10,
       });
       // Its failure was UNFORCED, and the first failure already spent attempt
-      // #1 - so this wait is the second rung (jittered [1s, 2s)). A helper
-      // that pardoned `reconnectAttempt` when spending the force would land
-      // the third dial inside the first rung's [500ms, 1s) window instead.
+      // #1 - so this wait is deterministically rung 1 = 1500ms. A helper that
+      // pardoned `reconnectAttempt` when spending the force would wait
+      // exactly rung 0 = 750ms instead, so the 1000ms probe below fails the
+      // mutant on every run, not merely on most draws.
       const secondFailureAt = Date.now();
-      await new Promise((resolve) => setTimeout(resolve, 450));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
       expect(relay.openBearers).toHaveLength(2);
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 8_000,
         interval: 50,
       });
       expect(relay.openBearers).toHaveLength(3);
-      expect(Date.now() - secondFailureAt).toBeGreaterThanOrEqual(950);
+      expect(Date.now() - secondFailureAt).toBeGreaterThanOrEqual(1_400);
       expect(relay.errors).toEqual([]);
     } finally {
       session.close();
+      randomSpy.mockRestore();
     }
   }, 15_000);
+
+  it("the ready boundary retires an in-flight force even when the rung it would zero is NONZERO", async () => {
+    // The discriminating order for the ready-boundary clear: the trivially
+    // green version drops a rung-0 session, where a stale surviving intent
+    // only zeroes a wait that was already zero. Here the reattach that gets
+    // forced rides an ESCALATED ladder, reaches ready inside the survival
+    // window (no forgiveness), and then drops - so a stale intent for that
+    // generation would zero a deterministic 1500ms rung. Deleting the ready
+    // clear turns the probe below red.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    // Two failures escalate; the third open is the forced reattach and acks.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      // Let the two failures land, then stall the THIRD generation mid-open.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      relay.stallOpens = true;
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      // Force while generation 3 is in flight with no armed timer: the
+      // intent is recorded against exactly that generation.
+      session.forceReconnect("network-path-changed");
+      relay.stallOpens = false;
+      await relay.releaseStalledOpens();
+      // Generation 3 reaches ready. The ladder is NOT forgiven (survival
+      // needs 30s), and the recorded force must be consumed here, unspent.
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      // Drop inside the survival window: this loss belongs to generation 3 -
+      // the very generation the stale intent (if the ready clear were
+      // deleted) would match and zero.
+      relay.dropCurrentConnection();
+      const droppedAt = Date.now();
+      // attempt=2, recovery offset 1 -> rung 1 is deterministically 1500ms.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      expect(relay.openBearers).toHaveLength(3);
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(Date.now() - droppedAt).toBeGreaterThanOrEqual(1_400);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+      randomSpy.mockRestore();
+    }
+  }, 20_000);
 
   it("multiple forces during one in-flight generation buy exactly one skip", async () => {
     const relay = new FakeRelayHost();
