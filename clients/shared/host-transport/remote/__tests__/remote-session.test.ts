@@ -32,6 +32,7 @@ import {
   type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import {
   createResponderHandshake,
   generateStaticKeyPair,
@@ -287,7 +288,10 @@ class FakeRelayHost {
    * capture ordering evidence (e.g. "was the stream frame already delivered
    * to the consumer?") at the exact tick the grant landed, not on a later poll. */
   onCreditGrant: (() => void) | null = null;
-  streamManifest = buildStreamManifest(emptyStreamRegistry);
+  streamManifest = buildStreamManifest(
+    emptyStreamRegistry,
+    SERVES_EVERY_INSTALLED_MAJOR,
+  );
   /**
    * The OPTIONAL rpc manifest the fake host advertises in `openAck`. Floor
    * stays empty (matching the empty client registries here); optional
@@ -1904,6 +1908,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
         expect(relay.subscribeSchemaVersions[0]).toEqual({
           major: 1,
           minor: 0,
+          supportedMajors: [1, 2],
         });
         expect(relay.errors).toEqual([]);
       } finally {
@@ -1918,7 +1923,10 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
     "re-reads the current params before a reconnect re-subscribes",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -3326,7 +3334,10 @@ describe("RemoteSession inbound bulk credit accounting (C1: per-FRAME, not per-m
       // transfer would stall forever. Accounting per FRAME (remote-session's
       // `onData`, right after decrypt) grants mid-transfer instead.
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -3386,7 +3397,10 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
     "no outbound frame is compressed when the host's openAck omits SESSION_CAPABILITY_BODY_COMPRESSION",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       // Explicit and empty: this host advertises nothing.
       relay.openAckCapabilities = [];
       const lease = new MutableBearerLease("valid-token", "user-1");
@@ -3430,7 +3444,10 @@ describe("RemoteSession body compression is gated on the host's openAck advert (
     "a large compressible body IS compressed once the host's openAck advertises SESSION_CAPABILITY_BODY_COMPRESSION",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       relay.openAckCapabilities = [SESSION_CAPABILITY_BODY_COMPRESSION];
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
@@ -3502,7 +3519,10 @@ describe("RemoteSession concurrent inbound chunk-sequence reassembly (C3, client
       // synchronous burst, and asserts every sequence reassembles to its own
       // stream with no cross-stream splice.
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -3603,7 +3623,10 @@ describe("RemoteSession per-stream inbound error routing", () => {
     "fails only the corrupted stream on a chunk-sequence mismatch - the session stays ready and an untouched sibling stream keeps working",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -3730,7 +3753,10 @@ describe("RemoteSession per-stream inbound error routing", () => {
       // a fresh output buffer, holding no state across frames or streams that
       // a bad payload could poison.
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -4171,7 +4197,10 @@ describe("RemoteSession poisoned inbound on a subscription stream (S2 / S4-clien
     "fails the poisoned stream and notifies the host (S2), then refuses to resurrect an accumulator for the withheld genuine chunks (S4-client)",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -5076,7 +5105,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     "re-subscribes the stream instead of disposing it, and reports reconnecting rather than closed",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -5144,7 +5176,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     "still disposes the stream terminally when the FATAL is not retryable",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -5185,7 +5220,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     "recovers a retryable-fatal stream when the session reconnects during the reopen backoff",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -5263,7 +5301,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     "reaches the ready boundary while one stream is stuck in its retryable-FATAL loop",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),
@@ -5327,7 +5368,10 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
     "clears the per-stream retry state when the host CLOSEs a reopened stream before its first frame",
     async () => {
       const relay = new FakeRelayHost();
-      relay.streamManifest = buildStreamManifest(cursorStreamRegistry);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
       const lease = new MutableBearerLease("valid-token", "user-1");
       const session = new RemoteSession({
         ...buildSessionOptions(relay, lease, null),

@@ -17,6 +17,7 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import { resolveSplitDropPosition } from "@/components/epic-canvas/dnd/pane-drop-geometry";
+import { resolvePaneCorridorPosition } from "@/components/epic-canvas/dnd/pane-corridor-geometry";
 import {
   LEFT_PANEL_IDS,
   ROOT_CREATE_PANEL_IDS,
@@ -859,6 +860,28 @@ export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
  * returns `null` - every point inside the group's body resolves to one of
  * the five zones.
  */
+/**
+ * Corridor-aware pane-body resolution for TILE sources.
+ *
+ * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
+ * neutral corridor is inert, so a tile crossing a pane arms and commits
+ * nothing there. Scoped to tile sources deliberately - a sidebar or rail drag
+ * has no transit requirement across a pane and keeps its immediate positional
+ * preview.
+ */
+export function getPaneCorridorPositionFromPoint(
+  point: PointLike,
+  rect: RectLike,
+): DropPosition | null {
+  const resolved = resolvePaneCorridorPosition({
+    width: rect.width,
+    height: rect.height,
+    x: point.x - rect.left,
+    y: point.y - rect.top,
+  });
+  return resolved === "corridor" ? null : resolved;
+}
+
 export function getEdgeDropPositionFromPoint(
   point: PointLike,
   rect: RectLike,
@@ -969,6 +992,15 @@ export function getEpicCanvasDropPreview(
   target: EpicCanvasDropTargetData,
   rect: RectLike | null,
   point: PointLike,
+  /**
+   * Tile sources resolve a pane body through the neutral corridor, which can
+   * answer "no target". Everything else keeps the five-position fallback.
+   *
+   * Required rather than defaulted: repo convention bans default parameters
+   * (`fn(x = 1)`), and a silent `false` here is the difference between the
+   * corridor being inert and ~84% of a pane committing a split.
+   */
+  useNeutralCorridor: boolean,
 ): EpicCanvasDropPreview {
   if (target.kind === "empty-shell") {
     return {
@@ -977,11 +1009,28 @@ export function getEpicCanvasDropPreview(
     };
   }
   if (target.kind === "artifact-tab-group-body") {
+    if (rect === null) {
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position: "center",
+      };
+    }
+    if (useNeutralCorridor) {
+      const position = getPaneCorridorPositionFromPoint(point, rect);
+      // Inert corridor: no preview at all, so nothing can be committed that
+      // was never shown.
+      if (position === null) return null;
+      return {
+        kind: "artifact-tab-group-body",
+        groupId: target.groupId,
+        position,
+      };
+    }
     return {
       kind: "artifact-tab-group-body",
       groupId: target.groupId,
-      position:
-        rect === null ? "center" : getEdgeDropPositionFromPoint(point, rect),
+      position: getEdgeDropPositionFromPoint(point, rect),
     };
   }
   if (target.kind === "left-panel-rail-item") {

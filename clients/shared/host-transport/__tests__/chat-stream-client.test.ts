@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   createRequestContext,
@@ -522,6 +521,14 @@ describe("ChatStreamClient", () => {
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "chat.subscribe",
+      // Deliberately NOT read off the manifest, which main's side of this
+      // merge changed to `buildStreamManifest(registry,
+      // CLIENT_SERVED_STREAM_MAJORS)`. That restriction covers
+      // `epic.subscribe` only, so it would still answer `chat.subscribe` with
+      // the client's canonical - which is now the windowed `1.8`, while
+      // `completeHandshakeAtVersion` above deliberately stands up a `1.7`
+      // host. Asserting the manifest here would assert the client's canonical
+      // and quietly stop testing the down-negotiation this case is named for.
       schemaVersion: FULL_SNAPSHOT_VERSION,
       params: { epicId: "epic-1", chatId: "chat-1" },
     });

@@ -66,12 +66,12 @@ export interface EpicTerminalRowAuthority {
   readonly onDurableClose: (hostId: string, terminalId: string) => void;
   readonly durableRenameIdentityKeys: ReadonlySet<string>;
   readonly durableRenamePending: boolean;
+  /** Returns whether the rename was actually dispatched. */
   readonly onDurableRename: (
     hostId: string,
     terminalId: string,
     manualTitle: string,
-    onSuccess: () => void,
-  ) => void;
+  ) => boolean;
 }
 
 export interface EpicTerminalsPanel extends EpicTerminalRowAuthority {
@@ -194,14 +194,16 @@ export function useEpicTerminalsPanel(args: {
   );
 
   const onDurableRename = useCallback(
-    (
-      hostId: string,
-      terminalId: string,
-      manualTitle: string,
-      onSuccess: () => void,
-    ) => {
-      if (!closeCanMutate || renameMutation.isPending) return;
-      renameMutation.mutate({ hostId, terminalId, manualTitle }, { onSuccess });
+    (hostId: string, terminalId: string, manualTitle: string): boolean => {
+      if (!closeCanMutate || renameMutation.isPending) return false;
+      // Deliberately no `mutate`-scoped `onSuccess`: a per-call callback is the
+      // wrong thing to hang an editor on - TanStack drops it when the observer
+      // unmounts or is superseded, so a rename that SUCCEEDED could leave its
+      // editor open. The mutation's own handlers own cache and toast. The
+      // SYNCHRONOUS return below is what the caller settles its editor on, and
+      // nothing can drop that.
+      renameMutation.mutate({ hostId, terminalId, manualTitle });
+      return true;
     },
     [closeCanMutate, renameMutation],
   );
@@ -348,13 +350,21 @@ export interface EpicTerminalRowActions {
   /** What the session is called on screen, from the one shared definition. */
   readonly label: string;
   readonly canRename: boolean;
-  readonly renamePending: boolean;
   /**
-   * Commits a rename through whichever authority owns this row. A blank or
-   * unchanged title is a no-op that still reports done, so a surface can close
-   * its editor on the same call either way.
+   * Commits a rename through whichever authority owns this row, returning
+   * whether the caller may now close its editor.
+   *
+   * `false` means REFUSED - nothing was sent and the typed title exists
+   * nowhere else, so the editor has to stay open or the text is lost. `true`
+   * covers both a dispatched rename and a settled no-op (blank or unchanged).
+   *
+   * The caller still settles on the same gesture rather than on the ack: this
+   * is a synchronous return, not a `mutate`-scoped callback, so nothing can
+   * drop it. Both rename paths patch their cached `terminal.list` row
+   * optimistically (rolling back on error), so an accepted title is on screen
+   * before the host answers.
    */
-  readonly submitRename: (next: string, onDone: () => void) => void;
+  readonly submitRename: (next: string) => boolean;
   /**
    * Not a pending flag: it also encodes "not permitted" (unsupported future
    * ref, unknown capability, no mutation authority).
@@ -418,24 +428,39 @@ export function useEpicTerminalRowActions(args: {
   const canRename = renameMode !== "disabled" && !renamePending;
   const label = terminalSessionLabel(session);
 
-  const submitRename = (next: string, onDone: () => void): void => {
-    if (!canRename) return;
+  const submitRename = (next: string): boolean => {
+    // A refusal has to reach the caller. `canRename` is a CONJUNCTION, and
+    // BOTH conjuncts can go false while an editor is already open:
+    //   - `renameMode` becomes "disabled" when the host stops being mutable
+    //     (disconnect, permission change, or a tile that turns out to hold an
+    //     unsupported future ref);
+    //   - `renamePending` is PANEL-WIDE, not per row - both rename paths share
+    //     one mutation observer - so ANOTHER row's in-flight rename refuses
+    //     this one. That is the same single-observer fact that makes the guard
+    //     worth keeping here at all, and it is exactly why "the editor closed
+    //     on commit, so it cannot outlive a pending transition" was wrong: it
+    //     reasons per row about a panel-wide flag.
+    // Closing on a refusal would drop the typed title with no RPC, no
+    // optimistic patch and no error, so the caller closes only on `true`.
+    //
+    // Contrast the two epic sidebar trees, which DID drop their pending guard:
+    // those chain renames through the overlay store's stamp/tombstone.
+    if (!canRename) return false;
     const trimmed = next.trim();
-    if (trimmed.length === 0 || trimmed === label) {
-      onDone();
-      return;
-    }
+    // Nothing to send, but the gesture is settled - blank or unchanged is a
+    // cancel, and the editor should close on it.
+    if (trimmed.length === 0 || trimmed === label) return true;
     // The mutation optimistically patches the cached `terminal.list` rows,
     // so this row AND any open canvas tab for the session update before the
     // host round-trip (with rollback on error).
     if (renameMode === "capable") {
-      authority.onDurableRename(hostId, session.sessionId, trimmed, onDone);
-      return;
+      // Propagated, not re-decided. The authority re-checks the same durable
+      // policy under its own state, and a second copy of that answer here
+      // could report `true` while the authority silently dropped the call.
+      return authority.onDurableRename(hostId, session.sessionId, trimmed);
     }
-    legacyRename.mutate(
-      { sessionId: session.sessionId, title: trimmed },
-      { onSuccess: onDone },
-    );
+    legacyRename.mutate({ sessionId: session.sessionId, title: trimmed });
+    return true;
   };
 
   // "Close" terminates the PTY AND closes its open canvas tab. Killing alone
@@ -478,7 +503,6 @@ export function useEpicTerminalRowActions(args: {
   return {
     label,
     canRename,
-    renamePending,
     submitRename,
     closeDisabled:
       hasUnsupportedFutureRef ||

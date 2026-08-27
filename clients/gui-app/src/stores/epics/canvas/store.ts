@@ -74,6 +74,7 @@ import {
   findPaneTabForRef,
   openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
+  restorePreview,
   renameArtifact,
   renameTerminalTiles,
   adoptHostTerminalProjection,
@@ -560,6 +561,12 @@ export interface EpicCanvasStore {
     fileKey: string,
   ) => void;
   promotePreviewInTab: (tabId: string, paneId: string) => void;
+  /** Inverse of `promotePreviewInTab`, for a cancelled preview-tile drag. */
+  readonly restorePreviewInTab: (
+    tabId: string,
+    paneId: string,
+    previewTabId: string,
+  ) => void;
   applyNestedRouteFocus: (tabId: string, target: NestedFocusTarget) => void;
   setActiveTileTab: (tabId: string, paneId: string, tileTabId: string) => void;
   prepareSetActiveTileTabFocusTarget: (
@@ -2140,6 +2147,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               promotePreview(canvas, paneId),
+            ),
+          );
+        },
+
+        restorePreviewInTab: (tabId, paneId, previewTabId) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              restorePreview(canvas, paneId, previewTabId),
             ),
           );
         },

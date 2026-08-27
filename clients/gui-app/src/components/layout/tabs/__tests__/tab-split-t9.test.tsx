@@ -10,7 +10,6 @@ import {
   resolveValidatedTopLevelTabDrop,
   stripPairTargetForIndex,
 } from "@/components/layout/tabs/top-level-tab-dnd";
-import { isHeaderStripPairZone } from "@/components/layout/tabs/header-tab-dnd";
 import {
   commitFillableSlotDestination,
   getFillableSlotChoices,
@@ -241,38 +240,6 @@ describe("T9 split interactions", () => {
         activeItemId: "source-item",
       }),
     ).toBeNull();
-  });
-
-  it("pairs only from a tab's centre band, never from its reorder thirds or a trailing slot", () => {
-    const slot = {
-      kind: "header-tab-slot" as const,
-      index: 1,
-      isTrailing: false,
-    };
-    // 200px wide starting at x=100, so the 40% band spans x=160..240.
-    const slotRect = { left: 100, top: 0, width: 200, height: 40 };
-    const zoneAt = (pointerX: number) =>
-      isHeaderStripPairZone({ slot, pointerX, slotRect });
-
-    expect(zoneAt(200)).toBe(true);
-    expect(zoneAt(161)).toBe(true);
-    expect(zoneAt(239)).toBe(true);
-    expect(zoneAt(159)).toBe(false);
-    expect(zoneAt(241)).toBe(false);
-    expect(zoneAt(105)).toBe(false);
-    expect(zoneAt(295)).toBe(false);
-    // Trailing slot covers empty strip space - there is no tab to pair with.
-    expect(
-      isHeaderStripPairZone({
-        slot: { ...slot, isTrailing: true },
-        pointerX: 200,
-        slotRect,
-      }),
-    ).toBe(false);
-    // Without geometry the gesture must fall back to reorder, not pair.
-    expect(isHeaderStripPairZone({ slot, pointerX: 200, slotRect: null })).toBe(
-      false,
-    );
   });
 
   it("resolves a pair target from the live strip and refuses split items", () => {
