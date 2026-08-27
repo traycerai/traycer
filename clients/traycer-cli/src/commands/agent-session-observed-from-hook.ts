@@ -6,7 +6,7 @@ import { tuiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
 import {
   callHostRpcFastFail,
   isRequestVersionProjectionError,
-  parseHostResponse,
+  parseCanonicalHostResponse,
   parseUserInput,
   toAgentCliError,
 } from "../internal/host-rpc";
@@ -119,7 +119,8 @@ export function buildAgentSessionObservedFromHookCommand(opts: {
       return noop("host-unreachable");
     }
 
-    const { accepted } = parseHostResponse(
+    const { accepted } = parseCanonicalHostResponse(
+      "agent.tui.recordActivity",
       recordTuiAgentActivityResponseSchema,
       rpcResult,
     );
