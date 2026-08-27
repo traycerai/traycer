@@ -4,10 +4,7 @@ import {
   type BrowserWindowConstructorOptions,
   type IpcMainInvokeEvent,
 } from "electron";
-import {
-  RunnerHostEvent,
-  RunnerHostInvoke,
-} from "../../ipc-contracts/ipc-channels";
+import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
   browserViewIpcPayload,
   parseReservedChordTokens,
@@ -23,7 +20,6 @@ import type {
   ManagedBrowserView,
 } from "../browser-view/browser-view-port";
 import { hostPlatformFromProcessPlatform } from "../../ipc-contracts/reserved-chords";
-import { installBrowserViewManagerDebug } from "../browser-view/browser-view-manager-debug";
 import {
   createBrowserViewWebPreferences,
   cancelBrowserViewDownload,
@@ -34,14 +30,14 @@ import {
   readBrowserViewPendingCertificateError,
   registerBrowserViewWebContents,
 } from "../browser-view/browser-session";
-import { getBrowserCookieCryptoState } from "../browser-view/browser-cookie-crypto";
+import { getBrowserCookieCryptoState } from "../browser-view/storage/browser-cookie-crypto";
 import {
   BrowserPrimaryProfileSnapshotCoordinator,
   captureBrowserOriginLocalStorage,
   captureBrowserPrimaryProfile,
   captureBrowserViewStorageState,
   seedBrowserViewCookies,
-} from "../browser-view/browser-storage-state";
+} from "../browser-view/storage/browser-storage-state";
 import { trustBrowserCertificate } from "../app/cert-trust";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
@@ -76,69 +72,8 @@ export function registerBrowserViewIpc(
     notifyHostWindowRendererReset: (windowId) => {
       bridge.markRendererUnavailable(windowId);
     },
-    notifyNativeTabStatus: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewNativeTabStatusChange,
-        change,
-      );
-    },
-    notifyFind: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewFindChange,
-        change,
-      );
-    },
-    notifyDownload: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewDownloadChange,
-        change,
-      );
-    },
-    notifyCertificateError: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewCertificateError,
-        change,
-      );
-    },
-    notifyOpenTileRequest: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewOpenTileRequest,
-        change,
-      );
-    },
-    notifySnapshotInvalidated: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewSnapshotInvalidated,
-        change,
-      );
-    },
-    notifyElectronTabHandoff: (windowId, change) => {
-      return bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewElectronTabHandoff,
-        change,
-      );
-    },
-    notifyAnnotationEvent: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewAnnotationEvent,
-        change,
-      );
-    },
-    notifyAnnotationAttached: (windowId, change) => {
-      bridge.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.browserViewAnnotationAttached,
-        change,
-      );
-    },
+    send: (windowId, channel, payload) =>
+      bridge.safeSendToWindow(windowId, channel, payload),
     seedStorageState: seedBrowserViewCookies,
     captureStorageState: captureBrowserViewStorageState,
     observePrimaryProfileOrigin: (url, webContents) => {
@@ -147,15 +82,6 @@ export function registerBrowserViewIpc(
     boundsStreamLogIntervalMs: BOUNDS_STREAM_LOG_INTERVAL_MS,
     hostPlatform: hostPlatformFromProcessPlatform(process.platform),
   });
-
-  // BT-501: E2E-only debug surface. Production never sets TRAYCER_E2E.
-  if (process.env.TRAYCER_E2E === "1") {
-    installBrowserViewManagerDebug({
-      boundsByKeyId: () => manager.debugBoundsByKeyId(),
-      occludedKeyIds: () => manager.debugOccludedKeyIds(),
-      frameCacheStats: () => manager.frameCacheStats(),
-    });
-  }
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewEnsureTab, (event, payload) =>
     manager.ensureTab(
@@ -195,12 +121,10 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewReleaseTab,
-    (event, payload) => {
-      readSenderWindowId(bridge, event);
-      return manager.releaseTab(
+    (_event, payload) =>
+      manager.releaseTab(
         browserViewIpcPayload.nativeTabCapability.parse(payload),
-      );
-    },
+      ),
   );
 
   bridge.handleInvoke(
@@ -217,12 +141,10 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewElectronTabCdpDispatch,
-    (event, payload) => {
-      readSenderWindowId(bridge, event);
-      return manager.dispatchElectronTabCdp(
+    (_event, payload) =>
+      manager.dispatchElectronTabCdp(
         browserViewIpcPayload.electronTabCdpDispatch.parse(payload),
-      );
-    },
+      ),
   );
 
   bridge.handleInvoke(
@@ -321,13 +243,10 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(
     RunnerHostInvoke.browserViewReleaseOverlay,
-    (event, payload) => {
-      const windowId = readSenderWindowId(bridge, event);
-      return manager.releaseOverlay(
-        windowId,
+    (_event, payload) =>
+      manager.releaseOverlay(
         browserViewIpcPayload.overlayRelease.parse(payload),
-      );
-    },
+      ),
   );
 
   bridge.handleInvoke(
@@ -410,7 +329,7 @@ export function registerBrowserViewIpc(
       setInAppBrowserBetaEnabledMarker(
         browserViewIpcPayload.labsStateUpdate.parse(payload)
           .inAppBrowserBetaEnabled,
-      ).then(() => undefined),
+      ),
   );
 
   bridge.disposeFns.push(() => {

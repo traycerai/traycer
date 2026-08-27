@@ -10,7 +10,7 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   useElectronTabBindingOnHost,
   type ElectronTabBinding,
-} from "@/lib/browser-view/electron-tabs";
+} from "@/lib/browser-view/sessions/electron-tabs";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 interface BrowserSessionTileProps {

@@ -14,6 +14,7 @@ import {
   createBrowserDebugContextAttachment,
   requestBrowserContextAttachment,
   type BrowserContextAttachmentPayload,
+  type BrowserDebugAttachLevel,
 } from "@/lib/browser-view/browser-context-attachments";
 import type {
   BrowserViewBridge,
@@ -34,8 +35,6 @@ import {
   type TileLayoutNode,
   type TilePane,
 } from "@/stores/epics/canvas/tile-tree";
-
-type BrowserAttachLevel = "screenshot" | "debug-errors" | "debug-snapshot";
 
 interface BrowserContextCandidate {
   readonly tile: BrowserSessionTileRef;
@@ -86,12 +85,11 @@ export function BrowserComposerContextChip(props: {
         : null,
     [pointer, session?.runtime, tab],
   );
-  const [pendingLevel, setPendingLevel] = useState<BrowserAttachLevel | null>(
-    null,
-  );
+  const [pendingLevel, setPendingLevel] =
+    useState<BrowserDebugAttachLevel | null>(null);
 
   const attach = useCallback(
-    (level: BrowserAttachLevel): void => {
+    (level: BrowserDebugAttachLevel): void => {
       if (browserView === null || candidate === null || pendingLevel !== null) {
         return;
       }
@@ -155,7 +153,7 @@ export function BrowserComposerContextChip(props: {
 async function captureBrowserContext(
   browserView: BrowserViewBridge,
   candidate: ResolvedBrowserContextCandidate,
-  level: BrowserAttachLevel,
+  level: BrowserDebugAttachLevel,
 ): Promise<BrowserContextAttachmentPayload> {
   const capture = await browserView.capturePage(candidate.tileKey);
   const snapshot =
@@ -175,7 +173,7 @@ async function captureBrowserContext(
 }
 
 function consoleEntriesForLevel(
-  level: BrowserAttachLevel,
+  level: BrowserDebugAttachLevel,
   entries: readonly BrowserViewConsoleEntry[],
 ): readonly BrowserViewConsoleEntry[] {
   if (level === "debug-errors") {
@@ -186,7 +184,7 @@ function consoleEntriesForLevel(
 }
 
 function networkEntriesForLevel(
-  level: BrowserAttachLevel,
+  level: BrowserDebugAttachLevel,
   entries: readonly BrowserViewNetworkEntry[],
 ): readonly BrowserViewNetworkEntry[] {
   if (level === "debug-errors") {

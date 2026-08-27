@@ -1,19 +1,21 @@
 export type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationAttachPayload,
-  BrowserAnnotationAttachRequest,
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationCounts,
-  BrowserAnnotationCssRect,
   BrowserAnnotationEndReason,
   BrowserAnnotationForwardedSessionEvent,
-  BrowserAnnotationMarkKind,
-  BrowserAnnotationMarkSnapshot,
   BrowserAnnotationMode,
-  BrowserAnnotationSessionEvent,
   BrowserAnnotationSessionIpcEvent,
   BrowserAnnotationSetTargetChatLabelInput,
   BrowserAnnotationStartFailureReason,
   BrowserAnnotationStartResult,
   BrowserAnnotationTargetOption,
 } from "@traycer-clients/shared/platform/browser-annotation";
+export type {
+  BrowserAnnotationAttachRequest,
+  BrowserAnnotationCssRect,
+  BrowserAnnotationMarkKind,
+  BrowserAnnotationMarkSnapshot,
+  BrowserAnnotationSessionEvent,
+} from "../electron-main/browser-view/annotation/browser-annotation-mark-types";

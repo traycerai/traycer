@@ -7,7 +7,7 @@ import type {
 import type { CanvasAddon } from "@xterm/addon-canvas";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
-import type { BrowserLinkClickEvent } from "@/lib/browser-view/browser-link-routing-core";
+import type { BrowserLinkClickEvent } from "@/lib/browser-view/link-routing/browser-link-routing-core";
 import type { TerminalWarmSessionIdentity } from "@/stores/terminals/terminal-session-registry";
 
 export type { TerminalWarmSessionIdentity };

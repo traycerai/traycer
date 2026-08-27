@@ -114,12 +114,9 @@ vi.mock("@dnd-kit/core", () => ({
   },
 }));
 
-vi.mock("@/lib/epic-selectors", async () => {
-  const { epicCanvasTileFallbackName } =
-    await import("@/stores/epics/canvas/types");
+vi.mock("@/lib/epic-selectors", () => {
   return {
-    useEpicTabDisplayTitle: (node: EpicCanvasTileRef) =>
-      epicCanvasTileFallbackName(node),
+    useEpicTabDisplayTitle: (node: EpicCanvasTileRef) => node.name,
     useEpicLiveArtifactTitleGenerating: () => false,
     useRegisteredEpicNodeArchived: () => false,
   };
@@ -333,6 +330,7 @@ describe("<TabStrip />", () => {
       id: "browser-session:session-1:browser-tab-1",
       instanceId: "browser-instance-1",
       type: "browser-session",
+      name: "Browser",
       hostId: "host-A",
       sessionId: "session-1",
       tabId: "browser-tab-1",

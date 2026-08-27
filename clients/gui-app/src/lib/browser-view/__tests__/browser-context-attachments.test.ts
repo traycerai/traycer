@@ -35,7 +35,6 @@ const CONSOLE_ENTRY: BrowserViewConsoleEntry = {
   url: "http://localhost:3000/app.js",
   lineNumber: 4,
   columnNumber: 2,
-  stackTrace: [],
 };
 
 const NETWORK_ENTRY: BrowserViewNetworkEntry = {
@@ -43,16 +42,13 @@ const NETWORK_ENTRY: BrowserViewNetworkEntry = {
   requestId: "request-1",
   url: "http://localhost:3000/api",
   method: "POST",
-  resourceType: "Fetch",
   status: "failed",
   statusCode: null,
   statusText: null,
   mimeType: null,
-  fromCache: false,
   startedAt: 1000,
   completedAt: 1200,
   durationMs: 200,
-  encodedDataLength: null,
   failureText: "net::ERR_FAILED",
 };
 
@@ -169,7 +165,26 @@ describe("browser context attachment payloads", () => {
     });
   });
 
-  it("returns unhandled until ticket 12 registers the composer handler", async () => {
+  it("leaves a non-http page origin null and mints no grant for it", () => {
+    const payload = createBrowserScreenshotAttachment({
+      tile: TILE,
+      pageUrl: "about:blank",
+      capture: CAPTURE,
+    });
+
+    expect(payload.source.origin).toBeNull();
+    expect(payload.observeGrantRequest.origin).toBeNull();
+
+    const granted = mintBrowserObserveGrant(payload, {
+      chatId: "chat-1",
+      expiresAt: 3000,
+    });
+
+    expect(granted.observeGrant).toBeNull();
+    expect(granted.observeGrantRequest.chatId).toBe("chat-1");
+  });
+
+  it("returns unhandled until a composer handler registers", async () => {
     const payload = createBrowserConsoleAttachment({
       tile: TILE,
       pageUrl: "http://localhost:3000/page",
@@ -178,10 +193,7 @@ describe("browser context attachment payloads", () => {
 
     await expect(
       requestBrowserContextAttachment(payload, { targetChatId: "chat-1" }),
-    ).resolves.toMatchObject({
-      status: "unhandled",
-      reason: "ticket-12-handler-not-registered",
-    });
+    ).resolves.toMatchObject({ status: "unhandled" });
 
     const registration = registerBrowserContextAttachmentHandler((next) => ({
       status: "attached",
@@ -235,7 +247,7 @@ describe("browser debug context attachment (ticket 22)", () => {
     );
   });
 
-  it("does not carry title or screenshot bytes on the payload - traced against production, nothing reads them (ticket 22 fixup: an earlier version of this test wrongly claimed 'other UI consumers' without tracing the claim)", () => {
+  it("does not carry title or screenshot bytes on the payload (ticket 22)", () => {
     const payload = createBrowserDebugContextAttachment({
       tile: TILE,
       pageUrl: "http://localhost:3000/page",
@@ -277,6 +289,7 @@ describe("browserContextAttachmentToWire (ticket 01)", () => {
           id: "browser-session:session-durable:durable-tab-1",
           instanceId: TILE.tileInstanceId,
           type: "browser-session",
+          name: "Browser",
           hostId: "host-1",
           sessionId: "session-durable",
           tabId: "durable-tab-1",

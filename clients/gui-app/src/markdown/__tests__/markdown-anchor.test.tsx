@@ -14,7 +14,7 @@ import { TraycerMarkdown } from "@/markdown";
 import { classifyHref } from "@/markdown/links/classify-href";
 import { markdownUrlTransform } from "@/markdown/links/markdown-url-transform";
 import { MarkdownLinkContext } from "@/markdown/links/markdown-link-context";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,

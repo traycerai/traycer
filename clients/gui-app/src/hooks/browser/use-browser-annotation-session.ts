@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { useAnnotationRoute } from "@/hooks/browser/use-annotation-route";
-import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
+import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
+import { browserViewTileKeyId } from "@/lib/browser-view/tiles/browser-view-keys";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
@@ -52,7 +54,7 @@ export function useBrowserAnnotationSession(
   useEffect(() => {
     if (browserView === null) return;
     return () => {
-      void browserView.cancelAnnotation(tileKey).catch(ignoreAnnotationError);
+      void browserView.cancelAnnotation(tileKey).catch(ignoreError);
     };
   }, [browserView, tileKey]);
 
@@ -88,7 +90,7 @@ export function useBrowserAnnotationSession(
         targets: route.targets,
         defaultChatId: route.defaultChatId,
       })
-      .catch(ignoreAnnotationError);
+      .catch(ignoreError);
   }, [browserView, isActive, route, tileKey]);
 
   const start = useCallback(() => {
@@ -114,7 +116,7 @@ export function useBrowserAnnotationSession(
     setIsActive(false);
     setMarkCount(0);
     if (browserView === null) return;
-    void browserView.cancelAnnotation(tileKey).catch(ignoreAnnotationError);
+    void browserView.cancelAnnotation(tileKey).catch(ignoreError);
   }, [browserView, tileKey]);
 
   const toggle = useCallback(() => {
@@ -148,7 +150,7 @@ function applySessionEvent(
 
 async function ingestAttachedAnnotation(
   change: BrowserAnnotationAttachedIpcEvent,
-  reportResult: BrowserViewBridge["reportAnnotationAttachResult"] | null,
+  reportResult: BrowserViewBridge["reportAnnotationAttachResult"],
 ): Promise<void> {
   const annotationId = change.payload.annotationId;
   let status: "attached" | "failed" = "failed";
@@ -164,9 +166,7 @@ async function ingestAttachedAnnotation(
       toast.error("Couldn't store the annotation crop.");
     }
   } finally {
-    if (reportResult !== null) {
-      void reportResult({ annotationId, status }).catch(ignoreAnnotationError);
-    }
+    void reportResult({ annotationId, status }).catch(ignoreError);
   }
 }
 
@@ -174,12 +174,5 @@ function isEventForTile(
   change: BrowserViewTileKey,
   key: BrowserViewTileKey,
 ): boolean {
-  return (
-    change.viewTabId === key.viewTabId &&
-    change.paneId === key.paneId &&
-    change.tileInstanceId === key.tileInstanceId &&
-    change.pageSessionId === key.pageSessionId
-  );
+  return browserViewTileKeyId(change) === browserViewTileKeyId(key);
 }
-
-function ignoreAnnotationError(_error: unknown): void {}

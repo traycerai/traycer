@@ -41,6 +41,7 @@ export type BrowserLinkDefaultMode = BrowserLinkOpenMode | "per-kind";
  */
 export type AgentTabSurfacingMode = "pip" | "tile" | "off";
 export const DEFAULT_AGENT_TAB_SURFACING_MODE: AgentTabSurfacingMode = "off";
+const DEFAULT_BROWSER_LINK_OPEN_MODE: BrowserLinkOpenMode = "in-app";
 export type MinimapSide = "left" | "right";
 export type MinimapPlacement = MinimapSide | "hide";
 // Mirrors xterm's `cursorStyle` union; kept as our own type so the settings
@@ -372,9 +373,9 @@ export const useSettingsStore = create<SettingsState>()(
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       inAppBrowserBetaEnabled: false,
-      browserLinkDefaultMode: "in-app",
-      terminalBrowserLinkOpenMode: "in-app",
-      markdownBrowserLinkOpenMode: "in-app",
+      browserLinkDefaultMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      terminalBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
+      markdownBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
       browserDevOrigins: [],
       agentTabSurfacingMode: DEFAULT_AGENT_TAB_SURFACING_MODE,
       steerOnModEnterEnabled: true,
@@ -525,6 +526,26 @@ export const useSettingsStore = create<SettingsState>()(
           )
             ? merged.agentTabSurfacingMode
             : DEFAULT_AGENT_TAB_SURFACING_MODE,
+          browserLinkDefaultMode: isBrowserLinkDefaultMode(
+            merged.browserLinkDefaultMode,
+          )
+            ? merged.browserLinkDefaultMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          terminalBrowserLinkOpenMode: isBrowserLinkOpenMode(
+            merged.terminalBrowserLinkOpenMode,
+          )
+            ? merged.terminalBrowserLinkOpenMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          markdownBrowserLinkOpenMode: isBrowserLinkOpenMode(
+            merged.markdownBrowserLinkOpenMode,
+          )
+            ? merged.markdownBrowserLinkOpenMode
+            : DEFAULT_BROWSER_LINK_OPEN_MODE,
+          browserDevOrigins: Array.isArray(merged.browserDevOrigins)
+            ? merged.browserDevOrigins.filter(
+                (origin) => typeof origin === "string",
+              )
+            : [],
           workspaceFileWordWrap:
             typeof merged.workspaceFileWordWrap === "boolean"
               ? merged.workspaceFileWordWrap
@@ -537,6 +558,16 @@ export const useSettingsStore = create<SettingsState>()(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isBrowserLinkOpenMode(value: unknown): value is BrowserLinkOpenMode {
+  return value === "in-app" || value === "external";
+}
+
+function isBrowserLinkDefaultMode(
+  value: unknown,
+): value is BrowserLinkDefaultMode {
+  return isBrowserLinkOpenMode(value) || value === "per-kind";
 }
 
 export function isAgentTabSurfacingMode(

@@ -14,7 +14,7 @@ import { TileMinimapScope } from "@/components/epic-canvas/tile-minimap/tile-min
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 import type { TileKindToRefMap } from "@/stores/epics/canvas/tile-kind-types";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
 import { BrowserSessionTile } from "./browser-session-tile";
 import { ChatTile } from "./chat-tile";
 import { ReviewTile } from "./review-tile";

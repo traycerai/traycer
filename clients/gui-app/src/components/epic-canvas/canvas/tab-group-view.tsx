@@ -69,10 +69,7 @@ import type {
   SplitDirection,
   TilePane,
 } from "@/stores/epics/canvas/types";
-import {
-  epicCanvasTileFallbackName,
-  WORKSPACE_FILE_TAB_KIND,
-} from "@/stores/epics/canvas/types";
+import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
 import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
 import { isWorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { requestFileTreeReveal } from "@/stores/file-tree/file-tree-reveal-store";
@@ -806,7 +803,7 @@ function usePublishedChatFallbackRef(args: {
             chatId: activeTab.id,
             ownerUserId,
             ownerHostId: activeTab.hostId,
-            name: epicCanvasTileFallbackName(activeTab),
+            name: activeTab.name,
             hostId: readingHostId,
           })
         : null,

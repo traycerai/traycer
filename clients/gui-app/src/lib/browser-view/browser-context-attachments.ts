@@ -6,8 +6,13 @@ import type {
   BrowserViewTileKey,
 } from "@traycer-clients/shared/platform/browser-view";
 import type { BrowserContextAttachmentWire } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { BrowserContextAttachmentRecord } from "@traycer/protocol/persistence/epic/schemas";
+import { parseHttpUrl } from "@/lib/browser-view/browser-tab-display";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import {
+  isBrowserSessionTileRef,
+  type BrowserSessionTileRef,
+} from "@/stores/epics/canvas/types";
 
 export type BrowserContextAttachmentKind =
   | "browser-console-entry"
@@ -16,7 +21,7 @@ export type BrowserContextAttachmentKind =
   | "browser-element"
   | "browser-debug-context";
 
-export type BrowserObserveDataLevel =
+type BrowserObserveDataLevel =
   | "console-entry"
   | "network-request"
   | "screenshot"
@@ -24,7 +29,12 @@ export type BrowserObserveDataLevel =
   | "debug-errors"
   | "debug-snapshot";
 
-export interface BrowserObserveGrant {
+export type BrowserDebugAttachLevel =
+  | "screenshot"
+  | "debug-errors"
+  | "debug-snapshot";
+
+interface BrowserObserveGrant {
   readonly kind: "visible-browser-observe-grant";
   readonly chatId: string;
   readonly tileInstanceId: string;
@@ -33,11 +43,12 @@ export interface BrowserObserveGrant {
   readonly expiresAt: number;
 }
 
-export interface BrowserObserveGrantRequest {
+interface BrowserObserveGrantRequest {
   readonly kind: "visible-browser-observe-grant-request";
   readonly chatId: string | null;
   readonly tileInstanceId: string;
-  readonly origin: string;
+  /** `null` when the page URL is not an http(s) URL - see `parseHttpUrl`. */
+  readonly origin: string | null;
   readonly dataLevel: BrowserObserveDataLevel;
   readonly expiresAt: number | null;
   readonly sourceAction:
@@ -54,7 +65,7 @@ interface BrowserContextAttachmentBase {
   readonly source: {
     readonly tile: BrowserViewTileKey;
     readonly pageUrl: string;
-    readonly origin: string;
+    readonly origin: string | null;
     readonly capturedAt: number;
   };
   readonly observeGrantRequest: BrowserObserveGrantRequest;
@@ -62,17 +73,17 @@ interface BrowserContextAttachmentBase {
   readonly composerText: string;
 }
 
-export interface BrowserConsoleContextAttachment extends BrowserContextAttachmentBase {
+interface BrowserConsoleContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-console-entry";
   readonly consoleEntry: BrowserViewConsoleEntry;
 }
 
-export interface BrowserNetworkContextAttachment extends BrowserContextAttachmentBase {
+interface BrowserNetworkContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-network-request";
   readonly networkRequest: BrowserViewNetworkEntry;
 }
 
-export interface BrowserScreenshotContextAttachment extends BrowserContextAttachmentBase {
+interface BrowserScreenshotContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-screenshot";
   readonly screenshot: {
     readonly mediaType: string;
@@ -84,14 +95,14 @@ export interface BrowserScreenshotContextAttachment extends BrowserContextAttach
   };
 }
 
-export interface BrowserElementContextAttachment extends BrowserContextAttachmentBase {
+interface BrowserElementContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-element";
   readonly element: BrowserViewElementCapture;
 }
 
-export interface BrowserDebugContextAttachment extends BrowserContextAttachmentBase {
+interface BrowserDebugContextAttachment extends BrowserContextAttachmentBase {
   readonly kind: "browser-debug-context";
-  readonly dataLevel: "screenshot" | "debug-errors" | "debug-snapshot";
+  readonly dataLevel: BrowserDebugAttachLevel;
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
 }
@@ -111,15 +122,14 @@ export type BrowserContextAttachmentResult =
   | {
       readonly status: "unhandled";
       readonly payload: BrowserContextAttachmentPayload;
-      readonly reason: "ticket-12-handler-not-registered";
     };
 
-export interface BrowserContextAttachmentRequest {
+interface BrowserContextAttachmentRequest {
   readonly targetChatId: string;
   readonly payload: BrowserContextAttachmentPayload;
 }
 
-export type BrowserContextAttachmentHandler = (
+type BrowserContextAttachmentHandler = (
   request: BrowserContextAttachmentRequest,
 ) => Promise<BrowserContextAttachmentResult> | BrowserContextAttachmentResult;
 
@@ -145,11 +155,7 @@ export async function requestBrowserContextAttachment(
     const result = await handler(request);
     if (result.status === "attached") return result;
   }
-  return {
-    status: "unhandled",
-    payload,
-    reason: "ticket-12-handler-not-registered",
-  };
+  return { status: "unhandled", payload };
 }
 
 export function createBrowserConsoleAttachment(input: {
@@ -157,7 +163,7 @@ export function createBrowserConsoleAttachment(input: {
   readonly pageUrl: string;
   readonly entry: BrowserViewConsoleEntry;
 }): BrowserConsoleContextAttachment {
-  const origin = originFromUrl(input.pageUrl);
+  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
   const capturedAt = Date.now();
   return {
     schemaVersion: 1,
@@ -185,7 +191,7 @@ export function createBrowserNetworkAttachment(input: {
   readonly pageUrl: string;
   readonly entry: BrowserViewNetworkEntry;
 }): BrowserNetworkContextAttachment {
-  const origin = originFromUrl(input.pageUrl);
+  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
   const capturedAt = Date.now();
   return {
     schemaVersion: 1,
@@ -213,7 +219,7 @@ export function createBrowserScreenshotAttachment(input: {
   readonly pageUrl: string;
   readonly capture: BrowserViewCapturePageResult;
 }): BrowserScreenshotContextAttachment {
-  const origin = originFromUrl(input.pageUrl);
+  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
   const capturedAt = input.capture.capturedAt;
   const name = `browser-screenshot-${input.capture.sha256.slice(0, 12)}.png`;
   return {
@@ -247,12 +253,12 @@ export function createBrowserScreenshotAttachment(input: {
 export function createBrowserDebugContextAttachment(input: {
   readonly tile: BrowserViewTileKey;
   readonly pageUrl: string;
-  readonly dataLevel: "screenshot" | "debug-errors" | "debug-snapshot";
+  readonly dataLevel: BrowserDebugAttachLevel;
   readonly capture: BrowserViewCapturePageResult;
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
 }): BrowserDebugContextAttachment {
-  const origin = originFromUrl(input.pageUrl);
+  const origin = parseHttpUrl(input.pageUrl)?.origin ?? null;
   const capturedAt = input.capture.capturedAt;
   return {
     schemaVersion: 1,
@@ -286,28 +292,33 @@ export function mintBrowserObserveGrant(
   payload: BrowserContextAttachmentPayload,
   input: { readonly chatId: string; readonly expiresAt: number },
 ): BrowserContextAttachmentPayload {
-  const grant: BrowserObserveGrant = {
-    kind: "visible-browser-observe-grant",
-    chatId: input.chatId,
-    tileInstanceId: payload.source.tile.tileInstanceId,
-    origin: payload.source.origin,
-    dataLevel: payload.observeGrantRequest.dataLevel,
-    expiresAt: input.expiresAt,
-  };
-  return {
+  const origin = payload.source.origin;
+  const requested: BrowserContextAttachmentPayload = {
     ...payload,
     observeGrantRequest: {
       ...payload.observeGrantRequest,
       chatId: input.chatId,
       expiresAt: input.expiresAt,
     },
-    observeGrant: grant,
   };
+  // A page whose URL is not http(s) has no origin to scope an observe grant
+  // to, and a grant carrying a placeholder origin would be a grant over
+  // anything. The attachment still rides along; only the grant is withheld.
+  if (origin === null) return requested;
+  const grant: BrowserObserveGrant = {
+    kind: "visible-browser-observe-grant",
+    chatId: input.chatId,
+    tileInstanceId: payload.source.tile.tileInstanceId,
+    origin,
+    dataLevel: payload.observeGrantRequest.dataLevel,
+    expiresAt: input.expiresAt,
+  };
+  return { ...requested, observeGrant: grant };
 }
 
 function createGrantRequest(input: {
   readonly tile: BrowserViewTileKey;
-  readonly origin: string;
+  readonly origin: string | null;
   readonly dataLevel: BrowserObserveDataLevel;
   readonly sourceAction: BrowserObserveGrantRequest["sourceAction"];
 }): BrowserObserveGrantRequest {
@@ -364,7 +375,7 @@ function screenshotComposerText(capture: BrowserViewCapturePageResult): string {
 }
 
 function debugContextComposerText(input: {
-  readonly dataLevel: "screenshot" | "debug-errors" | "debug-snapshot";
+  readonly dataLevel: BrowserDebugAttachLevel;
   readonly consoleEntries: readonly BrowserViewConsoleEntry[];
   readonly networkEntries: readonly BrowserViewNetworkEntry[];
   readonly hash: string;
@@ -392,7 +403,7 @@ function debugContextComposerText(input: {
 }
 
 function browserDebugDataLevelLabel(
-  dataLevel: "screenshot" | "debug-errors" | "debug-snapshot",
+  dataLevel: BrowserDebugAttachLevel,
 ): string {
   if (dataLevel === "debug-errors")
     return "screenshot + console/network errors";
@@ -421,31 +432,49 @@ function locationLine(
   return `Location: ${url}:${lineNumber}${column}`;
 }
 
-function originFromUrl(url: string): string {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return "local";
-  }
-}
-
 export function browserContextAttachmentToWire(
   payload: BrowserContextAttachmentPayload,
 ): BrowserContextAttachmentWire {
+  const source = browserContextTileRef(payload.source.tile);
+  if (source === null) {
+    throw new Error("Browser context source is no longer available.");
+  }
   return {
     kind: payload.kind,
-    origin: payload.source.origin,
+    // The wire field is not nullable and the empty string is the one value
+    // that cannot be mistaken for a real origin.
+    origin: payload.source.origin ?? "",
     pageUrl: payload.source.pageUrl,
     composerText: payload.composerText,
-    tabId: browserContextTabId(payload.source.tile),
+    tabId: source.tabId,
   };
 }
 
-function browserContextTabId(tile: BrowserViewTileKey): string {
+/**
+ * Transcript projection of an in-flight attachment - the pending user row
+ * renders the same chips the host re-derives at drain. `null` once the source
+ * tile is gone, which a render must survive.
+ */
+export function browserContextAttachmentToRecord(
+  payload: BrowserContextAttachmentPayload,
+): BrowserContextAttachmentRecord | null {
+  const source = browserContextTileRef(payload.source.tile);
+  if (source === null) return null;
+  return {
+    kind: payload.kind,
+    origin: payload.source.origin ?? "",
+    pageUrl: payload.source.pageUrl,
+    composerText: payload.composerText,
+    sessionId: source.sessionId,
+    tabId: source.tabId,
+  };
+}
+
+function browserContextTileRef(
+  tile: BrowserViewTileKey,
+): BrowserSessionTileRef | null {
   const canvas = useEpicCanvasStore.getState().canvasByTabId[tile.viewTabId];
   const source = canvas?.tilesByInstanceId[tile.tileInstanceId];
-  if (source === undefined || !isBrowserSessionTileRef(source)) {
-    throw new Error("Browser context source is no longer available.");
-  }
-  return source.tabId;
+  if (source === undefined || !isBrowserSessionTileRef(source)) return null;
+  return source;
 }

@@ -45,7 +45,7 @@ import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
-import type { BrowserAnnotationRecord } from "@/lib/browser-view/browser-annotation-record";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";

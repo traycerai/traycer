@@ -343,7 +343,6 @@ export function publishedChatSessionState(
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
     sendMessage: () => null,
-    sendMessageWithAttachments: () => null,
     sendSeededUserMessage: () => null,
     deleteMessageSuffix: () => null,
     editUserMessage: () => null,

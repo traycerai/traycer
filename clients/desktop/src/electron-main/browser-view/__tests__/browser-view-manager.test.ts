@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { log } from "../../app/logger";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import { BrowserViewManager } from "../browser-view-manager";
 import type {
   BrowserViewCapturedImage,
@@ -26,12 +27,12 @@ import type {
   BrowserAnnotationAttachedIpcEvent,
   BrowserAnnotationSessionIpcEvent,
 } from "../../../ipc-contracts/browser-annotation-types";
-import { ANNOTATION_BINDING_NAME } from "../browser-annotation-overlay-script";
+import { ANNOTATION_BINDING_NAME } from "../annotation/browser-annotation-overlay-script";
 import type {
   BrowserSessionCertificateErrorChange,
   BrowserSessionDownloadChange,
 } from "../browser-session";
-import type { BrowserStorageStateCaptureResult } from "../browser-storage-state";
+import type { BrowserStorageStateCaptureResult } from "../storage/browser-storage-state";
 
 type BrowserViewManagerOptions = ConstructorParameters<
   typeof BrowserViewManager
@@ -606,7 +607,10 @@ interface Harness {
 
 type HarnessOptions = {
   readonly captureStorageState?: BrowserViewManagerOptions["captureStorageState"];
-  readonly notifyElectronTabHandoff?: BrowserViewManagerOptions["notifyElectronTabHandoff"];
+  readonly notifyElectronTabHandoff?: (
+    windowId: string,
+    change: BrowserViewElectronTabHandoffChange,
+  ) => boolean;
   readonly boundsStreamLogIntervalMs?: number;
   readonly hostPlatform?: "darwin" | "other";
   readonly requireLoadedTargetForPageCommands?: boolean;
@@ -622,6 +626,18 @@ const DEFAULT_CAPTURE_STORAGE_STATE: BrowserViewManagerOptions["captureStorageSt
       localStorageAvailable: true,
       localStorageReason: null,
     });
+
+/**
+ * `send` is channel-keyed and payload-agnostic by design, so the harness
+ * re-narrows once per channel to keep assertions concretely typed.
+ */
+function asPayload<T>(payload: unknown): T {
+  return payload as T;
+}
+
+function record<T>(sink: T[], payload: unknown): void {
+  sink.push(asPayload<T>(payload));
+}
 
 function createHarness(): Harness {
   return createHarnessWithOptions(undefined);
@@ -699,38 +715,47 @@ function createHarnessWithOptions(
         certificateListeners.delete(listener);
       };
     },
-    notifyNativeTabStatus: (windowId, change) => {
-      nativeTabStatusWindowIds.push(windowId);
-      nativeTabStatuses.push(change);
-    },
-    notifyFind: (_windowId, change) => {
-      finds.push(change);
-    },
-    notifyDownload: (_windowId, change) => {
-      downloads.push(change);
-    },
-    notifyCertificateError: (_windowId, change) => {
-      certificateErrors.push(change);
-    },
-    notifyOpenTileRequest: (_windowId, change) => {
-      openTileRequests.push(change);
-    },
-    notifySnapshotInvalidated: (_windowId, change) => {
-      snapshotInvalidations.push(change);
-    },
-    notifyElectronTabHandoff: (windowId, change) => {
-      const delivered =
-        harnessOptions?.notifyElectronTabHandoff?.(windowId, change) ?? true;
-      if (!delivered) return false;
-      electronTabHandoffWindowIds.push(windowId);
-      electronTabHandoffNotifications.push(change);
-      return true;
-    },
-    notifyAnnotationEvent: (_windowId, change) => {
-      annotationEvents.push(change);
-    },
-    notifyAnnotationAttached: (_windowId, change) => {
-      annotationAttached.push(change);
+    send: (windowId, channel, payload) => {
+      switch (channel) {
+        case RunnerHostEvent.browserViewNativeTabStatusChange:
+          nativeTabStatusWindowIds.push(windowId);
+          record(nativeTabStatuses, payload);
+          return true;
+        case RunnerHostEvent.browserViewFindChange:
+          record(finds, payload);
+          return true;
+        case RunnerHostEvent.browserViewDownloadChange:
+          record(downloads, payload);
+          return true;
+        case RunnerHostEvent.browserViewCertificateError:
+          record(certificateErrors, payload);
+          return true;
+        case RunnerHostEvent.browserViewOpenTileRequest:
+          record(openTileRequests, payload);
+          return true;
+        case RunnerHostEvent.browserViewSnapshotInvalidated:
+          record(snapshotInvalidations, payload);
+          return true;
+        case RunnerHostEvent.browserViewAnnotationEvent:
+          record(annotationEvents, payload);
+          return true;
+        case RunnerHostEvent.browserViewAnnotationAttached:
+          record(annotationAttached, payload);
+          return true;
+        case RunnerHostEvent.browserViewElectronTabHandoff: {
+          const change =
+            asPayload<BrowserViewElectronTabHandoffChange>(payload);
+          const delivered =
+            harnessOptions?.notifyElectronTabHandoff?.(windowId, change) ??
+            true;
+          if (!delivered) return false;
+          electronTabHandoffWindowIds.push(windowId);
+          electronTabHandoffNotifications.push(change);
+          return true;
+        }
+        default:
+          throw new Error(`unexpected browser-view channel: ${channel}`);
+      }
     },
     seedStorageState: () => Promise.resolve(),
     captureStorageState: (input, webContents) => {
@@ -1755,6 +1780,44 @@ describe("BrowserViewManager native tab lifecycle", () => {
     expect(view.bounds).toEqual([]);
   });
 
+  it("presents an overlay-parked tile offscreen for PiP capture", async () => {
+    // Regression: PiP read `lastLoggedVisible`, a log-dedup latch that
+    // `applyEntryVisibility` never updates on the overlay-parked path, so a
+    // parked tile whose last LOG said "visible" skipped offscreen
+    // presentation entirely and captured an empty NativeImage.
+    const harness = createHarness();
+    const { capability, view } = await attachNativeTab(
+      harness,
+      "window-1",
+      BASE_KEY,
+      "https://example.com/",
+    );
+    await harness.manager.occludeForOverlay("window-1", {
+      overlayId: "settings-dialog",
+      tiles: [BASE_KEY],
+    });
+    harness.manager.paintAckOverlay("settings-dialog");
+    const boundsBeforeCapture = view.bounds.length;
+
+    await expect(
+      harness.manager.startPipCapture(
+        "window-1",
+        {
+          ...capability,
+          maxWidth: 640,
+          maxHeight: 360,
+          quality: 75,
+        },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+
+    expect(view.bounds.slice(boundsBeforeCapture)).toEqual([
+      { x: -300, y: -200, width: 300, height: 200 },
+    ]);
+    expect(view.visible).toBe(true);
+  });
+
   it("holds and releases the compositor lease for an unbound PiP tab", async () => {
     const harness = createHarness();
     const nativeKey = {
@@ -1856,9 +1919,7 @@ describe("BrowserViewManager host window renderer reset (fix round 2)", () => {
     );
 
     expect(view.visible).toBe(false);
-    harness.manager.releaseOverlay("window-1", {
-      overlayId: "settings-dialog",
-    });
+    harness.manager.releaseOverlay({ overlayId: "settings-dialog" });
     expect(view.visible).toBe(false);
   });
 

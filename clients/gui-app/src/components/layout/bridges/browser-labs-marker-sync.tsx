@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -12,7 +13,7 @@ export function BrowserLabsMarkerSync() {
     const sync = (inAppBrowserBetaEnabled: boolean): void => {
       void browserView
         .setLabsState({ inAppBrowserBetaEnabled })
-        .catch(ignoreBrowserLabsMarkerError);
+        .catch(ignoreError);
     };
 
     sync(useSettingsStore.getState().inAppBrowserBetaEnabled);
@@ -36,5 +37,3 @@ export function BrowserLabsMarkerSync() {
 
   return null;
 }
-
-function ignoreBrowserLabsMarkerError(_error: unknown): void {}

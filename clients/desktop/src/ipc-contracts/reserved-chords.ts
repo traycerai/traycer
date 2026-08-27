@@ -88,20 +88,6 @@ function normalizeKeyToken(rawKey: string): string | null {
   return key;
 }
 
-export function normalizeReservedChord(
-  chord: ReservedChord,
-): ReservedChord | null {
-  const key = normalizeKeyToken(chord.key);
-  if (key === null) return null;
-  return {
-    key,
-    mod: chord.mod === true,
-    ctrl: chord.ctrl === true,
-    shift: chord.shift === true,
-    alt: chord.alt === true,
-  };
-}
-
 /** Stable wire/log identifier, e.g. `mod+ctrl+shift+alt+key` (fixed order). */
 export function reservedChordToken(chord: ReservedChord): string {
   const parts: string[] = [];
@@ -185,11 +171,6 @@ export function reservedChordFromKeyEvent(
 }
 
 /**
- * Does the incoming host key event match this registered chord? `event` must
- * already be normalized through `reservedChordFromKeyEvent` with the SAME
- * platform.
- */
-/**
  * Fold a registered chord into its platform-physical form. On non-mac
  * platforms Control IS the primary modifier, so a `ctrl+k` registration and
  * `mod+k` collapse to the same gesture (`mod` set, `ctrl` cleared). Run this
@@ -206,6 +187,11 @@ export function resolveReservedChordForPlatform(
   return chord;
 }
 
+/**
+ * Does the incoming host key event match this registered chord? `event` must
+ * already be normalized through `reservedChordFromKeyEvent` with the SAME
+ * platform.
+ */
 export function reservedChordMatchesEvent(
   chord: ReservedChord,
   event: ReservedChord,

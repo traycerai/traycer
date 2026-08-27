@@ -46,7 +46,6 @@ import type {
   EpicCanvasState,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
-import { epicCanvasTileFallbackName } from "@/stores/epics/canvas/types";
 import {
   collectPanes,
   findPanePath,
@@ -341,7 +340,7 @@ const CHAT_RUN_SETTINGS: ChatRunSettings = {
 };
 
 function buildChatYMap(chat: EpicCanvasTileRef): Y.Map<unknown> {
-  const name = epicCanvasTileFallbackName(chat);
+  const name = chat.name;
   const chatMap = new Y.Map<unknown>();
   chatMap.set("id", chat.id);
   chatMap.set("title", name);
@@ -413,7 +412,7 @@ function buildUserSnapshotMessage(
             content: [
               {
                 type: "text",
-                text: `${epicCanvasTileFallbackName(chat)} seed message ${index}`,
+                text: `${chat.name} seed message ${index}`,
               },
             ],
           },
@@ -447,7 +446,7 @@ function buildAssistantSnapshotMessage(
       {
         type: "text",
         blockId: `${chat.id}-block-${index}`,
-        text: `${epicCanvasTileFallbackName(chat)} assistant reply ${index}`,
+        text: `${chat.name} assistant reply ${index}`,
         status: "completed",
         timestamp: index + 1,
         providerNotice: null,
@@ -489,7 +488,7 @@ function emitChatSnapshot(
         parentId: null,
         userId: "owner-1",
         hostId: chat.hostId,
-        title: epicCanvasTileFallbackName(chat),
+        title: chat.name,
         createdAt: 0,
         updatedAt: 0,
         archivedAt: null,

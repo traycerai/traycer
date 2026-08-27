@@ -7,17 +7,20 @@
 // sourceSha256=c37ff9db2eb5bb05f54ea0bba570dd60d3bbba0fcabed626f92a0ef9937640d3
 // registrySha256=f043b552b6dd9eb229f01f8f6bf2cc50c6d98e3f3af5a3eeb70fbb5bae04cc10
 export const hostV115MutationV20Fixtures = {
-  "provenance": {
-    "tag": "host-v1.1.5",
-    "tagSha": "90f034445dda7e6d5c6786b676753f7b2f31243d",
-    "sourcePath": "protocol/src/host/provider-schemas.ts",
-    "sourceSha256": "c37ff9db2eb5bb05f54ea0bba570dd60d3bbba0fcabed626f92a0ef9937640d3",
-    "registryPath": "protocol/src/host/registry.ts",
-    "registrySha256": "f043b552b6dd9eb229f01f8f6bf2cc50c6d98e3f3af5a3eeb70fbb5bae04cc10",
-    "derivedBy": "protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts",
-    "regenerateCommand": "bun run protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts > protocol/src/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20.ts"
+  provenance: {
+    tag: "host-v1.1.5",
+    tagSha: "90f034445dda7e6d5c6786b676753f7b2f31243d",
+    sourcePath: "protocol/src/host/provider-schemas.ts",
+    sourceSha256:
+      "c37ff9db2eb5bb05f54ea0bba570dd60d3bbba0fcabed626f92a0ef9937640d3",
+    registryPath: "protocol/src/host/registry.ts",
+    registrySha256:
+      "f043b552b6dd9eb229f01f8f6bf2cc50c6d98e3f3af5a3eeb70fbb5bae04cc10",
+    derivedBy: "protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts",
+    regenerateCommand:
+      "bun run protocol/scripts/snapshot-host-v1.1.5-mutation-v20-fixtures.ts > protocol/src/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20.ts",
   },
-  "mutationProviderIds": [
+  mutationProviderIds: [
     "claude-code",
     "codex",
     "opencode",
@@ -31,9 +34,9 @@ export const hostV115MutationV20Fixtures = {
     "copilot",
     "kilocode",
     "openrouter",
-    "amp"
+    "amp",
   ],
-  "listV20ProviderIds": [
+  listV20ProviderIds: [
     "claude-code",
     "codex",
     "opencode",
@@ -46,9 +49,9 @@ export const hostV115MutationV20Fixtures = {
     "kimi",
     "copilot",
     "kilocode",
-    "openrouter"
+    "openrouter",
   ],
-  "mutationResponseMethods": [
+  mutationResponseMethods: [
     "providers.addCustomPath",
     "providers.awaitLogin",
     "providers.clearApiKey",
@@ -58,9 +61,9 @@ export const hostV115MutationV20Fixtures = {
     "providers.setEnabled",
     "providers.setEnvOverride",
     "providers.setSelection",
-    "providers.setTerminalAgentArgs"
+    "providers.setTerminalAgentArgs",
   ],
-  "mutationRequestMethods": [
+  mutationRequestMethods: [
     "providers.addCustomPath",
     "providers.awaitLogin",
     "providers.clearApiKey",
@@ -70,415 +73,415 @@ export const hostV115MutationV20Fixtures = {
     "providers.setEnabled",
     "providers.setEnvOverride",
     "providers.setSelection",
-    "providers.setTerminalAgentArgs"
+    "providers.setTerminalAgentArgs",
   ],
-  "minimalStatesByProviderId": {
+  minimalStatesByProviderId: {
     "claude-code": {
-      "providerId": "claude-code",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+      providerId: "claude-code",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "codex": {
-      "providerId": "codex",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    codex: {
+      providerId: "codex",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "opencode": {
-      "providerId": "opencode",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    opencode: {
+      providerId: "opencode",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "cursor": {
-      "providerId": "cursor",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    cursor: {
+      providerId: "cursor",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "traycer": {
-      "providerId": "traycer",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    traycer: {
+      providerId: "traycer",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "grok": {
-      "providerId": "grok",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    grok: {
+      providerId: "grok",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "qwen": {
-      "providerId": "qwen",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    qwen: {
+      providerId: "qwen",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "kiro": {
-      "providerId": "kiro",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    kiro: {
+      providerId: "kiro",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "droid": {
-      "providerId": "droid",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    droid: {
+      providerId: "droid",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "kimi": {
-      "providerId": "kimi",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    kimi: {
+      providerId: "kimi",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "copilot": {
-      "providerId": "copilot",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    copilot: {
+      providerId: "copilot",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "kilocode": {
-      "providerId": "kilocode",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    kilocode: {
+      providerId: "kilocode",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "openrouter": {
-      "providerId": "openrouter",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    openrouter: {
+      providerId: "openrouter",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
     },
-    "amp": {
-      "providerId": "amp",
-      "enabled": true,
-      "disabledBy": null,
-      "selected": {
-        "kind": "bundled"
+    amp: {
+      providerId: "amp",
+      enabled: true,
+      disabledBy: null,
+      selected: {
+        kind: "bundled",
       },
-      "candidates": [],
-      "auth": {
-        "status": "unknown",
-        "badgeText": null,
-        "label": null,
-        "detail": null
+      candidates: [],
+      auth: {
+        status: "unknown",
+        badgeText: null,
+        label: null,
+        detail: null,
       },
-      "authPending": false,
-      "checkedAt": null,
-      "apiKey": {
-        "supported": false,
-        "configured": false,
-        "source": null
+      authPending: false,
+      checkedAt: null,
+      apiKey: {
+        supported: false,
+        configured: false,
+        source: null,
       },
-      "terminalAgentArgs": "",
-      "envOverrides": [],
-      "loginCapability": null,
-      "availabilityPending": false
-    }
+      terminalAgentArgs: "",
+      envOverrides: [],
+      loginCapability: null,
+      availabilityPending: false,
+    },
   },
-  "requestSamplesByMethod": {
+  requestSamplesByMethod: {
     "providers.addCustomPath": {
-      "providerId": "amp",
-      "path": "/opt/amp"
+      providerId: "amp",
+      path: "/opt/amp",
     },
     "providers.awaitLogin": {
-      "providerId": "amp"
+      providerId: "amp",
     },
     "providers.clearApiKey": {
-      "providerId": "amp"
+      providerId: "amp",
     },
     "providers.deleteEnvOverride": {
-      "providerId": "amp",
-      "key": "TAG_DERIVED"
+      providerId: "amp",
+      key: "TAG_DERIVED",
     },
     "providers.removeCustomPath": {
-      "providerId": "amp",
-      "path": "/opt/amp"
+      providerId: "amp",
+      path: "/opt/amp",
     },
     "providers.setApiKey": {
-      "providerId": "amp",
-      "apiKey": "tag-derived-key"
+      providerId: "amp",
+      apiKey: "tag-derived-key",
     },
     "providers.setEnabled": {
-      "providerId": "amp",
-      "enabled": true
+      providerId: "amp",
+      enabled: true,
     },
     "providers.setEnvOverride": {
-      "providerId": "amp",
-      "key": "TAG_DERIVED",
-      "value": "1"
+      providerId: "amp",
+      key: "TAG_DERIVED",
+      value: "1",
     },
     "providers.setSelection": {
-      "providerId": "amp",
-      "selection": {
-        "kind": "bundled"
-      }
+      providerId: "amp",
+      selection: {
+        kind: "bundled",
+      },
     },
     "providers.setTerminalAgentArgs": {
-      "providerId": "amp",
-      "terminalAgentArgs": ""
-    }
-  }
+      providerId: "amp",
+      terminalAgentArgs: "",
+    },
+  },
 } as const;

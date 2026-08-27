@@ -115,7 +115,7 @@ import {
   installPowerMonitorListeners,
   trimUnusedChromiumFeatures,
 } from "../app/lifecycle";
-import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/browser-cookie-crypto";
+import { resolveBrowserCookieCryptoStateAtReady } from "../browser-view/storage/browser-cookie-crypto";
 import { installProductionProxyAuthHandler } from "../app/proxy-auth";
 import {
   installCertificateErrorHandler,

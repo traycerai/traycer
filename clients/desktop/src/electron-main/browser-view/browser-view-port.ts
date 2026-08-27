@@ -1,6 +1,6 @@
 import type { BrowserWindowConstructorOptions } from "electron";
 import type { BrowserViewBounds } from "../../ipc-contracts/browser-view-types";
-import type { BrowserStorageSession } from "./browser-storage-state";
+import type { BrowserStorageSession } from "./storage/browser-storage-state";
 
 export interface BrowserViewDebugger {
   isAttached(): boolean;
@@ -50,7 +50,7 @@ export type BrowserViewWindowOpenResult =
       readonly outlivesOpener: boolean;
     };
 
-interface BrowserViewCropRect {
+export interface BrowserViewCropRect {
   readonly x: number;
   readonly y: number;
   readonly width: number;

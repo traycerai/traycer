@@ -60,7 +60,6 @@ import type {
   SplitDirection,
 } from "@/stores/epics/canvas/types";
 import {
-  epicCanvasTileFallbackName,
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
@@ -534,7 +533,7 @@ function useTabRenameControl(args: {
   const fallbackDisplayTitle = useEpicTabDisplayTitle(
     {
       id: tab.id,
-      name: epicCanvasTileFallbackName(tab),
+      name: tab.name,
       type: tab.type,
       hostId: tabHostId(tab),
     },

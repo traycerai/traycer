@@ -32,9 +32,9 @@ import {
   PIP_NUDGE_PX,
   PIP_RESIZE_STEP_PX,
   readViewportSize,
-} from "@/lib/browser-view/pip-geometry";
-import { usePipOwnedFrame } from "@/lib/browser-view/pip-frame-capture";
-import { useRemotePipSessions } from "@/lib/browser-view/use-pip-epic-sessions";
+} from "@/lib/browser-view/pip/pip-geometry";
+import { usePipOwnedFrame } from "@/lib/browser-view/pip/pip-frame-capture";
+import { useRemotePipSessions } from "@/lib/browser-view/pip/use-pip-epic-sessions";
 import {
   captionFreshness,
   dismissPip,
@@ -45,7 +45,7 @@ import {
   type PipSnapshot,
   type PipStreamHealth,
   type PipTarget,
-} from "@/lib/browser-view/pip-store";
+} from "@/lib/browser-view/pip/pip-store";
 import { cn } from "@/lib/utils";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";

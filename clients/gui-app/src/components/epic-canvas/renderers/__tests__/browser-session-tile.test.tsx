@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionTile } from "@/components/epic-canvas/renderers/browser-session-tile";
-import type { ElectronTabBinding } from "@/lib/browser-view/electron-tabs";
+import type { ElectronTabBinding } from "@/lib/browser-view/sessions/electron-tabs";
 import type { BrowserSessionTileRef } from "@/stores/epics/canvas/types";
 
 const harness = vi.hoisted(() => ({
@@ -26,7 +26,7 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
     closeTab: vi.fn(),
   }),
 }));
-vi.mock("@/lib/browser-view/electron-tabs", () => ({
+vi.mock("@/lib/browser-view/sessions/electron-tabs", () => ({
   useElectronTabBindingOnHost: () => harness.binding,
 }));
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -74,6 +74,7 @@ const NODE: BrowserSessionTileRef = {
   id: "browser-session:sess-1:tab-1",
   instanceId: "pointer-instance-1",
   type: "browser-session",
+  name: "Browser",
   hostId: "host-test",
   sessionId: "sess-1",
   tabId: "tab-1",

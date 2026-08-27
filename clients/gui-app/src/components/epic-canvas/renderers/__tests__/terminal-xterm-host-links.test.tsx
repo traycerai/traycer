@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { __disposeAllXtermHostsForTests } from "@/components/epic-canvas/renderers/xterm-host-registry";
-import { BrowserLinkRoutingProvider } from "@/lib/browser-view/browser-link-routing";
+import { BrowserLinkRoutingProvider } from "@/lib/browser-view/link-routing/browser-link-routing";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,

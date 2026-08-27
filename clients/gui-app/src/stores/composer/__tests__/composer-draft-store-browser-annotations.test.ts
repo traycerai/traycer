@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { del as idbDel, get as idbGet, set as idbSet } from "idb-keyval";
 
-import { attachBrowserAnnotation } from "@/lib/browser-view/browser-annotation-attach";
+import { attachBrowserAnnotation } from "@/lib/browser-view/annotation/browser-annotation-attach";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/__tests__/browser-annotation-fixtures";
+import { createStubBrowserAnnotationPayloadFor } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
 import { createBrowserConsoleAttachment } from "@/lib/browser-view/browser-context-attachments";
 import type {
   BrowserViewConsoleEntry,
@@ -14,12 +14,14 @@ import type {
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { markLandingDraftsReady } from "@/lib/composer/landing-image-gc";
 import {
-  deleteImage,
   hasLandingImageBytes,
   imageHashKeys,
   putImage,
-  releaseSession,
 } from "@/lib/composer/landing-image-store";
+import {
+  drainImages,
+  installIdbWorking,
+} from "@/lib/browser-view/annotation/__tests__/browser-annotation-idb-fixtures";
 import {
   useComposerDraftStore,
   type DraftState,
@@ -29,42 +31,12 @@ const STORAGE_KEY = "traycer-gui-app:composer-drafts";
 
 const idbData = vi.hoisted(() => new Map<string, unknown>());
 
-function idbStringKey(key: IDBValidKey): string {
-  if (typeof key !== "string") {
-    throw new Error("landing image store keys are string hashes");
-  }
-  return key;
-}
-
-function installIdbWorking(): void {
-  vi.mocked(idbSet).mockImplementation((key, value) => {
-    idbData.set(idbStringKey(key), value);
-    return Promise.resolve();
-  });
-  vi.mocked(idbDel).mockImplementation((key) => {
-    idbData.delete(idbStringKey(key));
-    return Promise.resolve();
-  });
-  vi.mocked(idbGet).mockImplementation((key) =>
-    Promise.resolve(idbData.get(idbStringKey(key))),
-  );
-}
-
-vi.mock("idb-keyval", () => {
-  const dummyStore = () => Promise.reject(new Error("unused"));
-  return {
-    createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
-    set: vi.fn((key: string, value: unknown) => {
-      idbData.set(key, value);
-      return Promise.resolve();
-    }),
-    del: vi.fn((key: string) => {
-      idbData.delete(key);
-      return Promise.resolve();
-    }),
-    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-  };
+vi.mock("idb-keyval", async () => {
+  // Dynamic import: the factory is hoisted above the static imports, so the
+  // fixture binding is not initialized yet when this runs.
+  const { createIdbKeyvalMock } =
+    await import("@/lib/browser-view/annotation/__tests__/browser-annotation-idb-mock");
+  return createIdbKeyvalMock(idbData);
 });
 
 const EMPTY_DOC: DraftState["content"] = {
@@ -88,7 +60,6 @@ const CONSOLE_ENTRY: BrowserViewConsoleEntry = {
   url: "https://example.com/app.js",
   lineNumber: 4,
   columnNumber: 2,
-  stackTrace: [],
 };
 
 let urlCounter = 0;
@@ -96,13 +67,6 @@ const createObjectURL = vi.fn(
   (_obj: Blob | MediaSource) => `blob:mock/${++urlCounter}`,
 );
 const revokeObjectURL = vi.fn((_url: string) => undefined);
-
-async function drainImages(): Promise<void> {
-  for (const hash of await imageHashKeys()) {
-    await deleteImage(hash);
-    releaseSession(hash);
-  }
-}
 
 async function attachNamed(
   chatId: string,
@@ -182,10 +146,10 @@ function persistedAnnotationOf(
 beforeEach(async () => {
   URL.createObjectURL = createObjectURL;
   URL.revokeObjectURL = revokeObjectURL;
-  installIdbWorking();
+  installIdbWorking(idbData, idbGet, idbSet, idbDel);
   await drainImages();
   vi.clearAllMocks();
-  installIdbWorking();
+  installIdbWorking(idbData, idbGet, idbSet, idbDel);
   window.localStorage.clear();
   useComposerDraftStore.setState({ drafts: {} });
   markLandingDraftsReady();

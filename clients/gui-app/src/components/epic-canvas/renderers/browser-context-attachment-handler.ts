@@ -41,9 +41,5 @@ export function useBrowserContextAttachmentHandler(input: {
 function unhandledAttachment(
   payload: BrowserContextAttachmentPayload,
 ): BrowserContextAttachmentResult {
-  return {
-    status: "unhandled",
-    payload,
-    reason: "ticket-12-handler-not-registered",
-  };
+  return { status: "unhandled", payload };
 }

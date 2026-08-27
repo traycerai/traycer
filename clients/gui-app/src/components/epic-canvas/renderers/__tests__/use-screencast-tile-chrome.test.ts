@@ -1,9 +1,9 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { SyntheticEvent } from "react";
+import type { BrowserNavState } from "@traycer/protocol/host/browser/contracts";
 import {
   useScreencastTileChrome,
-  type ScreencastNavState,
   type ScreencastTileChrome,
 } from "@/components/epic-canvas/renderers/use-screencast-tile-chrome";
 
@@ -14,7 +14,7 @@ const DRAFT_URL = "https://draft.example/path";
 const SUBMITTED_URL = "https://submitted.example/";
 
 interface ChromeHookProps {
-  readonly navState: ScreencastNavState;
+  readonly navState: BrowserNavState;
   readonly initialUrl: string;
 }
 
@@ -27,7 +27,7 @@ interface ChromeHookView {
   readonly onReload: Mock;
 }
 
-function idleNav(url: string): ScreencastNavState {
+function idleNav(url: string): BrowserNavState {
   return {
     url,
     canGoBack: false,
@@ -37,7 +37,7 @@ function idleNav(url: string): ScreencastNavState {
 }
 
 function renderChrome(
-  navState: ScreencastNavState,
+  navState: BrowserNavState,
   initialUrl: string,
 ): ChromeHookView {
   const onNavigateUrl = vi.fn();

@@ -1,4 +1,4 @@
-import type { BrowserViewSnapshotState } from "@/lib/browser-view/browser-overlay-coordinator";
+import type { BrowserViewSnapshotState } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 
 export function BrowserViewSnapshotLayer(props: {
   readonly snapshot: BrowserViewSnapshotState | null;

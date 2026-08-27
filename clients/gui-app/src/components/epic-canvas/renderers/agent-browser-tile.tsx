@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
-import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/visible-tile-registry";
+import { useRegisterVisibleBrowserTile } from "@/lib/browser-view/tiles/visible-tile-registry";
 import { BrowserTileFindAdapterBridge } from "@/components/epic-canvas/renderers/browser-tile-find-adapter";
 import {
   BrowserTileCertificateInterstitial,
@@ -18,21 +18,22 @@ import { useBrowserViewSnapshot } from "@/components/epic-canvas/renderers/use-b
 import { useCloseCanvasTileWithNestedFocus } from "@/components/epic-canvas/renderers/use-close-canvas-tile-with-nested-focus";
 import { useBrowserViewBoundsBridge } from "@/components/epic-canvas/renderers/use-browser-view-bounds-bridge";
 import { useElectronTabChrome } from "@/components/epic-canvas/renderers/use-electron-tile-chrome";
-import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/browser-overlay-coordinator";
+import { BROWSER_VIEW_SURFACE_ATTRIBUTE } from "@/lib/browser-view/tiles/browser-overlay-coordinator";
 import type {
   BrowserViewStatus,
   BrowserViewTileKey,
+  BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   ElectronTabBinding,
   ElectronTabSurfaceLease,
-} from "@/lib/browser-view/electron-tabs";
-import { openBrowserSessionTileFromPage } from "@/lib/browser-view/browser-link-routing-core";
+} from "@/lib/browser-view/sessions/electron-tabs";
+import { openBrowserSessionTileFromPage } from "@/lib/browser-view/link-routing/browser-link-routing-core";
 import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
 import { cn } from "@/lib/utils";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { convertBrowserTabToPip } from "@/lib/browser-view/pip-store";
+import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 
 interface ElectronTabSurfaceNode {
   readonly id: string;
@@ -41,7 +42,7 @@ interface ElectronTabSurfaceNode {
   readonly hostId: string;
   readonly sessionId: string;
   readonly url: string;
-  readonly viewportPreset: string;
+  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 interface ElectronTabSurfaceProps {
@@ -262,7 +263,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     persistViewportPreset: (preset) => {
       persistViewportPreset(props.viewTabId, props.node.instanceId, preset);
     },
-    initialViewportPreset: readAgentViewportPreset(props.node.viewportPreset),
+    initialViewportPreset: props.node.viewportPreset,
     onAttemptedUrl: latchAttemptedUrl,
   });
   useEffect(() => {
@@ -450,20 +451,6 @@ function effectiveAgentTileStatus(
 
 function pageSessionIdForAgentTile(nodeId: string): string {
   return nodeId;
-}
-
-function readAgentViewportPreset(
-  value: string,
-): "responsive" | "mobile" | "tablet" | "desktop" {
-  if (
-    value === "responsive" ||
-    value === "mobile" ||
-    value === "tablet" ||
-    value === "desktop"
-  ) {
-    return value;
-  }
-  return "responsive";
 }
 
 interface AttemptedNavigation {

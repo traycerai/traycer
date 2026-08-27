@@ -3,7 +3,8 @@ import {
   rectFromDomRect,
   registerBrowserOverlayTile,
   updateBrowserOverlayTileRect,
-} from "@/lib/browser-view/browser-overlay-coordinator";
+} from "@/lib/browser-view/tiles/browser-overlay-coordinator";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import type {
   BrowserViewBounds,
   BrowserViewBridge,
@@ -59,7 +60,7 @@ export function useBrowserViewBoundsBridge(
         frameId = null;
         void browserView
           .updateBounds({ ...tileKey, bounds })
-          .catch(ignoreBrowserViewError);
+          .catch(ignoreError);
       });
     };
 
@@ -91,5 +92,3 @@ function readElementBounds(rect: DOMRectReadOnly): BrowserViewBounds {
     height: rect.height,
   };
 }
-
-function ignoreBrowserViewError(_error: unknown): void {}

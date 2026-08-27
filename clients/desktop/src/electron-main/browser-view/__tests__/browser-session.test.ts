@@ -325,7 +325,7 @@ describe("browser view session policy", () => {
   });
 
   it("uses a dedicated persistent partition without mutating defaultSession", async () => {
-    const crypto = await import("../browser-cookie-crypto");
+    const crypto = await import("../storage/browser-cookie-crypto");
     crypto.setBrowserCookieCryptoStateForTests(realCookieCryptoState());
     const mod = await import("../browser-session");
 
@@ -354,7 +354,7 @@ describe("browser view session policy", () => {
   });
 
   it("uses a session-only partition when cookie crypto is degraded", async () => {
-    const crypto = await import("../browser-cookie-crypto");
+    const crypto = await import("../storage/browser-cookie-crypto");
     crypto.setBrowserCookieCryptoStateForTests(degradedCookieCryptoState());
     const mod = await import("../browser-session");
 
