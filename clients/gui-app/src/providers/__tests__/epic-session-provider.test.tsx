@@ -2140,4 +2140,126 @@ describe("<EpicSessionProvider />", () => {
     }
     expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-create");
   });
+
+  it("gives up the create-host seed when the effective host moves", async () => {
+    const EPIC_ID = "epic-create-host-move-test";
+    // The effective host at mount ("host-a", the `beforeEach` default) is
+    // deliberately DIFFERENT from both the create-host marker and the host it
+    // later moves to, so a pass here can only mean the seed was actually
+    // given up on the move - not that the effective host never differed from
+    // the seed in the first place.
+    markEpicCreatedThisSession(EPIC_ID, "host-create");
+    const streams: ControlledEpicStream[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const view = render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => expect(seenHandles).toHaveLength(1));
+    const firstHandle = seenHandles[0];
+    expect(getEpicSessionHandleHostId(firstHandle)).toBe("host-create");
+
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+    });
+
+    // Giving up the seed re-points against the NEW effective host, opening a
+    // second stream - if the seed still won, `targetHostId` would still be
+    // "host-create" and no re-point would start at all.
+    await waitFor(() => expect(streams).toHaveLength(2));
+    act(() => {
+      deliverSnapshot(streams[1], "room-a");
+    });
+    await waitFor(() => expect(seenHandles.at(-1)).not.toBe(firstHandle));
+
+    const mountedHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+    if (mountedHandle === null) {
+      throw new Error("expected a mounted handle");
+    }
+    expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-b");
+  });
+
+  it("keeps the create-host seed when the selection authority merely answers for the first time", async () => {
+    const EPIC_ID = "epic-create-host-baseline-test";
+    // Detached: nobody has answered yet, matching the authority's own
+    // bootstrap default - NOT the same as "effective" naming no usable host.
+    hostState.id = null;
+    markEpicCreatedThisSession(EPIC_ID, "host-create");
+    const streams: ControlledEpicStream[] = [];
+    __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+      const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    const view = render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+
+    // The seed answers regardless of the authority being detached:
+    // `requestedHostId` is non-null, so `targetHostId` never depended on
+    // `effectiveHostId` in the first place.
+    await waitFor(() => expect(seenHandles).toHaveLength(1));
+    const firstHandle = seenHandles[0];
+    expect(getEpicSessionHandleHostId(firstHandle)).toBe("host-create");
+
+    // The authority speaks for the FIRST time, naming a host that is NOT the
+    // create host - a baseline, not a move.
+    act(() => {
+      hostState.id = "host-b";
+      view.rerender(
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+        </EpicSessionProvider>,
+      );
+    });
+    // Give any erroneous re-point effect a chance to start.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // No second stream: the seed still wins, so `targetHostId` never moved
+    // off "host-create".
+    expect(streams).toHaveLength(1);
+    expect(seenHandles.at(-1)).toBe(firstHandle);
+    const mountedHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+    if (mountedHandle === null) {
+      throw new Error("expected a mounted handle");
+    }
+    expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-create");
+  });
 });

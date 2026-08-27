@@ -4,6 +4,7 @@ import {
   markEpicCreatedThisSession,
   sessionCreatedEpicHostId,
   unmarkEpicCreatedThisSession,
+  wasEpicCreatedRecentlyThisSession,
   wasEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 
@@ -70,6 +71,40 @@ describe("session-created-epics", () => {
   it("unmarkEpicCreatedThisSession on an epic not recorded is a no-op", () => {
     expect(() => unmarkEpicCreatedThisSession("never-recorded")).not.toThrow();
     expect(wasEpicCreatedThisSession("never-recorded")).toBe(false);
+  });
+
+  it("wasEpicCreatedRecentlyThisSession is true immediately after marking, and still true just inside the create-race window", () => {
+    vi.useFakeTimers();
+    markEpicCreatedThisSession("epic-1", "host-a");
+
+    expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(true);
+
+    // Just short of the TTL boundary (`< TTL`, not `<=`), mirroring the
+    // `sessionCreatedEpicHostId` "does not expire short of the TTL" test
+    // above - this is the create-race grace's own window, read through its
+    // own accessor.
+    vi.advanceTimersByTime(2 * 60 * 1000 - 1);
+
+    expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(true);
+  });
+
+  it("wasEpicCreatedRecentlyThisSession goes false once the create-race window elapses, while wasEpicCreatedThisSession stays true", () => {
+    vi.useFakeTimers();
+    markEpicCreatedThisSession("epic-1", "host-a");
+
+    // Just past the TTL boundary (`> TTL`, not `>=`).
+    vi.advanceTimersByTime(2 * 60 * 1000 + 1);
+
+    expect(wasEpicCreatedRecentlyThisSession("epic-1")).toBe(false);
+    // The contrast is the point: the access coordinator's create-race grace
+    // must stop trusting this epic's "just created" story, while the
+    // existence reconciler's session-lifetime fact - "did THIS renderer
+    // create it at all" - is never TTL-gated and must still read true.
+    expect(wasEpicCreatedThisSession("epic-1")).toBe(true);
+  });
+
+  it("wasEpicCreatedRecentlyThisSession answers false for an epic that was never recorded", () => {
+    expect(wasEpicCreatedRecentlyThisSession("unknown-epic")).toBe(false);
   });
 
   it("clearSessionCreatedEpics clears every recorded entry's answers", () => {

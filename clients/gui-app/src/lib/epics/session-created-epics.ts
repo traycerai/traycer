@@ -36,19 +36,31 @@ interface SessionCreatedEpicEntry {
 const sessionCreatedEpics = new Map<string, SessionCreatedEpicEntry>();
 
 /**
- * How long the create host stays the SEED for a new epic session's placement.
+ * How long a create is still RACING its own cloud record - the window both
+ * consumers of the create host are scoped to.
  *
- * The race this seed closes lasts only until the create host's background
- * cloud connect lands (seconds; a minute-plus only when that host is retrying
- * with backoff). Past this window the cloud record exists and the ordinary
- * rule - the epic session follows the app-wide effective host - is the right
- * one again, so the seed expires rather than pinning every self-created epic
- * to its create host for the whole app session. `wasEpicCreatedThisSession`
- * deliberately does NOT expire: the existence reconciler and the access
- * coordinator's NOT_FOUND grace need the session-lifetime fact, not the
- * placement seed.
+ * The race lasts only until the create host's background cloud connect lands
+ * (seconds; a minute-plus only when that host is retrying with backoff). Past
+ * it the cloud record exists, so a NOT_FOUND means what it says and the
+ * ordinary rule - the epic session follows the app-wide effective host - is
+ * right again.
+ *
+ * Both layers read the window through this one constant, deliberately:
+ * {@link sessionCreatedEpicHostId} for session placement, and the access
+ * coordinator's silent-retry grace through
+ * {@link wasEpicCreatedRecentlyThisSession}. Scoping the grace to the SESSION
+ * instead would let a transient NOT_FOUND hours later trigger a destructive
+ * `requestFreshSnapshot` on an epic that has since accumulated real work.
+ *
+ * {@link wasEpicCreatedThisSession} is the odd one out and does NOT expire:
+ * the existence reconciler asks whether this renderer created the epic at
+ * all, which is a fact about the session, not about the race.
  */
-const CREATE_HOST_SEED_TTL_MS = 2 * 60 * 1000;
+const CREATE_RACE_WINDOW_MS = 2 * 60 * 1000;
+
+function isWithinCreateRaceWindow(entry: SessionCreatedEpicEntry): boolean {
+  return Date.now() - entry.recordedAt <= CREATE_RACE_WINDOW_MS;
+}
 
 export function markEpicCreatedThisSession(
   epicId: string,
@@ -70,15 +82,27 @@ export function wasEpicCreatedThisSession(epicId: string): boolean {
 }
 
 /**
+ * Whether this renderer created the epic and the create is still racing its
+ * own cloud record - the only window in which an absence may be read as lag
+ * rather than as the delete the code says it is. See
+ * {@link CREATE_RACE_WINDOW_MS}.
+ */
+export function wasEpicCreatedRecentlyThisSession(epicId: string): boolean {
+  const entry = sessionCreatedEpics.get(epicId);
+  if (entry === undefined) return false;
+  return isWithinCreateRaceWindow(entry);
+}
+
+/**
  * The host a just-created epic should open its session on, or `null` once the
- * create-host seed has expired (or was never recorded). See
- * {@link CREATE_HOST_SEED_TTL_MS} for why this answer is time-bounded while
+ * create race is over (or the epic was not created here). See
+ * {@link CREATE_RACE_WINDOW_MS} for why this answer is time-bounded while
  * {@link wasEpicCreatedThisSession} is not.
  */
 export function sessionCreatedEpicHostId(epicId: string): string | null {
   const entry = sessionCreatedEpics.get(epicId);
   if (entry === undefined) return null;
-  if (Date.now() - entry.recordedAt > CREATE_HOST_SEED_TTL_MS) return null;
+  if (!isWithinCreateRaceWindow(entry)) return null;
   return entry.hostId;
 }
 
