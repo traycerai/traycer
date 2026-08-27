@@ -1,15 +1,14 @@
 import { useRef } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  ExpandedImageDialogContent,
+  type ExpandedImageState,
+} from "@/components/chat/expanded-image-dialog";
 import type { ComposerImageAtom } from "@/lib/composer/image-atoms";
 import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
-import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
+import { useImageBlobUrlState } from "@/lib/attachments/use-image-blob-url";
 import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 
@@ -43,8 +42,24 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
   // called unconditionally; for a base64-only atom (`hash === null`) it returns
   // null, so the `dataUrl` fallback keeps chat paste instant.
   const sessionUrl = atom.hash === null ? null : sessionObjectUrl(atom.hash);
-  const blobUrl = useImageBlobUrl(atom.hash, atom.mimeType, fetcher);
-  const src = sessionUrl ?? blobUrl ?? dataUrl;
+  const blob = useImageBlobUrlState(atom.hash, atom.mimeType, fetcher, null);
+  const src = sessionUrl ?? blob.url ?? dataUrl;
+  // A restored hash's bytes are typed by the serving host's sniff, which can
+  // disagree with the stored claim and decides whether Copy is offered at all.
+  // The claim only stands where it IS the source: a same-session paste or
+  // inline base64.
+  const mediaType =
+    sessionUrl === null && blob.status === "ready"
+      ? blob.mediaType
+      : atom.mimeType;
+  let expandedImage: ExpandedImageState;
+  if (src !== null) {
+    expandedImage = { status: "ready", src, mediaType };
+  } else if (blob.status === "unavailable") {
+    expandedImage = { status: "unavailable" };
+  } else {
+    expandedImage = { status: "loading" };
+  }
   return (
     <Dialog>
       <div
@@ -109,9 +124,11 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           <X className="size-3" aria-hidden />
         </Button>
       </div>
-      <DialogContent
-        className="w-[min(90vw,56rem)] max-w-[min(90vw,56rem)] sm:max-w-[min(90vw,56rem)] p-2"
-        showCloseButton
+      <ExpandedImageDialogContent
+        title={label.title}
+        alt={alt}
+        image={expandedImage}
+        suggestedName={atom.fileName.length > 0 ? atom.fileName : null}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           const shell = wrapperRef.current?.closest<HTMLElement>(
@@ -122,22 +139,7 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
           );
           editor?.focus();
         }}
-      >
-        <DialogTitle className="sr-only">{label.title}</DialogTitle>
-        {src === null ? (
-          <div
-            className="aspect-video w-full animate-pulse rounded-md bg-foreground/10"
-            aria-hidden
-          />
-        ) : (
-          <img
-            src={src}
-            alt={alt}
-            className="block size-full max-h-[min(85vh,48rem)] w-full rounded-md object-contain"
-            draggable={false}
-          />
-        )}
-      </DialogContent>
+      />
     </Dialog>
   );
 }

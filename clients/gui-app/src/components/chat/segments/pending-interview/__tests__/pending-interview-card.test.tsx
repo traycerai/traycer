@@ -1855,7 +1855,8 @@ describe("PendingInterviewCard keyboard navigation", () => {
         }),
       ]);
       const draftAnswers = onSkip.mock.calls[0]?.[2] as
-        ReadonlyArray<InterviewAnswer> | undefined;
+        | ReadonlyArray<InterviewAnswer>
+        | undefined;
       expect(draftAnswers?.some((answer) => answer.questionId === "q2")).toBe(
         false,
       );

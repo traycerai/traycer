@@ -32,6 +32,7 @@ interface PickerProfileDropdownProps {
   readonly shortcutHintForIndex: (
     index: number,
   ) => ProfileDropdownShortcutHint | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
   readonly contentContainer: HTMLElement | null;
   readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly runTargetHostId: string | null;
@@ -64,28 +65,22 @@ function ProfileUsagePickerProfileDropdown({
     enabled: true,
     subscribed: true,
   });
+  const runTargetProvider = runTargetProvidersQuery.data?.providers.find(
+    (candidate) => candidate.providerId === providerId,
+  );
   const usageProfiles = useMemo(() => {
     if (runTargetClient === null) return EMPTY_PROFILES;
-    const provider = runTargetProvidersQuery.data?.providers.find(
-      (candidate) => candidate.providerId === providerId,
-    );
-    if (provider === undefined) return EMPTY_PROFILES;
+    if (runTargetProvider === undefined) return EMPTY_PROFILES;
     return resolveHostConsistentUsageProfiles(
       props.profiles,
-      provider.profiles,
+      runTargetProvider.profiles,
     );
-  }, [
-    props.profiles,
-    providerId,
-    runTargetClient,
-    runTargetProvidersQuery.data,
-  ]);
+  }, [props.profiles, runTargetClient, runTargetProvider]);
   const usagePresentation = useProfileUsagePresentation({
     runTargetHostId: props.runTargetHostId,
     providerId,
     profiles: usageProfiles,
   });
-
   return (
     <PickerProfileDropdownView
       props={props}
@@ -197,9 +192,11 @@ function PickerProfileDropdownView({
       createProfileDisabled={props.createProfileDisabled}
       createProfileDisabledReason={props.createProfileDisabledReason}
       shortcutHintForIndex={props.shortcutHintForIndex}
+      profileEnablementPending={props.profileEnablementPending}
       contentContainer={props.contentContainer}
       onCloseAutoFocus={() => props.inputRef.current?.focus()}
       usagePresentation={usagePresentation}
+      eligibilityControls={null}
       admissionByProfileId={props.admissionByProfileId}
     />
   );

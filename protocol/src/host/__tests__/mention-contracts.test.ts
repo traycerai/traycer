@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  splitConnectionManifest,
-} from "@traycer/protocol/framework/index";
+import { splitConnectionManifest } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
@@ -144,9 +142,9 @@ describe("GitHub mention schemas", () => {
   });
 
   it("round-trips populated and null pull-request preview fields", () => {
-    expect(
-      githubPullRequestMentionRowSchema.parse(PULL_REQUEST),
-    ).toEqual(PULL_REQUEST);
+    expect(githubPullRequestMentionRowSchema.parse(PULL_REQUEST)).toEqual(
+      PULL_REQUEST,
+    );
     expect(
       githubPullRequestMentionRowSchema.parse(
         PULL_REQUEST_WITH_NULL_PREVIEW_FIELDS,
@@ -175,8 +173,7 @@ describe("GitHub mention schemas", () => {
     const { checksRollup: _checksRollup, ...withoutChecksRollup } =
       PULL_REQUEST;
     expect(
-      githubPullRequestMentionRowSchema.safeParse(withoutChecksRollup)
-        .success,
+      githubPullRequestMentionRowSchema.safeParse(withoutChecksRollup).success,
     ).toBe(false);
   });
 

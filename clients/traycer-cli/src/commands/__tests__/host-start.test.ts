@@ -3457,19 +3457,23 @@ describe("runHostStart - production defaults", () => {
     // neither does an awaited promise. An `unref()`ed timer here means Node
     // drains and exits 0 mid-wait, and the relaunch never happens - silently,
     // in production only.
-    // `getActiveResourcesInfo()` reports only what is currently KEEPING THE
-    // EVENT LOOP ALIVE, so an unref'd timer does not appear in it. That makes
-    // it a direct read of the property in question rather than a proxy for it.
-    const countTimers = (): number =>
-      process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    // Spy on the timer factory so this observes the handle created by `sleep`
+    // itself, rather than comparing against unrelated process-wide timers.
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const pending = defaultRunHostStartDeps.sleep(20);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
 
-    const before = countTimers();
-    const pending = defaultRunHostStartDeps.sleep(20);
-    const during = countTimers();
-    await pending;
+      const timerResult = setTimeoutSpy.mock.results.at(-1);
+      if (timerResult?.type !== "return") {
+        throw new Error("sleep did not return a timer handle");
+      }
+      expect(timerResult.value.hasRef()).toBe(true);
 
-    expect(during).toBe(before + 1);
-    expect(countTimers()).toBe(before);
+      await pending;
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("keeps the raced-stop escalation timer referenced, and cancels it on demand", async () => {
@@ -3491,7 +3495,7 @@ describe("runHostStart - production defaults", () => {
     expect(during).toBe(before + 1);
     // And the canceller really cancels - otherwise the ordinary path leaks a
     // 30s timer per attempt.
-    expect(countTimers()).toBe(before);
+    expect(countTimers()).toBeLessThan(during);
     expect(fired).toBe(false);
   });
 

@@ -245,7 +245,8 @@ function landingTerminalTabsEqual(
 
 function defaultLandingTerminalTitle(
   session:
-    CanonicalTerminalSessionInfo | CanonicalTerminalSessionInfoWithCurrentCwd,
+    | CanonicalTerminalSessionInfo
+    | CanonicalTerminalSessionInfoWithCurrentCwd,
   launchCwd: string,
 ): string {
   const currentCwdReported = "currentCwd" in session;

@@ -3,6 +3,8 @@ export const providersMutationKeys = {
   addCustomPath: () => ["providers.addCustomPath"] as const,
   removeCustomPath: () => ["providers.removeCustomPath"] as const,
   setEnabled: () => ["providers.setEnabled"] as const,
+  setProfileEnabled: (hostId: string | null, providerId: string | null) =>
+    ["providers.setProfileEnabled", hostId, providerId] as const,
   setApiKey: () => ["providers.setApiKey"] as const,
   clearApiKey: () => ["providers.clearApiKey"] as const,
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
@@ -34,4 +36,6 @@ export const providersMutationKeys = {
   acknowledgeAmbientDrift: () => ["providers.acknowledgeAmbientDrift"] as const,
   consumeRateLimitResetCredit: () =>
     ["providers.consumeRateLimitResetCredit"] as const,
+  refreshProfileStatus: (hostId: string | null) =>
+    ["providers.refreshProfileStatus", hostId] as const,
 };

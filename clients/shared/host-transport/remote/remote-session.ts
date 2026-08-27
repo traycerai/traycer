@@ -2199,15 +2199,11 @@ export class RemoteSession<
     this.clearPendingUnary(streamId);
     if (parsed.data.error !== null) {
       entry.reject(
-        new HostRpcError({
-          code: isRpcErrorCode(parsed.data.error.code)
-            ? parsed.data.error.code
-            : "RPC_ERROR",
-          message: parsed.data.error.message,
-          requestId: entry.requestId,
-          method: entry.method,
-          fatalDetails: null,
-        }),
+        HostRpcError.fromWireEnvelope(
+          parsed.data.error,
+          entry.requestId,
+          entry.method,
+        ),
       );
       return;
     }

@@ -151,6 +151,7 @@ import {
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/sidebar-reparent-row-drop-wrapper";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import type { ArtifactsSlice, TreeSlice } from "@/stores/epics/open-epic/types";
@@ -1552,6 +1553,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
           },
     [activeHostId, epicId, nodeId, viewTabId],
   );
+  const dragDisabled = useDragSourceDisabled();
   const {
     attributes,
     listeners,
@@ -1559,7 +1561,11 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     isDragging,
   } = useDraggable({
     id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
-    disabled: selectionMode || openableType === null || dragData === null,
+    disabled:
+      dragDisabled ||
+      selectionMode ||
+      openableType === null ||
+      dragData === null,
     data: dragData ?? undefined,
   });
   const selectionChevronToggle = useCallback(

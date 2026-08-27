@@ -77,7 +77,8 @@ interface UseChatComposerSubmitArgs {
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
   readonly onSubmitMessage:
-    ((input: ChatComposerSubmitInput) => boolean) | null;
+    | ((input: ChatComposerSubmitInput) => boolean)
+    | null;
 }
 
 interface ChatComposerSubmitInput {

@@ -76,7 +76,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsCloudFeedRow,
+  type HostNotificationsCloudFeedRowV11,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsCloudFeedMarkAllReadRequest,
   type HostNotificationsCloudFeedClearAllRequest,
@@ -95,7 +95,10 @@ import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 export type MergedNotificationSource =
-  "host" | "app-local" | "global" | "cloud";
+  | "host"
+  | "app-local"
+  | "global"
+  | "cloud";
 
 export interface MergedNotificationRow {
   readonly feedId: string;
@@ -249,7 +252,7 @@ function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
       const rows: MergedNotificationRow[] = [
         ...Object.values(cloudRows)
           .filter(
-            (row): row is HostNotificationsCloudFeedRow => row !== undefined,
+            (row): row is HostNotificationsCloudFeedRowV11 => row !== undefined,
           )
           .filter((row) => !isAutomaticAgentRecovery(row.entry))
           .map(rowFromCloudFeedRow),
@@ -442,7 +445,7 @@ function rowFromLocalFeedId(input: {
 
 function rowFromCloudFeedId(input: {
   readonly feedMode: "local" | "cloud" | "upgrade-required";
-  readonly cloudRow: HostNotificationsCloudFeedRow | undefined;
+  readonly cloudRow: HostNotificationsCloudFeedRowV11 | undefined;
 }): MergedNotificationRow | null {
   if (
     input.feedMode !== "cloud" ||
@@ -1093,7 +1096,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           if (cloudState.version !== cloudVersion) return;
           const fallbackEntryIds = Object.values(cloudState.rows)
             .filter(
-              (row): row is HostNotificationsCloudFeedRow =>
+              (row): row is HostNotificationsCloudFeedRowV11 =>
                 row !== undefined && row.entry.readAt === null,
             )
             .map((row) => row.entryId);
@@ -1397,7 +1400,7 @@ export function rowFromGlobalEntry(
 }
 
 export function rowFromCloudFeedRow(
-  row: HostNotificationsCloudFeedRow,
+  row: HostNotificationsCloudFeedRowV11,
 ): MergedNotificationRow {
   const fallback = formatHostNotificationPresentation(row.entry);
   const title =

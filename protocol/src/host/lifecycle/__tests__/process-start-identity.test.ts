@@ -108,10 +108,7 @@ describe("compareProcessStartIdentity", () => {
     ).toBe("same");
     // Leading/trailing whitespace from a trimmed-vs-untrimmed read.
     expect(
-      compareProcessStartIdentity(
-        "linux:boot-a 1",
-        "linux:  boot-a   1  ",
-      ),
+      compareProcessStartIdentity("linux:boot-a 1", "linux:  boot-a   1  "),
     ).toBe("same");
     // Canonicalising must not erase a real disagreement.
     expect(

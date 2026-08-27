@@ -65,10 +65,7 @@ export {
   type NoiseTransportCiphers,
 } from "./handshake-state";
 export type { NoiseKeyPair, NoiseRole } from "./types";
-export {
-  generateKeyPair,
-  publicKeyFromPrivate,
-} from "./primitives";
+export { generateKeyPair, publicKeyFromPrivate } from "./primitives";
 export { bytesToHex, hexToBytes } from "./bytes";
 
 /**

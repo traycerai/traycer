@@ -13,7 +13,9 @@ import type {
 } from "./rpc-scheduling-policy";
 
 export type HostRequestControlFlowReason =
-  "waiter-cancelled" | "authority-superseded" | "coordinator-disposed";
+  | "waiter-cancelled"
+  | "authority-superseded"
+  | "coordinator-disposed";
 
 /** Expected local request control flow, deliberately distinct from HostRpcError. */
 export class HostRequestControlFlowError extends Error {

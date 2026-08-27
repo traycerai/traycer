@@ -22,11 +22,9 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
     # The GUI suite deliberately runs isolated two-worker forks: disabling
-    # isolation makes tests leak state. The organization caps every job at ten
-    # minutes, so run its deterministic Vitest shards as parallel matrix jobs.
-    # The hash range that previously formed shard 1/4 is split into 1/8 and
-    # 2/8 because its canvas-heavy files can exhaust a runner when combined;
-    # the remaining three quarters retain their existing required-check names.
+    # isolation makes tests leak state. Twelve deterministic Vitest shards run
+    # as parallel matrix jobs; the measured eight-shard bodies still reached
+    # 4m39, so the smaller units keep the full hosted path below five minutes.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -39,30 +37,69 @@ jobs:
           - project: "@traycer/protocol"
             name: "test (@traycer/protocol)"
             test_args: ""
+            cache_key: "@traycer/protocol"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app)"
-            test_args: "-- --shard=1/8"
+            test_args: "-- --shard=1/12"
+            cache_key: "traycer-clients-gui-app-1-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2 of 8)"
-            test_args: "-- --shard=2/8"
+            test_args: "-- --shard=2/12"
+            cache_key: "traycer-clients-gui-app-2-of-12"
+          # Keep the three historical required-check names while narrowing
+          # their work from quarter-shards to eighth-shards.
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 2)"
-            test_args: "-- --shard=2/4"
+            test_args: "-- --shard=3/12"
+            cache_key: "traycer-clients-gui-app-3-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 4 of 8)"
+            test_args: "-- --shard=4/12"
+            cache_key: "traycer-clients-gui-app-4-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 3)"
-            test_args: "-- --shard=3/4"
+            test_args: "-- --shard=5/12"
+            cache_key: "traycer-clients-gui-app-5-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 6 of 8)"
+            test_args: "-- --shard=6/12"
+            cache_key: "traycer-clients-gui-app-6-of-12"
           - project: traycer-clients-gui-app
             name: "test (traycer-clients-gui-app shard 4)"
-            test_args: "-- --shard=4/4"
+            test_args: "-- --shard=7/12"
+            cache_key: "traycer-clients-gui-app-7-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 8 of 8)"
+            test_args: "-- --shard=8/12"
+            cache_key: "traycer-clients-gui-app-8-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 9 of 12)"
+            test_args: "-- --shard=9/12"
+            cache_key: "traycer-clients-gui-app-9-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 10 of 12)"
+            test_args: "-- --shard=10/12"
+            cache_key: "traycer-clients-gui-app-10-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 11 of 12)"
+            test_args: "-- --shard=11/12"
+            cache_key: "traycer-clients-gui-app-11-of-12"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 12 of 12)"
+            test_args: "-- --shard=12/12"
+            cache_key: "traycer-clients-gui-app-12-of-12"
           - project: "@traycer-clients/desktop"
             name: "test (@traycer-clients/desktop)"
             test_args: ""
+            cache_key: "@traycer-clients/desktop"
           - project: "@traycer-clients/shared"
             name: "test (@traycer-clients/shared)"
             test_args: ""
+            cache_key: "@traycer-clients/shared"
           - project: "@traycer-clients/traycer-cli"
             name: "test (@traycer-clients/traycer-cli)"
             test_args: ""
+            cache_key: "@traycer-clients/traycer-cli"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -88,9 +125,9 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .nx/cache
-          key: nx-${{ runner.os }}-${{ matrix.project }}-${{ github.sha }}
+          key: nx-${{ runner.os }}-${{ matrix.cache_key }}-${{ github.sha }}
           restore-keys: |
-            nx-${{ runner.os }}-${{ matrix.project }}-
+            nx-${{ runner.os }}-${{ matrix.cache_key }}-
       - run: bun install --frozen-lockfile
       # The host-v1.1.5 oracle in `provider-native-schemas.test.ts` regenerates
       # the checked-in fixture straight from the tag and deep-equals the two.
@@ -195,13 +232,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-      - name: Cache bun global install cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            bun-${{ runner.os }}-
+      # The standard runner starts immediately. A larger runner queued for
+      # more than three minutes, while cache restore on this runner took 3m27
+      # plus a 32s install versus 3m51 for the uncached install below.
       - run: bun install --frozen-lockfile
       - name: Build the CLI SEA
         run: bun run --filter @traycer-clients/traycer-cli build:sea

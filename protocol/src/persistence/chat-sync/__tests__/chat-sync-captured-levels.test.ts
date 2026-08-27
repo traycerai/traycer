@@ -35,7 +35,14 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
     "hostPrivate",
     "hostPrivateShard",
   ],
-  shard: ["schemaVersion", "chatId", "section", "messages", "events", "hostPrivate"],
+  shard: [
+    "schemaVersion",
+    "chatId",
+    "section",
+    "messages",
+    "events",
+    "hostPrivate",
+  ],
   core: [
     "chatId",
     "parentChatId",
@@ -63,7 +70,9 @@ const FROZEN_LEVEL_KEYS: Readonly<Record<string, readonly string[]>> = {
 
 describe("chat-sync captured residual levels", () => {
   it("registers exactly the levels the manifest declares", () => {
-    const registered = listCapturedLevelRegistrations().map((level) => level.id);
+    const registered = listCapturedLevelRegistrations().map(
+      (level) => level.id,
+    );
     const declared = CAPTURED_RESIDUAL_LEVELS.map((level) => level.id);
 
     // Set equality both ways: a capture site with no manifest entry is a level
@@ -76,7 +85,9 @@ describe("chat-sync captured residual levels", () => {
     // `reprojectResidualCapture` exists so the reader schemas can reuse a level
     // without double-counting it. If a reader schema started registering, this
     // is what would catch it.
-    const registered = listCapturedLevelRegistrations().map((level) => level.id);
+    const registered = listCapturedLevelRegistrations().map(
+      (level) => level.id,
+    );
     expect(registered).toHaveLength(new Set(registered).size);
   });
 

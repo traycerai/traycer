@@ -83,7 +83,8 @@ vi.mock("electron-log", () => ({
 type FetchHandler = (
   input: unknown,
   init:
-    { readonly method?: string; readonly body?: BodyInit | null } | undefined,
+    | { readonly method?: string; readonly body?: BodyInit | null }
+    | undefined,
 ) => Promise<Response>;
 
 function installFetch(handler: FetchHandler): () => void {

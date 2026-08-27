@@ -241,7 +241,9 @@ describe("chat-sync open harness ids", () => {
     expect(head.core.settings?.harnessId).toBe(FUTURE_HARNESS);
     // Every entry is interpreted - not degraded to unknown-variant passthrough,
     // which would lose the rendering entirely.
-    expect(shard.messages.every((message) => message.value !== null)).toBe(true);
+    expect(shard.messages.every((message) => message.value !== null)).toBe(
+      true,
+    );
     expect(head.events?.every((event) => event.value !== null)).toBe(true);
   });
 

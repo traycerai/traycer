@@ -7,6 +7,8 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import {
   providersConsumeRateLimitResetCreditRequestSchema,
   providersConsumeRateLimitResetCreditResponseSchema,
+  providersRefreshProfileStatusRequestSchema,
+  providersRefreshProfileStatusResponseSchema,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -31,7 +33,9 @@ import {
 // there is nothing to express there - stripping it keeps the wire payload
 // exactly the shape the released peer's own schema describes rather than
 // relying on its parse to discard an unrecognized key.
-function dropForce(request: RateLimitUsageRequestV40): RateLimitUsageRequestV12 {
+function dropForce(
+  request: RateLimitUsageRequestV40,
+): RateLimitUsageRequestV12 {
   const { force, ...released } = request;
   return released;
 }
@@ -58,6 +62,13 @@ export const providersConsumeRateLimitResetCreditV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersConsumeRateLimitResetCreditRequestSchema,
   responseSchema: providersConsumeRateLimitResetCreditResponseSchema,
+});
+
+export const providersRefreshProfileStatusV10 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
+  responseSchema: providersRefreshProfileStatusResponseSchema,
 });
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({

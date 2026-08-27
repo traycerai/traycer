@@ -8,7 +8,10 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
  * point, so an edit made while the stash was saving is never erased.
  */
 export type PromptStashSurface =
-  "chat" | "landing" | "new-conversation" | "test";
+  | "chat"
+  | "landing"
+  | "new-conversation"
+  | "test";
 
 export interface PromptStashSourceToken {
   readonly surface: PromptStashSurface;

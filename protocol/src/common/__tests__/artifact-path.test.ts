@@ -322,7 +322,13 @@ describe("isEpicArtifactCommentsDirName - shared with the host's sweep exemption
    * dot-sensitive host, synced, and then resolved on Windows onto the
    * projection directory.
    */
-  it.each([".comments.", ".comments ", ".comments...", ".COMMENTS. .", ".comments  "])(
+  it.each([
+    ".comments.",
+    ".comments ",
+    ".comments...",
+    ".COMMENTS. .",
+    ".comments  ",
+  ])(
     "matches %s, which Win32 canonicalizes onto the projection directory",
     (name) => {
       expect(isEpicArtifactCommentsDirName(name)).toBe(true);

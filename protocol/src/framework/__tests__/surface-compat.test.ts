@@ -681,7 +681,8 @@ describe("same-version wire-schema evolution rules", () => {
       exceptions: [],
     });
     const requestFinding = result.findings.find(
-      (finding) => finding.payload === "request" && finding.path === "properties.extra",
+      (finding) =>
+        finding.payload === "request" && finding.path === "properties.extra",
     );
     expect(requestFinding?.severity).toBe("advisory");
   });
@@ -849,16 +850,13 @@ describe("same-version wire-schema evolution rules", () => {
   });
 });
 
-
 describe("direction-aware enum/union addition severity", () => {
   const catalogRequest = z.object({});
   const catalogResponseV10 = z.object({
     harnesses: z.array(z.object({ id: z.enum(["claude", "cursor"]) })),
   });
   const catalogResponseV10PlusDevin = z.object({
-    harnesses: z.array(
-      z.object({ id: z.enum(["claude", "cursor", "devin"]) }),
-    ),
+    harnesses: z.array(z.object({ id: z.enum(["claude", "cursor", "devin"]) })),
   });
 
   function catalogRegistry(response: z.ZodType) {
@@ -934,7 +932,10 @@ describe("direction-aware enum/union addition severity", () => {
           versions: {
             0: {
               contract: v20,
-              upgradeFromPreviousVersion: defineUpgradePath<typeof v10, typeof v20>({
+              upgradeFromPreviousVersion: defineUpgradePath<
+                typeof v10,
+                typeof v20
+              >({
                 from: { major: 1, minor: 0 },
                 to: { major: 2, minor: 0 },
                 upgradeRequest: (request) => request,
@@ -982,12 +983,16 @@ describe("direction-aware enum/union addition severity", () => {
       mode: z.enum(["x", "y"]),
     });
     const result = checkSurfaceCompatibility({
-      mine: surfaceOfUnary(defineVersionedRpcRegistry({
-        "host.echo": unaryV10(requestV10Plus, baseResponse),
-      })),
-      theirs: surfaceOfUnary(defineVersionedRpcRegistry({
-        "host.echo": unaryV10(requestV10, baseResponse),
-      })),
+      mine: surfaceOfUnary(
+        defineVersionedRpcRegistry({
+          "host.echo": unaryV10(requestV10Plus, baseResponse),
+        }),
+      ),
+      theirs: surfaceOfUnary(
+        defineVersionedRpcRegistry({
+          "host.echo": unaryV10(requestV10, baseResponse),
+        }),
+      ),
       theirsLabel: "released",
       exceptions: [],
     });

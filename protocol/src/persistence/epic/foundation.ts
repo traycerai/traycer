@@ -76,8 +76,45 @@ export const guiHarnessIdSchema = z.enum([
   "hermes",
   "omp",
   "huggingface",
+  "reasonix",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
+
+/**
+ * Frozen copy of the persisted harness enum as the released
+ * `chat.subscribe@1.0–1.6` lines shipped it - everything before Reasonix, which
+ * first rides `1.7`.
+ *
+ * This is the SECOND independent copy of the harness enum (the first lives in
+ * `host/agent/shared.ts` as `guiHarnessIdSchemaPreReasonix`). They are kept
+ * separate on purpose: this one is the PERSISTED spelling, and it reaches the
+ * wire through `chatRunSettingsSchema` on released snapshot / `queueChanged`
+ * frames. Do NOT add new harnesses here - extend `guiHarnessIdSchema` above.
+ */
+export const guiHarnessIdSchemaPreReasonix = z.enum([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+]);
+export type GuiHarnessIdPreReasonix = z.infer<
+  typeof guiHarnessIdSchemaPreReasonix
+>;
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
 // enum before the unfinished runtime surface was withdrawn from the product.
@@ -125,6 +162,41 @@ export const chatRunSettingsSchema = z.object({
   profileId: z.string().nullable().default(null),
 });
 export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
+
+/**
+ * Wire-freeze copy of the settings tuple with `harnessId` pinned to the
+ * pre-Reasonix enum. Bound by every released `chat.subscribe@1.0–1.6`
+ * server-frame path that carries settings - the queue items embedded in
+ * snapshot / `queueChanged` frames, and `chat.settings` on the frozen chat
+ * records - so a newer host cannot project `harnessId: "reasonix"` onto a minor
+ * whose installed client would reject the whole frame.
+ *
+ * Hand-frozen field-for-field rather than `chatRunSettingsSchema.extend(...)`:
+ * a later required field added to the live tuple must not silently leak into
+ * this frozen contract.
+ *
+ * Client→host coverage is deliberately NARROWER than server→client, and the
+ * asymmetry is the point: the host is the side that must stay permissive, since
+ * a `1.7` peer has to be able to send `reasonix` in a settings write. Only
+ * `chatSubscribeClientFrameSchemaV10` pins this tuple - that line is frozen
+ * verbatim against a shipped host and gets the enum pin with everything else.
+ * `1.1`-`1.6` client frames still bind the LIVE tuple, which costs nothing
+ * today: a released client's own enum cannot spell `reasonix`, so only a
+ * crafted peer could send it, and the server-frame freezes above are what stop
+ * such a chat from ever being served back to a line that cannot decode it.
+ */
+export const chatRunSettingsSchemaPreReasonix = z.object({
+  harnessId: guiHarnessIdSchemaPreReasonix,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsPreReasonix = z.infer<
+  typeof chatRunSettingsSchemaPreReasonix
+>;
 
 // The wire-strict variant of `chatRunSettingsSchema`: identical output type,
 // but every field is REQUIRED - no `.default(...)` backstops. The defaults

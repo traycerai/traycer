@@ -137,7 +137,8 @@ describe("MockHostMessenger", () => {
         err.message === "handler supplied metadata" &&
         err.requestId === "req-current" &&
         err.method === "host.echo" &&
-        err.fatalDetails === fatalDetails,
+        err.fatalDetails === fatalDetails &&
+        err.holders === null,
     );
 
     const responseEvent = messenger.phases[4];
@@ -146,6 +147,49 @@ describe("MockHostMessenger", () => {
     }
     expect(responseEvent.error?.requestId).toBe("req-current");
     expect(responseEvent.error?.method).toBe("host.echo");
+  });
+
+  it("preserves WORKTREE_BUSY holders when re-stamping a handler HostRpcError", async () => {
+    const holders = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "terminal-agent" as const,
+          ownerId: "agent-1",
+        },
+        holdKind: "terminal-agent-pty" as const,
+        activity: "idle" as const,
+        label: "Claude Code",
+      },
+    ];
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new HostRpcError({
+            code: "WORKTREE_BUSY",
+            message: "in use",
+            requestId: "handler-req",
+            method: "handler.method",
+            fatalDetails: null,
+            holders,
+          });
+        },
+      },
+      requestId: () => "req-holders",
+    });
+
+    await expect(
+      messenger.request("host.echo", { message: "x" }, authority()),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "WORKTREE_BUSY" &&
+        err.requestId === "req-holders" &&
+        err.method === "host.echo" &&
+        err.holders !== null &&
+        JSON.stringify(err.holders) === JSON.stringify(holders),
+    );
   });
 
   it("emits phase hooks in the WS lifecycle order on the happy path", async () => {

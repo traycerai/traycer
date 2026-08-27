@@ -9,7 +9,10 @@
  */
 
 export type CanonicalImageMimeType =
-  "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  | "image/png"
+  | "image/jpeg"
+  | "image/gif"
+  | "image/webp";
 
 // Loosely typed as `ReadonlySet<string>` rather than
 // `ReadonlySet<CanonicalImageMimeType>`: both call sites check membership of

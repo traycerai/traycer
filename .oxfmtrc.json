@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "semi": true,
+  "tabWidth": 2,
+  "trailingComma": "all",
+  "ignorePatterns": ["protocol/**/__fixtures__/**", "protocol/**/snapshot-*.ts"]
+}

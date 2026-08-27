@@ -53,12 +53,12 @@ describe("agent.tui.validateForkProfile is optional, not floor", () => {
     expect(split.manifest["agent.tui.validateForkProfile"]).toBeUndefined();
   });
 
-  it("declares degrade: { kind: \"unsupported\" }", () => {
+  it('declares degrade: { kind: "unsupported" }', () => {
     const entry = hostRpcRegistry["agent.tui.validateForkProfile"];
     expect(Object.hasOwn(entry, "degrade")).toBe(true);
-    expect(
-      "degrade" in entry ? entry.degrade : undefined,
-    ).toEqual({ kind: "unsupported" });
+    expect("degrade" in entry ? entry.degrade : undefined).toEqual({
+      kind: "unsupported",
+    });
   });
 });
 

@@ -62,7 +62,10 @@ export function hostStopIntentPath(hostHomeDir: string): string {
  * not keep - the same call `host.update.install` already makes on the RPC leg.
  */
 export type StopIntentReason =
-  "stop" | "restart" | "install-swap" | "uninstall";
+  | "stop"
+  | "restart"
+  | "install-swap"
+  | "uninstall";
 
 export interface StopIntent {
   readonly v: 1;

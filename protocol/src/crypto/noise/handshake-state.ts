@@ -84,7 +84,9 @@ export class NoiseHandshakeState {
       );
     }
     if (responderStatic.length !== DH_LEN) {
-      throw new NoiseHandshakeError("responder static public key must be 32 bytes");
+      throw new NoiseHandshakeError(
+        "responder static public key must be 32 bytes",
+      );
     }
 
     const symmetric = SymmetricState.initialize();
@@ -140,7 +142,9 @@ export class NoiseHandshakeState {
     for (const token of tokens) {
       if (token === "e") {
         if (message.length - offset < DH_LEN) {
-          throw new NoiseHandshakeError("handshake message truncated at ephemeral");
+          throw new NoiseHandshakeError(
+            "handshake message truncated at ephemeral",
+          );
         }
         this.re = message.slice(offset, offset + DH_LEN);
         offset += DH_LEN;

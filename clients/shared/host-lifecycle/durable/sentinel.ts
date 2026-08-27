@@ -177,7 +177,9 @@ export function decodeBooleanSentinel(
  * non-`observed(true)` arms land, precisely").
  */
 export type SentinelIndeterminateCause =
-  "sentinel-corrupt" | "sentinel-unreadable" | "sentinel-unsupported-version";
+  | "sentinel-corrupt"
+  | "sentinel-unreadable"
+  | "sentinel-unsupported-version";
 
 /**
  * Project a sentinel decode onto an `Evidence<boolean>` world field.

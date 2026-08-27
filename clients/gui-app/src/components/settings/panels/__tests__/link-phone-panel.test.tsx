@@ -219,7 +219,8 @@ describe("LinkPhonePanel", () => {
     expect(codeQuery.refetch).not.toHaveBeenCalled();
     // Rotation idles while dead: a dead code costs zero further requests.
     const lastMintCall = mocks.useAuthLinkLoginCode.mock.calls.at(-1) as
-      unknown[] | undefined;
+      | unknown[]
+      | undefined;
     expect(lastMintCall?.[0]).toBe(false);
     // Only the explicit user action mints again — via the EVICTING restart
     // (a bare refetch would re-serve the dead entry from cache), which also
@@ -230,7 +231,8 @@ describe("LinkPhonePanel", () => {
     expect(mocks.evictLinkLoginCode).toHaveBeenCalledTimes(1);
     expect(codeQuery.refetch).not.toHaveBeenCalled();
     const reenabledCall = mocks.useAuthLinkLoginCode.mock.calls.at(-1) as
-      unknown[] | undefined;
+      | unknown[]
+      | undefined;
     expect(reenabledCall?.[0]).toBe(true);
   });
 

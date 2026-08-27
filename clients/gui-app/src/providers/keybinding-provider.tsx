@@ -6,8 +6,8 @@ import {
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
+  findActionMatchForChord,
   type DigitActionMatch,
-  findActionForChord,
   isExternallyHandled,
   isRepeatSensitiveAction,
   matchDigitAction,
@@ -17,6 +17,8 @@ import {
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
 import { historyNavChromeAvailable } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
+import { ACTION_META, type TerminalPolicy } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 import {
   routerAdapterFor,
   type KeybindingRouterSource,
@@ -324,22 +326,30 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // digit-by-number flow. `matchDigitAction` only succeeds when a digit
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
-      if (digitMatch !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        handleDigitMatch(digitMatch, digitSequenceRef, digitSequenceTimerRef);
+      if (
+        handleDigitKeyDown(
+          event,
+          digitMatch,
+          digitSequenceRef,
+          digitSequenceTimerRef,
+        )
+      )
         return;
-      }
 
       resetDigitSequence(digitSequenceRef, digitSequenceTimerRef);
 
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
+      if (
+        shouldPassCtrlChordToFocusedTerminal(event, actionId.terminalPolicy)
+      ) {
+        return;
+      }
 
       // Toggles (e.g. the model picker) must act once per physical press. Still
       // reserve the chord on OS key-repeat so the browser default can't run,
       // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
-      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+      if (event.repeat && isRepeatSensitiveAction(actionId.actionId)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -351,7 +361,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
       event.preventDefault();
       event.stopPropagation();
-      dispatchAction(actionId, adapter);
+      dispatchAction(actionId.actionId, adapter);
     };
 
     // Mouse back/forward (buttons 3/4). Desktop-only, on the shared chrome
@@ -458,23 +468,48 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
  * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
  * reserving those would swallow the key when the owner is inactive.
  */
-function resolveReservedAction(event: KeyboardEvent): ActionId | null {
+interface ReservedAction {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+function resolveReservedAction(event: KeyboardEvent): ReservedAction | null {
   const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const actionId = findActionForChord(chord);
-  if (actionId === null) return null;
+  const match = findActionMatchForChord(chord);
+  if (match === null) return null;
   // Cmd+Left/Right is browser history on macOS, but it is also the native
   // beginning/end-of-line command in text fields. Keep the familiar global
   // navigation binding without breaking editing. The same safeguard applies
   // if a non-Mac user explicitly remaps history to Ctrl+Left/Right.
   if (
-    (actionId === "nav.back" || actionId === "nav.forward") &&
+    (match.actionId === "nav.back" || match.actionId === "nav.forward") &&
     (chord === "mod+arrowleft" || chord === "mod+arrowright") &&
     (isEditableEventTarget(event.target) || isDiffsEditorEvent(event))
   ) {
     return null;
   }
-  return isExternallyHandled(actionId) ? null : actionId;
+  if (isExternallyHandled(match.actionId)) return null;
+  return match;
+}
+
+function shouldPassCtrlChordToFocusedTerminal(
+  event: KeyboardEvent,
+  terminalPolicy: TerminalPolicy,
+): boolean {
+  return (
+    !isMac() &&
+    event.ctrlKey &&
+    terminalPolicy === "shell" &&
+    isTerminalEventTarget(event.target)
+  );
+}
+
+function isTerminalEventTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest("[data-terminal-host]") !== null
+  );
 }
 
 function isDiffsHistoryShortcut(event: KeyboardEvent): boolean {
@@ -570,6 +605,27 @@ function handleDigitMatch(
   }
 
   scheduleDigitSequenceCommit(sequenceRef, timerRef);
+  return true;
+}
+
+function handleDigitKeyDown(
+  event: KeyboardEvent,
+  match: DigitActionMatch | null,
+  sequenceRef: RefBox<DigitSequenceSession | null>,
+  timerRef: RefBox<number | null>,
+): boolean {
+  if (match === null) return false;
+  if (
+    shouldPassCtrlChordToFocusedTerminal(
+      event,
+      ACTION_META[match.actionId].terminalPolicy,
+    )
+  )
+    return true;
+
+  event.preventDefault();
+  event.stopPropagation();
+  handleDigitMatch(match, sequenceRef, timerRef);
   return true;
 }
 

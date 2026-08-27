@@ -103,7 +103,10 @@ export function readLiveProcessStartTimeMs(pid: number): number | null {
 }
 
 export type PublishedProcessIdentityVerdict =
-  "current" | "mismatch" | "dead" | "indeterminate";
+  | "current"
+  | "mismatch"
+  | "dead"
+  | "indeterminate";
 
 /**
  * Electron-main checks an advertised endpoint first. Once the handshake has

@@ -16,7 +16,8 @@ import type {
  */
 
 export type GithubMentionFilter =
-  GithubPullRequestMentionFilter | GithubIssueMentionFilter;
+  | GithubPullRequestMentionFilter
+  | GithubIssueMentionFilter;
 
 const EMPTY_ROWS: ReadonlyArray<GithubMentionRow> = [];
 

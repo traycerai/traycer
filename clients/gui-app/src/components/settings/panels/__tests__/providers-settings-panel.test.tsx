@@ -147,12 +147,16 @@ const providerMocks = vi.hoisted(() => ({
     isError: false,
     isFetching: false,
     error: undefined as
-      HostRpcError | { message: string; code: string } | undefined,
+      | HostRpcError
+      | { message: string; code: string }
+      | undefined,
   },
   setSelectionMutate: vi.fn(),
   addCustomPathMutate: vi.fn(),
   removeCustomPathMutate: vi.fn(),
   setEnabledMutate: vi.fn<SetEnabledMutate>(),
+  setProfileEnabledMutate: vi.fn(),
+  refreshProfileStatusMutate: vi.fn(() => Promise.resolve()),
   setApiKeyMutate: vi.fn(),
   clearApiKeyMutate: vi.fn(),
   setTerminalAgentArgsMutate: vi.fn(),
@@ -167,7 +171,8 @@ const providerMocks = vi.hoisted(() => ({
   submitLoginCodePending: false,
   submitLoginCodeSuccess: false,
   submitLoginCodeData: undefined as
-    { readonly outcome: "accepted" | "noActiveLogin" } | undefined,
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
   submitLoginCodeError: null as Error | null,
   touchLoginMutate: vi.fn(),
   touchLoginReset: vi.fn(),
@@ -306,6 +311,28 @@ vi.mock("@/hooks/providers/use-providers-set-enabled-mutation", () => ({
     isPending: false,
   }),
 }));
+
+// The panel's profile controls use a host-scoped TanStack mutation in
+// production. This legacy panel harness intentionally has no QueryClient;
+// keep its provider-detail coverage focused on rendering and the existing
+// provider mutations while the dedicated hook suite covers cache behavior.
+vi.mock("@/hooks/providers/use-providers-set-profile-enabled-mutation", () => ({
+  useProvidersSetProfileEnabledForClient: () => ({
+    mutate: providerMocks.setProfileEnabledMutate,
+    isPending: false,
+  }),
+  useProviderProfileEnablementPending: () => () => false,
+}));
+
+vi.mock(
+  "@/hooks/providers/use-providers-refresh-profile-status-mutation",
+  () => ({
+    useProvidersRefreshProfileStatusForClient: () => ({
+      mutateAsync: providerMocks.refreshProfileStatusMutate,
+      isPending: false,
+    }),
+  }),
+);
 
 vi.mock("@/hooks/providers/use-providers-set-api-key-mutation", () => ({
   useProvidersSetApiKey: () => ({
@@ -457,6 +484,14 @@ vi.mock("@/lib/host", async (importOriginal) => {
   // host, never a tab) - this harness has no real `<HostRuntimeProvider>`, so
   // stub it the same way every other provider hook here is stubbed.
   return { ...actual, useHostClient: () => null };
+});
+
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-supports-method")
+    >();
+  return { ...actual, useHostSupportsMethod: () => true };
 });
 
 vi.mock("@/hooks/providers/use-providers-detect-version-query", () => ({
@@ -818,6 +853,7 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
 
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { ProviderProfileScopedSection } from "@/components/settings/panels/provider-profile-scoped-section";
+import { ProviderProfileReauthPanel } from "@/components/settings/panels/provider-profile-reauth-panel";
 import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
@@ -1013,12 +1049,22 @@ function profile(input: TestProfileInput): ProviderProfile {
   return profileWithAccent(input, null);
 }
 
+function legacyAwaitLoginProfile(
+  input: TestProfileInput,
+): Omit<ProviderProfile, "enabled"> {
+  const current = profile(input);
+  const { enabled: _enabled, ...legacy } = current;
+  void _enabled;
+  return legacy;
+}
+
 function profileWithAccent(
   input: TestProfileInput,
   accentColor: ProviderProfileAccentColor | null,
 ): ProviderProfile {
   return {
     profileId: input.profileId,
+    enabled: true,
     kind: input.kind,
     authType: "oauth",
     label: input.label,
@@ -2436,7 +2482,7 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected provider switch to render as a button.");
     }
 
-    expect(switchElement.disabled).toBe(true);
+    expect(switchElement.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(switchElement);
 
     expect(providerMocks.setEnabledMutate).not.toHaveBeenCalled();
@@ -2447,7 +2493,9 @@ describe("<ProvidersSettingsPanel />", () => {
       readonly enabled: boolean;
       readonly enablementMode?: "auto" | "on" | "off";
       readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
+        | "sticky"
+        | "auto-detected"
+        | "auto-undetected";
     }): void {
       providerMocks.listResult.data = {
         providers: [
@@ -2721,7 +2769,9 @@ describe("<ProvidersSettingsPanel />", () => {
       readonly enabled: boolean;
       readonly enablementMode?: "auto" | "on" | "off";
       readonly enablementSource?:
-        "sticky" | "auto-detected" | "auto-undetected";
+        | "sticky"
+        | "auto-detected"
+        | "auto-undetected";
     }): void {
       providerMocks.listResult.data = {
         providers: [
@@ -3426,6 +3476,72 @@ describe("<ProvidersSettingsPanel />", () => {
     });
   });
 
+  it("shows a copyable CLI command for a managed profile", () => {
+    const command =
+      "CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/profiles/ambient' codex";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            {
+              ...profile({
+                profileId: "managed-1",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              launchCommand: { command, shell: "posix" },
+            },
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Edit profile" });
+    expect(within(dialog).getByText("Open from terminal")).toBeDefined();
+    expect(
+      within(dialog).getByText(
+        "Run this command on this host to open Codex with this profile.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(dialog).getByLabelText("Codex profile launch command").textContent,
+    ).toBe(command);
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Copy Codex profile launch command",
+      }),
+    ).toBeDefined();
+  });
+
   it("resets the edit draft when reopening the same or a different profile", () => {
     const ambientColor = PROVIDER_PROFILE_ACCENT_COLORS[0];
     const workColor = PROVIDER_PROFILE_ACCENT_COLORS[1];
@@ -3577,6 +3693,10 @@ describe("<ProvidersSettingsPanel />", () => {
           onDismissFailedAttempt={vi.fn()}
           selectedProfileId={null}
           onSelectedProfileIdChange={vi.fn()}
+          profileEnablementAvailable={false}
+          profileStatusRefreshAvailable={false}
+          profileEnablementPending={() => false}
+          onSetProfileEnabled={vi.fn()}
         />
       </TooltipProvider>
     );
@@ -3789,6 +3909,65 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(
       profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
     ).toHaveLength(1);
+  });
+
+  it("selects a disabled managed profile for Settings management", () => {
+    const disabledProfile = {
+      ...profile({
+        profileId: "managed-disabled",
+        kind: "managed",
+        label: "Disabled profile",
+        email: "disabled@example.test",
+        tier: "Pro",
+        authStatus: "authenticated",
+        duplicateOfProfileId: null,
+        ambientDriftNotice: null,
+      }),
+      enabled: false,
+    };
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          profiles: [
+            profile({
+              profileId: "ambient",
+              kind: "ambient",
+              label: "Terminal account",
+              email: "ambient@example.test",
+              tier: null,
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+            disabledProfile,
+          ],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    openProfilesTab();
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Disabled profile, Disabled",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
+
+    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(screen.getByLabelText("Profile name")).toHaveProperty(
+      "value",
+      "Disabled profile",
+    );
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -4527,6 +4706,73 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(screen.getByText("Signed in as")).toBeDefined();
     expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes an omitted enabled field on the Settings awaitLogin flow row", async () => {
+    const returnedProfiles: ProviderProfile[] = [];
+    const entryProfile = profile({
+      profileId: "managed-1",
+      kind: "managed",
+      label: "Work",
+      email: "work@example.test",
+      tier: "Pro",
+      authStatus: "unauthenticated",
+      duplicateOfProfileId: null,
+      ambientDriftNotice: null,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProviderProfileReauthPanel
+          state={codePasteReauthProviderState()}
+          profile={entryProfile}
+          onSameAccountReconnected={(returnedProfile) =>
+            returnedProfiles.push(returnedProfile)
+          }
+          onCancel={vi.fn()}
+          onDone={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    });
+    const [, startOptions] = firstStartLoginCall();
+    act(() => {
+      startOptions.onSuccess({
+        url: "https://login.example.test",
+        started: true,
+        profileId: "managed-1",
+      });
+    });
+
+    const [, awaitOptions] = firstAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        existingProfileId: null,
+        state: {
+          profiles: [
+            legacyAwaitLoginProfile({
+              profileId: "managed-1",
+              kind: "managed",
+              label: "Work",
+              email: "work@example.test",
+              tier: "Pro",
+              authStatus: "authenticated",
+              duplicateOfProfileId: null,
+              ambientDriftNotice: null,
+            }),
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(returnedProfiles).toHaveLength(1);
+    });
+    expect(returnedProfiles[0]?.enabled).toBe(true);
   });
 
   it("re-polls awaitLogin instead of failing when the ambient row is still authPending after the login completes (terminal-account switch)", async () => {
@@ -7147,6 +7393,7 @@ describe("<ProvidersSettingsPanel />", () => {
           profiles: [
             {
               profileId: "managed-1",
+              enabled: true,
               kind: "managed",
               authType: "oauth",
               label: "Work",

@@ -54,25 +54,47 @@ export function profileRowStatusSuffix(
   return null;
 }
 
-// Ambient always sorts first, matching the rail dot / picker dropdown / old
-// row-list convention, so "default to ambient/first" resolves to the same
-// profile everywhere.
-export function orderProfiles(
+export function profileEnablementTooltipText(
+  enabled: boolean,
+  disabledReason: string | null,
+): string {
+  if (disabledReason !== null) return disabledReason;
+  return enabled
+    ? "Enabled: agents can use this profile."
+    : "Disabled: agents can’t use this profile.";
+}
+
+export function profileEligibilityToggleDisabledReason(
+  providerEnabled: boolean,
+  profile: ProviderProfile,
   profiles: readonly ProviderProfile[],
-): ReadonlyArray<ProviderProfile> {
-  return [...profiles].sort((a, b) => {
-    if (a.kind === b.kind) return 0;
-    return a.kind === "ambient" ? -1 : 1;
-  });
+): string | null {
+  if (!providerEnabled || !profile.enabled) return null;
+  return profiles.some(
+    (candidate) =>
+      candidate.profileId !== profile.profileId && candidate.enabled,
+  )
+    ? null
+    : "Enable another profile before disabling this one.";
+}
+
+export function eligibleProfilesForShortcut(
+  profiles: readonly ProviderProfile[],
+  profileEnablementPending: (profileId: string | null) => boolean,
+): ProviderProfile[] {
+  return profiles.filter(
+    (profile) =>
+      profile.enabled && !profileEnablementPending(profileCommitId(profile)),
+  );
 }
 
 /** The profile a fresh section instance (new provider, or first mount) should
- *  select - ambient/first per `orderProfiles`. `null` when the provider
+ *  select - first in the host's stable order. `null` when the provider
  *  reports no profiles (callers don't render profile-scoped UI then anyway). */
 export function defaultSelectedProfileId(
   profiles: readonly ProviderProfile[],
 ): string | null {
-  const first = orderProfiles(profiles).at(0);
+  const first = profiles.at(0);
   return first === undefined ? null : profileCommitId(first);
 }
 
