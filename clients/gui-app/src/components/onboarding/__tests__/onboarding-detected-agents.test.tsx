@@ -983,3 +983,53 @@ describe("SignInToEnableButton mount survival", () => {
     expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
   });
 });
+
+// Sign-in AVAILABILITY and sign-in NECESSITY are different questions, and the
+// row asked the first one first. For an account that needs no login the answer
+// is irrelevant, and letting it win renders a false status over a working
+// account while withholding the only action left.
+describe("SignInToEnableButton already-authenticated with sign-in unavailable", () => {
+  afterEach(resetFixtures);
+
+  it("enables an authenticated provider that cannot start a browser sign-in", () => {
+    // No `oauthArgs`, so `providerSignInUnavailableHint` is non-null and its
+    // early return used to win - rendering the muted "Not signed in" fallback
+    // over an authenticated account. The same shape is reached by a
+    // terminal-login provider and by any OAuth provider on a remote host.
+    fixtures.providers = [
+      {
+        ...fixtures.signInProvider,
+        loginCapability: null,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    expect(screen.queryByText("Not signed in")).toBeNull();
+
+    fireEvent.click(signInButton());
+
+    expect(fixtures.setEnabledMutate).toHaveBeenCalledTimes(1);
+    expect(fixtures.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("still shows the unavailable hint when the account is NOT signed in", () => {
+    // The gate is skipped only for an authenticated account. Without this
+    // control the fix above would read as "the hint never renders", which
+    // would be a different bug wearing the same green.
+    fixtures.providers = [
+      { ...fixtures.signInProvider, loginCapability: null },
+    ];
+    render(<OnboardingDetectedAgents />);
+
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /sign in to enable/i }),
+    ).toBeNull();
+  });
+});

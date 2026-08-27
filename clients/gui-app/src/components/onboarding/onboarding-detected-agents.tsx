@@ -218,6 +218,63 @@ function providerNeedsSignInToEnable(
 }
 
 /**
+ * The two auth phases the row renders from, derived together.
+ *
+ * ONE flag decides both, rather than each testing the auth state itself, so
+ * they cannot stop being exact complements. As independent comparisons they
+ * agreed only while both spelled the check the same way, and any change to one
+ * would make "did not complete" and "awaiting enable" simultaneously true - a
+ * failure message on a button that is in fact about to enable.
+ *
+ * The account is signed in EITHER because this attempt just signed it in, or
+ * because it already was before the user pressed: a provider switched off by
+ * hand keeps its account. Both mean the remaining gesture is the ENABLE alone,
+ * so both take the same branch. Restarting a login there is not merely
+ * wasteful - a CLI that refuses to start one while already signed in answers
+ * `started: false`, so the press would render "sign-in did not start" and the
+ * button could never complete the action it advertises, leaving no way out but
+ * abandoning onboarding.
+ *
+ * Read HERE and not in `providerNeedsSignInToEnable`, deliberately - see that
+ * function for why an attempt-dependent input must never reach the MOUNT
+ * decision. At this level it changes what a press does; there it would delete
+ * the row mid-attempt and strand the enable in a dropped callback.
+ *
+ * A pure function taking its inputs rather than a block inside the component:
+ * it is the component's only non-trivial derivation, and keeping it out of the
+ * render body is what holds that body inside the `complexity` budget. Not
+ * exported - `react(only-export-components)` reserves this file's exports for
+ * components, and the row's own tests already drive every branch through the
+ * rendered button.
+ */
+function resolveAttemptAuthPhase(input: {
+  readonly state: ProviderCliState;
+  /** This attempt's completed `awaitLogin` echo, or null when none settled. */
+  readonly awaitState: ProvidersAwaitLoginResponse["state"] | null;
+  readonly awaitSuccess: boolean;
+  readonly isPending: boolean;
+}): {
+  readonly authenticatedAwaitingEnable: boolean;
+  readonly notAuthenticated: boolean;
+} {
+  const attemptAuthenticated =
+    input.awaitSuccess &&
+    input.awaitState !== null &&
+    isProviderAmbientAuthenticated(input.awaitState);
+  const authenticatedAwaitingEnable =
+    attemptAuthenticated || isProviderAmbientAuthenticated(input.state);
+  return {
+    authenticatedAwaitingEnable,
+    // Gated on `!isPending` so a fresh press hides the previous verdict while
+    // the new attempt runs: `startLogin.mutate` does not touch `awaitLogin`,
+    // so its `data` would otherwise linger across the retry it is no longer
+    // about.
+    notAuthenticated:
+      !input.isPending && input.awaitSuccess && !authenticatedAwaitingEnable,
+  };
+}
+
+/**
  * Split out so the host-runtime hooks below are instantiated ONLY on a row
  * that actually offers sign-in - the same shape as the sign-in terminal's
  * restart button. It is not a tidiness preference: `useProvidersStartLogin`,
@@ -319,37 +376,13 @@ function SignInToEnableButton(props: {
   // would end pending having never called `awaitLogin`, and the row would
   // render "did not start" and "did not complete" together - the second one
   // describing an attempt the user had already moved on from.
-  //
-  // Both phases below derive from ONE flag rather than each testing the auth
-  // state itself, so they cannot stop being exact complements. As independent
-  // comparisons they agreed only while both spelled the check the same way,
-  // and any change to one would make "did not complete" and "awaiting enable"
-  // simultaneously true - a failure message on a button that is in fact about
-  // to enable.
-  //
-  // The account is signed in EITHER because this attempt just signed it in, or
-  // because it already was before the user pressed - a provider switched off
-  // by hand keeps its account. Both mean the remaining gesture is the ENABLE
-  // alone, so both take the same branch.
-  //
-  // Restarting a login in that state is not merely wasteful: a CLI that
-  // refuses to start one while already signed in answers `started: false`, so
-  // the press would render "sign-in did not start" and the button could never
-  // complete the action it advertises. The user's only way out would be
-  // leaving onboarding.
-  //
-  // Read here rather than in `providerNeedsSignInToEnable` deliberately - see
-  // that function for why an attempt-dependent input must never reach the
-  // MOUNT decision. Here it changes what a press does; there it would delete
-  // the row mid-attempt and strand the enable.
-  const attemptAuthenticated =
-    awaitLogin.isSuccess &&
-    awaitLogin.data.state !== null &&
-    isProviderAmbientAuthenticated(awaitLogin.data.state);
-  const authenticatedAwaitingEnable =
-    attemptAuthenticated || isProviderAmbientAuthenticated(state);
-  const notAuthenticated =
-    !isPending && awaitLogin.isSuccess && !authenticatedAwaitingEnable;
+  const { authenticatedAwaitingEnable, notAuthenticated } =
+    resolveAttemptAuthPhase({
+      state,
+      awaitSuccess: awaitLogin.isSuccess,
+      awaitState: awaitLogin.data?.state ?? null,
+      isPending,
+    });
   const onSignIn = (providerId: ProviderId): void => {
     // Scope the await result to THIS attempt. `startLogin.mutate` resets its
     // own result and so clears `declined` on its own; `awaitLogin` is a
@@ -451,7 +484,19 @@ function SignInToEnableButton(props: {
   };
   // One helper answers both "can this start" and "why not", so the button and
   // its tooltip cannot disagree - the drift this helper was extracted to stop.
-  const unavailableHint = providerSignInUnavailableHint(state, isLocalHost);
+  //
+  // Not asked at all once the account is signed in, because the question is
+  // about starting a LOGIN and there is no longer one to start. Asking anyway
+  // is not a harmless extra gate: the helper is non-null for a remote host, a
+  // terminal-login provider, and any provider with no `oauthArgs`, so its
+  // early return would render a flatly false "Not signed in" over an
+  // authenticated account AND withhold the enable - which is the only action
+  // left, and the one this component exists to perform. It also made the
+  // direct-enable branch below structurally unreachable for exactly those
+  // combinations.
+  const unavailableHint = authenticatedAwaitingEnable
+    ? null
+    : providerSignInUnavailableHint(state, isLocalHost);
   if (unavailableHint !== null) {
     return (
       <TooltipWrapper
