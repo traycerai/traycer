@@ -307,9 +307,11 @@ export function EpicSessionProvider(
     sessionCreatedEpicHostId(epicId),
   );
   // Whether `requestedHostId` is still that SEED rather than a host the user
-  // asked for through `openOnOriginalHost`. Only the seed is given up below;
-  // an explicit request is the user's, and outlives a derivation move exactly
-  // as it did before.
+  // asked for through `openOnOriginalHost`. Only the seed is given up, and on
+  // any of the three signals that the create race is no longer what decides
+  // placement: a derivation move, a Retry, or the user naming a host. An
+  // explicit request is the user's and outlives all of them, exactly as it
+  // did before this seed existed.
   const seededCreateHostRef = useRef(requestedHostId !== null);
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [presentation, setPresentation] = useState<SessionPresentationState>({
@@ -366,6 +368,18 @@ export function EpicSessionProvider(
   }, []);
 
   const retryRepoint = useCallback((): void => {
+    // Reaching Retry means the seeded open FAILED at the one job the seed
+    // has, so give it up here too. Without this the seed survives a create
+    // host that died while `effectiveHostId` never moved - the derivation
+    // move below is then never observed - and Retry re-dials the dead host
+    // for as long as the user keeps pressing it, where an UNSEEDED session
+    // would have re-dialed the live effective host. Only the seed is
+    // dropped; a host the user named through `openOnOriginalHost` is what
+    // they are retrying, so it stays.
+    if (seededCreateHostRef.current) {
+      seededCreateHostRef.current = false;
+      setRequestedHostId(null);
+    }
     setRetryGeneration((generation) => generation + 1);
   }, []);
   const openOnOriginalHost = useCallback((): void => {

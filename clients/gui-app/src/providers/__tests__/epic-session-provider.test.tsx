@@ -2266,4 +2266,101 @@ describe("<EpicSessionProvider />", () => {
     }
     expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-create");
   });
+
+  it("Retry releases the create-host seed and re-points to the effective host", async () => {
+    // hostState.id/attached are left at their `beforeEach` defaults ("host-a",
+    // attached) for the ENTIRE test - a DIFFERENT, live host than the
+    // create-host marker below, and one that never changes. The give-up-on-a-
+    // derivation-move effect (`lastEffectiveHostIdRef` in
+    // epic-session-provider.tsx) only fires on a CHANGE to `effectiveHostId`,
+    // so it never runs here: this is precisely the case it cannot cover, and
+    // the only thing that can release the seed is `retryRepoint` itself.
+    vi.useFakeTimers();
+    try {
+      const EPIC_ID = "epic-create-host-retry-test";
+      markEpicCreatedThisSession(EPIC_ID, "host-create");
+      const streams: ControlledEpicStream[] = [];
+      __setEpicStreamClientFactoryForTests((_epicId, callbacks) => {
+        const stream: ControlledEpicStream = { closeCount: 0, callbacks };
+        streams.push(stream);
+        return {
+          applyUpdate: () => undefined,
+          awareness: () => undefined,
+          applyArtifactRoomUpdate: () => undefined,
+          artifactRoomAwareness: () => undefined,
+          retryMigration: () => undefined,
+          close: () => {
+            stream.closeCount += 1;
+          },
+        };
+      });
+
+      const seenHandles: OpenEpicStoreHandle[] = [];
+      const presentations: Array<EpicSessionPresentation | null> = [];
+      render(
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+          <PresentationProbe
+            onPresentation={(presentation) => presentations.push(presentation)}
+          />
+        </EpicSessionProvider>,
+      );
+
+      await act(() => Promise.resolve());
+      // The seed wins the first mount - the session opens on the create
+      // host, not on the effective one.
+      expect(seenHandles).toHaveLength(1);
+      expect(getEpicSessionHandleHostId(seenHandles[0])).toBe("host-create");
+      expect(streams).toHaveLength(1);
+      expect(presentations.at(-1)?.kind).toBe("ready");
+
+      // First Retry. With the fix, this releases the seed and re-points
+      // toward `effectiveHostId` ("host-a") - a second stream opens even
+      // though nothing ever touched `hostState.id`. Under the ablated
+      // `retryRepoint` (seed never released), `targetHostId` stays
+      // "host-create" == `current.hostId`, no re-point starts, and every
+      // assertion from here on fails.
+      act(() => {
+        presentations.at(-1)?.retry();
+      });
+      expect(streams).toHaveLength(2);
+      expect(presentations.at(-1)?.kind).toBe("establishing");
+      expect(presentations.at(-1)?.targetHostId).toBe("host-a");
+
+      // Let that re-point hang past the deadline, so the user is looking at
+      // a genuine `failed` presentation - naming the effective host, not the
+      // dead create host - when they press Retry again.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      const failed = presentations.at(-1);
+      expect(failed?.kind).toBe("failed");
+      expect(failed?.targetHostId).toBe("host-a");
+      expect(streams[1].closeCount).toBe(1);
+      // The original create-host session is untouched by the failed re-point.
+      expect(seenHandles.at(-1)).toBe(seenHandles[0]);
+
+      // Second Retry, invoked from the `failed` presentation the way a user
+      // would after seeing the failure. The seed is already gone, so this
+      // re-attempts the same effective host - and this time it succeeds.
+      act(() => {
+        failed?.retry();
+      });
+      expect(streams).toHaveLength(3);
+      act(() => {
+        deliverSnapshot(streams[2], "room-a");
+      });
+      await act(() => Promise.resolve());
+
+      expect(presentations.at(-1)?.kind).toBe("ready");
+      expect(seenHandles.at(-1)).not.toBe(seenHandles[0]);
+      const mountedHandle = __getOpenEpicRegistryForTests().peek(EPIC_ID);
+      if (mountedHandle === null) {
+        throw new Error("expected a mounted handle");
+      }
+      expect(getEpicSessionHandleHostId(mountedHandle)).toBe("host-a");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
