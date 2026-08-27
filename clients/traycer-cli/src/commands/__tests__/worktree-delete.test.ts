@@ -158,33 +158,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("buildWorktreeDeleteCommand readonly guard", () => {
-  it("refuses in the readonly surface before any auth/endpoint/stream work", async () => {
-    await expect(
-      buildWorktreeDeleteCommand({
-        worktreePath: "/wt/x",
-        readonlySurface: true,
-      })(ctx),
-    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-
-    expect(resolveHostAuthMock).not.toHaveBeenCalled();
-    expect(resolveEndpointMock).not.toHaveBeenCalled();
-    expect(hoisted.subscribeMock).not.toHaveBeenCalled();
-  });
-});
+// The readonly-surface refusal moved out of this command: `worktree delete` is
+// now one entry in `READONLY_REFUSED_COMMANDS`, enforced for every gated
+// command in `withRunner` before the body runs. Its coverage lives with that
+// gate, in `__tests__/readonly-surface-gate.test.ts`.
 
 describe("buildWorktreeDeleteCommand input validation", () => {
   it("rejects an empty --path before any network call", async () => {
     await expect(
       buildWorktreeDeleteCommand({
         worktreePath: "   ",
-        readonlySurface: false,
       })(ctx),
     ).rejects.toBeInstanceOf(CliError);
     await expect(
       buildWorktreeDeleteCommand({
         worktreePath: "",
-        readonlySurface: false,
       })(ctx),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
 
@@ -197,7 +185,6 @@ describe("buildWorktreeDeleteCommand command shape", () => {
   it("opens ONE start-mode command carrying a uuid and the single target", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -228,7 +215,6 @@ describe("buildWorktreeDeleteCommand command shape", () => {
     const recorded: ProgressInfo[] = [];
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(jsonCtx(recorded));
 
     await waitForSessions(1);
@@ -293,7 +279,6 @@ describe("buildWorktreeDeleteCommand stream-drop safety", () => {
   it("fails non-zero on a drop before a terminal frame, with no re-subscribe", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -335,7 +320,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("resolves deleted=true on a target.complete frame", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -356,7 +340,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("resolves deleted=false with a non-zero exit when the host removed nothing", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -375,7 +358,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps a target.failed frame to a CliError carrying the host's reason", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -396,7 +378,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps a command.failed frame to a CliError carrying the host's reason", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -418,7 +399,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
     // per-target frames are replayed, so the counts are the whole answer.
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -438,7 +418,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps an UNAUTHORIZED fatal close to an auth-rejected CliError", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -461,7 +440,6 @@ describe("buildWorktreeDeleteCommand terminal outcomes", () => {
   it("maps an INCOMPATIBLE fatal close to a host-incompatible CliError", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -487,7 +465,6 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
     hoisted.state.methodSupport = "unsupported";
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);
@@ -523,7 +500,6 @@ describe("buildWorktreeDeleteCommand older-host fallback", () => {
   it("does not fall back after a fatal close that is not an unsupported method", async () => {
     const pending = buildWorktreeDeleteCommand({
       worktreePath: "/wt/x",
-      readonlySurface: false,
     })(ctx);
 
     await waitForSessions(1);

@@ -131,6 +131,8 @@ interface LandingDraftStoreState {
   ) => ReadonlyArray<string>;
   removeDraftFolder: (id: string, folderPath: string) => void;
   setDraftWorkspacePrimary: (id: string, folderPath: string) => void;
+  /** Replace the draft workspace with one host's remembered folder bucket. */
+  restoreDraftWorkspaceForHost: (id: string, hostId: string | null) => void;
 }
 
 export const LANDING_DRAFT_PERSIST_KEY = persistKey(STORE_KEYS.landingDraft);
@@ -518,6 +520,24 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             d.id === id ? { ...d, composerMode: mode } : d,
           ),
         }));
+      },
+
+      restoreDraftWorkspaceForHost: (id, hostId) => {
+        const bucket = selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          hostId,
+        );
+        set((state) =>
+          updateDraftWorkspace(state, id, () =>
+            normalizeLandingDraftWorkspace({
+              folders: [...bucket.folders],
+              folderInfoByPath: copyWorkspaceFolderInfoByPath(
+                bucket.folderInfoByPath,
+              ),
+              primaryPath: bucket.primaryPath,
+            }),
+          ),
+        );
       },
 
       addDraftResolvedFolders: (id, folders) => {

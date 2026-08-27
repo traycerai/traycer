@@ -48,12 +48,6 @@ const MAX_BACKOFF_MS = 30_000;
 
 export interface WorktreeDeleteCommandOpts {
   readonly worktreePath: string;
-  // The delete is destructive, so it is a capability boundary - not merely a
-  // hidden command - in the readonly agent surface. Commander's `hidden` flag
-  // still runs the action when the subcommand is typed explicitly, so the
-  // command itself refuses up front (before any network/stream work) when this
-  // is true. Resolved from `TRAYCER_AGENT_CLI_SURFACE` at registration.
-  readonly readonlySurface: boolean;
 }
 
 /**
@@ -61,8 +55,14 @@ export interface WorktreeDeleteCommandOpts {
  * (busy-check -> teardown script -> `git worktree remove`). Teardown/remove
  * output is relayed live as it streams; the terminal frame carries the final
  * `deleted` flag, and a failure (busy path, unexpected host error) surfaces as
- * a clean non-zero CliError. Hidden in the `readonly` CLI surface (registered
- * like `agent create`).
+ * a clean non-zero CliError.
+ *
+ * The delete is destructive, so it is a capability boundary in the readonly
+ * agent surface, not merely a hidden command. That refusal is no longer made
+ * here: `READONLY_REFUSED_COMMANDS` lists `worktree delete`, and `withRunner`
+ * enforces the whole table before any command body runs (CLI-019). One
+ * mechanism covers this command and every gated agent mutation, so nothing
+ * reaches this function on a readonly surface.
  *
  * On a host that has `worktree.deleteBatchByPath` this runs as a ONE-TARGET
  * command, so the CLI's delete queues on the same host-wide scheduler as every
@@ -73,15 +73,6 @@ export function buildWorktreeDeleteCommand(
   opts: WorktreeDeleteCommandOpts,
 ): CommandFn {
   return async (ctx) => {
-    if (opts.readonlySurface) {
-      throw cliError({
-        code: CLI_ERROR_CODES.FORBIDDEN,
-        message:
-          "traycer: worktree delete is not available in the readonly agent surface - remove worktrees from Settings ▸ Worktrees, or run this from a full-surface session.",
-        details: null,
-        exitCode: 1,
-      });
-    }
     const worktreePath = opts.worktreePath.trim();
     if (worktreePath.length === 0) {
       throw cliError({
