@@ -13,11 +13,6 @@ import {
 } from "../browser-storage-state";
 
 vi.mock("electron", () => ({
-  app: {
-    commandLine: {
-      hasSwitch: () => false,
-    },
-  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
@@ -30,16 +25,14 @@ const realState: BrowserCookieCryptoState = {
   reason: "os-backed",
   storageBackend: null,
   encryptionAvailable: true,
-  mockKeychainEnabled: false,
 };
 
 const degradedState: BrowserCookieCryptoState = {
   mode: "degraded",
   persistence: "ephemeral",
-  reason: "mock-keychain",
+  reason: "keychain-denied",
   storageBackend: null,
   encryptionAvailable: false,
-  mockKeychainEnabled: true,
 };
 
 describe("seedBrowserViewCookies", () => {
@@ -351,7 +344,7 @@ describe("captureBrowserPrimaryProfileWithDependencies", () => {
     expect(result).toEqual({
       status: "unavailable",
       storageState: null,
-      reason: "mock-keychain",
+      reason: "keychain-denied",
     });
     expect(getSession).not.toHaveBeenCalled();
   });

@@ -19,7 +19,6 @@ function resetSettingsStore(): void {
     pinContextUsageBreakdown: false,
     chatTurnMinimapSide: "right",
     quoteReplyEnabled: true,
-    inAppBrowserBetaEnabled: false,
     browserLinkDefaultMode: "in-app",
     terminalBrowserLinkOpenMode: "in-app",
     markdownBrowserLinkOpenMode: "in-app",
@@ -328,8 +327,7 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
   });
 
-  it("defaults in-app browser link settings to labs-off and in-app mode", () => {
-    expect(useSettingsStore.getState().inAppBrowserBetaEnabled).toBe(false);
+  it("defaults in-app browser link settings to in-app mode", () => {
     expect(useSettingsStore.getState().browserLinkDefaultMode).toBe("in-app");
     expect(useSettingsStore.getState().terminalBrowserLinkOpenMode).toBe(
       "in-app",
@@ -341,14 +339,12 @@ describe("useSettingsStore", () => {
   });
 
   it("persists in-app browser link settings", () => {
-    useSettingsStore.getState().setInAppBrowserBetaEnabled(true);
     useSettingsStore.getState().setBrowserLinkDefaultMode("per-kind");
     useSettingsStore.getState().setTerminalBrowserLinkOpenMode("external");
     useSettingsStore.getState().setMarkdownBrowserLinkOpenMode("in-app");
     useSettingsStore.getState().addBrowserDevOrigin("http://localhost:5173");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
 
-    expect(persisted ?? "").toContain('"inAppBrowserBetaEnabled":true');
     expect(persisted ?? "").toContain('"browserLinkDefaultMode":"per-kind"');
     expect(persisted ?? "").toContain(
       '"terminalBrowserLinkOpenMode":"external"',

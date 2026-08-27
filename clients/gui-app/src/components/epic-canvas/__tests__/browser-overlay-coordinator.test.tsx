@@ -183,7 +183,6 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
     readonly reason: "os-backed";
     readonly storageBackend: null;
     readonly encryptionAvailable: true;
-    readonly mockKeychainEnabled: false;
   }> {
     return Promise.resolve({
       mode: "real",
@@ -191,12 +190,7 @@ class FakeBrowserViewBridge implements BrowserViewBridge {
       reason: "os-backed",
       storageBackend: null,
       encryptionAvailable: true,
-      mockKeychainEnabled: false,
     });
-  }
-
-  setLabsState(): Promise<void> {
-    return Promise.resolve();
   }
 
   onFindChange(_handler: (change: BrowserViewFindChange) => void): {

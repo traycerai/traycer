@@ -10,7 +10,6 @@ import type {
 } from "../../ipc-contracts/browser-annotation-types";
 import { BROWSER_VIEW_VIEWPORT_PRESET_IDS } from "../../ipc-contracts/browser-view-types";
 import type {
-  BrowserLabsStateUpdate,
   BrowserViewAttachSurface,
   BrowserViewBoundsUpdate,
   BrowserViewCertificateTrust,
@@ -104,9 +103,6 @@ const overlayReleaseSchema: z.ZodType<BrowserViewOverlayRelease> = z.object({
   overlayId: z.string(),
 });
 const overlayPaintAckSchema = z.object({ overlayId: z.string() });
-const labsStateUpdateSchema: z.ZodType<BrowserLabsStateUpdate> = z.object({
-  inAppBrowserBetaEnabled: z.boolean(),
-});
 const ensureTabSchema: z.ZodType<BrowserViewEnsureTab> =
   nativeTabKeySchema.extend({
     requestedUrl: nonEmptyStringSchema,
@@ -146,7 +142,6 @@ export const browserViewIpcPayload = {
   ensureTab: ensureTabSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
-  labsStateUpdate: labsStateUpdateSchema,
   nativeTabCapability: nativeTabCapabilitySchema,
   overlayOcclusion: overlayOcclusionSchema,
   overlayPaintAck: overlayPaintAckSchema,

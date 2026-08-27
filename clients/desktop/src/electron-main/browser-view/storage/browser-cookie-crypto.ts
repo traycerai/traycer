@@ -1,4 +1,4 @@
-import { app, safeStorage } from "electron";
+import { safeStorage } from "electron";
 import type {
   BrowserCookieCryptoReason,
   BrowserCookieCryptoState,
@@ -10,7 +10,6 @@ export interface BrowserCookieCryptoDetectionInput {
   readonly platform: NodeJS.Platform | string;
   readonly encryptionAvailable: boolean;
   readonly selectedStorageBackend: BrowserCookieStorageBackend;
-  readonly mockKeychainEnabled: boolean;
 }
 
 let resolvedState: BrowserCookieCryptoState | null = null;
@@ -18,9 +17,6 @@ let resolvedState: BrowserCookieCryptoState | null = null;
 export function resolveBrowserCookieCryptoStateFromInputs(
   input: BrowserCookieCryptoDetectionInput,
 ): BrowserCookieCryptoState {
-  if (input.mockKeychainEnabled) {
-    return buildState(input, "degraded", "mock-keychain");
-  }
   if (!input.encryptionAvailable) {
     return buildState(
       input,
@@ -44,7 +40,6 @@ export function resolveBrowserCookieCryptoStateAtReady(): BrowserCookieCryptoSta
     platform: process.platform,
     encryptionAvailable: safeStorage.isEncryptionAvailable(),
     selectedStorageBackend: readSelectedStorageBackend(),
-    mockKeychainEnabled: app.commandLine.hasSwitch("use-mock-keychain"),
   });
   resolvedState = state;
   log.info("[browser-view] cookie crypto mode resolved", {
@@ -53,16 +48,8 @@ export function resolveBrowserCookieCryptoStateAtReady(): BrowserCookieCryptoSta
     reason: state.reason,
     storageBackend: state.storageBackend,
     encryptionAvailable: state.encryptionAvailable,
-    mockKeychainEnabled: state.mockKeychainEnabled,
   });
-  if (state.reason === "mock-keychain") {
-    log.warn("[browser-view] cookie store downgrade detected", {
-      reason: state.reason,
-      persistence: state.persistence,
-      message:
-        "Persistent browser cookies from real encryption mode may be unreadable; using an ephemeral browser partition for this run.",
-    });
-  } else if (state.mode === "degraded") {
+  if (state.mode === "degraded") {
     log.warn("[browser-view] cookie persistence disabled", {
       reason: state.reason,
       persistence: state.persistence,
@@ -79,7 +66,6 @@ export function getBrowserCookieCryptoState(): BrowserCookieCryptoState {
       reason: "unresolved",
       storageBackend: null,
       encryptionAvailable: false,
-      mockKeychainEnabled: false,
     }
   );
 }
@@ -101,7 +87,6 @@ function buildState(
     reason,
     storageBackend: input.selectedStorageBackend,
     encryptionAvailable: input.encryptionAvailable,
-    mockKeychainEnabled: input.mockKeychainEnabled,
   };
 }
 

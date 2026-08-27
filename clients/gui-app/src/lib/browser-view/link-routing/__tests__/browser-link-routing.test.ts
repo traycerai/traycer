@@ -29,7 +29,6 @@ const SOURCE_TILE: EpicCanvasTileRef = {
 function resetStores(): void {
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
-    inAppBrowserBetaEnabled: false,
     browserLinkDefaultMode: "in-app",
     terminalBrowserLinkOpenMode: "in-app",
     markdownBrowserLinkOpenMode: "in-app",
@@ -76,31 +75,10 @@ describe("browser link routing", () => {
   beforeEach(resetStores);
   afterEach(resetStores);
 
-  it("keeps web links external while the browser beta is disabled", () => {
-    const runnerHost = mockRunnerHost();
-    const openInApp = vi.fn(() => true);
-
-    const result = routeBrowserLink({
-      runnerHost,
-      source: seedCanvas(SOURCE_TILE),
-      kind: "terminal",
-      url: "https://example.test/docs",
-      event: null,
-      openInApp,
-    });
-
-    expect(result).toBe("external");
-    expect(openInApp).not.toHaveBeenCalled();
-    expect(runnerHost.openExternalLink).toHaveBeenCalledWith(
-      "https://example.test/docs",
-    );
-  });
-
   it("delegates enabled in-app links to the host-backed opener", () => {
     const source = seedCanvas(SOURCE_TILE);
     const runnerHost = mockRunnerHost();
     const openInApp = vi.fn(() => true);
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
 
     const result = routeBrowserLink({
       runnerHost,
@@ -118,7 +96,6 @@ describe("browser link routing", () => {
 
   it("falls back externally when host-backed opening is unavailable", () => {
     const runnerHost = mockRunnerHost();
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
 
     const result = routeBrowserLink({
       runnerHost,
@@ -140,7 +117,6 @@ describe("browser link routing", () => {
     const runnerHost = mockRunnerHost();
     const openInApp = vi.fn(() => true);
     useSettingsStore.setState({
-      inAppBrowserBetaEnabled: true,
       browserLinkDefaultMode: "per-kind",
       terminalBrowserLinkOpenMode: "in-app",
       markdownBrowserLinkOpenMode: "external",
@@ -187,7 +163,6 @@ describe("browser link routing", () => {
   it("records terminal dev-server origins from URL output only", () => {
     const source = seedCanvas(SOURCE_TILE);
     const runnerHost = mockRunnerHost();
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
 
     for (const [kind, url] of [
       ["terminal", "http://localhost:5173/ready"],

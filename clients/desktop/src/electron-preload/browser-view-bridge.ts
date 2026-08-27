@@ -142,11 +142,6 @@ export function buildBrowserViewBridge(): { browserView: BrowserViewBridge } {
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewCookieCryptoStateGet,
         ) as Promise<BrowserCookieCryptoState>,
-      setLabsState: (input) =>
-        ipcRenderer.invoke(
-          RunnerHostInvoke.browserViewLabsStateSet,
-          input,
-        ) as Promise<void>,
       capturePrimaryProfile: () =>
         ipcRenderer.invoke(
           RunnerHostInvoke.browserViewPrimaryProfileCapture,

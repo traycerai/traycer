@@ -55,7 +55,6 @@ afterEach(() => {
   openTab.mockClear();
   useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
   useSettingsStore.setState({
-    inAppBrowserBetaEnabled: false,
     browserLinkDefaultMode: "in-app",
     terminalBrowserLinkOpenMode: "in-app",
     markdownBrowserLinkOpenMode: "in-app",
@@ -167,7 +166,6 @@ describe("MarkdownAnchor", () => {
 
   it("opens markdown http links through the host and places its session pointer", async () => {
     const host = createRunnerHost();
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
     renderMarkdownWithBrowserRouting("[Docs](https://example.com/docs)", host);
 
     fireEvent.click(screen.getByRole("link", { name: "Docs" }));

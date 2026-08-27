@@ -344,7 +344,6 @@ export const RunnerHostInvoke = {
     "runnerHost:browserView:primaryProfile:capture",
   browserViewCookieCryptoStateGet:
     "runnerHost:browserView:cookieCryptoState:get",
-  browserViewLabsStateSet: "runnerHost:browserView:labsState:set",
   browserViewStartAnnotation: "runnerHost:browserView:annotation:start",
   browserViewCancelAnnotation: "runnerHost:browserView:annotation:cancel",
   browserViewSetAnnotationTargetChatLabel:

@@ -494,35 +494,29 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     chord's mid-turn-steering semantics - stays out of Keybindings, which is
     for rebinding), Pin context usage breakdown (global toggle for the
     always-visible agent context-window breakdown, default off).
-  - **Browser (beta)**: In-app browser (beta) (`inAppBrowserBetaEnabled`,
-    default off - master toggle for browser tiles and default link routing),
-    Web link default + per-kind terminal/markdown link open-mode selects
-    (disabled until the master toggle is on), Agent tab surfacing
-    (`agentTabSurfacingMode`: `pip` | `tile` | `off`, default `off` - what the
-    GUI does when the AGENT opens a browser tab via its REPL `openTab` tool;
-    deliberately NOT gated by the labs toggle, because it governs suppressing
-    host-driven opens that previously always split the canvas. `pip` floats
-    the tab picture-in-picture unless a user-converted PiP is showing or the
-    epic surface is hidden; `tile` places a canvas tile grouped by session -
-    same-session opens become tabs of one pane - even in hidden epics; `off`
-    answers electron foreground creates with a hidden off-screen view so the
-    agent's open still succeeds, and leaves headless tabs in the sidebar.
-    Disposition decisions live in
-    `lib/browser-view/agent-tab-surfacing.ts`; headless-origin tabs are
-    diffed from `browser.sessions` lifecycle frames in the dock, seeded
-    snapshot-only so surfacing stays ephemeral across reloads), and a
-    conditional Detected dev origins row. The master toggle's `SettingsRow`
-    carries a standing `risk` paragraph (always rendered, distinct from the conditional `hint` used
-    for the mock-keychain restart notice below it) disclosing that the agent
-    can run code on an attached tab's page - reading or doing anything the
-    user could there - and, because every in-app browser tab shares one
-    `persist:traycer-browser` partition and `browser-repl-api.ts`'s
-    `navigate()` performs no origin check (nothing gates navigation on an
-    origin; the origin tier is metadata only), the agent can navigate to and act on any other site the
-    user is logged into in that shared browser, not only the tab attached -
-    per ticket 11 and v3's "accepted blast radius": this is the one place
-    that risk is surfaced to the user, so the copy must not be softened or
-    hidden behind an expander.
+  - **Browser**: the in-app browser has no toggle - it is always on, and the
+    group carries no master switch.
+    Web link default + per-kind terminal/markdown link open-mode selects are
+    always active (no `disabled` state).
+    Agent tab surfacing (`agentTabSurfacingMode`: `pip` | `tile` | `off`,
+    default `off` - what the GUI does when the AGENT opens a browser tab via
+    its REPL `openTab` tool) governs suppressing host-driven opens that
+    previously always split the canvas.
+    `pip` floats the tab picture-in-picture unless a user-converted PiP is
+    showing or the epic surface is hidden; `tile` places a canvas tile
+    grouped by session - same-session opens become tabs of one pane - even
+    in hidden epics; `off` answers electron foreground creates with a hidden
+    off-screen view so the agent's open still succeeds, and leaves headless
+    tabs in the sidebar.
+    Disposition decisions live in `lib/browser-view/agent-tab-surfacing.ts`;
+    headless-origin tabs are diffed from `browser.sessions` lifecycle frames
+    in the dock, seeded snapshot-only so surfacing stays ephemeral across
+    reloads.
+    A conditional Detected dev origins row follows.
+    There is no standing risk disclosure in this group - the master toggle
+    row that carried one was deleted along with the toggle, and the
+    `SettingsRow` `risk` prop it was the sole consumer of was deleted with
+    it.
   - **Running agents**: Prevent sleep while running
     (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
     "Two different mobile questions"), Show global resources button, Show

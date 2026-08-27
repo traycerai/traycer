@@ -10,7 +10,6 @@ const DEGRADED_COOKIE_CRYPTO_STATE: BrowserCookieCryptoState = {
   reason: "unresolved",
   storageBackend: null,
   encryptionAvailable: false,
-  mockKeychainEnabled: false,
 };
 
 export function useBrowserCookieCryptoState(

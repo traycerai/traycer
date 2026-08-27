@@ -142,9 +142,7 @@ export interface SettingsState {
    * the chat composer as a blockquote.
    */
   quoteReplyEnabled: boolean;
-  /** Labs gate for the native in-app browser surface. */
-  inAppBrowserBetaEnabled: boolean;
-  /** Global default for http(s) links when the browser beta is enabled. */
+  /** Global default for http(s) links. */
   browserLinkDefaultMode: BrowserLinkDefaultMode;
   /** Terminal plain URL / OSC-8 default used when global mode is per-kind. */
   terminalBrowserLinkOpenMode: BrowserLinkOpenMode;
@@ -153,10 +151,9 @@ export interface SettingsState {
   /** Origins designated from terminal URL output for the host classifier. */
   browserDevOrigins: ReadonlyArray<string>;
   /**
-   * What happens visually when the agent opens a browser tab. Independent of
-   * `inAppBrowserBetaEnabled`: the agent's REPL tabs are a host capability,
-   * not part of the link-routing beta, and this preference also governs
-   * suppressing them.
+   * What happens visually when the agent opens a browser tab. The agent's
+   * REPL tabs are a host capability, separate from link routing, and this
+   * preference also governs suppressing them.
    */
   agentTabSurfacingMode: AgentTabSurfacingMode;
   /**
@@ -211,7 +208,6 @@ export interface SettingsState {
   setVoiceLanguage: (value: string) => void;
   setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
-  setInAppBrowserBetaEnabled: (value: boolean) => void;
   setBrowserLinkDefaultMode: (mode: BrowserLinkDefaultMode) => void;
   setTerminalBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
   setMarkdownBrowserLinkOpenMode: (mode: BrowserLinkOpenMode) => void;
@@ -254,7 +250,6 @@ type PersistedSettingsState = Pick<
   | "voiceLanguage"
   | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
-  | "inAppBrowserBetaEnabled"
   | "browserLinkDefaultMode"
   | "terminalBrowserLinkOpenMode"
   | "markdownBrowserLinkOpenMode"
@@ -329,7 +324,6 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     voiceLanguage: state.voiceLanguage,
     worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
-    inAppBrowserBetaEnabled: state.inAppBrowserBetaEnabled,
     browserLinkDefaultMode: state.browserLinkDefaultMode,
     terminalBrowserLinkOpenMode: state.terminalBrowserLinkOpenMode,
     markdownBrowserLinkOpenMode: state.markdownBrowserLinkOpenMode,
@@ -372,7 +366,6 @@ export const useSettingsStore = create<SettingsState>()(
       voiceLanguage: "auto",
       worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
-      inAppBrowserBetaEnabled: false,
       browserLinkDefaultMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
       terminalBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
       markdownBrowserLinkOpenMode: DEFAULT_BROWSER_LINK_OPEN_MODE,
@@ -446,7 +439,6 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
-      setInAppBrowserBetaEnabled: makeSetter(set, "inAppBrowserBetaEnabled"),
       setBrowserLinkDefaultMode: makeSetter(set, "browserLinkDefaultMode"),
       setTerminalBrowserLinkOpenMode: makeSetter(
         set,
