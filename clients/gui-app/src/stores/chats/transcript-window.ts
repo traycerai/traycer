@@ -160,6 +160,30 @@ export interface OrdinalRange {
 export const TRANSCRIPT_WINDOW_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
+ * How large a span may grow by absorbing the span NEXT to it.
+ *
+ * Eviction drops whole spans, so a span is the smallest thing the budget can
+ * reclaim - and merging is what decides how big that unit is. Without a cap,
+ * the ordinary way to read a long chat defeats the budget completely: scroll
+ * up from the tail and every response is adjacent to the last, so the whole
+ * transcript coalesces into ONE span whose end touches `rowCount`. That span
+ * is the tail span, the tail is exempt from eviction, and the exemption then
+ * covers every row the reader has ever visited. The window grows without
+ * bound while `hydratedBytes` says it is over budget and eviction finds
+ * nothing it is allowed to drop.
+ *
+ * Capping adjacency keeps contiguous coverage represented as SEVERAL touching
+ * spans, so the exemption lands on a bounded tail rather than on everything
+ * behind it. Overlapping spans are always merged whatever their size - two
+ * spans claiming the same ordinal is a correctness problem, not a size one.
+ *
+ * Sized against the host's own range ceiling (`TRANSCRIPT_RANGE_MAX_BYTES`),
+ * so a single response stays one span and the budget divides into enough
+ * spans to have an eviction ORDER at all.
+ */
+const SPAN_MERGE_MAX_BYTES = 1024 * 1024;
+
+/**
  * How many rows to hydrate when a snapshot arrives with an EMPTY tail.
  *
  * The host's tail is bounded by `TRANSCRIPT_TAIL_MAX_BYTES` and it walks
@@ -485,15 +509,27 @@ function insertSpan(
 ): readonly HydratedSpan[] {
   const untouched: HydratedSpan[] = [];
   const overlapping: HydratedSpan[] = [];
+  // Adjacency is absorbed only while the result stays a unit eviction can
+  // reclaim (see SPAN_MERGE_MAX_BYTES). Overlap is not optional: two spans
+  // covering one ordinal would place that row twice.
+  let mergedBytes = incoming.bytes;
   for (const span of spans) {
     const disjoint =
       spanEnd(span) < incoming.fromOrdinal ||
       span.fromOrdinal > spanEnd(incoming);
     if (disjoint) {
       untouched.push(span);
-    } else {
-      overlapping.push(span);
+      continue;
     }
+    const touchesOnly =
+      spanEnd(span) === incoming.fromOrdinal ||
+      spanEnd(incoming) === span.fromOrdinal;
+    if (touchesOnly && mergedBytes + span.bytes > SPAN_MERGE_MAX_BYTES) {
+      untouched.push(span);
+      continue;
+    }
+    mergedBytes += span.bytes;
+    overlapping.push(span);
   }
   if (overlapping.length === 0) {
     return [...untouched, incoming].sort(
@@ -918,11 +954,33 @@ export function holdsEveryRecordFrom(
   if (window.liveMessages.some((message) => message.messageId === messageId)) {
     return true;
   }
-  return window.spans.some(
-    (span) =>
-      spanEnd(span) >= window.rowCount &&
-      span.messages.some((message) => message.messageId === messageId),
+  const holder = window.spans.find((span) =>
+    span.messages.some((message) => message.messageId === messageId),
   );
+  if (holder === undefined) return false;
+  // Coverage, not a single span. Adjacent spans are no longer always merged
+  // (see SPAN_MERGE_MAX_BYTES), so "held all the way to the end" is a question
+  // about the CHAIN from this span onward - asking whether one span reaches
+  // `rowCount` would answer false for a transcript that is fully held but
+  // represented as several touching spans.
+  return coversThroughEnd(window, holder.fromOrdinal);
+}
+
+/** Is every ordinal from `fromOrdinal` to the end held, across touching spans? */
+function coversThroughEnd(
+  window: TranscriptWindow,
+  fromOrdinal: number,
+): boolean {
+  let cursor = fromOrdinal;
+  for (const span of [...window.spans].sort(
+    (left, right) => left.fromOrdinal - right.fromOrdinal,
+  )) {
+    if (spanEnd(span) <= cursor) continue;
+    if (span.fromOrdinal > cursor) return false;
+    cursor = spanEnd(span);
+    if (cursor >= window.rowCount) return true;
+  }
+  return cursor >= window.rowCount;
 }
 
 /**
@@ -1064,6 +1122,13 @@ export function planTranscriptHydration(
  * happens and where every snapshot re-seats content, so evicting it would
  * trade a bounded cache for an unbounded re-fetch loop - and it is the one
  * span whose absence is visible immediately.
+ *
+ * That exemption is only safe because a span is BOUNDED: it protects the span
+ * that reaches the end, so how much it protects is decided by how large that
+ * span is allowed to grow. `SPAN_MERGE_MAX_BYTES` is what keeps it a tail
+ * rather than the whole transcript - without the cap, reading a long chat
+ * upward from the tail coalesces every visited row into the tail span and
+ * this function is left with nothing it may drop.
  *
  * Spans overlapping `visible` are never evicted either, and the budget is
  * SOFT against them - the loop stops when only protected spans remain, even

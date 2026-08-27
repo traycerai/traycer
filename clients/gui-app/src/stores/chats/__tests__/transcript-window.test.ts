@@ -743,6 +743,100 @@ describe("eviction protects the visible span", () => {
   });
 });
 
+describe("reading a long chat upward from the tail", () => {
+  /** ~400 KiB in one message, so a few rows cross the span merge cap. */
+  function fatMessage(messageId: string, timestamp: number): Message {
+    return {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "x".repeat(400 * 1024) }],
+            },
+          ],
+        },
+      },
+      timestamp,
+      sessionAnchor: null,
+    };
+  }
+
+  /**
+   * The ordinary way to read history: hydrate the tail, then walk backwards,
+   * each response adjacent to the one before it.
+   */
+  function walkUpwardFromTail(
+    rowCount: number,
+    steps: number,
+  ): TranscriptWindow {
+    let window = windowWithSkeleton(rowCount);
+    for (let step = 0; step < steps; step += 1) {
+      const fromOrdinal = rowCount - (step + 1) * 2;
+      window = applyRangeResponse(
+        window,
+        rangeResponse({
+          epoch: 1,
+          fromOrdinal,
+          rowIds: [`row-${fromOrdinal}`, `row-${fromOrdinal + 1}`],
+          messages: [fatMessage(`m-${fromOrdinal}`, fromOrdinal)],
+        }),
+      );
+    }
+    return window;
+  }
+
+  it("does not coalesce the whole visited history into the tail span", () => {
+    const window = walkUpwardFromTail(20, 6);
+
+    // Every response was adjacent to the last. Before the merge cap this was
+    // ONE span [8,20) whose end touches rowCount - the tail span - and the
+    // tail exemption then covered all of it.
+    expect(window.spans.length).toBeGreaterThan(1);
+    const tailSpan = window.spans.find(
+      (span) => span.fromOrdinal + span.rowIds.length >= window.rowCount,
+    );
+    expect(tailSpan).toBeDefined();
+    expect(tailSpan?.bytes).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("evicts the cold scrollback behind the tail instead of protecting all of it", () => {
+    const window = walkUpwardFromTail(20, 6);
+    const budget = 1024 * 1024;
+    expect(window.hydratedBytes).toBeGreaterThan(budget);
+
+    // The reader is at the tail; everything behind it is fair game.
+    const evicted = evictTranscriptWindowToBudget(window, budget, {
+      fromOrdinal: 18,
+      toOrdinal: 20,
+    });
+
+    expect(evicted.hydratedBytes).toBeLessThan(window.hydratedBytes);
+    expect(evicted.spans.length).toBeLessThan(window.spans.length);
+    // The tail survived: it is where the live turn lands and where every
+    // snapshot re-seats content.
+    expect(
+      evicted.spans.some(
+        (span) => span.fromOrdinal + span.rowIds.length >= evicted.rowCount,
+      ),
+    ).toBe(true);
+  });
+
+  it("still answers the downward-scan question across touching spans", () => {
+    const window = walkUpwardFromTail(20, 6);
+    // Coverage runs [8,20) unbroken, just not as a single span - the record at
+    // the oldest visited row still has every later record held.
+    expect(holdsEveryRecordFrom(window, "m-8")).toBe(true);
+    // A record the window never hydrated is not held.
+    expect(holdsEveryRecordFrom(window, "m-0")).toBe(false);
+  });
+});
+
 describe("records the index has not placed yet", () => {
   it("holds them, reports them last, and drops duplicates of what a span already has", () => {
     const window = applyRangeResponse(
