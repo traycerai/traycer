@@ -168,7 +168,8 @@ const mocks = vi.hoisted(() => {
     // its observer - firing synchronously here would race that binding and
     // silently drop the ack.
     onSessionCreated: null as
-      ((session: FakeStreamSession, lapIndex: number) => void) | null,
+      | ((session: FakeStreamSession, lapIndex: number) => void)
+      | null,
     FakeWsStreamClient,
     subscribeMock,
     clientCloseMock,
@@ -1196,7 +1197,7 @@ describe("provisionInstalledHostCredential", () => {
     // budget ran out would hold `host install` open past its bound, and
     // disposing the store does not cancel one already in flight.
     const outcome = await provisionInstalledHostCredential(
-      makeOptions({ deadlineMs: 100, progress: vi.fn() }),
+      makeOptions({ deadlineMs: 0, progress: vi.fn() }),
     );
 
     expect(outcome).toEqual<HostCredentialProvisionOutcome>({

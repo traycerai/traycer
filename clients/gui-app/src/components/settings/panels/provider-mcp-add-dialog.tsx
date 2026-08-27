@@ -238,7 +238,8 @@ export function ProviderMcpAddDialog(props: {
     readonly workspaceRoot: string | null;
   };
   readonly onAdded:
-    ((args: { name: string; requiresAuth: boolean }) => void) | null;
+    | ((args: { name: string; requiresAuth: boolean }) => void)
+    | null;
 }): ReactNode {
   const {
     open,

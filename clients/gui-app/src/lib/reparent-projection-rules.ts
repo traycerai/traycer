@@ -1,3 +1,6 @@
+import { CrossFamilyParentError } from "@/lib/errors/cross-family-parent-error";
+import { MissingNodeError } from "@/lib/errors/missing-node-error";
+import { ReparentCycleError } from "@/lib/errors/reparent-cycle-error";
 import type { NodeFamily, ReparentRejectionReason } from "@/lib/reparent-rules";
 import type {
   EpicTreeNodeType,
@@ -97,6 +100,40 @@ export function canReparentProjected(
   newParentId: string | null,
 ): ProjectedReparentEvaluation {
   return evaluateProjectedReparent(tree, nodeId, newParentId);
+}
+
+/**
+ * The projected twin of `reparentRejectionError`, so a rejection is described
+ * by the SAME surface that judged it.
+ *
+ * Building the doc-based error for a projected rejection would report the
+ * wrong thing: its `missingRole` probe asks the DOC whether the node exists,
+ * and for a registry-backed row the answer is always "no" - so every
+ * projected rejection would blame the node, even when the tree's actual
+ * complaint was the parent. `same-parent` is never routed here; it is a
+ * silent no-op at every call site.
+ */
+export function projectedReparentRejectionError(
+  tree: TreeSlice,
+  reason: ReparentRejectionReason,
+  nodeId: string,
+  newParentId: string | null,
+): Error {
+  if (reason === "missing-node") {
+    const missingRole =
+      resolveProjectedReparentNode(tree, nodeId) === null ? "node" : "parent";
+    return new MissingNodeError(
+      missingRole === "node" ? nodeId : (newParentId ?? ""),
+      missingRole,
+    );
+  }
+  if (reason === "cycle") {
+    return new ReparentCycleError(nodeId, newParentId ?? nodeId);
+  }
+  if (reason === "cross-panel") {
+    return new CrossFamilyParentError(nodeId, newParentId ?? "");
+  }
+  return new Error(`Cannot reparent ${nodeId}: node already has that parent.`);
 }
 
 /**

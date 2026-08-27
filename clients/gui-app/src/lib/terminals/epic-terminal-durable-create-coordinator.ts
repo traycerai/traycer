@@ -13,7 +13,9 @@ export interface EpicTerminalDurableCreateRequest {
 }
 
 export type EpicTerminalDurableCreateStatus =
-  "accepted" | "in-flight" | "failed";
+  | "accepted"
+  | "in-flight"
+  | "failed";
 
 export interface EpicTerminalDurableCreateListSnapshot {
   readonly sessions: ReadonlyArray<{ readonly sessionId: string }>;
@@ -157,9 +159,11 @@ export function requestEpicTerminalDurableCreate(args: {
   readonly ready: boolean;
   readonly create: () => Promise<void>;
   readonly commit:
-    (() => Promise<EpicTerminalDurableCreateListSnapshot>) | undefined;
+    | (() => Promise<EpicTerminalDurableCreateListSnapshot>)
+    | undefined;
   readonly onCommit:
-    ((snapshot: EpicTerminalDurableCreateListSnapshot) => void) | undefined;
+    | ((snapshot: EpicTerminalDurableCreateListSnapshot) => void)
+    | undefined;
   readonly onSuccess: () => void;
   readonly onFailure: ((error: Error) => void) | undefined;
 }): Promise<void> | null {

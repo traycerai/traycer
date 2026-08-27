@@ -69,12 +69,12 @@ function profileRow(
 
 describe("profile eligibility protocol compatibility", () => {
   it("defaults omitted profile eligibility to enabled", () => {
-    expect(providerProfileSchema.parse(profileRow(undefined, null)).enabled).toBe(
-      true,
-    );
-    expect(providerProfileSchemaV70.safeParse(profileRow(false, null)).success).toBe(
-      true,
-    );
+    expect(
+      providerProfileSchema.parse(profileRow(undefined, null)).enabled,
+    ).toBe(true);
+    expect(
+      providerProfileSchemaV70.safeParse(profileRow(false, null)).success,
+    ).toBe(true);
   });
 
   it("normalizes a malformed present profile eligibility value to enabled", () => {

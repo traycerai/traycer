@@ -3,6 +3,7 @@ import {
   buildStreamManifest,
   checkStreamMethodCompatibility,
 } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
@@ -53,9 +54,14 @@ describe("host.communicationGraph.subscribe@1.0 contract", () => {
       major: 1,
       minor: 0,
     });
-    expect(buildStreamManifest(hostStreamRpcRegistry)[METHOD]).toEqual({
+    expect(
+      buildStreamManifest(hostStreamRpcRegistry, SERVES_EVERY_INSTALLED_MAJOR)[
+        METHOD
+      ],
+    ).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
   });
 
@@ -242,7 +248,10 @@ describe("host.communicationGraph.subscribe@1.0 frames", () => {
 
 describe("host.communicationGraph.subscribe@1.0 degrades against an older host", () => {
   it("fails only this method's subscribe, leaving every other stream method compatible", () => {
-    const currentManifest = buildStreamManifest(hostStreamRpcRegistry);
+    const currentManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
     const olderHostManifest = Object.fromEntries(
       Object.entries(currentManifest).filter(([method]) => method !== METHOD),
     );

@@ -31,7 +31,8 @@ export interface DesktopOwnershipEntry {
 }
 
 export type DesktopOwnershipClaimResult =
-  { readonly ok: true } | { readonly ok: false; readonly currentOwner: string };
+  | { readonly ok: true }
+  | { readonly ok: false; readonly currentOwner: string };
 
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
@@ -43,7 +44,8 @@ export interface DesktopPerWindowEpicViewTab {
 }
 
 export type DesktopPerWindowStateFeature =
-  "tab-strip-layout-v2" | "active-route-v1";
+  | "tab-strip-layout-v2"
+  | "active-route-v1";
 
 export interface DesktopPerWindowStateCapabilities {
   readonly schemaVersion: number;
@@ -93,7 +95,9 @@ export interface DesktopPerWindowStatePatch {
 }
 
 export type DesktopAuthSessionStatus =
-  "signed-out" | "signing-in" | "signed-in";
+  | "signed-out"
+  | "signing-in"
+  | "signed-in";
 
 export interface DesktopAuthSessionProfile {
   readonly userId: string;
@@ -138,7 +142,11 @@ export interface DesktopMenuCommandPayload {
 }
 
 export type DesktopTopLevelMenuId =
-  "file" | "edit" | "view" | "window" | "help";
+  | "file"
+  | "edit"
+  | "view"
+  | "window"
+  | "help";
 
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
@@ -153,7 +161,11 @@ export interface DesktopZoomBridge {
 export type DesktopSupportLogTarget = "desktop" | "host";
 
 export type DesktopSupportLinkId =
-  "website" | "documentation" | "release-notes" | "discord" | "support";
+  | "website"
+  | "documentation"
+  | "release-notes"
+  | "discord"
+  | "support";
 
 export interface DesktopSupportLinkDescriptor {
   readonly id: DesktopSupportLinkId;
@@ -457,7 +469,9 @@ export interface DesktopAppUpdateSnapshot {
  * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
  */
 export type DesktopAppUpdateChannelChangeOutcome =
-  "changed" | "unchanged" | "refused-update-pending";
+  | "changed"
+  | "unchanged"
+  | "refused-update-pending";
 
 export interface DesktopAppUpdateChannelChange {
   readonly outcome: DesktopAppUpdateChannelChangeOutcome;
@@ -485,7 +499,10 @@ export interface DesktopAppUpdateChannelChange {
  * Mirrored from `desktop/src/ipc-contracts/app-update-types.ts`.
  */
 export type DesktopCompatRecoveryRoute =
-  "update-available" | "enable-rc" | "restart-to-clear-staged" | "manual";
+  | "update-available"
+  | "enable-rc"
+  | "restart-to-clear-staged"
+  | "manual";
 
 export interface DesktopCompatRecoveryPlan {
   readonly route: DesktopCompatRecoveryRoute;
@@ -563,7 +580,10 @@ export interface DesktopHostControllerStatusBridge {
 export type DesktopReportType = "bug" | "idea" | "other";
 
 export type DesktopReportFrequency =
-  "once" | "sometimes" | "every_time" | "not_sure";
+  | "once"
+  | "sometimes"
+  | "every_time"
+  | "not_sure";
 
 /**
  * Field-for-field match with ticket 08's `SupportImageAttachmentInput`

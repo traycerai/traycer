@@ -13,7 +13,10 @@ import { isUnknownHost } from "@/lib/host/constants";
 import { HOST_STARTING_BUDGET_MS } from "@/lib/host/bounded-load-budgets";
 
 export type HostReachabilityStatus =
-  "checking" | "reachable" | "unreachable" | "host-starting";
+  | "checking"
+  | "reachable"
+  | "unreachable"
+  | "host-starting";
 
 /**
  * What EVIDENCE produced this verdict.

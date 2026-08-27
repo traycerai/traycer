@@ -310,7 +310,13 @@ describe("body compression round-trip (T5)", () => {
     for (const binary of bodies) {
       let seq = 0;
       const source = new OutboundChunkSource(
-        { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json: null, binary },
+        {
+          type: MuxFrameType.STREAM_FRAME,
+          streamId: 1,
+          qos: QosClass.BULK,
+          json: null,
+          binary,
+        },
         () => seq++,
         false,
       );
@@ -327,12 +333,24 @@ describe("body compression round-trip (T5)", () => {
     let seqA = 0;
     let seqB = 0;
     const compressed = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 1,
+        qos: QosClass.BULK,
+        json,
+        binary,
+      },
       () => seqA++,
       true,
     );
     const plain = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 1, qos: QosClass.BULK, json, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 1,
+        qos: QosClass.BULK,
+        json,
+        binary,
+      },
       () => seqB++,
       false,
     );
@@ -361,7 +379,13 @@ describe("body compression round-trip (T5)", () => {
     const binary = new Uint8Array(BULK_CHUNK_SIZE_BYTES * 2).fill(0x42);
     let seq = 0;
     const source = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 2, qos: QosClass.BULK, json: null, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 2,
+        qos: QosClass.BULK,
+        json: null,
+        binary,
+      },
       () => seq++,
       true,
     );
@@ -381,7 +405,13 @@ describe("body compression round-trip (T5)", () => {
     const binary = randomBytes(BULK_CHUNK_SIZE_BYTES * 2 + 100);
     let seq = 0;
     const source = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 3, qos: QosClass.BULK, json: null, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 3,
+        qos: QosClass.BULK,
+        json: null,
+        binary,
+      },
       () => seq++,
       true,
     );
@@ -402,7 +432,13 @@ describe("body compression round-trip (T5)", () => {
     );
     let seq = 0;
     const source = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 4, qos: QosClass.INTERACTIVE, json: null, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 4,
+        qos: QosClass.INTERACTIVE,
+        json: null,
+        binary,
+      },
       () => seq++,
       true,
     );
@@ -422,7 +458,13 @@ describe("body compression round-trip (T5)", () => {
     const binary = concatBytes(compressiblePart, incompressiblePart);
     let seq = 0;
     const source = new OutboundChunkSource(
-      { type: MuxFrameType.STREAM_FRAME, streamId: 5, qos: QosClass.BULK, json: null, binary },
+      {
+        type: MuxFrameType.STREAM_FRAME,
+        streamId: 5,
+        qos: QosClass.BULK,
+        json: null,
+        binary,
+      },
       () => seq++,
       true,
     );
@@ -494,9 +536,12 @@ describe("body compression round-trip (T5)", () => {
       // data), masking a missing length check - it must be real deflate data
       // that WOULD succeed were the bound not enforced first.
       const oversizedPlainLength = BULK_CHUNK_SIZE_BYTES * 4;
-      const deflated = deflateSync(new Uint8Array(oversizedPlainLength).fill(0), {
-        level: 6,
-      });
+      const deflated = deflateSync(
+        new Uint8Array(oversizedPlainLength).fill(0),
+        {
+          level: 6,
+        },
+      );
       const header = new Uint8Array(4);
       new DataView(header.buffer).setUint32(0, oversizedPlainLength);
       const badPayload = concatBytes(header, deflated);
@@ -579,10 +624,7 @@ describe("body compression round-trip (T5)", () => {
           chunkLast: false,
           compressed: true,
           json: null,
-          binary: concatBytes(
-            header,
-            deflateSync(plainBody, { level: 1 }),
-          ),
+          binary: concatBytes(header, deflateSync(plainBody, { level: 1 })),
         }),
       );
     }

@@ -38,9 +38,7 @@ regexTarget = "secret"
 paths = [
   '''^clients/desktop/src/electron-main/cli/__tests__/cross-layer-download-resilience\.test\.ts$''',
 ]
-regexes = [
-  '''^RWSEfvU5EZoZYQTQUOVHeQFv3poThl1VM7FZLkNQr0Zu0FyL2x\+u2O2l$''',
-]
+regexes = ['''^RWSEfvU5EZoZYQTQUOVHeQFv3poThl1VM7FZLkNQr0Zu0FyL2x\+u2O2l$''']
 
 [[allowlists]]
 description = "Chat transcript scroll-state cache keys in the original and split gui-app chat tests - kebab-case UI state bucket names (e.g. a per-test anchor key) that the generic-api-key rule matches only because the field is literally named `scrollStateKey`. These are UI state keys, never credentials. Path-scoped to the monolith and its five split files; `fetch-depth: 0` means the PR scan sees them on in-flight branches before they merge, so this cannot wait for the introducing branch to land."
@@ -49,20 +47,14 @@ regexTarget = "line"
 paths = [
   '''^clients/gui-app/src/components/chat/__tests__/chat-messages(?:-(?:anchor-engine|core|library-contract|navigation|persistence))?\.test\.tsx?$''',
 ]
-regexes = [
-  '''scrollStateKey: "[A-Za-z0-9_-]+"''',
-]
+regexes = ['''scrollStateKey: "[A-Za-z0-9_-]+"''']
 
 [[allowlists]]
 description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
 condition = "AND"
 regexTarget = "secret"
-paths = [
-  '''^clients/desktop/src/electron-main/host/host-lifecycle\.ts$''',
-]
-regexes = [
-  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
-]
+paths = ['''^clients/desktop/src/electron-main/host/host-lifecycle\.ts$''']
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
 
 [[allowlists]]
 description = "JWT-shaped scrubber fixture. This exact dummy value verifies redaction of JWTs in user text and logs; require both its precise test path and full value."
@@ -83,6 +75,4 @@ paths = [
   '''^clients/gui-app/src/components/epic-canvas/renderers/__tests__/pr-diff-tile-find\.test\.tsx$''',
   '''^clients/gui-app/src/components/epic-canvas/pr/__tests__/pr-local-diff-body\.test\.tsx$''',
 ]
-regexes = [
-  '''^YmFkLf(?:8|4)udHh0$''',
-]
+regexes = ['''^YmFkLf(?:8|4)udHh0$''']

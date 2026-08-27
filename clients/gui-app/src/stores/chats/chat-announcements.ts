@@ -31,7 +31,9 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
  */
 
 export type ChatAnnouncementKind =
-  "turn-completed" | "background-completion" | "background-update";
+  | "turn-completed"
+  | "background-completion"
+  | "background-update";
 
 export interface ChatAnnouncement {
   /**

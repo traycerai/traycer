@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   chatBackupStatus: null as EpicChatBackupStatus | null,
   presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
   terminalCoverage: null as
-    "partial-serving-host" | "complete-fleet" | "complete-local" | null,
+    | "partial-serving-host"
+    | "complete-fleet"
+    | "complete-local"
+    | null,
   terminalCapability: {
     status: "capable",
     schemaVersion: { major: 2, minor: 1 },

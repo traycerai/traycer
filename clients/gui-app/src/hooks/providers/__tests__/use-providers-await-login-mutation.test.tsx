@@ -260,12 +260,12 @@ describe("useProvidersAwaitLogin overlay merge", () => {
 });
 
 // The echo is pinned to `providerMutationCliStateSchemaV21`, whose field set
-// is the hand-frozen `providerCliStateBaseShapeV40` - structurally incapable
-// of carrying `enablementMode` / `enablementSource`, which exist only on the
-// live `providers.list@7.1` shape. So the overlay in the suite above can
-// never correct those two fields; invalidating `providers.list` here is not
-// belt-and-braces on top of the overlay, it is the ONLY way they are ever
-// refreshed after a login completes.
+// is the hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+// the live `providers.list` row, and a login is exactly when the rest of that
+// row moves too (the profile list gains the new account, its ambient identity
+// resolves). So the overlay in the suite above cannot be the last word;
+// invalidating `providers.list` here is not belt-and-braces on top of it, it
+// is the only way those fields are ever refreshed after a login completes.
 describe("useProvidersAwaitLogin providers.list invalidation", () => {
   beforeEach(() => {
     mocks.tabHostId.mockReturnValue(HOST_ID);

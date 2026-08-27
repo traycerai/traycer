@@ -355,6 +355,7 @@ export const MAX_DIAGNOSTIC_APP_VERSION_LENGTH = 64;
  */
 export function isStrictSemVer(value: string): boolean {
   return (
-    value.length <= MAX_DIAGNOSTIC_APP_VERSION_LENGTH && STRICT_SEMVER.test(value)
+    value.length <= MAX_DIAGNOSTIC_APP_VERSION_LENGTH &&
+    STRICT_SEMVER.test(value)
   );
 }

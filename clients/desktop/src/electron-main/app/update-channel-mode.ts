@@ -37,7 +37,9 @@ import {
 } from "@traycer-clients/shared/host-version/release-line";
 
 export type DesktopUpdateChannelMode =
-  "stable-only" | "implicit-rc-line" | "explicit-prerelease";
+  | "stable-only"
+  | "implicit-rc-line"
+  | "explicit-prerelease";
 
 /**
  * The mode a check runs under, from the two inputs that decide it: the durable

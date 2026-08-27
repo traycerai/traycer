@@ -262,7 +262,10 @@ export interface GitModuleRootInput {
 }
 
 export type GitModuleParentReferenceStatus =
-  "differs" | "conflicted" | "dirty" | "unavailable";
+  | "differs"
+  | "conflicted"
+  | "dirty"
+  | "unavailable";
 
 export interface GitModuleParentReference {
   readonly status: GitModuleParentReferenceStatus;

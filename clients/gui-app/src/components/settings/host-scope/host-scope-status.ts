@@ -36,7 +36,11 @@ import type { HostScopeOption } from "@/components/settings/host-scope/host-scop
  * nothing needs to mock it, and the real predicate runs in every suite.
  */
 export type HostScopeStatus =
-  "following" | "connecting" | "unreachable" | "vanished" | "ready";
+  | "following"
+  | "connecting"
+  | "unreachable"
+  | "vanished"
+  | "ready";
 
 /**
  * True when the scope resolved to a client the caller may read/write through.

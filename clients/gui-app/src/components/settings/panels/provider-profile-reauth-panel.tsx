@@ -49,7 +49,8 @@ interface ProviderProfileReauthPanelProps {
    *  either way: its amber notice is the only thing that tells the user the
    *  profile was rebound to a different account. */
   readonly onSameAccountReconnected:
-    ((profile: ProviderProfile) => void) | null;
+    | ((profile: ProviderProfile) => void)
+    | null;
   readonly onCancel: () => void;
   readonly onDone: () => void;
 }

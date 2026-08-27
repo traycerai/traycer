@@ -437,11 +437,13 @@ function renderList(args: {
   readonly queryClient: QueryClient;
   readonly worktrees: readonly WorktreeHostEntryV16[];
   readonly enrichedByPath:
-    ReadonlyMap<string, WorktreeHostEntryV16> | undefined;
+    | ReadonlyMap<string, WorktreeHostEntryV16>
+    | undefined;
   readonly erroredPaths: ReadonlySet<string> | undefined;
   readonly seededPaths: ReadonlySet<string> | undefined;
   readonly onVisiblePathsChange:
-    ((paths: readonly string[]) => void) | undefined;
+    | ((paths: readonly string[]) => void)
+    | undefined;
   readonly taskTitlesByEpicId: ReadonlyMap<string, string> | undefined;
 }) {
   const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
@@ -3789,7 +3791,8 @@ describe("WorktreesList virtualization + per-viewport enrichment", () => {
     readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV16>;
     readonly erroredPaths: ReadonlySet<string> | undefined;
     readonly onVisiblePathsChange:
-      ((paths: readonly string[]) => void) | undefined;
+      | ((paths: readonly string[]) => void)
+      | undefined;
   }): ReactNode {
     return (
       <QueryClientProvider client={new QueryClient()}>

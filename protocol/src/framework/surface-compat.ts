@@ -146,10 +146,7 @@ export const CATALOG_HOST_TO_CLIENT_METHODS = [
   "providers.list",
 ] as const;
 
-export const HOST_TO_CLIENT_PAYLOADS = [
-  "response",
-  "serverFrame",
-] as const;
+export const HOST_TO_CLIENT_PAYLOADS = ["response", "serverFrame"] as const;
 
 export const CLIENT_TO_HOST_PAYLOADS = [
   "request",
@@ -229,17 +226,77 @@ function canBridgeUnaryFromSurface(
   return line.downgradeTargets.includes(theirVersion.major);
 }
 
+/** The highest major both dumped surfaces still install a line for. */
+function highestSharedSurfaceMajor(
+  mine: SurfaceMethod,
+  theirs: SurfaceMethod,
+): number | null {
+  let highest: number | null = null;
+  for (const key of Object.keys(mine.majors)) {
+    const major = Number(key);
+    if (!Number.isInteger(major)) continue;
+    if (theirs.majors[key] === undefined) continue;
+    if (highest === null || major > highest) highest = major;
+  }
+  return highest;
+}
+
+function highestInstalledMinor(minors: readonly number[]): number | null {
+  let highest: number | null = null;
+  for (const minor of minors) {
+    if (highest === null || minor > highest) highest = minor;
+  }
+  return highest;
+}
+
 /**
- * Mirror of `stream-compat.canBridgeStream`: same-major only, the newer side
- * must have the older minor installed; cross-major is handshake-fatal.
+ * Whether the two surfaces can actually talk on `major`.
+ *
+ * Each side selects its OWN newest installed minor on the shared line (see
+ * `capability-manifest.selectConnectionManifestForPeer`), so the older of the
+ * two is what gets spoken, and the newer side has to still install it.
+ * Identical in substance to the same-major branch below - deliberately, since
+ * that is the check the cross-major path was missing.
+ */
+function surfaceLinesBridgeOnMajor(
+  mine: SurfaceMethod,
+  theirs: SurfaceMethod,
+  major: number,
+): boolean {
+  const myLine = mine.majors[String(major)];
+  const theirLine = theirs.majors[String(major)];
+  if (myLine === undefined || theirLine === undefined) return false;
+  const myMinor = highestInstalledMinor(myLine.installedMinors);
+  const theirMinor = highestInstalledMinor(theirLine.installedMinors);
+  if (myMinor === null || theirMinor === null) return false;
+  // We are the older (or equal) side: additive-minors makes the frames we
+  // author parse against whatever they grew on top.
+  if (myMinor <= theirMinor) return true;
+  return myLine.installedMinors.includes(theirMinor);
+}
+
+/**
+ * Mirror of `stream-compat.canBridgeStream` over two dumped surfaces.
+ *
+ * A canonical-major skew bridges when both surfaces retain a shared major AND
+ * that shared LINE can still carry the minor the older side will speak.
+ * Retaining a major says nothing about which of its minors survive: keeping
+ * the `v1` line while deleting released `v1.0` used to pass here, and at
+ * runtime the released peer was then rejected at subscribe time. Unlike the
+ * live handshake - where a peer's minor on a non-canonical major is simply
+ * not in the manifest - both surfaces are dumped here, so this side CAN check
+ * it, and does.
  */
 function canBridgeStreamFromSurface(
   mine: SurfaceMethod,
   myVersion: SurfaceVersion,
   theirVersion: SurfaceVersion,
+  theirs: SurfaceMethod,
 ): boolean {
   if (myVersion.major !== theirVersion.major) {
-    return false;
+    const shared = highestSharedSurfaceMajor(mine, theirs);
+    if (shared === null) return false;
+    return surfaceLinesBridgeOnMajor(mine, theirs, shared);
   }
   if (myVersion.minor <= theirVersion.minor) {
     return true;
@@ -425,7 +482,6 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-
 /** True when this payload slot is host→client (unconditionally decoded by clients). */
 export function isHostToClientPayload(payload: string | null): boolean {
   return payload !== null && hostToClientPayloadNames.includes(payload);
@@ -534,7 +590,10 @@ export function matchMethodGlob(pattern: string, method: string): boolean {
   return new RegExp(regex).test(method);
 }
 
-export function matchVersionGlob(pattern: string, version: string | null): boolean {
+export function matchVersionGlob(
+  pattern: string,
+  version: string | null,
+): boolean {
   if (pattern === "*") return true;
   return pattern === version;
 }
@@ -781,8 +840,7 @@ function diffSchemasAtSameVersion(
           divergences.push({
             path: joinPath(path, `anyOf[${signature}]`),
             severity: "breaking",
-            detail:
-              `union variant added at a released version on a host→client slot - a released client strict-decodes this frame and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
+            detail: `union variant added at a released version on a host→client slot - a released client strict-decodes this frame and will fail; ${HOST_TO_CLIENT_ADDITION_HINT}`,
           });
         } else {
           divergences.push({
@@ -868,6 +926,7 @@ function checkFamily(
     side: SurfaceMethod,
     myVersion: SurfaceVersion,
     theirVersion: SurfaceVersion,
+    otherSide: SurfaceMethod,
   ) => boolean,
   isExcepted: (finding: Omit<CompatFinding, "excepted">) => boolean,
 ): CompatFinding[] {
@@ -919,7 +978,7 @@ function checkFamily(
 
     const mineCanonical = mineMethod.canonical;
     const theirsCanonical = theirsMethod.canonical;
-    if (!canBridge(mineMethod, mineCanonical, theirsCanonical)) {
+    if (!canBridge(mineMethod, mineCanonical, theirsCanonical, theirsMethod)) {
       pushFinding({
         family,
         method,
@@ -930,7 +989,7 @@ function checkFamily(
         detail: `this tree (canonical ${formatVersionValue(mineCanonical)}) cannot bridge ${theirsLabel}'s canonical ${formatVersionValue(theirsCanonical)}`,
       });
     }
-    if (!canBridge(theirsMethod, theirsCanonical, mineCanonical)) {
+    if (!canBridge(theirsMethod, theirsCanonical, mineCanonical, mineMethod)) {
       pushFinding({
         family,
         method,

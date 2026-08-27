@@ -141,7 +141,9 @@ const REPRESENTATIVE_MUX_FRAMES: readonly EncodeMuxFrameInput[] = [
 ];
 
 describe("AEAD associated-data invariant: no mux field is externalized without AD", () => {
-  it.each(REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const))(
+  it.each(
+    REPRESENTATIVE_MUX_FRAMES.map((frame, index) => [index, frame] as const),
+  )(
     "frame #%i: the transport wire frame's only plaintext bytes are [v, counter] — every mux field requires the session key to recover",
     async (_index, frame) => {
       const { initiator, responder } = await establishSessionPair();

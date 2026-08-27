@@ -25,7 +25,10 @@ export type ShellOutputAvailability =
   | {
       readonly kind: "bootstrapping";
       readonly phase:
-        "checking-host" | "starting-host" | "opening-stream" | "connecting";
+        | "checking-host"
+        | "starting-host"
+        | "opening-stream"
+        | "connecting";
     }
   | { readonly kind: "unsupported-host" }
   | { readonly kind: "unreachable-host"; readonly hostLabel: string }

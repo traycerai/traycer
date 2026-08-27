@@ -23,7 +23,9 @@ export class ReplayWindow {
 
   constructor(size: number) {
     if (!Number.isInteger(size) || size <= 0) {
-      throw new NoiseReplayError("replay window size must be a positive integer");
+      throw new NoiseReplayError(
+        "replay window size must be a positive integer",
+      );
     }
     this.size = BigInt(size);
     this.mask = (1n << this.size) - 1n;

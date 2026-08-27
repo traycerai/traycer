@@ -85,9 +85,7 @@ describe("terminal.list@2.3 lifecycleOwner", () => {
       sessions: [{ ...base, lifecycleOwner: "registry" }],
       homeCwd: "/Users/dev",
     });
-    expect(
-      upgradeResponseToVersion(listRegistry, V22, V23, response),
-    ).toEqual({
+    expect(upgradeResponseToVersion(listRegistry, V22, V23, response)).toEqual({
       sessions: [{ ...base, lifecycleOwner: "registry" }],
       homeCwd: "/Users/dev",
     });
