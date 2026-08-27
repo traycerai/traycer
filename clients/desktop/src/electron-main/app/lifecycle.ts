@@ -1,7 +1,6 @@
 import { app, powerMonitor, session } from "electron";
 import { join } from "node:path";
 import { DESKTOP_APP_USER_MODEL_ID } from "../../config";
-import { readInAppBrowserBetaEnabledSync } from "./browser-labs-state";
 import { log } from "./logger";
 
 /**
@@ -20,16 +19,8 @@ export function configureV8CodeCache(): void {
  * Trim Chromium features the app never uses. Reduces RSS and CPU for
  * subsystems that would otherwise sit idle. Must be called before
  * `app.whenReady()` - command-line switches are read at Chromium init.
- *
- * `use-mock-keychain` is critical on macOS: without it, Chromium's OSCrypt
- * initializes cookie encryption against the real Keychain at app launch,
- * which creates a "Traycer Safe Storage" item and prompts the user for
- * their login password. The renderer's auth tokens go through
- * `encrypt-storage` (AES in localStorage), not cookies, so plaintext
- * cookies on disk are an acceptable trade for skipping the prompt.
  */
 export function trimUnusedChromiumFeatures(): void {
-  const inAppBrowserBetaEnabled = readInAppBrowserBetaEnabledSync();
   app.commandLine.appendSwitch(
     "disable-features",
     [
@@ -41,11 +32,6 @@ export function trimUnusedChromiumFeatures(): void {
       "AutofillServerCommunication",
     ].join(","),
   );
-  const useMockKeychain = !inAppBrowserBetaEnabled;
-  if (useMockKeychain) {
-    app.commandLine.appendSwitch("use-mock-keychain");
-  }
-  log.info("[lifecycle] use-mock-keychain", { useMockKeychain });
   // Cap Chromium's HTTP/code disk cache. Without a cap it grows to a
   // percentage of free disk; this app serves its bundle from a single
   // `app://` origin, so 256 MB is generous and bounds the footprint.

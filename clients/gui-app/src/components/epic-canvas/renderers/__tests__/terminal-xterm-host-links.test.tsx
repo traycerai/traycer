@@ -266,7 +266,6 @@ describe("<TerminalXtermHost /> link handling", () => {
     xtermMocks.openTab.mockClear();
     useEpicCanvasStore.setState({ canvasByTabId: {}, tabsById: {} });
     useSettingsStore.setState({
-      inAppBrowserBetaEnabled: false,
       browserLinkDefaultMode: "in-app",
       terminalBrowserLinkOpenMode: "in-app",
       markdownBrowserLinkOpenMode: "in-app",
@@ -318,7 +317,6 @@ describe("<TerminalXtermHost /> link handling", () => {
   });
 
   it("opens plain-text URLs through the host and places its session pointer", async () => {
-    useSettingsStore.setState({ inAppBrowserBetaEnabled: true });
     renderHostWithBrowserRouting();
 
     await waitFor(() => {

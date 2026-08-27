@@ -10,7 +10,6 @@ import {
   parseReservedChordTokens,
 } from "./browser-view-ipc-payload";
 import type { IpcManagedWindow } from "./runner-ipc-bridge";
-import { setInAppBrowserBetaEnabledMarker } from "../app/browser-labs-state";
 import {
   BOUNDS_STREAM_LOG_INTERVAL_MS,
   BrowserViewManager,
@@ -321,15 +320,6 @@ export function registerBrowserViewIpc(
 
   bridge.handleInvoke(RunnerHostInvoke.browserViewCookieCryptoStateGet, () =>
     getBrowserCookieCryptoState(),
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserViewLabsStateSet,
-    (_event, payload) =>
-      setInAppBrowserBetaEnabledMarker(
-        browserViewIpcPayload.labsStateUpdate.parse(payload)
-          .inAppBrowserBetaEnabled,
-      ),
   );
 
   bridge.disposeFns.push(() => {

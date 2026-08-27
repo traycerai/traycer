@@ -233,7 +233,6 @@ export type BrowserCookieStorageBackend =
 export type BrowserCookieCryptoReason =
   | "os-backed"
   | "linux-basic-text"
-  | "mock-keychain"
   | "keychain-denied"
   | "encryption-unavailable"
   | "unresolved";
@@ -244,11 +243,6 @@ export interface BrowserCookieCryptoState {
   readonly reason: BrowserCookieCryptoReason;
   readonly storageBackend: BrowserCookieStorageBackend;
   readonly encryptionAvailable: boolean;
-  readonly mockKeychainEnabled: boolean;
-}
-
-export interface BrowserLabsStateUpdate {
-  readonly inAppBrowserBetaEnabled: boolean;
 }
 
 export type BrowserViewConsoleLevel =
@@ -338,7 +332,6 @@ export interface BrowserViewBridge {
     input: BrowserViewOverlayRelease,
   ): Promise<BrowserViewOverlayReleaseResult>;
   getCookieCryptoState(): Promise<BrowserCookieCryptoState>;
-  setLabsState(input: BrowserLabsStateUpdate): Promise<void>;
   /** Renderer confirms the replacement frame is painted before main parks the view. */
   readonly overlayPaintAck: (overlayId: string) => Promise<void>;
   capturePrimaryProfile(): Promise<BrowserPrimaryProfileCaptureResult>;

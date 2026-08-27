@@ -394,10 +394,8 @@ function createFakeBridge(): FakeBridge {
         reason: "os-backed",
         storageBackend: null,
         encryptionAvailable: true,
-        mockKeychainEnabled: false,
       }),
     ),
-    setLabsState: vi.fn(() => Promise.resolve()),
     capturePrimaryProfile: vi.fn(() =>
       Promise.resolve({
         status: "unavailable" as const,

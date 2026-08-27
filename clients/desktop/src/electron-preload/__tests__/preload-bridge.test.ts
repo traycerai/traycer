@@ -906,14 +906,13 @@ describe("preload new-capability wiring", () => {
     });
   });
 
-  it("forwards browser cookie crypto and labs state through ipcRenderer.invoke", async () => {
+  it("forwards browser cookie crypto state through ipcRenderer.invoke", async () => {
     const cryptoState = {
       mode: "degraded",
       persistence: "ephemeral",
-      reason: "mock-keychain",
+      reason: "keychain-denied",
       storageBackend: null,
       encryptionAvailable: false,
-      mockKeychainEnabled: true,
     };
     const invokeFn = vi.fn(async (channel: string) => {
       if (channel === RunnerHostInvoke.browserViewCookieCryptoStateGet) {
@@ -932,16 +931,11 @@ describe("preload new-capability wiring", () => {
     await expect(bridge.browserView.getCookieCryptoState()).resolves.toEqual(
       cryptoState,
     );
-    await bridge.browserView.setLabsState({ inAppBrowserBetaEnabled: true });
 
     expect(invokeFn).toHaveBeenCalledWith(
       RunnerHostInvoke.browserViewCookieCryptoStateGet,
     );
-    expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.browserViewLabsStateSet,
-      { inAppBrowserBetaEnabled: true },
-    );
-    expect(invokeFn).toHaveBeenCalledTimes(2);
+    expect(invokeFn).toHaveBeenCalledTimes(1);
   });
 
   it("exposes capturePrimaryProfile as a zero-arg invoke (ticket 06)", async () => {

@@ -871,7 +871,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.browserViewGetDebugSnapshot,
         RunnerHostInvoke.browserViewPrimaryProfileCapture,
         RunnerHostInvoke.browserViewCookieCryptoStateGet,
-        RunnerHostInvoke.browserViewLabsStateSet,
         RunnerHostInvoke.pipCaptureStart,
         RunnerHostInvoke.pipCaptureStop,
         // Selection authority (D16 / P1.1), plus P1.3's fleet-refresh edge.

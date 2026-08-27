@@ -45,11 +45,6 @@ const electronState = vi.hoisted(() => {
 });
 
 vi.mock("electron", () => ({
-  app: {
-    commandLine: {
-      hasSwitch: () => false,
-    },
-  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
@@ -297,7 +292,6 @@ function realCookieCryptoState() {
     reason: "os-backed" as const,
     storageBackend: null,
     encryptionAvailable: true,
-    mockKeychainEnabled: false,
   };
 }
 
@@ -305,10 +299,9 @@ function degradedCookieCryptoState() {
   return {
     mode: "degraded" as const,
     persistence: "ephemeral" as const,
-    reason: "mock-keychain" as const,
+    reason: "keychain-denied" as const,
     storageBackend: null,
     encryptionAvailable: false,
-    mockKeychainEnabled: true,
   };
 }
 

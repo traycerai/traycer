@@ -35,7 +35,6 @@ import type {
   BrowserCookieCryptoState,
   BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
-import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface BrowserPictureInPictureControl {
   readonly disabled: boolean;
@@ -375,9 +374,6 @@ function BrowserSiteInfoButton(props: {
   readonly cookieCryptoState: BrowserCookieCryptoState | null;
 }) {
   const isWebOrigin = isWebOriginUrl(props.url);
-  const inAppBrowserBetaEnabled = useSettingsStore(
-    (state) => state.inAppBrowserBetaEnabled,
-  );
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -403,10 +399,7 @@ function BrowserSiteInfoButton(props: {
         {props.cookieCryptoState === null ? null : (
           <BrowserSiteInfoRow
             title={cookieCryptoHeadline(props.cookieCryptoState)}
-            detail={cookieCryptoDetail(
-              props.cookieCryptoState,
-              inAppBrowserBetaEnabled,
-            )}
+            detail={cookieCryptoDetail(props.cookieCryptoState)}
           />
         )}
       </PopoverContent>
@@ -444,12 +437,9 @@ function cookieCryptoHeadline(state: BrowserCookieCryptoState): string {
     : "Logins saved with basic protection";
 }
 
-function cookieCryptoDetail(
-  state: BrowserCookieCryptoState,
-  inAppBrowserBetaEnabled: boolean,
-): string {
+function cookieCryptoDetail(state: BrowserCookieCryptoState): string {
   if (state.mode === "degraded" || state.persistence === "ephemeral") {
-    return browserCookieDegradedMessage(state, inAppBrowserBetaEnabled);
+    return browserCookieDegradedMessage(state);
   }
   if (state.mode === "real") {
     return "Cookies and saved logins on this page are encrypted by your operating system.";

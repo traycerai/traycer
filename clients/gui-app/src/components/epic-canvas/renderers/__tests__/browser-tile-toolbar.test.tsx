@@ -18,7 +18,6 @@ const REAL_COOKIE_STATE: BrowserCookieCryptoState = {
   reason: "os-backed",
   storageBackend: null,
   encryptionAvailable: true,
-  mockKeychainEnabled: false,
 };
 
 const ANNOTATION: BrowserAnnotationSessionController = {

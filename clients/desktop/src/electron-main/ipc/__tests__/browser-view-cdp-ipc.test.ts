@@ -58,11 +58,6 @@ vi.mock("electron", () => {
         on: () => undefined,
       }),
     },
-    app: {
-      commandLine: {
-        hasSwitch: () => false,
-      },
-    },
     safeStorage: {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "unknown",
@@ -76,10 +71,6 @@ vi.mock("../../app/logger", () => ({
     warn: vi.fn(),
   },
   describeLogError: (err: unknown) => String(err),
-}));
-
-vi.mock("../../app/browser-labs-state", () => ({
-  setInAppBrowserBetaEnabledMarker: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../app/cert-trust", () => ({
@@ -150,7 +141,6 @@ vi.mock("../../browser-view/storage/browser-cookie-crypto", () => ({
       reason: "os-backed",
       storageBackend: null,
       encryptionAvailable: true,
-      mockKeychainEnabled: false,
     }),
   ),
 }));

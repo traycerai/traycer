@@ -41,10 +41,8 @@ export function routeBrowserLink(
 ): BrowserLinkOpenResult {
   const parsed = parseHttpUrl(args.url.trim());
   const settings = useSettingsStore.getState();
-  const labsEnabled = settings.inAppBrowserBetaEnabled;
   if (
     args.kind === "terminal" &&
-    labsEnabled &&
     parsed !== null &&
     looksLikeDevServer(parsed)
   ) {
@@ -57,7 +55,7 @@ export function routeBrowserLink(
   }
   const webUrl = parsed.href;
 
-  if (!labsEnabled || args.source === null) {
+  if (args.source === null) {
     void args.runnerHost.openExternalLink(webUrl);
     return "external";
   }

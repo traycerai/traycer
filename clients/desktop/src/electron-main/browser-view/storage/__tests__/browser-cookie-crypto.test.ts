@@ -2,11 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveBrowserCookieCryptoStateFromInputs } from "../browser-cookie-crypto";
 
 vi.mock("electron", () => ({
-  app: {
-    commandLine: {
-      hasSwitch: () => false,
-    },
-  },
   safeStorage: {
     isEncryptionAvailable: () => true,
     getSelectedStorageBackend: () => "unknown",
@@ -21,28 +16,12 @@ vi.mock("../../app/logger", () => ({
 }));
 
 describe("browser cookie crypto mode", () => {
-  it("degrades when mock-keychain is active", () => {
-    expect(
-      resolveBrowserCookieCryptoStateFromInputs({
-        platform: "darwin",
-        encryptionAvailable: true,
-        selectedStorageBackend: null,
-        mockKeychainEnabled: true,
-      }),
-    ).toMatchObject({
-      mode: "degraded",
-      persistence: "ephemeral",
-      reason: "mock-keychain",
-    });
-  });
-
   it("degrades macOS keychain denial to ephemeral", () => {
     expect(
       resolveBrowserCookieCryptoStateFromInputs({
         platform: "darwin",
         encryptionAvailable: false,
         selectedStorageBackend: null,
-        mockKeychainEnabled: false,
       }),
     ).toMatchObject({
       mode: "degraded",
@@ -57,7 +36,6 @@ describe("browser cookie crypto mode", () => {
         platform: "linux",
         encryptionAvailable: true,
         selectedStorageBackend: "basic_text",
-        mockKeychainEnabled: false,
       }),
     ).toMatchObject({
       mode: "basic",
@@ -72,7 +50,6 @@ describe("browser cookie crypto mode", () => {
         platform: "win32",
         encryptionAvailable: true,
         selectedStorageBackend: null,
-        mockKeychainEnabled: false,
       }),
     ).toMatchObject({
       mode: "real",

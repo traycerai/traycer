@@ -21,8 +21,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { useRunnerHost } from "@/providers/use-runner-host";
-import { useBrowserCookieCryptoState } from "@/lib/browser-view/use-browser-cookie-crypto-state";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
@@ -94,9 +92,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 }
 
 export function GeneralSettingsPanel() {
-  const runnerHost = useRunnerHost();
-  const browserView = runnerHost.browserView;
-  const browserCookieCryptoState = useBrowserCookieCryptoState(browserView);
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
   const migrationState = useMigrationRunStore(
@@ -131,12 +126,6 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
-  const inAppBrowserBetaEnabled = useSettingsStore(
-    (s) => s.inAppBrowserBetaEnabled,
-  );
-  const setInAppBrowserBetaEnabled = useSettingsStore(
-    (s) => s.setInAppBrowserBetaEnabled,
-  );
   const browserLinkDefaultMode = useSettingsStore(
     (s) => s.browserLinkDefaultMode,
   );
@@ -235,36 +224,17 @@ export function GeneralSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Browser (beta)"
+          title="Browser"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="In-app browser (beta)"
-            description="Enable browser tiles and route web links into Traycer by default."
-            risk="When you attach a tab open in the in-app browser, the agent can run code on that page - it can do or read anything you could there, and act as you on it. Because every in-app browser tab shares one logged-in session, this reaches further than the tab you attached: the agent can navigate to any other site you're logged into in Traycer's browser and act there too. The agent gets this access only when you explicitly attach a tab - never on its own, and never to a tab you haven't attached. Nothing in Traycer stops this, and it isn't a rare case - reading page content is how the agent works, every time. It never applies to the agent's own browser, which holds none of your logins."
-            hint={
-              inAppBrowserBetaEnabled &&
-              browserCookieCryptoState?.reason === "mock-keychain"
-                ? "Restart Traycer to enable persistent logins"
-                : undefined
-            }
-            control={
-              <Switch
-                checked={inAppBrowserBetaEnabled}
-                onCheckedChange={setInAppBrowserBetaEnabled}
-                aria-label="In-app browser (beta)"
-              />
-            }
-          />
-          <SettingsRow
             label="Web link default"
-            description="Choose where http and https links open while the in-app browser beta is enabled."
+            description="Choose where http and https links open."
             control={
               <BrowserLinkDefaultModeSelect
                 value={browserLinkDefaultMode}
-                disabled={!inAppBrowserBetaEnabled}
                 onValueChange={setBrowserLinkDefaultMode}
               />
             }
@@ -277,7 +247,6 @@ export function GeneralSettingsPanel() {
                 control={
                   <BrowserLinkOpenModeSelect
                     value={terminalBrowserLinkOpenMode}
-                    disabled={!inAppBrowserBetaEnabled}
                     onValueChange={setTerminalBrowserLinkOpenMode}
                   />
                 }
@@ -288,7 +257,6 @@ export function GeneralSettingsPanel() {
                 control={
                   <BrowserLinkOpenModeSelect
                     value={markdownBrowserLinkOpenMode}
-                    disabled={!inAppBrowserBetaEnabled}
                     onValueChange={setMarkdownBrowserLinkOpenMode}
                   />
                 }
@@ -461,7 +429,6 @@ export function GeneralSettingsPanel() {
 
 interface BrowserLinkDefaultModeSelectProps {
   readonly value: BrowserLinkDefaultMode;
-  readonly disabled: boolean;
   readonly onValueChange: (value: BrowserLinkDefaultMode) => void;
 }
 
@@ -471,7 +438,6 @@ function BrowserLinkDefaultModeSelect(
   return (
     <Select
       value={props.value}
-      disabled={props.disabled}
       onValueChange={(value) => {
         if (isBrowserLinkDefaultMode(value)) props.onValueChange(value);
       }}
@@ -498,7 +464,6 @@ function BrowserLinkDefaultModeSelect(
 
 interface BrowserLinkOpenModeSelectProps {
   readonly value: BrowserLinkOpenMode;
-  readonly disabled: boolean;
   readonly onValueChange: (value: BrowserLinkOpenMode) => void;
 }
 
@@ -537,7 +502,6 @@ function BrowserLinkOpenModeSelect(props: BrowserLinkOpenModeSelectProps) {
   return (
     <Select
       value={props.value}
-      disabled={props.disabled}
       onValueChange={(value) => {
         if (isBrowserLinkOpenMode(value)) props.onValueChange(value);
       }}
