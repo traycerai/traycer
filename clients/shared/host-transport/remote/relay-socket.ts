@@ -12,7 +12,6 @@ import {
   RELAY_PING_INTERVAL_MS,
   RELAY_PING_TICK_MS,
   RELAY_PONG_TIMEOUT_MS,
-  RELAY_WAKE_PROBE_TIMEOUT_MS,
 } from "./config";
 
 /**
@@ -37,6 +36,15 @@ import {
 // Kept in lockstep with workers/relay-do/src/config.ts (relay-owned constants).
 const KEEPALIVE_PING = "relay-ping";
 const KEEPALIVE_PONG = "relay-pong";
+
+/**
+ * The close code+reason a failed wake probe reports, exported so the session
+ * above can recognize this loss BY IDENTITY (structured fields on the close
+ * event, not a substring of the composed log line) when deciding whether a
+ * wake-probe verdict earns an immediate redial.
+ */
+export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE = 4006;
+export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON = "relay-wake-probe-timeout";
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
@@ -162,10 +170,15 @@ export class RelaySocket {
    * So: run the scheduled check off-schedule (a socket already past
    * `RELAY_PONG_TIMEOUT_MS` fails immediately, exactly as the tick would), and
    * then hold the ping that check just sent to a much shorter
-   * `RELAY_WAKE_PROBE_TIMEOUT_MS` deadline. The 60s allowance is calibrated for
+   * `probeTimeoutMs` deadline. The 60s allowance is calibrated for
    * a link that is merely slow; a wake is the one moment we have positive
    * reason to suspect the socket is dead, and waiting out a minute to find out
-   * is most of what "the app was unusable after switching away" means.
+   * is most of what "the app was unusable after switching away" means. The
+   * deadline is the CALLER's because the caller holds the evidence that sizes
+   * it: a desktop wake passes `RELAY_WAKE_PROBE_TIMEOUT_MS` (the socket
+   * usually survived, be generous), a mobile resume after a measured brief
+   * background passes `RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS` (the socket
+   * is probably dead, verdict fast).
    *
    * An ARMED probe timer is the whole state, and it means exactly "a ping went
    * out and nothing has answered since". Any inbound frame disarms it; the
@@ -184,12 +197,14 @@ export class RelaySocket {
    * {@link fail} path. A socket that has not opened, or is closed, has nothing
    * to probe and is a no-op.
    */
-  pokeKeepalive(): void {
+  pokeKeepalive(probeTimeoutMs: number): void {
     // The outstanding-probe check comes FIRST, before anything is sent. A probe
     // already in flight is already asking this exact question, so a second poke
     // has nothing to learn and every extra ping is pure wire traffic - and
     // pokes do arrive in bursts, one per subscriber on a single visibility
-    // edge.
+    // edge. (That also means a burst's FIRST poke owns the deadline: a later
+    // poke with a different timeout joins the in-flight probe rather than
+    // re-arming it.)
     if (this.closed || !this.opened || this.probeTimer !== null) {
       return;
     }
@@ -204,8 +219,11 @@ export class RelaySocket {
       }
       // Still armed at the deadline, so nothing answered the ping this probe
       // sent - the socket is open in name only.
-      this.fail(4006, "relay-wake-probe-timeout");
-    }, RELAY_WAKE_PROBE_TIMEOUT_MS);
+      this.fail(
+        RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE,
+        RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
+      );
+    }, probeTimeoutMs);
   }
 
   close(code: number, reason: string): void {

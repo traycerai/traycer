@@ -1,4 +1,6 @@
+import { App } from "@capacitor/app";
 import { AppLauncher } from "@capacitor/app-launcher";
+import { Network, type ConnectionStatus } from "@capacitor/network";
 import { SecureStoragePlugin } from "capacitor-secure-storage-plugin";
 import {
   applySlowDown,
@@ -81,6 +83,7 @@ import type {
   StoredAuthTokens,
   StoredCredentials,
   StoredCredentialsIdentity,
+  SystemResumeEvent,
   TokenRotateResult,
   TokenStoreChange,
   TrayEpic,
@@ -230,6 +233,9 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly pushPermission: IPushPermissionHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   private readonly systemResume = new MobileSystemResume();
+  private readonly networkPath = new MobileNetworkPathWatcher(
+    this.systemResume,
+  );
   /**
    * The in-window selection authority (the "shell with no main process"
    * binding the contract names): the SAME engine desktop mounts in Electron
@@ -593,13 +599,14 @@ export class MobileRunnerHost implements IRunnerHost {
     // a parsed callback URL. The `traycer://auth/callback` deep link the
     // approval page fires exists only to make the OS switch back to this app -
     // it carries no payload (see `IRunnerHost.onAuthCallback`), and once the
-    // WebView resumes, its `visibilitychange` edge is the same "the browser
-    // returned" fact. Resume, and not the App plugin's `appUrlOpen`, because
+    // WebView resumes, the shell's foreground edge (DOM visibility or native
+    // app-state, whichever reports first) is the same "the browser returned"
+    // fact. Resume, and not the App plugin's `appUrlOpen`, because
     // resume ALSO covers the manual return - the user switching back by hand
     // after the manual-code page, where no deep link is fired at all. (The
-    // App plugin does exist in this shell now, for the link-login deep link
-    // that carries a real payload; see `link-login-deep-links.ts`. It has
-    // nothing to add here, where the URL is payload-free by design.)
+    // App plugin's `appUrlOpen` still has nothing to add here, where the URL
+    // is payload-free by design; see `link-login-deep-links.ts` for the deep
+    // link that does carry one.)
     // A resume with no in-flight attempt is a no-op in the consumer
     // (`AuthService.handleReturnSignal` only collapses an active poll wait).
     return this.systemResume.subscribe(handler);
@@ -612,8 +619,12 @@ export class MobileRunnerHost implements IRunnerHost {
     return disposable();
   }
 
-  onSystemResumed(handler: () => void): Disposable {
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     return this.systemResume.subscribe(handler);
+  }
+
+  onNetworkPathChanged(handler: () => void): Disposable {
+    return this.networkPath.subscribe(handler);
   }
 
   async requestHostRespawn(): Promise<HostRestartRequestResult> {
@@ -1167,55 +1178,177 @@ class MobilePushPermissionHost implements IPushPermissionHost {
  * coming back to the foreground. The OS suspends the WebView on every app
  * switch, which kills its sockets and freezes its timers, so the shared wake
  * consumers (host-stream re-dial, the auth refresh scheduler) need exactly the
- * signal a desktop gets from `powerMonitor` and a phone gets from
- * `visibilitychange`. Without it every wake consumer falls back to the
- * cross-platform `window 'online'` event, which does NOT fire on an app switch:
- * the network never went anywhere, only this runtime did.
+ * signal a desktop gets from `powerMonitor`. Without it every wake consumer
+ * falls back to the cross-platform `window 'online'` event, which does NOT
+ * fire on an app switch: the network never went anywhere, only this runtime
+ * did.
  *
- * `visibilitychange` and not the App plugin's `appStateChange`: WKWebView and
- * the Android WebView both raise it, so the resume edge costs nothing on top
- * of whatever plugins the shell already carries, and it also fires for
- * in-WebView backgrounding the native app-state event does not describe.
+ * TWO sources feed one edge: DOM `visibilitychange` AND the App plugin's
+ * `appStateChange`. Neither subsumes the other. `visibilitychange` also fires
+ * for in-WebView backgrounding the native app-state event does not describe -
+ * but it is raised by the suspended WebView itself, so an edge can be
+ * delivered late or (observed in practice) not at all around a suspend, which
+ * left every wake consumer blind until a keepalive tick noticed the dead
+ * socket. `appStateChange` is the OS's own statement, delivered through the
+ * native bridge - and it can LAG the WebView's edge in either direction, so
+ * it supplements rather than replaces. Both fire on an ordinary app switch;
+ * the shared background/foreground state machine below is the dedupe (the
+ * second source to report an edge finds the state already transitioned and
+ * does nothing), so subscribers see one resume per real suspend.
+ *
+ * Backgrounding STAMPS a wall-clock time, and the resume event carries the
+ * measured dwell (`SystemResumeEvent.backgroundedForMs`). That number is what
+ * lets the wake policy distinguish a quick app switch (the socket may have
+ * survived - probe it fast) from a long one (iOS has torn the socket down -
+ * redial without asking). A resume whose background edge was never seen
+ * reports `null` and keeps the conservative default.
  *
  * The shell's plugin set is kept SMALL rather than fixed at a number, and each
- * member earns its place by being the only way to reach an OS capability: core,
- * keyboard, push-notifications, app-launcher, secure-storage, native-settings,
- * device, barcode-scanner, and app. The last one is the newest and the least
- * obvious - `@capacitor/app` is there because a URL the OS opens (a QR scanned
- * by the system camera) has no other route into JS: Capacitor's iOS bridge
- * posts the launch/open URL to that plugin and nothing else listens, so
- * without it the app launches and the code is silently dropped. See
- * `link-login-deep-links.ts`. Its resume/state events are deliberately NOT
- * used - this class stays the resume source.
+ * member earns its place by being the only way to reach an OS capability:
+ * core, keyboard, push-notifications, app-launcher, secure-storage,
+ * native-settings, device, barcode-scanner, network, and app. `@capacitor/app`
+ * first earned its place because a URL the OS opens (a QR scanned by the
+ * system camera) has no other route into JS (see `link-login-deep-links.ts`);
+ * its app-state event is the second capability it is the only route to.
  *
- * Fires ONLY on the hidden -> visible edge. That edge filter is also the whole
- * dedupe, deliberately with no debounce timer: the event is edge-driven (a
- * repeat needs a real hide in between, which is a real suspend), and every
- * consumer downstream is idempotent and rate-limits itself - the remote
- * session's `wake` can only pull one redial forward per armed backoff, and the
- * auth scheduler coalesces on its own. A timer here would only add latency to
- * the recovery this exists to make fast.
+ * Fires ONLY on the background -> foreground edge, deliberately with no
+ * debounce timer: the edge filter is the dedupe (a repeat needs a real
+ * background in between, which is a real suspend), and every consumer
+ * downstream is idempotent and rate-limits itself - the remote session's
+ * `wake` can only pull one redial forward per armed backoff, and the auth
+ * scheduler coalesces on its own. A timer here would only add latency to the
+ * recovery this exists to make fast.
  */
 class MobileSystemResume {
-  private readonly handlers = new Set<() => void>();
-  private hidden = false;
+  private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
+  private background = false;
+  private backgroundEnteredAt: number | null = null;
   private listening = false;
   private readonly onVisibilityChange = (): void => {
-    const hidden = document.visibilityState === "hidden";
-    const resumed = this.hidden && !hidden;
-    this.hidden = hidden;
-    if (!resumed) {
+    if (document.visibilityState === "hidden") {
+      this.noteBackgrounded();
+    } else {
+      this.noteForegrounded();
+    }
+  };
+
+  /** Whether the app is currently backgrounded, per the merged two-source state. */
+  isBackgrounded(): boolean {
+    return this.background;
+  }
+
+  subscribe(handler: (event: SystemResumeEvent) => void): Disposable {
+    this.ensureTracking();
+    this.handlers.add(handler);
+    return {
+      dispose: () => {
+        this.handlers.delete(handler);
+      },
+    };
+  }
+
+  private noteBackgrounded(): void {
+    if (this.background) {
       return;
     }
+    this.background = true;
+    this.backgroundEnteredAt = Date.now();
+  }
+
+  private noteForegrounded(): void {
+    if (!this.background) {
+      // The dedupe: whichever source reported this foreground first already
+      // consumed the edge (or the app was never seen backgrounded at all -
+      // e.g. the native active event on a cold start).
+      return;
+    }
+    this.background = false;
+    const enteredAt = this.backgroundEnteredAt;
+    this.backgroundEnteredAt = null;
+    const event: SystemResumeEvent = {
+      backgroundedForMs:
+        enteredAt === null ? null : Math.max(0, Date.now() - enteredAt),
+    };
     for (const handler of Array.from(this.handlers)) {
       try {
-        handler();
+        handler(event);
       } catch (error) {
         // One bad subscriber must not cost the others their wake.
         console.error("[mobile] system-resume handler threw", error);
       }
     }
-  };
+  }
+
+  /**
+   * Installs both listeners on first subscription and keeps them: this object
+   * lives as long as the shell, and the background/foreground state has to
+   * stay tracked across a window with no subscribers or the next resume edge
+   * is read against a stale baseline. Seeding from the CURRENT DOM state here
+   * (rather than at construction) is what keeps a cold start from counting as
+   * a resume - a shell that boots hidden has not woken up yet, and one that
+   * boots visible has nothing to resume from. A boot-time seed to `hidden`
+   * carries no entry stamp, so a resume measured against it honestly reports
+   * `null` rather than counting time before the listener existed.
+   *
+   * Public (not folded into `subscribe`) because the network watcher reads
+   * `isBackgrounded()` without ever subscribing to resumes, and that read is
+   * only meaningful while the state is actually being tracked - it must be
+   * able to start the tracking itself rather than depend on some unrelated
+   * consumer having subscribed first.
+   */
+  ensureTracking(): void {
+    if (this.listening || typeof document === "undefined") {
+      return;
+    }
+    this.listening = true;
+    this.background = document.visibilityState === "hidden";
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    // The native edge arrives through the plugin bridge; registration is
+    // async and can reject where no bridge exists (the dev web entry). The
+    // DOM listener above is already installed either way, so a shell without
+    // the plugin degrades to exactly the old single-source behavior.
+    void App.addListener("appStateChange", (state) => {
+      if (state.isActive) {
+        this.noteForegrounded();
+      } else {
+        this.noteBackgrounded();
+      }
+    }).catch((error: unknown) => {
+      console.warn("[mobile] appStateChange listener unavailable", error);
+    });
+  }
+}
+
+/**
+ * The phone's `IRunnerHost.onNetworkPathChanged` source: Capacitor
+ * `networkStatusChange`, filtered down to the two transitions under which an
+ * existing socket is dead (or about to behave like it) with no DOM `online`
+ * event and no resume edge to notice:
+ *
+ *  - connectivity REGAINED (`connected` false -> true);
+ *  - the interface TYPE changing while staying connected (Wi-Fi -> cellular).
+ *    The OS migrates the route out from under the socket and the enum never
+ *    passes through "offline", so every other trigger stays silent while
+ *    sends quietly die.
+ *
+ * Suppressed while the app is backgrounded: a backgrounded phone hopping
+ * networks must not reopen a relay splice nobody is looking at, and the
+ * resume edge owns recovery on the way back (its duration gate already
+ * forces a redial after any background long enough for a network hop to be
+ * likely). The tracked status still updates while backgrounded, so a change
+ * that happened mid-background is not replayed as a stale edge on the next
+ * foreground change.
+ *
+ * The `null` -> first-status transition never fires: the seed read and the
+ * first listener callback describe the network the app booted on, not a
+ * change.
+ */
+class MobileNetworkPathWatcher {
+  private readonly handlers = new Set<() => void>();
+  private lastStatus: ConnectionStatus | null = null;
+  private listening = false;
+
+  constructor(private readonly systemResume: MobileSystemResume) {}
 
   subscribe(handler: () => void): Disposable {
     this.ensureListening();
@@ -1227,21 +1360,59 @@ class MobileSystemResume {
     };
   }
 
-  /**
-   * Installs the DOM listener on first subscription and keeps it: this object
-   * lives as long as the shell, and the visible/hidden state has to stay
-   * tracked across a window with no subscribers or the next resume edge is
-   * read against a stale baseline. Seeding from the CURRENT state here (rather
-   * than at construction) is what keeps a cold start from counting as a
-   * resume - a shell that boots hidden has not woken up yet.
-   */
+  private noteStatus(status: ConnectionStatus): void {
+    const previous = this.lastStatus;
+    this.lastStatus = status;
+    if (previous === null) {
+      return;
+    }
+    const regained = !previous.connected && status.connected;
+    const pathMoved =
+      previous.connected &&
+      status.connected &&
+      previous.connectionType !== status.connectionType;
+    if (!regained && !pathMoved) {
+      return;
+    }
+    if (this.systemResume.isBackgrounded()) {
+      return;
+    }
+    for (const handler of Array.from(this.handlers)) {
+      try {
+        handler();
+      } catch (error) {
+        // One bad subscriber must not cost the others the signal.
+        console.error("[mobile] network-path handler threw", error);
+      }
+    }
+  }
+
   private ensureListening(): void {
-    if (this.listening || typeof document === "undefined") {
+    if (this.listening) {
       return;
     }
     this.listening = true;
-    this.hidden = document.visibilityState === "hidden";
-    document.addEventListener("visibilitychange", this.onVisibilityChange);
+    // The backgrounded gate below reads the resume tracker's state; make sure
+    // that state is live even when no resume consumer ever subscribed.
+    this.systemResume.ensureTracking();
+    // Seed from the current status so the first CHANGE has a real baseline;
+    // both calls ride the plugin bridge and can reject where none exists (the
+    // dev web entry), in which case this source simply never fires - the
+    // no-op degradation the IRunnerHost contract names.
+    void Network.getStatus()
+      .then((status) => {
+        if (this.lastStatus === null) {
+          this.lastStatus = status;
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn("[mobile] network status read unavailable", error);
+      });
+    void Network.addListener("networkStatusChange", (status) => {
+      this.noteStatus(status);
+    }).catch((error: unknown) => {
+      console.warn("[mobile] networkStatusChange listener unavailable", error);
+    });
   }
 }
 

@@ -61,6 +61,7 @@ function fakeSession(): FakeSession {
     }),
     notifyBearerRotated: vi.fn(),
     wake: vi.fn(),
+    forceReconnect: vi.fn(),
     onClosed: (listener) => {
       closedListeners.add(listener);
       return () => {

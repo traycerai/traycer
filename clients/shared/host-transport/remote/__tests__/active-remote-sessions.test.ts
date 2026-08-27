@@ -72,6 +72,9 @@ function fakeSession(): FakeSession {
     wake: (reason) => {
       wakeReasons.push(reason);
     },
+    forceReconnect: (reason) => {
+      wakeReasons.push(`forced:${reason}`);
+    },
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
@@ -931,10 +934,26 @@ describe("wake ownership", () => {
     const session = fakeSession();
     const view = acquireRemoteSession(identity, () => session);
 
-    view.wake("app-resumed");
+    view.wake("app-resumed", null);
 
     expect(session.wakeReasons).toEqual(["app-resumed"]);
     view.close();
+  });
+
+  it("forwards a forced reconnect while held, and refuses it once released", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+
+    view.forceReconnect("user-retry");
+    expect(session.wakeReasons).toEqual(["forced:user-retry"]);
+
+    view.close();
+    // A forced redial is strictly MORE session activity than an accelerated
+    // one, so the stale-callback guard binds it at least as hard.
+    view.forceReconnect("user-retry");
+    expect(session.wakeReasons).toEqual(["forced:user-retry"]);
+    expireLinger();
   });
 
   it("ignores a wake from a view whose reference was already released", () => {
@@ -946,7 +965,7 @@ describe("wake ownership", () => {
     // The stale-callback case: a discarded render or a disposed binding still
     // holding the view. Honouring it would hurry a session this consumer no
     // longer holds - possibly one sitting at refCount 0 with nobody waiting.
-    view.wake("app-resumed");
+    view.wake("app-resumed", null);
 
     expect(session.wakeReasons).toEqual([]);
     expireLinger();
@@ -964,7 +983,7 @@ describe("wake ownership", () => {
     };
     const successor = acquireRemoteSession(rotated, fakeSession);
 
-    view.wake("app-resumed");
+    view.wake("app-resumed", null);
 
     // Its key embeds a public key the host has moved off, so it can never
     // re-handshake; hurrying it only spends grants against a dead identity.
@@ -980,7 +999,7 @@ describe("wake ownership", () => {
     const view = acquireRemoteSession(identity, () => session);
     session.closedUnderneath = true;
 
-    view.wake("app-resumed");
+    view.wake("app-resumed", null);
 
     expect(session.wakeReasons).toEqual([]);
     view.close();
@@ -1000,13 +1019,33 @@ describe("wakeHeldRemoteSessions", () => {
     // of React consumers share one physical session safely.
     const firstAgain = acquireRemoteSession(firstIdentity, () => first);
 
-    wakeHeldRemoteSessions("app-resumed");
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
 
     expect(first.wakeReasons).toEqual(["app-resumed"]);
     expect(second.wakeReasons).toEqual(["app-resumed"]);
     firstView.close();
     firstAgain.close();
     secondView.close();
+    expireLinger();
+  });
+
+  it("routes a forced sweep to forceReconnect instead of the probe-first wake", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    const view = acquireRemoteSession(identity, () => session);
+
+    // The long-background resume: the caller's verdict is that no socket
+    // survived, so every held session drops and redials rather than probing.
+    wakeHeldRemoteSessions("wake-resume", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    expect(session.wakeReasons).toEqual(["forced:wake-resume"]);
+    view.close();
     expireLinger();
   });
 
@@ -1019,7 +1058,10 @@ describe("wakeHeldRemoteSessions", () => {
     // Still cached and still connected, but nobody holds it. Keep-warm exists
     // so a prompt re-acquire is free, not so an abandoned session redials on
     // wakes no consumer asked for - the adopter brings its own wake.
-    wakeHeldRemoteSessions("app-resumed");
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
 
     expect(session.wakeReasons).toEqual([]);
     expireLinger();
@@ -1041,7 +1083,10 @@ describe("wakeHeldRemoteSessions", () => {
     const closedView = acquireRemoteSession(closedIdentity, () => closed);
     closed.closedUnderneath = true;
 
-    wakeHeldRemoteSessions("app-resumed");
+    wakeHeldRemoteSessions("app-resumed", {
+      probeFirst: true,
+      wakeProbe: null,
+    });
 
     expect(superseded.wakeReasons).toEqual([]);
     expect(closed.wakeReasons).toEqual([]);

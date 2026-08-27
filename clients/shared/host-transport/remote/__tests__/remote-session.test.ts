@@ -351,6 +351,12 @@ class FakeRelayHost {
   });
   /** Count of `relay-ping` keepalive frames received from the client. */
   pingCount = 0;
+  /**
+   * When false, pings are counted but never answered - the half-open-socket
+   * shape an OS suspend leaves behind (sends go out, nothing comes back),
+   * which is what the wake-probe tests need the wire to look like.
+   */
+  answerPings = true;
 
   get hostStaticPublicKey(): Uint8Array {
     return this.hostKeys.publicKey;
@@ -560,7 +566,9 @@ class FakeRelayHost {
     if (typeof data === "string") {
       if (data === "relay-ping") {
         this.pingCount += 1;
-        connection.socket.onmessage?.({ type: "text", data: "relay-pong" });
+        if (this.answerPings) {
+          connection.socket.onmessage?.({ type: "text", data: "relay-pong" });
+        }
       }
       // `reauth` control frames need no ack for these tests.
       return;
@@ -2691,7 +2699,7 @@ describe("RemoteSession wake", () => {
       // A beat for the 4th fatal's async round trip to land and the 8s
       // backoff to actually be armed before waking it.
       await new Promise((resolve) => setTimeout(resolve, 300));
-      session.wake("app-resumed");
+      session.wake("app-resumed", null);
       // The collapsed redial is a sub-second draw, so a budget well under
       // the armed tier's JITTERED minimum (8s halved, not 8s) is what makes
       // this an honest check rather than a race with the schedule.
@@ -2720,7 +2728,7 @@ describe("RemoteSession wake", () => {
       try {
         session.start();
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
-        session.wake("app-resumed");
+        session.wake("app-resumed", null);
         // Shortly after the wake, no new dial has begun: the draw is bounded
         // below by half the initial backoff, so an immediate dial is not a
         // thing this can produce however loudly it is woken.
@@ -2757,7 +2765,7 @@ describe("RemoteSession wake", () => {
       // carries ONE collapse, spent by the first of these; the rest find it
       // already spent and draw nothing, so no wake can outbid another.
       for (let i = 0; i < 5; i += 1) {
-        session.wake(`app-resumed-${i}`);
+        session.wake(`app-resumed-${i}`, null);
       }
       await vi.waitFor(() => expect(session.isReady()).toBe(true), {
         timeout: 3_000,
@@ -2785,11 +2793,11 @@ describe("RemoteSession wake", () => {
         session.start();
         await vi.waitFor(() => expect(relay.openBearers).toHaveLength(1), WAIT);
         const armedAt = Date.now();
-        session.wake("wake-1");
+        session.wake("wake-1", null);
         await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-2");
+        session.wake("wake-2", null);
         await new Promise((resolve) => setTimeout(resolve, 100));
-        session.wake("wake-3");
+        session.wake("wake-3", null);
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const elapsedMs = Date.now() - armedAt;
         // One extra dial, and no wake pushed the deadline out: a draw landing
@@ -2821,7 +2829,7 @@ describe("RemoteSession wake", () => {
         expect(relay.openBearers).toHaveLength(1);
         expect(recoveredEvents).toBe(1);
 
-        session.wake("app-resumed");
+        session.wake("app-resumed", null);
         // Nothing to poke or collapse on a healthy session - give it a beat
         // and confirm it neither re-dialed nor re-fired recovery evidence.
         await new Promise((resolve) => setTimeout(resolve, 300));
@@ -2854,7 +2862,7 @@ describe("RemoteSession wake", () => {
         // `wake` only pokes the socket of an already-ready session - a
         // connection that is mid-dial or sitting in backoff has nothing to
         // poke, so no keepalive traffic should reach the wire from this call.
-        session.wake("app-resumed");
+        session.wake("app-resumed", null);
         await new Promise((resolve) => setTimeout(resolve, 200));
         expect(relay.pingCount).toBe(0);
 
@@ -2887,7 +2895,7 @@ describe("RemoteSession wake", () => {
         await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
         const dialsBeforeWake = relay.openBearers.length;
 
-        expect(() => session.wake("app-resumed")).not.toThrow();
+        expect(() => session.wake("app-resumed", null)).not.toThrow();
         await new Promise((resolve) => setTimeout(resolve, 300));
 
         expect(relay.openBearers).toHaveLength(dialsBeforeWake);
@@ -2915,7 +2923,7 @@ describe("RemoteSession wake", () => {
         interval: 50,
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      session.wake("app-resumed");
+      session.wake("app-resumed", null);
       // The woken redial (the third open) fails too - a real host outage,
       // not a resumed one. If `wake` had reset the attempt counter, THIS
       // failure would arm a fresh 1s backoff instead of continuing the
@@ -2942,6 +2950,232 @@ describe("RemoteSession wake", () => {
       session.close();
     }
   }, 15_000);
+
+  it("probes on the caller's deadline - a muted socket is dropped and re-dialed on the short probe, not the default one", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toHaveLength(1);
+      // The half-open shape an OS suspend leaves: sends go out, nothing
+      // answers.
+      relay.answerPings = false;
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: false,
+      });
+      // The 250ms probe deadline fails the socket and the recovery redial
+      // (immediate rung - this session was stable) dials again, all well
+      // inside a second. Under the default 10s deadline nothing would have
+      // moved yet - this window is what proves the caller's deadline was the
+      // one armed.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 1_200,
+        interval: 25,
+      });
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("keeps the default wake-probe deadline when the caller supplies no tuning", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      relay.answerPings = false;
+      session.wake("app-resumed", null);
+      await vi.waitFor(() => expect(relay.pingCount).toBeGreaterThan(0), WAIT);
+      // The probe is in flight on the 10s default deadline, so well past the
+      // mobile deadline the socket is still trusted and no redial has begun.
+      // The discriminating window against the test above.
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect(relay.openBearers).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("a failed probe with immediateRedialOnFailure skips the armed backoff rung", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    // Two failed opens escalate the ladder before the third is allowed to
+    // succeed, so the session reaches ready with its attempt counter NOT at
+    // zero (the stable reset needs 30s of sustained health it will not get).
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      relay.answerPings = false;
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: true,
+      });
+      // Probe fails at ~250ms; the loss funnel arms the escalated rung
+      // (jittered floor 1s), and the latch pulls that redial to NOW. The
+      // fourth open landing inside 900ms is therefore only reachable with
+      // the rung skipped: 250ms (probe) + a same-tick redial.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 900,
+        interval: 25,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("a failed probe WITHOUT immediateRedialOnFailure keeps the armed backoff rung", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 2
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(3);
+      relay.answerPings = false;
+      session.wake("app-resumed", {
+        timeoutMs: 250,
+        immediateRedialOnFailure: false,
+      });
+      // The same probe failure, without the latch: the redial waits out the
+      // escalated rung (jittered floor 1s past the ~250ms probe). Still only
+      // three opens at the window where the latched arm above had four - the
+      // two arms MUST read differently or the gate is decorative.
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      expect(relay.openBearers).toHaveLength(3);
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      expect(relay.openBearers).toHaveLength(4);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+});
+
+describe("RemoteSession forceReconnect", () => {
+  function retryableDropDetails(): FatalErrorDetails {
+    return { ...unauthorizedDetails(), retryable: true };
+  }
+
+  it("drops a ready session's socket and redials with no backoff wait", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = buildSession(relay, lease, null);
+    let readinessLost = 0;
+    session.subscribeReadinessLost(() => {
+      readinessLost += 1;
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.openBearers).toHaveLength(1);
+      session.forceReconnect("user-retry");
+      // The drop is synchronous and the redial immediate - no probe window,
+      // no backoff draw. A `wake` on the same healthy session provably dials
+      // nothing (see the wake suite); this MUST dial, that is the contract
+      // difference.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), {
+        timeout: 800,
+        interval: 25,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(readinessLost).toBeGreaterThanOrEqual(1);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+
+  it("pulls a pending escalated backoff to NOW - faster than a wake's jittered collapse can", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    // Three failed opens escalate the armed backoff to the 4s step.
+    relay.decideOpen = (_bearer, openIndex) =>
+      openIndex < 3
+        ? { kind: "fatal", details: retryableDropDetails() }
+        : { kind: "ack" };
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(3), {
+        timeout: 8_000,
+        interval: 50,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      session.forceReconnect("network-path-changed");
+      // A wake's collapse draw is bounded BELOW by 500ms (half the initial
+      // backoff); the forced redial is not a draw at all. Landing the fourth
+      // open inside 450ms is therefore only reachable through the forced
+      // path.
+      await vi.waitFor(() => expect(relay.openBearers).toHaveLength(4), {
+        timeout: 450,
+        interval: 10,
+      });
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      expect(relay.errors).toEqual([]);
+    } finally {
+      session.close();
+    }
+  }, 15_000);
+
+  it("is a no-op on a closed session - it neither throws nor dials", async () => {
+    const relay = new FakeRelayHost();
+    const lease = new MutableBearerLease("token", "user-1");
+    relay.decideOpen = () => ({
+      kind: "fatal",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "manifest mismatch",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    const session = buildSession(relay, lease, null);
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isClosed()).toBe(true), WAIT);
+      const dialsBefore = relay.openBearers.length;
+      expect(() => session.forceReconnect("user-retry")).not.toThrow();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(relay.openBearers).toHaveLength(dialsBefore);
+      expect(session.isClosed()).toBe(true);
+    } finally {
+      session.close();
+    }
+  }, 10_000);
+});
+
+describe("RemoteSession wake", () => {
+  function retryableDropDetails(): FatalErrorDetails {
+    return { ...unauthorizedDetails(), retryable: true };
+  }
 
   /**
    * A one-method registry for the two `sendUnary` cases below, which need a
@@ -3257,8 +3491,11 @@ describe("RemoteSession wake", () => {
       // in backoff is not ready, whatever any other cached session for the
       // host may be doing.
       expect(streamClient.isReady()).toBe(false);
-      streamClient.reconnectAll("wake-resume", { probeFirst: true });
-      expect(wakeSpy).toHaveBeenCalledWith("wake-resume");
+      streamClient.reconnectAll("wake-resume", {
+        probeFirst: true,
+        wakeProbe: null,
+      });
+      expect(wakeSpy).toHaveBeenCalledWith("wake-resume", null);
       // Behaviourally: the collapsed sub-second redial, far sooner than the
       // escalated 4s tier (2-4s jittered) would have allowed.
       await vi.waitFor(() => expect(view.isReady()).toBe(true), {
@@ -3272,7 +3509,10 @@ describe("RemoteSession wake", () => {
       // stop reaching the session.
       view.close();
       const wakesBeforeRelease = wakeSpy.mock.calls.length;
-      streamClient.reconnectAll("stale-callback", { probeFirst: true });
+      streamClient.reconnectAll("stale-callback", {
+        probeFirst: true,
+        wakeProbe: null,
+      });
       expect(wakeSpy.mock.calls).toHaveLength(wakesBeforeRelease);
       expect(relay.errors).toEqual([]);
     } finally {

@@ -49,6 +49,7 @@ import {
   prepareStreamSubscribeRequest,
   type ParamsOf,
 } from "../ws-stream-client";
+import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
 import {
   CLIENT_REAUTH_INTERVAL_MS,
@@ -64,6 +65,7 @@ import {
   RECONNECT_INITIAL_BACKOFF_MS,
   RECONNECT_MAX_BACKOFF_MS,
   RECONNECT_STABLE_RESET_MS,
+  RELAY_WAKE_PROBE_TIMEOUT_MS,
 } from "./config";
 import { DialFailureLog } from "./dial-failure-log";
 import { recordNegotiatedHostManifest } from "../negotiated-manifest-registry";
@@ -105,7 +107,12 @@ import {
 } from "@traycer/protocol/host-transport/chunking";
 import { InboundCreditTracker, PriorityScheduler } from "./scheduler";
 import { NoiseChannel } from "./noise-channel";
-import { RelaySocket, type RelayKillReason } from "./relay-socket";
+import {
+  RelaySocket,
+  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE,
+  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
+  type RelayKillReason,
+} from "./relay-socket";
 import type { AttachGrantProvider } from "./grant-client";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 
@@ -392,8 +399,29 @@ export interface IRemoteSession<
    * flight, and never forgives the escalation (that needs a connection to
    * SURVIVE; see the class contract). So repeated wakes cannot become a dial
    * loop, and a fleet woken by one shared event does not redial in a herd.
+   *
+   * `probe` sizes the probe that verdict rides on; `null` is the default
+   * desktop-calibrated deadline. A caller that measured a brief mobile
+   * background passes a shorter one, and may additionally ask for the redial
+   * after a FAILED probe to skip its backoff rung (see
+   * {@link WakeProbeTuning}) - the user is watching that recovery happen.
    */
-  wake(reason: string): void;
+  wake(reason: string, probe: WakeProbeTuning | null): void;
+  /**
+   * Drops the current socket - alive or not - and redials with no backoff
+   * delay. The forced flavour of {@link wake}, for a caller whose evidence
+   * says the socket is not worth probing: a user tapping Retry, a network
+   * path change under a socket that cannot have survived it, a mobile resume
+   * after a background long enough that iOS has torn the socket down.
+   *
+   * Same skip-not-pardon stance as `wake`: the redial is pulled to now, but
+   * the escalation counter is untouched, so a host that is genuinely gone
+   * keeps climbing the ladder between forced attempts instead of being pinned
+   * at the fastest tier. An attach already in flight is left alone - its own
+   * phase timers bound it, and a timer frozen through an OS suspend fires
+   * immediately on unfreeze, so a stale dial already fails fast on resume.
+   */
+  forceReconnect(reason: string): void;
   /**
    * Subscribes to the session's terminal close - a caller `close()` (on the
    * shared session, once every consumer released) or a terminal session
@@ -678,6 +706,16 @@ export class RemoteSession<
    * arrive during it.
    */
   private backoffCollapsed = false;
+  /**
+   * Whether the wake probe currently riding the socket was armed by a caller
+   * whose evidence earns a FAILED probe an immediate redial (a foregrounded
+   * mobile resume - see {@link WakeProbeTuning.immediateRedialOnFailure}).
+   * Consumed by the socket-close handler when the loss is that probe's own
+   * timeout; cleared on every connection drop, so it cannot outlive the
+   * socket it was armed against and a much-later unrelated loss never
+   * inherits it.
+   */
+  private wakeProbeImmediateRedial = false;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /**
@@ -877,7 +915,7 @@ export class RemoteSession<
           // Aborts, terminal closures, post-send ambiguity and host-originated
           // failures never reach this branch: they are not
           // `RetryableTransportError`.
-          this.wake("pre-send-failure");
+          this.wake("pre-send-failure", null);
         }
         throw cause;
       }
@@ -1214,7 +1252,7 @@ export class RemoteSession<
   }
 
   /** See {@link IRemoteSession.wake}. */
-  wake(reason: string): void {
+  wake(reason: string, probe: WakeProbeTuning | null): void {
     if (this.phase === "closed" || this.phase === "idle") {
       // Closed is terminal, and idle has never dialed - `start()` owns that,
       // and every caller that wants a session calls it first.
@@ -1233,9 +1271,45 @@ export class RemoteSession<
       // collapse below has to run afterwards to pull that redial forward too.
       // A socket that merely looks alive is left connected and answers the
       // poke's probe on its own deadline.
-      this.connection.relaySocket.pokeKeepalive();
+      //
+      // The latch goes up BEFORE the poke: a socket already past its scheduled
+      // pong deadline fails synchronously inside it, and that loss must find
+      // the latch already cleared by its own drop rather than half-armed.
+      this.wakeProbeImmediateRedial =
+        probe !== null && probe.immediateRedialOnFailure;
+      this.connection.relaySocket.pokeKeepalive(
+        probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
+      );
     }
     this.collapseBackoff(reason);
+  }
+
+  /** See {@link IRemoteSession.forceReconnect}. */
+  forceReconnect(reason: string): void {
+    if (this.phase === "closed" || this.phase === "idle") {
+      return;
+    }
+    const connection = this.connection;
+    if (this.phase === "ready" && connection !== null) {
+      // A client-initiated teardown says nothing about the host - the durable
+      // rule is that `confirmed-refusal` requires evidence from the HOST's
+      // transport plane, and this loss is our own decision (see the provenance
+      // note on `handleConnectionLost`).
+      this.handleConnectionLost(
+        connection.generation,
+        `forced-reconnect:${reason}`,
+        "not-host-evidence",
+      );
+      this.pullRedialToNow(reason);
+      return;
+    }
+    if (this.phase === "reconnecting" && this.backoffTimer !== null) {
+      this.pullRedialToNow(reason);
+    }
+    // connecting/handshaking (and reconnecting with a dial in flight): an
+    // attach is already running, bounded by its own phase timers - which fire
+    // immediately on unfreeze if the runtime slept through them. Nothing to
+    // hurry, nothing worth killing.
   }
 
   /** See {@link IRemoteSession.onClosed}. */
@@ -1513,12 +1587,27 @@ export class RemoteSession<
         onReauthAck: () => undefined,
         onPeerGone: (reason) => this.onPeerGone(generation, reason),
         onError: () => undefined,
-        onClose: (info) =>
+        onClose: (info) => {
+          // Read BEFORE the loss funnel runs: `dropConnection` clears the
+          // latch on every drop. Matched by the close event's structured
+          // identity, so only the wake probe's own timeout - never a
+          // concurrent genuine close - can spend it.
+          const immediateRedialEarned =
+            this.wakeProbeImmediateRedial &&
+            info.code === RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE &&
+            info.reason === RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON;
           this.handleConnectionLost(
             generation,
             describeSocketClose(this.phase, info),
             "host-transport-plane",
-          ),
+          );
+          if (immediateRedialEarned) {
+            // The probe just PROVED the socket dead to a user who is looking
+            // at the screen; sleeping out the backoff rung the funnel armed
+            // would be pure added outage.
+            this.pullRedialToNow("wake-probe-failed");
+          }
+        },
       },
     });
 
@@ -2415,6 +2504,10 @@ export class RemoteSession<
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
+    // Any drop retires the wake-probe latch: whatever this loss was, the probe
+    // context it was armed in ends with the socket. The close handler that
+    // wants to honour it has already read it by the time this runs.
+    this.wakeProbeImmediateRedial = false;
     // Guarded internally to once per outage, so a failed redial arriving here
     // again does not restart the clock.
     this.noteConnectionLost();
@@ -2943,6 +3036,33 @@ export class RemoteSession<
       `[remote-session] remote session (host ${this.options.hostId}) redialing early (${reason}) in ${wokenDelayMs}ms - ${Math.round(armedRemainingMs)}ms of backoff left`,
     );
     this.armBackoffTimer(now, wokenDelayMs);
+  }
+
+  /**
+   * Clears a pending backoff wait and dials NOW. Distinct from
+   * {@link collapseBackoff} on both axes that make collapse safe to wire to
+   * free-firing signals: no jitter (the callers are single-device,
+   * user-scoped edges - a Retry tap, a forced resume, a probe this session
+   * just watched fail - not fleet-synchronized events), and not
+   * once-per-timer (a forced caller's evidence does not expire because an
+   * earlier wake already spent the collapse). `reconnectAttempt` stays
+   * untouched: this skips ONE wait, it does not forgive the escalation, so a
+   * host that is genuinely gone keeps climbing the ladder between forced
+   * redials.
+   */
+  private pullRedialToNow(reason: string): void {
+    if (this.phase !== "reconnecting" || this.backoffTimer === null) {
+      return;
+    }
+    clearTimeout(this.backoffTimer);
+    this.backoffTimer = null;
+    // Spend the timer's wake-collapse as well: the wait it guarded no longer
+    // exists, so a wake racing in behind this must find nothing to shorten.
+    this.backoffCollapsed = true;
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
+    );
+    this.armBackoffTimer(Date.now(), 0);
   }
 
   /**

@@ -20,6 +20,61 @@ const nativeMocks = vi.hoisted(() => ({
   storage: new Map<string, string>(),
 }));
 
+/**
+ * The App/Network plugin event bridges, faked at the package boundary like
+ * every other plugin here. Handlers are captured so a test can play the
+ * NATIVE side of an edge (app-state change, network-path change) directly -
+ * the web implementations of these plugins would otherwise re-derive their
+ * events from the same jsdom document and make the dedupe untestable.
+ */
+const capacitorEventMocks = vi.hoisted(() => ({
+  appListeners: new Array<(state: { isActive: boolean }) => void>(),
+  networkListeners: new Array<
+    (status: { connected: boolean; connectionType: string }) => void
+  >(),
+  networkStatus: { connected: true, connectionType: "wifi" },
+}));
+
+vi.mock("@capacitor/app", () => ({
+  App: {
+    addListener: (
+      _event: string,
+      handler: (state: { isActive: boolean }) => void,
+    ) => {
+      capacitorEventMocks.appListeners.push(handler);
+      return Promise.resolve({ remove: () => Promise.resolve() });
+    },
+  },
+}));
+
+vi.mock("@capacitor/network", () => ({
+  Network: {
+    getStatus: () => Promise.resolve(capacitorEventMocks.networkStatus),
+    addListener: (
+      _event: string,
+      handler: (status: { connected: boolean; connectionType: string }) => void,
+    ) => {
+      capacitorEventMocks.networkListeners.push(handler);
+      return Promise.resolve({ remove: () => Promise.resolve() });
+    },
+  },
+}));
+
+function fireAppState(isActive: boolean): void {
+  for (const handler of capacitorEventMocks.appListeners) {
+    handler({ isActive });
+  }
+}
+
+function fireNetworkStatus(status: {
+  connected: boolean;
+  connectionType: string;
+}): void {
+  for (const handler of capacitorEventMocks.networkListeners) {
+    handler(status);
+  }
+}
+
 vi.mock("@capacitor/app-launcher", () => ({
   AppLauncher: {
     openUrl: nativeMocks.browserOpen,
@@ -123,6 +178,12 @@ function phoneRunner(input: {
 describe("MobileRunnerHost", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capacitorEventMocks.appListeners.length = 0;
+    capacitorEventMocks.networkListeners.length = 0;
+    capacitorEventMocks.networkStatus = {
+      connected: true,
+      connectionType: "wifi",
+    };
     nativeMocks.storage.clear();
     nativeMocks.storageKeys.mockImplementation(async () => ({
       value: [...nativeMocks.storage.keys()],
@@ -445,6 +506,180 @@ describe("MobileRunnerHost", () => {
       throwing.dispose();
       live.dispose();
       errorSpy.mockRestore();
+    });
+
+    it("fires on the native appStateChange edge when the DOM visibility edge never arrives", () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const subscription = host.onSystemResumed(() => resumes.push(1));
+      expect(capacitorEventMocks.appListeners).toHaveLength(1);
+
+      // The missed-DOM-edge suspend: the OS backgrounds and foregrounds the
+      // app, and the WebView never raises visibilitychange for either side.
+      fireAppState(false);
+      expect(resumes).toEqual([]);
+      fireAppState(true);
+      expect(resumes).toEqual([1]);
+
+      subscription.dispose();
+    });
+
+    it("delivers ONE resume when both the DOM edge and the native edge report the same foreground", () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const subscription = host.onSystemResumed(() => resumes.push(1));
+
+      // An ordinary app switch: both sources see the background...
+      setVisibility("hidden");
+      fireAppState(false);
+      // ...and both see the return. The second reporter must find the edge
+      // already consumed.
+      setVisibility("visible");
+      fireAppState(true);
+
+      expect(resumes).toEqual([1]);
+      subscription.dispose();
+    });
+
+    it("ignores a native active report with no background to resume from", () => {
+      const host = runner(null);
+      const resumes: number[] = [];
+      const subscription = host.onSystemResumed(() => resumes.push(1));
+
+      // iOS also fires an active app-state on cold start.
+      fireAppState(true);
+      expect(resumes).toEqual([]);
+
+      subscription.dispose();
+    });
+
+    it("reports the measured background dwell on the resume event", () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(100_000);
+        const host = runner(null);
+        const dwells: Array<number | null> = [];
+        const subscription = host.onSystemResumed((event) =>
+          dwells.push(event.backgroundedForMs),
+        );
+
+        setVisibility("hidden");
+        vi.setSystemTime(100_000 + 7_500);
+        setVisibility("visible");
+
+        expect(dwells).toEqual([7_500]);
+        subscription.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports a null dwell when the shell booted hidden and never saw the background edge", () => {
+      // Seeded hidden at first subscribe: the state says backgrounded, but
+      // there is no entry stamp to measure from - the honest answer is null,
+      // which keeps the conservative default probe downstream.
+      state = "hidden";
+      const host = runner(null);
+      const dwells: Array<number | null> = [];
+      const subscription = host.onSystemResumed((event) =>
+        dwells.push(event.backgroundedForMs),
+      );
+
+      setVisibility("visible");
+
+      expect(dwells).toEqual([null]);
+      subscription.dispose();
+    });
+  });
+
+  describe("onNetworkPathChanged", () => {
+    let state: DocumentVisibilityState = "visible";
+
+    beforeEach(() => {
+      state = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => state,
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    function setVisibility(next: DocumentVisibilityState): void {
+      state = next;
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+
+    /** Subscribes and lets the async seed (`Network.getStatus`) settle. */
+    async function subscribeNetwork(host: MobileRunnerHost): Promise<{
+      readonly changes: number[];
+      readonly dispose: () => void;
+    }> {
+      const changes: number[] = [];
+      const subscription = host.onNetworkPathChanged(() => changes.push(1));
+      await vi.waitFor(() =>
+        expect(capacitorEventMocks.networkListeners).toHaveLength(1),
+      );
+      // One macrotask beat for the `getStatus` seed promise to land.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return { changes, dispose: () => subscription.dispose() };
+    }
+
+    it("fires when the connection type changes while staying connected", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      // The Wi-Fi -> cellular handoff: never offline, path moved anyway.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      expect(changes).toEqual([1]);
+
+      dispose();
+    });
+
+    it("fires when connectivity is regained, not when it is lost", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      fireNetworkStatus({ connected: false, connectionType: "none" });
+      expect(changes).toEqual([]);
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      expect(changes).toEqual([1]);
+
+      dispose();
+    });
+
+    it("does not fire for a repeat of the same status", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      expect(changes).toEqual([]);
+
+      dispose();
+    });
+
+    it("suppresses changes while backgrounded and does not replay them on resume", async () => {
+      const host = runner(null);
+      const { changes, dispose } = await subscribeNetwork(host);
+
+      setVisibility("hidden");
+      // A backgrounded phone hopping networks must not reopen a splice
+      // nobody is looking at.
+      fireNetworkStatus({ connected: true, connectionType: "cellular" });
+      expect(changes).toEqual([]);
+
+      // The tracked status still advanced, so the return itself replays
+      // nothing - recovery on resume belongs to the resume edge.
+      setVisibility("visible");
+      expect(changes).toEqual([]);
+
+      // ...but the NEXT foreground change fires against the updated baseline.
+      fireNetworkStatus({ connected: true, connectionType: "wifi" });
+      expect(changes).toEqual([1]);
+
+      dispose();
     });
   });
 
