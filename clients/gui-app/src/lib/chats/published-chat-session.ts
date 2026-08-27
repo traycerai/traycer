@@ -268,6 +268,7 @@ export function publishedChatSessionState(
     transcriptBaselineEpoch: 0,
     // Frozen, so nothing hydrates and this never moves.
     transcriptHydrationSequence: 0,
+    transcriptRowContext: {},
     chat: {
       parentId: null,
       id: input.chatId,

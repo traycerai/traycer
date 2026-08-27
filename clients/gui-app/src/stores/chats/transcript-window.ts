@@ -1336,6 +1336,13 @@ function coversThroughEnd(
 export function hydratedRecords(window: TranscriptWindow): {
   readonly messages: readonly Message[];
   readonly events: readonly ChatEvent[];
+  /**
+   * What these rows render WITH - returned HERE rather than read separately so
+   * a consumer cannot publish the records without the context that describes
+   * them. Two `set`s would leave a frame rendering rows against the previous
+   * hydration's context, which is the bug this whole channel exists to close.
+   */
+  readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
 } {
   // Spans FIRST, live records after, and both facts matter. Chronologically an
   // unplaced record is the newest thing the client has, so it sorts last
@@ -1351,6 +1358,7 @@ export function hydratedRecords(window: TranscriptWindow): {
       ...window.spans.map((span) => span.events),
       window.liveEvents,
     ]),
+    rowContext: hydratedRowContext(window),
   };
 }
 

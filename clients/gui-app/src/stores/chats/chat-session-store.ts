@@ -28,6 +28,7 @@ import {
 } from "@/stores/chats/optimistic-queue";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
+import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import type {
   ChatAccumulatedFileChangeSummary,
   ChatIndexChange,
@@ -44,6 +45,7 @@ import {
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
   hydratedRecords,
+  hydratedRowContext,
   isTailHydrated,
   mapWindowMessages,
   planTranscriptHydration,
@@ -581,6 +583,22 @@ export interface ChatSessionState {
    * ranges.
    */
   readonly transcriptHydrationSequence: number;
+  /**
+   * What each hydrated row renders WITH, by row id.
+   *
+   * The host projects a row against whole history; a range serves that row's
+   * records alone. Every derivation that reads the rows AROUND the one it is
+   * drawing therefore gets a different answer from a bounded subset - and in
+   * two cases the re-derived row id then disagrees with the skeleton, so the
+   * ordinal is suppressed and the row draws unplaced. Those derivations read
+   * this instead. See `row-context.ts`.
+   *
+   * Published in the SAME `set` as the records it describes, so no consumer
+   * can observe rows against a previous hydration's context. Empty off the
+   * windowed line, where `messages` is the whole transcript and every
+   * derivation can still see everything it needs.
+   */
+  readonly transcriptRowContext: Readonly<Record<string, TranscriptRowContext>>;
   readonly chat: ChatSessionRecord | null;
   readonly access: ChatAccess | null;
   readonly messages: ReadonlyArray<Message>;
@@ -2577,6 +2595,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         transcriptWindow: window,
         messages: records.messages,
         events: records.events,
+        transcriptRowContext: records.rowContext,
         ...(provenance ?? {}),
       });
     };
@@ -2752,12 +2771,23 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): void => {
       if (!isTailHydrated(window)) {
         const records = hydratedRecords(window);
-        set({ ...aux, messages: records.messages, events: records.events });
+        set({
+          ...aux,
+          messages: records.messages,
+          events: records.events,
+          transcriptRowContext: records.rowContext,
+        });
         deferredWindowedSnapshot = frame;
         return;
       }
       deferredWindowedSnapshot = null;
-      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window), aux);
+      // The adapted snapshot's records ARE `hydratedRecords(window)`, so its
+      // context has to ride the same apply. Left out, a snapshot would seat
+      // rows against whatever context the previous hydration published.
+      applyAuthoritativeSnapshot(adaptWindowedSnapshot(frame, window), {
+        ...aux,
+        transcriptRowContext: hydratedRowContext(window),
+      });
     };
 
     const callbacks: ChatStreamCallbacks = {
@@ -4024,6 +4054,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       snapshotLoaded: false,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
       transcriptHydrationSequence: 0,
+      transcriptRowContext: {},
       chat: null,
       access: null,
       messages: [],
