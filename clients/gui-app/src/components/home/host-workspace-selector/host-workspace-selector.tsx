@@ -504,9 +504,7 @@ export function ActiveHostWorkspaceControls(
     // unlike an effect keyed by `resolvedHostId`, does not overwrite another
     // draft on mount or react to lease-driven automatic failover.
     if (
-      (hostId !== activeHostId ||
-        (composerPin.selection !== null && composerPin.selection !== hostId) ||
-        landingDraftContainsAnotherHost(props.stagingKey, hostId)) &&
+      (hostId !== activeHostId || composerPin.selection !== hostId) &&
       props.stagingKey.surface === "landing" &&
       props.stagingKey.draftId !== null
     ) {
@@ -604,22 +602,6 @@ export function ActiveHostWorkspaceControls(
       hostSlot={deviceSelect}
       disabled={disabled}
     />
-  );
-}
-
-function landingDraftContainsAnotherHost(
-  stagingKey: WorktreeStagingKey,
-  hostId: string,
-): boolean {
-  if (stagingKey.surface !== "landing" || stagingKey.draftId === null) {
-    return false;
-  }
-  const draft = useLandingDraftStore
-    .getState()
-    .drafts.find((candidate) => candidate.id === stagingKey.draftId);
-  if (draft === undefined) return false;
-  return draft.workspace.folders.some(
-    (path) => draft.workspace.folderInfoByPath[path]?.hostId !== hostId,
   );
 }
 

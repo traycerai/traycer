@@ -312,6 +312,9 @@ describe("composer host picker writes a surface pin", () => {
         hostId: "host-home",
       },
     ]);
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(COMPOSER_KEY, "host-home");
     renderComposerPicker({ kind: "active" }, draftId);
 
     pickHomeHost();
@@ -319,6 +322,29 @@ describe("composer host picker writes a surface pin", () => {
     expect(
       useLandingDraftStore.getState().drafts[0]?.workspace.folders,
     ).toEqual(["/home/this-draft"]);
+    expect(pinnedHostId()).toBe("host-home");
+  });
+
+  it("restores remembered folders when an unpinned follower pins its displayed host", () => {
+    useWorkspaceFoldersStore.getState().addResolvedFolders("host-home", [
+      {
+        path: "/home/remembered",
+        name: "remembered",
+        repoIdentifier: null,
+        hostId: "host-home",
+      },
+    ]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore
+      .getState()
+      .restoreDraftWorkspaceForHost(draftId, "host-with-empty-bucket");
+    renderComposerPicker({ kind: "active" }, draftId);
+
+    pickHomeHost();
+
+    expect(
+      useLandingDraftStore.getState().drafts[0]?.workspace.folders,
+    ).toEqual(["/home/remembered"]);
     expect(pinnedHostId()).toBe("host-home");
   });
 
