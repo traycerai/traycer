@@ -757,7 +757,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = renameArtifact.isPending;
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = deleteArtifact.isPending;
@@ -951,7 +950,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -961,16 +959,53 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
-    renameArtifact.mutate(
-      { epicId, artifactId: nodeId, title: trimmed },
-      {
-        onSuccess: () => {
-          setIsRenaming(false);
+    // Settle the editor on COMMIT, not on the ack. The overlay stamped below
+    // IS the feedback, and `useInlineRename` — the shared state machine both
+    // tab strips rename through — already calls `setIsEditing(false)` before
+    // its `onCommit`. Holding the input open for the round trip made this row
+    // the one surface where a rename did not feel instant: every other surface
+    // bound to the node repainted from the overlay while the row the cursor
+    // was in sat there for the whole RPC (~1.2 s against a local host, and
+    // unbounded against a slow one).
+    //
+    // Failure is not silent: the mutation hook toasts (`Couldn't rename
+    // artifact.`) and `retire("failed")` rolls the overlay back to the old
+    // title, so the row reverts under a toast rather than never leaving edit
+    // mode. Deliberately NOT re-opening the editor on failure — that would
+    // steal focus seconds later, wherever the user had moved on to.
+    setIsRenaming(false);
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do — rationale and the promise-carried retire contract live in
+    // `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    void renameArtifact
+      .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
+      .then(
+        () => {
+          retire("landed");
+          // The tab snapshot only on settlement - it is a persisted fallback
+          // with no rollback path, so a speculative write would preserve a
+          // rejected title across restarts - and only while this is still
+          // the LATEST stamped rename for the node: settles are unordered,
+          // and an older ack landing last must not overwrite the newer
+          // snapshot. See `use-rename-canvas-tab.ts`.
+          if (
+            requestId === null ||
+            epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+          ) {
+            renameArtifactInTab(tabId, nodeId, trimmed);
+          }
         },
-      },
-    );
+        () => {
+          retire("failed");
+        },
+      );
   }, [
     epicHandle,
     epicId,
@@ -978,14 +1013,12 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     nodeId,
     renameArtifactInTab,
     renameArtifact,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -994,7 +1027,7 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1081,7 +1114,6 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1134,7 +1166,6 @@ interface ArtifactNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1186,7 +1217,6 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1249,7 +1279,6 @@ function ArtifactNodeShell(props: ArtifactNodeShellProps) {
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             unreadMarkerVariant={unreadMarkerVariant}
@@ -1441,7 +1470,6 @@ interface ArtifactRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly unreadMarkerVariant: ArtifactUnreadMarkerVariant | null;
@@ -1460,7 +1488,6 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
     unreadMarkerVariant,
@@ -1490,18 +1517,10 @@ function ArtifactRenameRow(props: ArtifactRenameRowProps) {
         }}
         onBlur={onBlur}
         onKeyDown={onKeyDown}
-        disabled={renamePending}
         className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
         aria-label={`Rename ${nodeName}`}
         data-testid={`epic-sidebar-rename-input-${nodeId}`}
       />
-      {renamePending ? (
-        <AgentSpinningDots
-          className="shrink-0 text-muted-foreground"
-          testId={undefined}
-          variant={undefined}
-        />
-      ) : null}
     </div>
   );
 }

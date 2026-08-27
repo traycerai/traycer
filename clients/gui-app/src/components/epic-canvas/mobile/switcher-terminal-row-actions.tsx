@@ -93,9 +93,19 @@ export function SwitcherTerminalRowActions(props: {
         title="Rename terminal"
         initialValue={actions.label}
         nodeId={session.sessionId}
-        onSubmit={(value) =>
-          actions.submitRename(value, () => setRenameOpen(false))
-        }
+        // Close on COMMIT, like the chat/artifact row above and the two epic
+        // sidebar trees. Waiting on the mutation kept this dialog up for the
+        // whole round trip, and up forever when the rename failed.
+        //
+        // A refusal is the one case that keeps it up: rename can go
+        // unavailable while the dialog is open (the host stops being mutable,
+        // or another row's rename is in flight - that pending flag is
+        // panel-wide), and closing then would discard the typed title having
+        // sent nothing. The return is synchronous, so the settle still happens
+        // on the gesture rather than on the ack.
+        onSubmit={(value) => {
+          if (actions.submitRename(value)) setRenameOpen(false);
+        }}
       />
     </>
   );
