@@ -725,6 +725,13 @@ export function useLandingComposerActions(
       const epicId = uuidv4();
       const now = Date.now();
       rememberLandingWorktreeIntent(workspaceContext, epicId, now);
+      // The identity this create belongs to, captured synchronously. The
+      // create's continuation outlives this component, and the completion
+      // re-anchor below is an INSERT into account-scoped memory - see its own
+      // comment for why that has to be checked. `dispatchSubmission` needs no
+      // equivalent capture: its retired-settlement early return already turns
+      // the whole continuation back on an identity teardown.
+      const dispatchUserId = useAuthStore.getState().profile?.userId ?? null;
       // Stored untitled; the title is generated from the first terminal prompt,
       // and render surfaces fall back via `epicDisplayTitle` meanwhile. (The
       // tui-agent tile is named separately in `use-create-tui-agent.ts`.)
@@ -801,7 +808,20 @@ export function useLandingComposerActions(
             // can legitimately hold a 30s host-side deadline before landing.
             // Measured from the request instead, a slow create burns its own
             // window and the session it protects opens unprotected.
-            markEpicCreatedThisSession(epicId, hostId);
+            //
+            // Only for the identity that dispatched it. These markers are
+            // account-scoped, and `auth-lifecycle-bridge` clears them on
+            // sign-out/user-switch precisely so the NEXT identity's persisted
+            // tabs reconcile normally. This continuation survives that
+            // teardown, so an unguarded re-mark would restore the outgoing
+            // account's host seed and reconciliation exemption for an epic id
+            // the incoming account may also have a tab for.
+            if (
+              (useAuthStore.getState().profile?.userId ?? null) ===
+              dispatchUserId
+            ) {
+              markEpicCreatedThisSession(epicId, hostId);
+            }
             return terminalAgentCreateFn({
               epicId,
               tabId,

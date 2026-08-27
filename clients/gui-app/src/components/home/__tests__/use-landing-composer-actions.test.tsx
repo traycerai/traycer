@@ -3,6 +3,7 @@ import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -32,8 +33,10 @@ import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
+  clearSessionCreatedEpics,
   sessionCreatedEpicHostId,
   wasEpicCreatedRecentlyThisSession,
+  wasEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 
 const landingMocks = vi.hoisted(() => ({
@@ -2521,6 +2524,84 @@ describe("useLandingComposerActions", () => {
       expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
       expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
 
+      queryClient.clear();
+    });
+
+    it("does not restore the create marker when the identity changed while the create was in flight", async () => {
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-initial",
+          userName: "Initial User",
+          email: "initial@example.com",
+        },
+        { userId: "user-initial", username: "initial" },
+        [],
+      );
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The identity transition `auth-lifecycle-bridge` performs on
+      // sign-out / user-switch: swap in a DIFFERENT user and clear the
+      // session-created-epics markers, while the create is still in flight.
+      useAuthStore.getState().setSignedIn(
+        {
+          userId: "user-different",
+          userName: "Different User",
+          email: "different@example.com",
+        },
+        { userId: "user-different", username: "different" },
+        [],
+      );
+      clearSessionCreatedEpics();
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // The completion re-anchor must not restore the marker for the
+      // OUTGOING account: the dispatching identity no longer matches the
+      // identity live at completion.
+      expect(sessionCreatedEpicHostId(epicId)).toBeNull();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+
+      useAuthStore.getState().setSignedOut();
       queryClient.clear();
     });
   });
