@@ -103,23 +103,55 @@ export function SwitcherNewItemRow(props: {
   );
 }
 
-export function SwitcherListEmpty(props: { readonly message: string }) {
+/**
+ * The "nothing to show" body for a category list. `description` carries the
+ * second line a NARROWED empty state needs - which control is doing the hiding
+ * - so an empty list the user filtered into never reads as an epic with nothing
+ * in it. Categories with nothing to add pass null.
+ */
+export function SwitcherListEmpty(props: {
+  readonly message: string;
+  readonly description: string | null;
+}) {
   return (
-    <div className="flex min-h-24 items-center justify-center p-6 text-center text-ui-sm text-muted-foreground">
-      {props.message}
+    <div className="flex min-h-24 flex-col items-center justify-center gap-1 p-6 text-center text-ui-sm text-muted-foreground">
+      <span>{props.message}</span>
+      {props.description === null ? null : (
+        <span className="text-ui-xs">{props.description}</span>
+      )}
     </div>
   );
 }
 
 /**
- * Right-aligned header bar hosting a category's "+" create affordance. Renders
- * nothing when `action` is null (a viewer with no create rights).
+ * Header bar for a category: its search field, its "+" create affordance, and
+ * its view (ordering / filter) menu. Renders nothing when every slot is null -
+ * a viewer with no create rights in a category with nothing to search or
+ * narrow.
+ *
+ * Search takes the row's width and the buttons trail it; with no search field
+ * the buttons sit right, against the edge the thumb reaches. The view menu is
+ * LAST either way, matching the desktop section headers - create is what the
+ * user came to the header for, and a control that changes position between
+ * surfaces is one the muscle memory has to relearn.
  */
-export function SwitcherListHeader(props: { readonly action: ReactNode }) {
-  if (props.action === null) return null;
+export function SwitcherListHeader(props: {
+  readonly search: ReactNode;
+  readonly action: ReactNode;
+  readonly viewMenu: ReactNode;
+}) {
+  if (
+    props.search === null &&
+    props.action === null &&
+    props.viewMenu === null
+  ) {
+    return null;
+  }
   return (
-    <div className="flex shrink-0 items-center justify-end px-2 pt-1.5">
+    <div className="flex shrink-0 items-center justify-end gap-1 px-2 pt-1.5">
+      {props.search}
       {props.action}
+      {props.viewMenu}
     </div>
   );
 }

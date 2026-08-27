@@ -11,6 +11,7 @@ import {
   parseDiffFromFile,
   parsePatchFiles,
   type FileContents,
+  type FileDiffContentsLoader,
   type FileDiffMetadata,
 } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
@@ -44,21 +45,7 @@ const DIFF_FIND_UNSAFE_CSS = `
   }
 `;
 
-/**
- * A patch-parsed diff does not know how many unchanged lines follow its final
- * hunk. Synchronous edit hydration does, so @pierre/diffs otherwise inserts a
- * new trailing separator row during activation and changes the tile height
- * (40px with the default theme). Keep the edit layout identical to the
- * already-painted partial diff; keyboard navigation still reveals a hidden
- * trailing line on demand through FileDiff.revealLine.
- */
-const DIFF_EDIT_STABLE_LAYOUT_UNSAFE_CSS = `
-  :host-context([data-diffs-editor-boundary]) [data-separator-last] {
-    display: none;
-  }
-`;
-
-const DIFF_PANEL_WITH_FIND_UNSAFE_CSS = `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_FIND_UNSAFE_CSS}\n${DIFF_EDIT_STABLE_LAYOUT_UNSAFE_CSS}`;
+const DIFF_PANEL_WITH_FIND_UNSAFE_CSS = `${DIFF_PANEL_UNSAFE_CSS}\n${DIFF_FIND_UNSAFE_CSS}`;
 
 export interface DiffContentPrimitiveProps {
   readonly patch: string;
@@ -69,6 +56,7 @@ export interface DiffContentPrimitiveProps {
   readonly lineNumbers: boolean;
   readonly indicatorStyle: "bars" | "classic" | "none";
   readonly fileHeaders: boolean;
+  readonly loadDiffFiles?: FileDiffContentsLoader;
   readonly editAdapter?: DiffClickToEditAdapter;
   readonly editSession?: {
     readonly editorOptions: EditorOptions<undefined>;
@@ -356,6 +344,7 @@ function renderDiffContentBody(args: {
         theme: args.themeName,
         themeType: args.resolvedTheme,
         unsafeCSS: diffUnsafeCSS,
+        loadDiffFiles: props.loadDiffFiles,
         ...props.editAdapter?.diffOptions,
       }}
     />
