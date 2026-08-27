@@ -203,7 +203,7 @@ diff --git a/dist/utils/createSeparator.js b/dist/utils/createSeparator.js
 +			contentChildren.push(createCollapseButton());
 +			buttonCount++;
 +		}
-+		if (expandIndex != null && !collapsible) if (!chunked) {
++		if (expandIndex != null) if (!chunked) {
  			contentChildren.push(createExpandButton(!isFirstHunk && !isLastHunk ? "both" : isFirstHunk ? "down" : "up"));
  			buttonCount++;
  		} else {

@@ -151,6 +151,13 @@ try {
     "the expanded trailing context",
     `Boolean(document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-additions] [data-content] > [data-line="30"]'))`,
   );
+  assert.ok(
+    await evaluate(
+      client,
+      `document.querySelector("diffs-container")?.shadowRoot?.querySelector('[data-separator-last] [data-expand-button]:not([data-collapse-button])') !== null`,
+    ),
+    "partial context expansion lost its remaining expander",
+  );
   const collapseControl = await evaluate(
     client,
     `(() => {
