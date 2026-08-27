@@ -94,6 +94,49 @@ function kinds(rows: readonly TranscriptListRow[]): string[] {
 }
 
 describe("transcriptListRows", () => {
+  it("leaves a partially-hydrated turn's unserved rows as placeholders", () => {
+    // Codex P1 (#1459): hydrating ONE row of a steer-split assistant turn
+    // pulls the turn's shared records, and rendering those projects EVERY row
+    // of the turn. Only `r-2` was served, so `r-3` must stay a placeholder at
+    // its own ordinal - appending it as an unplaced row draws it twice, once
+    // out of order at the end and once as the placeholder still standing.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 4,
+        spans: [span(2, ["r-2"])],
+        skeleton: [
+          skeletonEntry("r-0"),
+          skeletonEntry("r-1"),
+          skeletonEntry("r-2"),
+          skeletonEntry("r-3"),
+        ],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      // The renderer produced both halves of the turn from the shared records.
+      rendered: [model("r-2"), model("r-3")],
+    });
+
+    expect(kinds(rows)).toEqual(["P:0", "P:1", "H:r-2", "P:3"]);
+  });
+
+  it("still appends a record the index genuinely does not name", () => {
+    // The other side of the same guard: a live/pending record has no skeleton
+    // entry, and must keep landing after every ordinal.
+    const rows = transcriptListRows({
+      window: windowOf({
+        rowCount: 2,
+        spans: [span(0, ["r-0", "r-1"])],
+        skeleton: [skeletonEntry("r-0"), skeletonEntry("r-1")],
+        skeletonComplete: true,
+        invalidated: false,
+      }),
+      rendered: [model("r-0"), model("r-1"), model("live-turn")],
+    });
+
+    expect(kinds(rows)).toEqual(["H:r-0", "H:r-1", "H:live-turn"]);
+  });
+
   it("is the identity mapping on the legacy line", () => {
     const rendered = [model("a"), model("b")];
 

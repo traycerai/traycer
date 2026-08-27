@@ -44,6 +44,12 @@ import type { TranscriptWindow } from "@/stores/chats/transcript-window";
  * They go after every ordinal, which is also where they belong
  * chronologically - an unplaced record is the newest thing the client has.
  *
+ * "Unplaced" is decided by the SKELETON, not by absence from the spans. A
+ * partially-hydrated steer-split turn renders rows the range never served
+ * (its records back the whole turn), and those rows do own ordinals - they are
+ * simply not hydrated. Appending them here would draw them twice, out of
+ * order, alongside the placeholders still holding their real positions.
+ *
  * ## A hydrated row the renderer withheld is OMITTED, not placeholder'd
  *
  * `rendered` is post-filter: the pinned-todo pass drops an assistant row whose
@@ -83,6 +89,38 @@ export type TranscriptListRow =
 /** The key a placeholder takes before any skeleton entry describes it. */
 export function unplacedRowKey(ordinal: number): string {
   return `unplaced-row:${ordinal}`;
+}
+
+/**
+ * Every row id the index names, keyed by the skeleton array that produced it.
+ *
+ * Module-scope and keyed on array IDENTITY for the same reason
+ * `chat-timeline.tsx`'s row caches are: `transcriptListRows` re-runs on every
+ * streaming token (`messages` is rebuilt wholesale per token), while the
+ * skeleton array is replaced only when a chunk lands or the index changes.
+ * Building this inline would put an O(rowCount) Set on the per-token path -
+ * 20k entries per token on a long chat - which is precisely the per-token
+ * O(history) work the windowed line exists to delete.
+ *
+ * Safe to publish from a render: the value is a pure function of the array it
+ * is keyed on, so a discarded render can only ever populate the same answer.
+ */
+const skeletonRowIdCache = new WeakMap<
+  readonly (RowSkeletonEntry | undefined)[],
+  ReadonlySet<string>
+>();
+
+function skeletonRowIdSet(
+  skeleton: readonly (RowSkeletonEntry | undefined)[],
+): ReadonlySet<string> {
+  const cached = skeletonRowIdCache.get(skeleton);
+  if (cached !== undefined) return cached;
+  const ids = new Set<string>();
+  for (const entry of skeleton) {
+    if (entry !== undefined) ids.add(entry.rowId);
+  }
+  skeletonRowIdCache.set(skeleton, ids);
+  return ids;
 }
 
 /**
@@ -136,6 +174,8 @@ export function transcriptListRows(input: {
     });
   }
 
+  const skeletonRowIds = skeletonRowIdSet(window.skeleton);
+
   const rows: TranscriptListRow[] = [];
   for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
     const model = modelByOrdinal.get(ordinal);
@@ -154,6 +194,9 @@ export function transcriptListRows(input: {
   }
   for (const model of rendered) {
     if (placedRowIds.has(model.id)) continue;
+    // A row the SKELETON names owns an ordinal, so it is not an unplaced
+    // record however it came to be rendered - see the note above the loop.
+    if (skeletonRowIds.has(model.id)) continue;
     rows.push({ kind: "hydrated", key: model.id, ordinal: null, model });
   }
   return rows;

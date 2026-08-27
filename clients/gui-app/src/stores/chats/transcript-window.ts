@@ -133,10 +133,14 @@ export interface TranscriptWindow {
   /**
    * The index is void and only a `resnapshot` repairs it.
    *
-   * Set by a `reindexed` change, and by a final skeleton chunk whose assembled
-   * length disagrees with `rowCount` (chunks were lost). Both are cases where
-   * continuing to serve ordinals would be serving a coordinate the client
-   * knows is wrong.
+   * Set by a `reindexed` change; by a final skeleton chunk whose assembled
+   * length disagrees with `rowCount` (chunks were lost); and by a `range`
+   * response whose row ids contradict the skeleton under the CURRENT epoch.
+   * All three are cases where continuing to serve ordinals would be serving a
+   * coordinate the client knows is wrong.
+   *
+   * The third is also the only one that would otherwise SPIN rather than
+   * merely be wrong - see {@link applyRangeResponse}.
    */
   readonly invalidated: boolean;
   /** Monotonic counter backing `touchedAt`. */
@@ -815,10 +819,19 @@ function dropSpansForUpdatedOrdinals(
 /**
  * Seat one `range` response.
  *
- * Discarded outright on a stale epoch or a row-id mismatch. Both are the same
- * judgement: the response is internally consistent but describes a coordinate
- * space the client is no longer in, and re-fetching is cheap where seating it
- * is unrecoverable.
+ * Discarded on a stale epoch or a row-id mismatch - but those are NOT the same
+ * judgement, and treating them as one was a defect.
+ *
+ * A stale epoch is self-healing: a newer epoch is by definition already on its
+ * way, and the frame that carries it re-seats the coordinate space. Dropping
+ * the response and waiting is correct.
+ *
+ * A row-id mismatch under the CURRENT epoch is not self-healing. Nothing is en
+ * route to repair it: the planner sees the same still-missing span, asks for
+ * the same ordinals, and the host answers with the same contradicting ids -
+ * an unbounded request/response loop that never converges. The disagreement is
+ * about the coordinate space itself, which is exactly what `invalidated` means,
+ * so it is raised here and only a `resnapshot` clears it.
  *
  * `truncatedAtOrdinal` is not an error and is not handled here - the response
  * is seated for what it did serve, and asking for the remainder is the
@@ -831,7 +844,7 @@ export function applyRangeResponse(
   if (response.epoch !== window.epoch) return window;
   if (response.rowIds.length === 0) return window;
   if (skeletonContradicts(window, response.fromOrdinal, response.rowIds)) {
-    return window;
+    return window.invalidated ? window : { ...window, invalidated: true };
   }
   const clock = window.clock + 1;
   const span: HydratedSpan = {

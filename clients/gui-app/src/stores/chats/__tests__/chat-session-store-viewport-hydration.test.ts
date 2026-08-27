@@ -437,6 +437,62 @@ describe("chat session viewport hydration: review fixes", () => {
     }
   });
 
+  it("applies the byte budget when a snapshot seats a new tail", () => {
+    // Codex P1 (#1459): `insertSpan` has exactly two callers - the snapshot
+    // tail and a range response - and only the range path ran the budget. A
+    // reader who hydrates scrollback and then stops scrolling still receives a
+    // snapshot per completed turn, so the cache grew across snapshots with
+    // nothing ever enforcing TRANSCRIPT_WINDOW_MAX_BYTES.
+    const harness = createViewportHarness();
+    try {
+      hydrateTail(harness);
+      // The reader scrolls back and hydrates a span. It survives `onRange`'s
+      // own eviction only because it is what the viewport is showing.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 5, toOrdinal: 6 });
+      harness
+        .callbacks()
+        .onRange(
+          rangeWithMessages(5, ["row-5"], [hugeUserMessage("m-huge", 5)]),
+        );
+      const seeded = harness.handle.store.getState().transcriptWindow;
+      expect(seeded.spans.some((held) => held.fromOrdinal === 5)).toBe(true);
+      expect(seeded.hydratedBytes).toBeGreaterThan(TRANSCRIPT_WINDOW_MAX_BYTES);
+
+      // The reader returns to the tail, so that span is now cold. Reporting a
+      // viewport does not itself evict - only a seat does.
+      harness.handle.store
+        .getState()
+        .reportVisibleTranscriptRange({ fromOrdinal: 20, toOrdinal: 21 });
+      expect(
+        harness.handle.store
+          .getState()
+          .transcriptWindow.spans.some((held) => held.fromOrdinal === 5),
+      ).toBe(true);
+
+      // A later turn completes. No range is requested - only a snapshot
+      // arrives - which is precisely the path that used to skip the budget.
+      harness.callbacks().onWindowedSnapshot(
+        snapshot({
+          rowCount: 41,
+          tailFromOrdinal: 21,
+          tailMessages: [userMessage("tail-2", 21)],
+        }),
+      );
+
+      const after = harness.handle.store.getState().transcriptWindow;
+      expect(after.hydratedBytes).toBeLessThanOrEqual(
+        TRANSCRIPT_WINDOW_MAX_BYTES,
+      );
+      // The cold oversized span is what went; the freshly seated tail stays.
+      expect(after.spans.some((held) => held.fromOrdinal === 5)).toBe(false);
+      expect(after.spans.length).toBeGreaterThan(0);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
   it("the viewport report warms the visible span", () => {
     const harness = createViewportHarness();
     try {

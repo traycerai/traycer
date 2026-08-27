@@ -429,6 +429,48 @@ describe("range responses", () => {
     expect(seated.spans).toEqual([]);
   });
 
+  it("invalidates on a contradiction so the planner cannot spin on it", () => {
+    // Codex P1 (#1459): dropping the response and leaving the window valid
+    // makes the planner re-request the SAME ordinals, which the host answers
+    // with the same contradicting ids under the same epoch - forever. Only a
+    // resnapshot can repair a coordinate disagreement, so raise the flag that
+    // asks for one.
+    const window = windowWithSkeleton(4);
+    const seated = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 1,
+        fromOrdinal: 1,
+        rowIds: ["row-1", "SOMETHING-ELSE"],
+        messages: [userMessage("m-1", 1)],
+      }),
+    );
+
+    expect(seated.invalidated).toBe(true);
+    // And the planner now asks for a resnapshot rather than the same range.
+    expect(
+      planTranscriptHydration(seated, { fromOrdinal: 0, toOrdinal: 4 }),
+    ).toBeNull();
+  });
+
+  it("does not invalidate on a superseded epoch, which repairs itself", () => {
+    // The contrast that makes the case above a real distinction: a newer epoch
+    // is already on its way and will re-seat the coordinate space, so dropping
+    // the response is the whole of the correct response.
+    const window = windowWithSkeleton(4);
+    const seated = applyRangeResponse(
+      window,
+      rangeResponse({
+        epoch: 0,
+        fromOrdinal: 1,
+        rowIds: ["row-1"],
+        messages: [userMessage("m-1", 1)],
+      }),
+    );
+
+    expect(seated.invalidated).toBe(false);
+  });
+
   it("discards a response from a superseded epoch", () => {
     const window = windowWithSkeleton(4);
     const seated = applyRangeResponse(

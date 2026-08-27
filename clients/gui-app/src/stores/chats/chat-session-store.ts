@@ -2491,11 +2491,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // applied after an authoritative snapshot would re-add a block the
         // snapshot already carries.
         flushBlockDeltas();
-        const window = applyWindowedSnapshot(get().transcriptWindow, {
-          epoch: frame.snapshot.transcriptEpoch,
-          rowCount: frame.snapshot.rowCount,
-          tail: frame.snapshot.tail,
-        });
+        // Budgeted here as well as in `onRange`, because seating a tail is the
+        // OTHER way this window grows: `insertSpan` has exactly two callers
+        // (`applyWindowedSnapshot` and `applyRangeResponse`) and leaving one
+        // unbudgeted means a reader who hydrated scrollback and then stopped
+        // asking for ranges accumulates every completed turn's tail without
+        // the budget ever running.
+        const window = evictTranscriptWindowToBudget(
+          applyWindowedSnapshot(get().transcriptWindow, {
+            epoch: frame.snapshot.transcriptEpoch,
+            rowCount: frame.snapshot.rowCount,
+            tail: frame.snapshot.tail,
+          }),
+          TRANSCRIPT_WINDOW_MAX_BYTES,
+          visibleTranscriptRange,
+        );
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a
         // beat of "new spans, old rendered models" reads to the row merge as
