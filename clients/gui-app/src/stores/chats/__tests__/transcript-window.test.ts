@@ -9,6 +9,7 @@ import type { ChatRangeResponse } from "@traycer/protocol/host/agent/gui/subscri
 import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   appendLiveRecords,
+  MAX_LIVE_EVENTS,
   applyIndexChange,
   applyRangeResponse,
   applySkeletonChunk,
@@ -1025,6 +1026,34 @@ describe("records the index has not placed yet", () => {
     // unplaced record is the newest thing the client has.
     expect(records.messages.map((m) => m.messageId)).toEqual(["m-0", "m-live"]);
     expect(records.events.map((e) => e.eventId)).toEqual(["e-live"]);
+  });
+
+  it("bounds row-less live events instead of growing for the session", () => {
+    // Supersession cannot reach this class at all. A live record leaves via a
+    // span carrying it, which requires it to belong to a ROW - and
+    // `send.accepted`, the `queue.*` family and their siblings materialize no
+    // row, so no span will ever name them however far the reader scrolls.
+    // `hydratedBytes` is `totalBytes(spans)`, so they are not charged to the
+    // budget either and nothing else notices them accumulating.
+    let window = windowWithSkeleton(4);
+    const total = MAX_LIVE_EVENTS + 200;
+    for (let index = 0; index < total; index += 1) {
+      window = appendLiveRecords(window, {
+        messages: [],
+        events: [event(`row-less-${index}`, index)],
+      });
+    }
+
+    expect(window.liveEvents).toHaveLength(MAX_LIVE_EVENTS);
+    // The NEWEST are kept: those are the ones with any chance of being live-
+    // relevant, and an older one that genuinely belongs to a row is re-served
+    // by that row's hydration.
+    expect(window.liveEvents[window.liveEvents.length - 1].eventId).toBe(
+      `row-less-${total - 1}`,
+    );
+    expect(window.liveEvents[0].eventId).toBe(
+      `row-less-${total - MAX_LIVE_EVENTS}`,
+    );
   });
 
   it("updates a message wherever it lives, and says so when it lives nowhere", () => {

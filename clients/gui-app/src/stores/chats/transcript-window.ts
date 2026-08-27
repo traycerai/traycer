@@ -217,6 +217,16 @@ const SPAN_MERGE_MAX_BYTES = 1024 * 1024;
  */
 export const EAGER_TAIL_ROW_COUNT = 20;
 
+/**
+ * How many row-less live events the window keeps.
+ *
+ * Generous, because these are small and the cap is a leak backstop rather than
+ * a working limit: a chat would have to run hundreds of sends and queue changes
+ * on one connection to reach it, and everything a row needs is re-served by
+ * that row's hydration regardless.
+ */
+export const MAX_LIVE_EVENTS = 512;
+
 export function emptyTranscriptWindow(): TranscriptWindow {
   return {
     epoch: 0,
@@ -272,10 +282,19 @@ export function appendLiveRecords(
     (event) => !knownEvents.has(event.eventId),
   );
   if (messages.length === 0 && events.length === 0) return window;
+  // Capped here as well as in `pruneSupersededLiveRecords`, because that runs
+  // after a SPAN mutation and this path does not need one: a session that only
+  // sends - no scrolling, no eviction, no range - never seats a span, so the
+  // prune never runs and the row-less events would still accumulate unbounded.
+  // This is the append the cap actually has to hold.
+  const appendedEvents = [...window.liveEvents, ...events];
   return {
     ...window,
     liveMessages: [...window.liveMessages, ...messages],
-    liveEvents: [...window.liveEvents, ...events],
+    liveEvents:
+      appendedEvents.length > MAX_LIVE_EVENTS
+        ? appendedEvents.slice(appendedEvents.length - MAX_LIVE_EVENTS)
+        : appendedEvents,
     clock: window.clock + 1,
   };
 }
@@ -303,9 +322,28 @@ function pruneSupersededLiveRecords(
   const liveMessages = window.liveMessages.filter(
     (message) => !spanMessages.has(message.messageId),
   );
-  const liveEvents = window.liveEvents.filter(
+  const supersededEvents = window.liveEvents.filter(
     (event) => !spanEvents.has(event.eventId),
   );
+  // Span-supersession alone cannot bound this set, and that is not a tuning
+  // matter - it is a whole CLASS of event the rule can never reach.
+  //
+  // A live record leaves via a span carrying it, which requires the record to
+  // belong to a row. Plenty do not: `send.accepted`, the `queue.*` family and
+  // their siblings are transcript-level signals that materialize no row, so no
+  // span will ever name them and no amount of scrolling will evict them. On a
+  // tab left connected across many sends they accumulate for the life of the
+  // session - and, because `hydratedBytes` is `totalBytes(spans)`, they are
+  // not charged to the window budget either, so nothing else notices.
+  //
+  // The tail is what has any chance of being live-relevant, so the cap keeps
+  // the NEWEST. Dropping an older one is safe rather than lossy: anything that
+  // genuinely belongs to a row is re-served by that row's hydration, which is
+  // the same reason the supersession rule above can discard on sight.
+  const liveEvents =
+    supersededEvents.length > MAX_LIVE_EVENTS
+      ? supersededEvents.slice(supersededEvents.length - MAX_LIVE_EVENTS)
+      : supersededEvents;
   if (
     liveMessages.length === window.liveMessages.length &&
     liveEvents.length === window.liveEvents.length
