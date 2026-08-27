@@ -8,6 +8,7 @@
 import {
   Fragment,
   useEffect,
+  useRef,
   useState,
   type MouseEvent,
   type ReactNode,
@@ -174,6 +175,7 @@ function AgentSubpageRows(props: {
   );
   const search = useCommandState((state) => state.search);
   const selectedValue = useCommandState((state) => state.value);
+  const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["agentTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
@@ -203,9 +205,12 @@ function AgentSubpageRows(props: {
   );
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
       if (
         !(event.target instanceof Element) ||
-        event.target.closest("[cmdk-root]") === null
+        ownerRoot === null ||
+        ownerRoot === undefined ||
+        event.target.closest("[cmdk-root]") !== ownerRoot
       ) {
         return;
       }
@@ -243,7 +248,7 @@ function AgentSubpageRows(props: {
               return ancestor !== undefined && isExpanded(ancestor);
             }),
         );
-  return visibleItems.map((item) => {
+  const rows = visibleItems.map((item) => {
     const row = item.agentTreeRow;
     const expanded = row !== undefined && isExpanded(row);
     return (
@@ -276,6 +281,12 @@ function AgentSubpageRows(props: {
       </PaletteItemRow>
     );
   });
+  return (
+    <>
+      <span ref={ownerMarkerRef} className="hidden" />
+      {rows}
+    </>
+  );
 }
 
 function ArtifactTreeItemLabel(props: {
@@ -333,6 +344,7 @@ function ArtifactSubpageRows(props: {
   );
   const search = useCommandState((state) => state.search);
   const selectedValue = useCommandState((state) => state.value);
+  const ownerMarkerRef = useRef<HTMLSpanElement>(null);
   const isExpanded = (row: NonNullable<CommandItemShape["artifactTreeRow"]>) =>
     !userCollapsedIds.has(row.nodeId) &&
     (row.depth === 0 || userExpandedIds.has(row.nodeId));
@@ -362,9 +374,12 @@ function ArtifactSubpageRows(props: {
   );
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const ownerRoot = ownerMarkerRef.current?.closest("[cmdk-root]");
       if (
         !(event.target instanceof Element) ||
-        event.target.closest("[cmdk-root]") === null
+        ownerRoot === null ||
+        ownerRoot === undefined ||
+        event.target.closest("[cmdk-root]") !== ownerRoot
       ) {
         return;
       }
@@ -402,7 +417,7 @@ function ArtifactSubpageRows(props: {
               return ancestor !== undefined && isExpanded(ancestor);
             }),
         );
-  return visibleItems.map((item) => {
+  const rows = visibleItems.map((item) => {
     const row = item.artifactTreeRow;
     const expanded = row !== undefined && isExpanded(row);
     return (
@@ -432,6 +447,12 @@ function ArtifactSubpageRows(props: {
       </PaletteItemRow>
     );
   });
+  return (
+    <>
+      <span ref={ownerMarkerRef} className="hidden" />
+      {rows}
+    </>
+  );
 }
 
 function PathTreeItemLabel(props: {

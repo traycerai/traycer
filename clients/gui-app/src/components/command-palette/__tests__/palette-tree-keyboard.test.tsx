@@ -159,3 +159,12 @@ describe.each(["open:agents", "open:artifacts"] as const)(
     });
   },
 );
+
+it("scopes tree arrows to the command surface receiving the key", () => {
+  renderTree("open:agents");
+  renderTree("open:agents");
+  const [firstInput] = screen.getAllByRole("combobox");
+  fireEvent.keyDown(firstInput, { key: "ArrowDown" });
+  fireEvent.keyDown(firstInput, { key: "ArrowRight" });
+  expect(screen.getAllByText("Grandchild")).toHaveLength(1);
+});

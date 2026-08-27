@@ -17,6 +17,7 @@ interface DirectoryNode {
   readonly displayPath: string;
   readonly childDirectories: Map<string, DirectoryNode>;
   readonly leaves: PathTreeLeaf[];
+  actionLeaf: PathTreeLeaf | null;
 }
 
 export function buildPathTreeItems(
@@ -30,6 +31,7 @@ export function buildPathTreeItems(
     displayPath: "",
     childDirectories: new Map(),
     leaves: [],
+    actionLeaf: null,
   };
   for (const directoryPath of explicitDirectoryPaths) {
     const segments = directoryPath
@@ -48,6 +50,7 @@ export function buildPathTreeItems(
           displayPath: path,
           childDirectories: new Map(),
           leaves: [],
+          actionLeaf: null,
         };
         directory.childDirectories.set(segment, child);
       }
@@ -80,6 +83,7 @@ export function buildPathTreeItems(
           displayPath,
           childDirectories: new Map(),
           leaves: [],
+          actionLeaf: null,
         };
         directory.childDirectories.set(segment, child);
       }
@@ -88,6 +92,31 @@ export function buildPathTreeItems(
     directory.leaves.push(leaf);
   }
 
+  const structuralPath = (leaf: PathTreeLeaf): string => {
+    const displaySegments =
+      leaf.displaySegments ??
+      leaf.path.split("/").filter((segment) => segment.length > 0);
+    const structuralSegments = leaf.structuralSegments ?? displaySegments;
+    return (
+      leaf.displaySegments === null
+        ? structuralSegments
+        : structuralSegments.map((segment) => encodeURIComponent(segment))
+    ).join("/");
+  };
+  const coalesceActionableDirectories = (directory: DirectoryNode): void => {
+    for (const child of directory.childDirectories.values()) {
+      const leafIndex = directory.leaves.findIndex(
+        (leaf) => structuralPath(leaf) === child.path,
+      );
+      if (leafIndex !== -1) {
+        child.actionLeaf = directory.leaves[leafIndex] ?? null;
+        directory.leaves.splice(leafIndex, 1);
+      }
+      coalesceActionableDirectories(child);
+    }
+  };
+  coalesceActionableDirectories(root);
+
   const items: CommandItem[] = [];
   const appendDirectory = (
     directory: DirectoryNode,
@@ -95,29 +124,35 @@ export function buildPathTreeItems(
   ): void => {
     const nodeId = `${namespace}:directory:${directory.path}`;
     const label = directory.label;
+    const item = directory.actionLeaf?.item;
+    const effectiveNodeId = item?.id ?? nodeId;
     items.push({
-      id: nodeId,
+      ...(item ?? {
+        id: nodeId,
+        description: null,
+        keywords: [directory.path, label],
+        group: "open" as const,
+        scope: "actions" as const,
+        shortcut: null,
+        actionId: null,
+        subpage: null,
+        run: () => undefined,
+      }),
+      id: effectiveNodeId,
       label,
       description: null,
-      keywords: [directory.path, label],
-      group: "open",
-      scope: "actions",
-      shortcut: null,
-      actionId: null,
-      subpage: null,
-      run: () => undefined,
       pathTreeRow: {
         treeId: namespace,
-        nodeId,
+        nodeId: effectiveNodeId,
         depth: ancestorIds.length,
         ancestorIds,
         hasChildren: true,
-        kind: "directory",
+        kind: item === undefined ? "directory" : "file",
         path: directory.path,
         displayPath: directory.displayPath,
       },
     });
-    const nextAncestors = [...ancestorIds, nodeId];
+    const nextAncestors = [...ancestorIds, effectiveNodeId];
     for (const child of directory.childDirectories.values()) {
       appendDirectory(child, nextAncestors);
     }
