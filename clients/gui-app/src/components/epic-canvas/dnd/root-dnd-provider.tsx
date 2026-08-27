@@ -640,6 +640,12 @@ function updateTileStripPreview(
     index = insertionIndexForTarget(geometry.sourceIndex, next.targetIndex);
     offsets.set(groupId, stripOffsetsFor(geometry, next.targetIndex));
   } else {
+    const sourceGeometry = remapGeometryToSlots(
+      drag.geometry,
+      readTileStripSlots(drag.groupId),
+    );
+    if (sourceGeometry === null) return false;
+    activeTileDrag = { ...drag, geometry: sourceGeometry };
     const foreign = measureForeignTileStrip(groupId);
     if (foreign === null) return false;
     index = insertionIndexFromPointer(
@@ -649,11 +655,11 @@ function updateTileStripPreview(
     );
     offsets.set(
       groupId,
-      insertionOffsetsFor(foreign.slots, index, drag.geometry.sourceWidth),
+      insertionOffsetsFor(foreign.slots, index, sourceGeometry.sourceWidth),
     );
     // The tile has left its own strip, so that strip closes the gap rather
     // than holding a slot open for something no longer in it.
-    offsets.set(drag.groupId, stripOffsetsFor(drag.geometry, null));
+    offsets.set(drag.groupId, stripOffsetsFor(sourceGeometry, null));
     dndStore.headerStripDragStateChanged(null);
   }
   dndStore.tileStripOffsetsChanged(offsets);
@@ -699,6 +705,8 @@ function updateHeaderTabSourcePreview(input: {
       ? null
       : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
   if (validDrop !== null) {
+    headerMergeDwell().reset();
+    lastHeaderDrag = null;
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
