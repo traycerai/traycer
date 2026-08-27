@@ -31,7 +31,7 @@ const FAKE_CLIENT = {
 };
 const mutationMocks = vi.hoisted(() => ({
   addBindingFolder: vi.fn(),
-  createWorktree: vi.fn(),
+  createWorktree: vi.fn().mockResolvedValue({ perEntry: [] }),
   recordRecent: vi.fn(),
   removeBindingFolder: vi.fn(),
 }));
@@ -102,6 +102,7 @@ vi.mock("@/hooks/worktree/use-worktree-import-mutation", () => ({
 vi.mock("@/hooks/worktree/use-worktree-create-mutation", () => ({
   useWorktreeCreateForClient: () => ({
     mutate: mutationMocks.createWorktree,
+    mutateAsync: mutationMocks.createWorktree,
     isPending: false,
   }),
 }));
@@ -270,6 +271,7 @@ function renderBoundSurface(
             binding: BINDING,
             isOwnerActive: false,
             hasActiveTurn: false,
+            ownerLabel: "Owner",
             missingWorktreePaths: [],
             bindingResolved,
             onBindingCommitted: null,

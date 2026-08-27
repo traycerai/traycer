@@ -128,6 +128,14 @@ import { applyWorktreeCreateResult } from "@/lib/worktree/apply-worktree-create-
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
+import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
+import { isWorktreeRebindBlocked } from "@/lib/worktree/is-worktree-rebind-blocked";
+import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
+import {
+  TeardownCommitDialog,
+  type TeardownCommitChoice,
+} from "@/components/worktree/teardown-commit-dialog";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { useRecentWorkspaces } from "./use-recent-workspaces";
 import { RecentWorkspacesSection } from "./recent-workspaces-section";
 
@@ -166,6 +174,8 @@ type BoundOwnerSurface = {
   // `isOwnerActive` still decides whether removal is disabled at all (a live
   // background process could still be touching the folder either way).
   readonly hasActiveTurn: boolean;
+  /** Display name used in teardown copy (agent title, chat title). */
+  readonly ownerLabel: string;
   // The `workspacePath`s whose bound directory is gone on disk (host-computed,
   // delivered on the chat snapshot / `worktreeStateChanged` for chat and on
   // `worktree.getBinding` for terminal-agents). Drives the per-folder "missing"
@@ -1768,9 +1778,23 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     props.hostClient,
   );
   const importMutation = useWorktreeImportForClient(props.hostClient);
-  const worktreeCreateMutation = useWorktreeCreateForClient(props.hostClient);
-  const createWorktree = worktreeCreateMutation.mutate;
+  const worktreeCreateMutation = useWorktreeCreateForClient(props.hostClient, [
+    "WORKTREE_REBIND_BLOCKED",
+  ]);
   const worktreeCreatePending = worktreeCreateMutation.isPending;
+  const snapshotTeardownHolders = useOwnerTeardownSnapshot({
+    epicId: surface.epicId,
+    hostId: surface.hostId,
+    ownerKind,
+    ownerId: surface.ownerId,
+    ownerLabel: surface.ownerLabel,
+    hasActiveTurn: surface.hasActiveTurn,
+    ptyLive: surface.kind === "terminal-agent" && surface.isOwnerActive,
+  });
+  const [teardownDialog, setTeardownDialog] = useState<{
+    readonly choice: TeardownCommitChoice;
+    readonly holders: readonly WorktreeBusyHolder[];
+  } | null>(null);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
   );
@@ -2014,50 +2038,50 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       finishAndResume();
       return;
     }
-    createWorktree(
-      {
+    void worktreeCreateMutation
+      .mutateAsync({
         epicId: surface.epicId,
         ownerId: surface.ownerId,
         ownerKind,
         entries: worktreeCreateEntries(stagedEntries),
-      },
-      {
-        onSuccess: (result) => {
-          // The RPC resolves per-entry: on a mixed outcome the failed
-          // folders keep their staged intent (popover stays open) so Update
-          // can re-apply just the failed subset, while the succeeded folders
-          // commit + unstage normally. The commit signal for the successes
-          // still fires - the host already applied them to the binding, and
-          // a live terminal surface must re-sync its PTY to that partially
-          // updated binding rather than keep running against stale folders.
-          applyWorktreeCreateResult({
-            stagedEntries,
-            changedWorkspacePaths,
-            perEntry: result.perEntry,
-            actions: {
-              finishAndResume,
-              unstageEntry: (workspacePath) =>
-                unstageWorktreeEntry(stagedKey, workspacePath),
-              commitPaths: handleBindingCommitted,
-              showPartialFailure: (message) =>
-                reportableErrorToast(message, undefined, {
-                  title: "Workspace update incomplete",
-                  message: null,
-                  code: null,
-                  source: "Worktree update",
-                }),
-            },
-          });
-          // Telemetry runs strictly after the product work; it is an
-          // observer and never part of the mutation chain (and it already
-          // gates each event on per-entry success).
-          trackUserInitiatedWorktreeWrite(stagedEntries, result);
-        },
-      },
-    );
+      })
+      .then((result) => {
+        applyWorktreeCreateResult({
+          stagedEntries,
+          changedWorkspacePaths,
+          perEntry: result.perEntry,
+          actions: {
+            finishAndResume,
+            unstageEntry: (workspacePath) =>
+              unstageWorktreeEntry(stagedKey, workspacePath),
+            commitPaths: handleBindingCommitted,
+            showPartialFailure: (message) =>
+              reportableErrorToast(message, undefined, {
+                title: "Workspace update incomplete",
+                message: null,
+                code: null,
+                source: "Worktree update",
+              }),
+          },
+        });
+        trackUserInitiatedWorktreeWrite(stagedEntries, result);
+      })
+      .catch((error: unknown) => {
+        if (!isWorktreeRebindBlocked(error)) return;
+        const draft = readStagedWorktreeIntent(stagedKey);
+        const dropped = droppedRunDirectoriesFromDraft({
+          binding: surface.binding,
+          draft,
+        });
+        setTeardownDialog({
+          choice: "blocked",
+          holders: snapshotTeardownHolders(dropped),
+        });
+      });
   }, [
     editor.dirtyPathsSinceResume,
-    createWorktree,
+    worktreeCreateMutation,
+    surface.binding,
     surface.epicId,
     surface.ownerId,
     ownerKind,
@@ -2065,6 +2089,25 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     clearStagedWorktreeIntent,
     unstageWorktreeEntry,
     handleBindingCommitted,
+    snapshotTeardownHolders,
+  ]);
+  const requestStagedFolderCommit = useCallback((): void => {
+    const staged = readStagedWorktreeIntent(stagedKey);
+    const dropped = droppedRunDirectoriesFromDraft({
+      binding: surface.binding,
+      draft: staged,
+    });
+    const holders = snapshotTeardownHolders(dropped);
+    if (holders.length === 0) {
+      applyStagedFoldersAndResume();
+      return;
+    }
+    setTeardownDialog({ choice: "commit", holders });
+  }, [
+    applyStagedFoldersAndResume,
+    snapshotTeardownHolders,
+    stagedKey,
+    surface.binding,
   ]);
   // Terminal-agent add/remove commit to the binding but deliberately do NOT
   // resume — only the explicit "Update" does. Mark the binding dirty so
@@ -2075,16 +2118,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     },
     [],
   );
-  // Closing the picker without Update discards the staged (un-applied) edits so
-  // the rows revert to the live binding. Terminal-agent only: chat staged
-  // worktree intents ride the next message send and must survive the popover.
-  // A committed add/remove (`editor.dirtyPathsSinceResume`) is intentionally NOT
-  // discarded here — it is already in the binding and can only be cleared by a
-  // resume, so "Update" must stay available after a close-without-apply.
-  const discardStagedFoldersOnClose = useCallback((): void => {
-    clearStagedWorktreeIntent(stagedKey);
-  }, [clearStagedWorktreeIntent, stagedKey]);
-
   useEffect(() => {
     const pending = pendingDefaultPathsRef.current;
     if (pending.size === 0) return;
@@ -2236,14 +2269,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         // Persist the per-folder choice immediately (not at send) so it survives
         // a reload and seeds future adds of this folder.
         setFolderIntent(intent, Date.now());
-        if (surface.kind === "terminal-agent") {
-          // Live terminal agent: stage every location/branch edit locally - no
-          // host write and no PTY restart yet. The explicit "Update" button
-          // applies the staged intent set via worktree.create and resumes the
-          // PTY once, so changing several folders is a single resume rather than
-          // one restart per edit. Closing the picker without Update discards the
-          // staged edits. `stageIntent` merges by workspacePath, so re-picking a
-          // folder replaces its prior staged choice.
+        if (
+          surface.kind === "terminal-agent" ||
+          (surface.kind === "chat" && surface.isOwnerActive)
+        ) {
+          // Draft: no host write. Terminal-agent commits via Update;
+          // a busy chat rides the next send. `stageIntent` merges by
+          // workspacePath, so re-picking a folder replaces its prior choice.
           stageWorktreeIntent(stagedKey, { entries: [intent] });
           return;
         }
@@ -2305,6 +2337,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       stageWorktreeIntent,
       surface.binding,
       surface.epicId,
+      surface.isOwnerActive,
       surface.kind,
       surface.ownerId,
       unstageWorktreeEntry,
@@ -2538,9 +2571,9 @@ function InEpicSurface(props: InEpicSurfaceProps) {
           makePrimaryDisabled: false,
           makePrimaryDisabledReason: null,
           hostClient: props.hostClient,
-          modeDisabled: activeRunLocksBinding || rowMetadataPending,
+          modeDisabled: rowMetadataPending,
           modeDisabledReason: modeDisabledReasonFor(
-            activeRunLocksBinding,
+            false,
             activeRunNotice,
             rowMetadataPending,
           ),
@@ -2797,18 +2830,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             onAddFolder={addFoldersToOwnerBinding}
             onUpdate={
               surface.kind === "terminal-agent"
-                ? applyStagedFoldersAndResume
+                ? requestStagedFolderCommit
                 : null
             }
+            draftPending={hasStagedFolderChanges}
             updateEnabled={
               hasStagedFolderChanges || editor.dirtyPathsSinceResume.size > 0
             }
             updatePending={worktreeCreatePending}
-            onDiscardStaged={
-              surface.kind === "terminal-agent"
-                ? discardStagedFoldersOnClose
-                : null
-            }
+            onDiscardStaged={null}
             onEditEnvironment={handleEditEnvironment}
             refresh={summariesRefresh}
             popoverTestId="workspace-rows-popover"
@@ -2830,6 +2860,21 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         context={scriptsContext}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setScriptsTargetPath(null);
+        }}
+      />
+      <TeardownCommitDialog
+        open={teardownDialog !== null}
+        choice={teardownDialog?.choice ?? null}
+        holders={teardownDialog?.holders ?? []}
+        onImmediate={() => {
+          setTeardownDialog(null);
+          applyStagedFoldersAndResume();
+        }}
+        onDefer={() => {
+          setTeardownDialog(null);
+        }}
+        onDismiss={() => {
+          setTeardownDialog(null);
         }}
       />
     </>

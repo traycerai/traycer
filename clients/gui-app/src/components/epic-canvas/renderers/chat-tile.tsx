@@ -61,6 +61,14 @@ import { ContextUsageChip } from "@/components/chat/context-usage-chip";
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { RevertOnEditDialog } from "@/components/chat/segments/revert-on-edit-dialog";
 import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { TeardownCommitDialog } from "@/components/worktree/teardown-commit-dialog";
+import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
+import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
+import {
+  readStagedWorktreeIntent,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
 import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
@@ -1192,6 +1200,14 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               onRestart={view.steerRestart.onRestart}
               changed={view.steerRestart.changed}
             />
+            <TeardownCommitDialog
+              open={view.teardownCommit.open}
+              choice={view.teardownCommit.choice}
+              holders={view.teardownCommit.holders}
+              onImmediate={view.teardownCommit.onImmediate}
+              onDefer={view.teardownCommit.onDismiss}
+              onDismiss={view.teardownCommit.onDismiss}
+            />
             <ChatForkDialog
               open={view.fork.open}
               target={view.fork.target}
@@ -1916,6 +1932,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [composerActiveTurnStatus, forkAtAssistantMessage, latestForkBoundaryId],
   );
 
+  const snapshotTeardownHolders = useOwnerTeardownSnapshot({
+    epicId: currentEpicId,
+    hostId: activeHostId,
+    ownerKind: "chat",
+    ownerId: node.id,
+    ownerLabel: node.name,
+    hasActiveTurn: composerActiveTurnStatus !== null,
+    ptyLive: false,
+  });
+  const [teardownDialog, setTeardownDialog] = useState<{
+    readonly holders: readonly WorktreeBusyHolder[];
+  } | null>(null);
+  const pendingSubmitRef = useRef<ChatComposerSubmitInput | null>(null);
+  const teardownConfirmedRef = useRef(false);
+
   const submitMessage = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
       if (!canAct) return false;
@@ -1963,6 +1994,31 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           content: input.content,
         },
       );
+      if (!teardownConfirmedRef.current) {
+        const stagedKey: WorktreeStagingKey = {
+          surface: "owner",
+          hostId: activeHostId,
+          epicId: currentEpicId,
+          ownerKind: "chat",
+          ownerId: node.id,
+        };
+        const staged = readStagedWorktreeIntent(stagedKey);
+        const holders =
+          staged === null
+            ? []
+            : snapshotTeardownHolders(
+                droppedRunDirectoriesFromDraft({
+                  binding: state.worktreeBinding,
+                  draft: staged,
+                }),
+              );
+        if (holders.length > 0) {
+          pendingSubmitRef.current = input;
+          setTeardownDialog({ holders });
+          return false;
+        }
+      }
+      teardownConfirmedRef.current = false;
       const sent = chatActions.sendMessage(
         input.content,
         sender,
@@ -1979,12 +2035,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [
       activeEditingQueueItemId,
+      activeHostId,
       canAct,
       chatActions,
+      currentEpicId,
       dispatchUi,
       node.id,
       node.name,
       profile,
+      snapshotTeardownHolders,
+      state.worktreeBinding,
       state.chat,
       state.messages,
       state.pendingUserMessages,
@@ -2205,6 +2265,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // because of visible background work, not a turn the "stop" wording
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
+          ownerLabel: node.name,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2504,6 +2565,23 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     todo: pinnedTodoRenderState.todo,
     revertOnEdit,
     steerRestart,
+    teardownCommit: {
+      open: teardownDialog !== null,
+      choice: "submit" as const,
+      holders: teardownDialog?.holders ?? [],
+      onImmediate: () => {
+        const pending = pendingSubmitRef.current;
+        pendingSubmitRef.current = null;
+        setTeardownDialog(null);
+        if (pending === null) return;
+        teardownConfirmedRef.current = true;
+        submitMessage(pending);
+      },
+      onDismiss: () => {
+        pendingSubmitRef.current = null;
+        setTeardownDialog(null);
+      },
+    },
     fork: {
       open: forkTarget !== null,
       target: forkTarget,
