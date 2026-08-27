@@ -4,8 +4,10 @@ import { cliError, CLI_ERROR_CODES, type CliError } from "./runner/errors";
  * Which slice of the agent-facing CLI a session is allowed to drive.
  *
  * `readonly` is set by the host (`TRAYCER_AGENT_CLI_SURFACE=readonly`) for
- * sessions that may inspect Traycer state but must not change it. `full` is
- * everything else, including a human typing `traycer` in their own terminal.
+ * sessions that may inspect Traycer state but must not change it. `full` is an
+ * absent/empty variable - a human typing `traycer` in their own terminal, and
+ * every session the host chose not to restrict - or the exact string `full`.
+ * Anything else resolves to `readonly`; see `resolveAgentCliSurface`.
  *
  * WHAT THIS IS, AND IS NOT. The signal is an environment variable in the
  * session's own environment, so an agent holding that shell can unset or

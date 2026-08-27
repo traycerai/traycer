@@ -2425,11 +2425,15 @@ function registerAgentCommands(
 // the shared globals still parse if present.
 //
 // Because it bypasses the runner, it also bypasses the readonly capability
-// gate `withRunner` applies - deliberately, and it is absent from
-// `READONLY_REFUSED_COMMANDS` for the reason recorded in `MONITOR_SURFACE_NOTE`
-// (CLI-021): it is the host-spawned delivery daemon, not a mutation an agent
-// asks for, and refusing it would break delivery rather than remove a
-// capability. It stays hidden on the readonly surface, as before.
+// check `withRunner` applies - and it is absent from
+// `READONLY_REFUSED_COMMANDS` as an EXPLICIT EXCEPTION, for the reason
+// recorded in `MONITOR_SURFACE_NOTE` (CLI-021). Not because it is out of
+// reach: this is a registered command an agent can type, with its own
+// `--agent-id`, so leaving it open does leave a mutation reachable. It is
+// granted because refusing it would break inbox delivery for any session the
+// host spawns a monitor for, and would buy little against a caller who can
+// clear the surface variable anyway. It stays hidden on the readonly surface,
+// as before.
 //
 // It is not read-only, and the description now says so: printing a message
 // durably acknowledges it, and the process maintains this machine's stored
