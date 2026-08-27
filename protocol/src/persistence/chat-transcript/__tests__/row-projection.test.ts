@@ -329,6 +329,33 @@ describe("the stopped-turn trailing row", () => {
     ).toBe(false);
   });
 
+  it("numbers the boundary row `part:0` for a STEER-ONLY stopped turn", () => {
+    // The one shape where `nextChunkIndex` is 0: `planAssistantTurnRows` never
+    // increments `chunkIndex` because the turn produced no slice at all. Every
+    // other fixture here ends on "one more than the last slice", so the id
+    // string is pinned rather than inferred - both the host projection and the
+    // renderer read the same `nextChunkIndex`, which is exactly why an
+    // equivalence assertion alone cannot see a change to it.
+    const turn = assistantMessage({
+      messageId: "m-1",
+      timestamp: 10,
+      turnId: "t-1",
+      startedAt: 1,
+      blocks: [steerBlock("b-1", 2, "m-gone")],
+    });
+    const stopped = stoppedEvent({
+      eventId: "e-1",
+      turnId: "t-1",
+      timestamp: 11,
+      messageId: null,
+    });
+
+    expect(project([turn], [stopped], null)).toEqual([
+      "steer:q-b-1",
+      "assistant:t-1:part:0",
+    ]);
+  });
+
   it("adds no boundary row while the turn is still ACTIVE", () => {
     const turn = assistantMessage({
       messageId: "m-1",

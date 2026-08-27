@@ -604,9 +604,16 @@ describe("an ACTIVE turn - the one place the two deliberately differ", () => {
     });
 
     expect(rendered.slice(0, projected.length)).toEqual(projected);
-    // Exactly one extra row, and it belongs to the active turn.
+    // Exactly one extra row, and it belongs to the active turn. Named
+    // EXACTLY, not by `toContain`: `assistant:turn-1` is a prefix of
+    // `assistant:turn-1:part:1`, so a substring match cannot tell the pre-turn
+    // indicator (`renderPendingRunIndicator`) from the trailing synthesized
+    // slice (`attachRunStateToTrailingAssistantSlice`) - two different
+    // client-only row sources, in a suite whose whole point is exact
+    // enumeration agreement. This fixture ends on a steer with a live run
+    // state, so the extra row is the trailing slice.
     expect(rendered).toHaveLength(projected.length + 1);
-    expect(rendered.at(-1)).toContain("assistant:turn-1");
+    expect(rendered.at(-1)).toBe("assistant:turn-1:part:1");
   });
 
   it("agrees exactly when a turn is active but produces no trailing indicator row", () => {

@@ -197,6 +197,27 @@ describe("indexChangeFits", () => {
     expect(indexChangeFits([{ type: "reindexed" }], 0)).toBe(true);
   });
 
+  it("still measures an array that merely CONTAINS a reindexed", () => {
+    // The exemption above is for the fallback ARRAY, not for the member. An
+    // exemption that fired on membership would let an oversized `appended`
+    // ride along beside a `reindexed` and skip the ceiling entirely - the
+    // measurement waived by the very thing that exists to make waiving
+    // unnecessary.
+    const oversized: ChatIndexChange = {
+      type: "appended",
+      entries: Array.from({ length: 4_000 }, (unused, index) =>
+        entry(`row-${index}`, "x".repeat(200)),
+      ),
+    };
+
+    expect(
+      indexChangeFits(
+        [oversized, { type: "reindexed" }],
+        INDEX_CHANGE_MAX_BYTES,
+      ),
+    ).toBe(false);
+  });
+
   it("clamps a caller asking for more than the frame budget", () => {
     const change: ChatIndexChange = {
       type: "appended",

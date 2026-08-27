@@ -173,10 +173,16 @@ function rowByteLength(
     case "assistant-slice":
       return blockBytes(source.blockIds, blocksById);
     case "steer": {
+      // BOTH, summed: `rowRecordIds` serves the turn's records and the steered
+      // user record for this row, and the renderer draws the steer block
+      // (badge, mode, sender) above the message itself. Returning only the
+      // message under-reports the row, and the list turns that hint into a
+      // placeholder height - so the row reserves too little space and the
+      // transcript jumps when the body lands.
       const block = blockBytes([source.blockId], blocksById);
       if (source.steeredMessageId === null) return block;
       const message = lookup.messagesById.get(source.steeredMessageId);
-      return message === undefined ? block : recordByteLength(message);
+      return message === undefined ? block : block + recordByteLength(message);
     }
     case "stopped-turn":
     case "forked-chat-link":

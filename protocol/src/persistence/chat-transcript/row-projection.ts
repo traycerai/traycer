@@ -451,14 +451,6 @@ export interface TurnStoppedInfo {
   readonly eventId: string;
 }
 
-/**
- * `turn.stopped` events keyed by `turnId`, in event order.
- *
- * The host's terminal latch guarantees at most one per turn attempt, so
- * last-write-wins is a defensive fallback rather than an expected overwrite.
- * Insertion order is load-bearing: it decides tie order among synthesized
- * stopped rows.
- */
 const EMPTY_EVENT_IDS: readonly string[] = [];
 
 /**
@@ -507,6 +499,14 @@ export function decoratingEventIdsByTurn(
   return out;
 }
 
+/**
+ * `turn.stopped` events keyed by `turnId`, in event order.
+ *
+ * The host's terminal latch guarantees at most one per turn attempt, so
+ * last-write-wins is a defensive fallback rather than an expected overwrite.
+ * Insertion order is load-bearing: it decides tie order among synthesized
+ * stopped rows.
+ */
 export function turnStoppedInfoByTurnKey(
   events: readonly ChatEvent[],
 ): ReadonlyMap<string, TurnStoppedInfo> {

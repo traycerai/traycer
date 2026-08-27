@@ -317,6 +317,40 @@ describe("index deltas", () => {
     expect(appended.spans).toHaveLength(1);
   });
 
+  it("seats an append at rowCount while the skeleton is still streaming", () => {
+    // `windowWithSkeleton` delivers a COMPLETE skeleton, where `length` and
+    // `rowCount` happen to agree - so every other case here would pass with
+    // either rule. This one separates them: only 30 of 100 ordinals have
+    // arrived, so appending at `skeleton.length` would seat the two new tail
+    // rows at ordinals 30 and 31, over scrollback whose real entries are still
+    // in flight. Then the identity check rejects a valid range for 30-31 while
+    // 100-101 stay holes forever.
+    const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
+      epoch: 1,
+      rowCount: 100,
+      tail: { fromOrdinal: 100, messages: [], events: [] },
+    });
+    const partial = applySkeletonChunk(seeded, {
+      epoch: 1,
+      fromOrdinal: 0,
+      entries: skeletonEntries(0, 30),
+      isFinal: false,
+    });
+    expect(partial.skeleton).toHaveLength(30);
+
+    const appended = applyIndexChange(partial, {
+      epoch: 1,
+      rowCount: 102,
+      changes: [{ type: "appended", entries: skeletonEntries(100, 2) }],
+    });
+
+    expect(appended.skeleton[100]?.rowId).toBe("row-100");
+    expect(appended.skeleton[101]?.rowId).toBe("row-101");
+    expect(appended.skeleton[30]).toBeUndefined();
+    expect(appended.rowCount).toBe(102);
+    expect(appended.skeletonComplete).toBe(false);
+  });
+
   it("drops the whole span containing a row that was rewritten in place", () => {
     // The whole span, not the row: a span's records are a DEDUPLICATED union
     // across its rows, so the client cannot say which records belong to the
@@ -1019,7 +1053,7 @@ describe("the streaming row's byte charge", () => {
     expect(streamed.held).toBe(true);
     // The row grew; the figure deliberately did not move.
     expect(streamed.window.hydratedBytes).toBe(seeded.hydratedBytes);
-    expect(streamed.window.unsettledByteRowIds).toEqual(["live"]);
+    expect(streamed.window.unsettledByteMessageIds).toEqual(["live"]);
   });
 
   it("settles to the same number an exact charge would have reached", () => {
@@ -1034,7 +1068,7 @@ describe("the streaming row's byte charge", () => {
 
     const settled = settleWindowBytes(deferred.window);
     expect(settled.hydratedBytes).toBe(exact.window.hydratedBytes);
-    expect(settled.unsettledByteRowIds).toEqual([]);
+    expect(settled.unsettledByteMessageIds).toEqual([]);
   });
 
   it("does not name the same row twice across a turn's worth of deltas", () => {
@@ -1044,7 +1078,7 @@ describe("the streaming row's byte charge", () => {
         messageWithText(message, `body ${index}`),
       ).window;
     }
-    expect(window.unsettledByteRowIds).toEqual(["live"]);
+    expect(window.unsettledByteMessageIds).toEqual(["live"]);
   });
 
   it("evicts on the settled figure, not the stale one", () => {
@@ -1080,7 +1114,7 @@ describe("the streaming row's byte charge", () => {
     );
     expect(evicted.spans.map((span) => span.fromOrdinal)).toEqual([0, 29]);
     // Settled on the way through, so the next read costs nothing.
-    expect(evicted.unsettledByteRowIds).toEqual([]);
+    expect(evicted.unsettledByteMessageIds).toEqual([]);
   });
 });
 

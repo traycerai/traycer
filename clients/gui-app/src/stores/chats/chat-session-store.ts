@@ -30,6 +30,8 @@ import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TRANSCRIPT_RANGE_MAX_BYTES } from "@traycer/protocol/persistence/chat-transcript/read-range";
 import type {
   ChatAccumulatedFileChangeSummary,
+  ChatIndexChange,
+  ChatRangeResponse,
   ChatTranscriptDerived,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
@@ -38,6 +40,7 @@ import {
   applySkeletonChunk,
   applyWindowedSnapshot,
   appendLiveRecords,
+  bodyInvalidatingOrdinals,
   emptyTranscriptWindow,
   evictTranscriptWindowToBudget,
   hydratedRecords,
@@ -2234,11 +2237,44 @@ export function createChatSessionStoreWithNotificationDependencies(
      * connection, and the transcript epoch can survive one - without the
      * clear, an identical re-plan would be suppressed forever), and
      * superseded by any differently-planned request.
+     *
+     * `requestId` and `superseded` are what make a LATE answer safe, and they
+     * cover different halves of one hazard. An oversized `range` response is
+     * the one frame on this line the relay may reclassify to its BULK lane,
+     * where it can be reordered behind INTERACTIVE deltas - so an
+     * `indexChanged` naming a row that response is carrying can arrive FIRST.
+     * An `updated` deliberately keeps both the epoch and the row id (see
+     * `diffRowSkeleton`: a row id that moved is a `reindexed` instead), so
+     * NEITHER check inside {@link applyRangeResponse} can see the staleness.
+     * The pre-update body seats, passes every check, and nothing re-requests
+     * it - a row frozen at a previous revision for the life of the epoch.
      */
     let inFlightHydrationRequest: {
-      epoch: number;
-      range: OrdinalRange;
+      readonly requestId: string;
+      readonly epoch: number;
+      readonly range: OrdinalRange;
+      /**
+       * Ordinals inside `range` whose body a later frame invalidated while
+       * this request was outstanding, or `"all"` for a `reindexed`. Clipped to
+       * the request's own extent, so the set is bounded by what one response
+       * can serve rather than by how long the request stays in flight.
+       */
+      readonly superseded: ReadonlySet<number> | "all";
     } | null = null;
+
+    /**
+     * The epoch a `resnapshot` has already been asked for, so an invalidated
+     * window asks once rather than once per frame.
+     *
+     * Invalidation is sticky until a snapshot clears it, and every windowed
+     * callback ends in {@link requestPlannedHydration} - so without the latch
+     * a skeleton chunk, an index delta and a range response arriving after the
+     * same invalidation send three identical resnapshot requests, each
+     * answered with a full bounded snapshot. Keyed by epoch rather than a bare
+     * boolean because a second invalidation under a NEW epoch is a genuinely
+     * new ask.
+     */
+    let resnapshotRequestedForEpoch: number | null = null;
 
     /** Ask for whatever the window says is missing, if anything. */
     const requestPlannedHydration = (): void => {
@@ -2248,6 +2284,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       if (window.invalidated) {
         // A void index cannot be repaired by a range: every ordinal it would
         // name belongs to a coordinate space this client has left.
+        if (resnapshotRequestedForEpoch === window.epoch) return;
+        resnapshotRequestedForEpoch = window.epoch;
         client.requestResnapshot();
         return;
       }
@@ -2262,9 +2300,15 @@ export function createChatSessionStoreWithNotificationDependencies(
       ) {
         return;
       }
-      inFlightHydrationRequest = { epoch: window.epoch, range: next };
+      const requestId = uuidv4();
+      inFlightHydrationRequest = {
+        requestId,
+        epoch: window.epoch,
+        range: next,
+        superseded: new Set<number>(),
+      };
       client.requestTranscriptRange({
-        requestId: uuidv4(),
+        requestId,
         epoch: window.epoch,
         fromOrdinal: next.fromOrdinal,
         toOrdinal: next.toOrdinal,
@@ -2273,6 +2317,72 @@ export function createChatSessionStoreWithNotificationDependencies(
         // than a number this side has to keep in step.
         maxBytes: TRANSCRIPT_RANGE_MAX_BYTES,
       });
+    };
+
+    /**
+     * Record that a delta invalidated bodies a range request is still waiting
+     * for.
+     *
+     * Reads the SAME predicate {@link applyIndexChange} folds with
+     * ({@link bodyInvalidatingOrdinals}) rather than re-deriving "which
+     * ordinals does this frame stale" from `changes` here - a second copy of
+     * that rule would drift from the one that decides which spans to drop, and
+     * the two disagreeing is exactly the state this guards against.
+     */
+    const supersedeInFlightHydration = (input: {
+      readonly epoch: number;
+      readonly changes: readonly ChatIndexChange[];
+    }): void => {
+      const inFlight = inFlightHydrationRequest;
+      if (inFlight === null || inFlight.superseded === "all") return;
+      const invalidated = bodyInvalidatingOrdinals(input.changes);
+      if (invalidated === "all") {
+        inFlightHydrationRequest = { ...inFlight, superseded: "all" };
+        return;
+      }
+      // An `updated` from another epoch says nothing about whether THIS
+      // request's answer is still current: it describes rows in a coordinate
+      // space the request was not framed against, and `applyIndexChange`
+      // discards it for the same reason.
+      if (input.epoch !== inFlight.epoch) return;
+      // Inclusive at the top: the wire's `loadRange` bounds are inclusive at
+      // both ends, so a response may legitimately reach `range.toOrdinal`.
+      const inside = invalidated.filter(
+        (ordinal) =>
+          ordinal >= inFlight.range.fromOrdinal &&
+          ordinal <= inFlight.range.toOrdinal,
+      );
+      if (inside.length === 0) return;
+      inFlightHydrationRequest = {
+        ...inFlight,
+        superseded: new Set([...inFlight.superseded, ...inside]),
+      };
+    };
+
+    /**
+     * Should this `range` response be thrown away rather than seated?
+     *
+     * Tested against what the response actually SERVED - a truncated answer
+     * that stopped before the invalidated ordinal is still current, and
+     * discarding it would cost a round trip for nothing.
+     *
+     * An untracked response is discarded rather than trusted. The slot is
+     * `null` only because a windowed snapshot cleared it (see that field's own
+     * doc), and a cleared slot is precisely the state in which nothing
+     * recorded what happened to these ordinals while the answer was in the
+     * air. Costing a re-request there is the cheap side of the trade; the
+     * expensive side is a body that renders as current forever.
+     */
+    const rangeResponseIsStale = (response: ChatRangeResponse): boolean => {
+      const inFlight = inFlightHydrationRequest;
+      if (inFlight === null) return true;
+      if (inFlight.requestId !== response.requestId) return true;
+      if (inFlight.superseded === "all") return true;
+      const servedEnd = response.fromOrdinal + response.rowIds.length;
+      for (const ordinal of inFlight.superseded) {
+        if (ordinal >= response.fromOrdinal && ordinal < servedEnd) return true;
+      }
+      return false;
     };
 
     /** {@link ChatSessionState.reportVisibleTranscriptRange}'s implementation;
@@ -2435,6 +2545,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // discriminator now reports.
         windowedLine = false;
         inFlightHydrationRequest = null;
+        resnapshotRequestedForEpoch = null;
         deferredWindowedSnapshot = null;
         applyAuthoritativeSnapshot(frame, {
           transcriptWindow: emptyTranscriptWindow(),
@@ -2487,6 +2598,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // See the field's own doc: a snapshot means a (re)connection settled,
         // and any request the previous connection had in flight is gone.
         inFlightHydrationRequest = null;
+        // A fresh snapshot IS the answer an invalidated window was waiting
+        // for, whether or not this one was sent in reply to that request.
+        resnapshotRequestedForEpoch = null;
         // Before the fold, exactly as the legacy path flushes: a queued delta
         // applied after an authoritative snapshot would re-add a block the
         // snapshot already carries.
@@ -2544,6 +2658,12 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
+        // BEFORE the fold, because it reads the epoch the in-flight request
+        // was framed against and the fold can move it.
+        supersedeInFlightHydration({
+          epoch: frame.epoch,
+          changes: frame.changes,
+        });
         const window = applyIndexChange(get().transcriptWindow, {
           epoch: frame.epoch,
           rowCount: frame.rowCount,
@@ -2563,7 +2683,16 @@ export function createChatSessionStoreWithNotificationDependencies(
         ) {
           return;
         }
+        const stale = rangeResponseIsStale(frame.range);
         inFlightHydrationRequest = null;
+        if (stale) {
+          // Seat nothing. The ordinals stay unhydrated, so the re-plan below
+          // asks for them again - which is the whole point: a discarded
+          // response costs a round trip, a seated stale one costs a row that
+          // never corrects itself.
+          requestPlannedHydration();
+          return;
+        }
         const window = evictTranscriptWindowToBudget(
           applyRangeResponse(get().transcriptWindow, frame.range),
           TRANSCRIPT_WINDOW_MAX_BYTES,
@@ -2586,7 +2715,17 @@ export function createChatSessionStoreWithNotificationDependencies(
         requestPlannedHydration();
       },
       onAccumulatedChanges: (frame) => {
-        if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
+        // Same downgrade guard as `onSkeletonChunk`, and it is not symmetry
+        // for its own sake: `onSnapshot` clears the summaries when it falls
+        // back to the legacy line, where `accumulatedFileChanges` is the
+        // authoritative set - and nothing clears them a second time. A
+        // straggling chunk repopulating them here leaves the panel serving
+        // rows from an abandoned windowed epoch for the life of the session.
+        if (
+          disposed ||
+          !windowedLine ||
+          !matchesChat(options, frame.epicId, frame.chatId)
+        ) {
           return;
         }
         // Chunks are contiguous and in order from `fromIndex`, so a chunk
@@ -5469,7 +5608,8 @@ export function isWindowedTranscript<
  * follows from how often the caller runs rather than from what it wants. The
  * row-targeted appliers pass `"now"`. The ACTIVE TURN's streaming row passes
  * `"deferred"`, because charging it exactly would serialize a growing record
- * on every buffered delta - see `unsettledByteRowIds` in `transcript-window`.
+ * on every buffered delta - see `unsettledByteMessageIds` in
+ * `transcript-window`.
  */
 function rewriteMessageInPlace(
   state: ChatSessionState,

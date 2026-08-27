@@ -13,6 +13,7 @@ import {
   buildRowSkeleton,
   type TranscriptPreviewProjection,
 } from "@traycer/protocol/persistence/chat-transcript/build-skeleton";
+import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   ROW_SKELETON_PREVIEW_MAX_CHARS,
   rowSkeletonEntrySchema,
@@ -110,6 +111,37 @@ function assistantMessage(fields: {
     reasoningEffort: null,
     serviceTier: null,
     imageResolutions: [],
+  });
+}
+
+/** An assistant turn whose only block STEERS - one steer row, no slices. */
+function steeredTurn(fields: {
+  messageId: string;
+  timestamp: number;
+  steeredMessageId: string;
+}): Message {
+  const base = assistantMessage({
+    messageId: fields.messageId,
+    timestamp: fields.timestamp,
+    text: "unused",
+    usage: null,
+  });
+  return messageSchema.parse({
+    ...base,
+    turnId: `t-${fields.messageId}`,
+    blocks: [
+      {
+        blockId: `b-${fields.messageId}`,
+        status: "completed",
+        timestamp: fields.timestamp,
+        type: "steer",
+        queueItemId: `q-${fields.messageId}`,
+        messageId: fields.steeredMessageId,
+        content: { type: "doc" },
+        mode: "safe_point",
+        sender: null,
+      },
+    ],
   });
 }
 
@@ -392,6 +424,63 @@ describe("buildRowSkeleton", () => {
     expect(largeEntry?.byteLength).toBeGreaterThan(0);
     expect(largeEntry?.byteLength ?? 0).toBeGreaterThan(
       smallEntry?.byteLength ?? 0,
+    );
+  });
+
+  it("charges a steer row for the steer block AND the steered record", () => {
+    // `rowRecordIds` serves both for this row - the block carries the badge,
+    // mode and sender, the record carries the message - so a hint that named
+    // only one of them under-reports the row. The list turns that hint into a
+    // placeholder height, and an under-reported row reserves too little space,
+    // which is a visible jump when the body lands.
+    const steered = humanUserMessage({
+      messageId: "m-steer",
+      timestamp: 5,
+      text: "x".repeat(4000),
+    });
+    const turn = steeredTurn({
+      messageId: "m-turn",
+      timestamp: 10,
+      steeredMessageId: "m-steer",
+    });
+    const orphaned = steeredTurn({
+      messageId: "m-turn-2",
+      timestamp: 20,
+      // No such record: the row is the steer block alone.
+      steeredMessageId: "m-gone",
+    });
+
+    const withRecord = buildRowSkeleton(
+      {
+        messages: [steered, turn],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+    const blockOnly = buildRowSkeleton(
+      {
+        messages: [orphaned],
+        events: [],
+        activeTurnId: null,
+        chatId: "chat-1",
+      },
+      previewText,
+    );
+
+    const steerRow = withRecord.find((entry) => entry.rowId === "m-steer");
+    const orphanRow = blockOnly.find((entry) =>
+      entry.rowId.startsWith("steer:"),
+    );
+    expect(steerRow).toBeDefined();
+    expect(orphanRow?.byteLength ?? 0).toBeGreaterThan(0);
+    // Against the RECORD, not against the block-only row: "bigger than a small
+    // row" is true of `recordByteLength(message)` alone, so it would pass with
+    // the block silently dropped. Strictly greater than the record is what
+    // only the sum satisfies.
+    expect(steerRow?.byteLength ?? 0).toBeGreaterThan(
+      recordByteLength(steered),
     );
   });
 

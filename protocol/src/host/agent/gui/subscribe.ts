@@ -7,11 +7,13 @@
  * bridge (see `stream-compat.ts`'s `canBridgeStream()`), so once a method
  * ships, its major must never move again - only additive minors.
  *
- * `1.7` is the WINDOWED line and is the one place that generalization bends:
- * it does not merely add to `1.6`, it replaces the snapshot's embedded
+ * `1.8` is the WINDOWED line and is the one place that generalization bends:
+ * it does not merely add to `1.7`, it replaces the snapshot's embedded
  * transcript with a skeleton plus on-demand ranges. That is a behaviour
  * change selected by version rather than by a flag, and the host serves whole
- * snapshots to anything below it. See the `1.7` contract at the bottom.
+ * snapshots to anything below it. See `chatSubscribeV18` at the bottom. (It
+ * was drafted as `1.7` and re-based when the interview-settlement + Reasonix
+ * line took that minor first - see the note above `chatSubscribeV17`.)
  *
  * This stream is intentionally text-frame-only. The existing `epic.subscribe`
  * stream remains responsible for Y.Doc binary updates; chat execution frames
@@ -2787,13 +2789,15 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 /**
  * The windowed line.
  *
- * **Deliberately not in `hostStreamRpcRegistry` yet.** Stream minors are
- * negotiated to the highest the two peers share, so the moment this appears in
- * the registry every new-GUI-to-new-host pair negotiates it — which means
- * registering it IS the switch, and it must land in the same change that
- * teaches the host to serve windowed frames and the GUI to consume them.
- * Registering it earlier would leave both sides negotiating a line neither
- * implements, on the one stream where a broken subscribe means a blank chat.
+ * **Registered in `hostStreamRpcRegistry`, and that registration IS the
+ * switch.** Stream minors are negotiated to the highest the two peers share,
+ * so every `1.8`-capable GUI talking to a `1.8`-capable host now lands here;
+ * anything older settles on its own minor and is served whole snapshots by the
+ * legacy handlers. It was held out of the registry until this contract, the
+ * host's windowed producers and the GUI's windowed appliers could land
+ * together, because registering it alone would have left both sides
+ * negotiating a line neither implements - on the one stream where a broken
+ * subscribe means a blank chat.
  */
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",

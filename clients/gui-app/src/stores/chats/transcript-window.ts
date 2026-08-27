@@ -109,7 +109,14 @@ export interface TranscriptWindow {
   readonly liveEvents: readonly ChatEvent[];
   readonly hydratedBytes: number;
   /**
-   * Rows whose latest rewrite is NOT yet reflected in {@link hydratedBytes}.
+   * MESSAGE ids whose latest rewrite is not yet reflected in
+   * {@link hydratedBytes}.
+   *
+   * Message ids, not row ids, and the distinction is worth the longer name:
+   * everywhere else in this module an identity is the host's PROJECTION id,
+   * and this one is matched against `span.messages[].messageId` because a
+   * rewrite names a record. The two spaces are not interchangeable - one
+   * folded assistant turn is many rows over one record set.
    *
    * The streaming path's answer to a cost that has no cheap exact form.
    * `recordByteLength` serializes a whole record, and the active turn's row is
@@ -129,7 +136,7 @@ export interface TranscriptWindow {
    * evicting the cold scrollback it is competing with, which is the one moment
    * that budget is for.
    */
-  readonly unsettledByteRowIds: readonly string[];
+  readonly unsettledByteMessageIds: readonly string[];
   /**
    * The index is void and only a `resnapshot` repairs it.
    *
@@ -208,7 +215,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     liveMessages: [],
     liveEvents: [],
     hydratedBytes: 0,
-    unsettledByteRowIds: [],
+    unsettledByteMessageIds: [],
     invalidated: false,
     clock: 0,
   };
@@ -317,7 +324,7 @@ export function updateWindowMessage(
  * The same rewrite, for the ACTIVE TURN's row.
  *
  * Identical in every respect except when the bytes are charged: this one defers
- * (see {@link TranscriptWindow.unsettledByteRowIds}). Separate from
+ * (see {@link TranscriptWindow.unsettledByteMessageIds}). Separate from
  * {@link updateWindowMessage} rather than a flag on it, because the choice is
  * not a caller preference - it follows from how often the caller runs, and a
  * row-targeted applier that started deferring would be a silent regression in
@@ -340,8 +347,8 @@ export function streamWindowMessage(
  * Called wherever the figure is about to be READ.
  */
 export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
-  if (window.unsettledByteRowIds.length === 0) return window;
-  const unsettled = new Set(window.unsettledByteRowIds);
+  if (window.unsettledByteMessageIds.length === 0) return window;
+  const unsettled = new Set(window.unsettledByteMessageIds);
   const spans = window.spans.map((span) =>
     span.messages.some((message) => unsettled.has(message.messageId))
       ? { ...span, bytes: recordsByteLength(span.messages, span.events) }
@@ -351,7 +358,7 @@ export function settleWindowBytes(window: TranscriptWindow): TranscriptWindow {
     ...window,
     spans,
     hydratedBytes: totalBytes(spans),
-    unsettledByteRowIds: [],
+    unsettledByteMessageIds: [],
   };
 }
 
@@ -388,7 +395,7 @@ function rewriteWindowMessage(
       // Charged as a DELTA, not by re-measuring the span: only one record
       // changed, so the two are identical and this one does not serialize
       // every record the span holds. `deferred` skips even that - see
-      // `unsettledByteRowIds` for why the streaming path cannot afford one
+      // `unsettledByteMessageIds` for why the streaming path cannot afford one
       // serialization of a growing row per delta.
       bytes:
         charge === "deferred"
@@ -408,10 +415,10 @@ function rewriteWindowMessage(
       spans,
       liveMessages,
       hydratedBytes: totalBytes(spans),
-      unsettledByteRowIds:
-        charge === "now" || window.unsettledByteRowIds.includes(messageId)
-          ? window.unsettledByteRowIds
-          : [...window.unsettledByteRowIds, messageId],
+      unsettledByteMessageIds:
+        charge === "now" || window.unsettledByteMessageIds.includes(messageId)
+          ? window.unsettledByteMessageIds
+          : [...window.unsettledByteMessageIds, messageId],
       clock: window.clock + 1,
     },
     held: true,
@@ -721,6 +728,32 @@ function spanContradictsSkeleton(
 }
 
 /**
+ * The ordinals whose BODIES a delta invalidates, or `"all"`.
+ *
+ * Exported because two readers have to reach the same answer and a second copy
+ * of the rule would drift: {@link applyIndexChange} uses it to decide which
+ * spans to drop, and the session store uses it to decide whether a range
+ * request already in flight is about to be answered with bodies this very
+ * frame superseded.
+ *
+ * `updated` is the only member that stales a body without renumbering it -
+ * `appended` shifts nothing, and `reindexed` voids the coordinate space
+ * itself, which is `"all"` rather than a list of ordinals in a space that no
+ * longer means anything.
+ */
+export function bodyInvalidatingOrdinals(
+  changes: readonly ChatIndexChange[],
+): readonly number[] | "all" {
+  if (changes.some((change) => change.type === "reindexed")) return "all";
+  const ordinals: number[] = [];
+  for (const change of changes) {
+    if (change.type !== "updated") continue;
+    for (const entry of change.entries) ordinals.push(entry.ordinal);
+  }
+  return ordinals;
+}
+
+/**
  * Apply an `indexChanged` delta.
  *
  * The three cases are what the client can actually do to its row set, and each
@@ -747,7 +780,8 @@ export function applyIndexChange(
     readonly changes: readonly ChatIndexChange[];
   },
 ): TranscriptWindow {
-  if (input.changes.some((change) => change.type === "reindexed")) {
+  const invalidated = bodyInvalidatingOrdinals(input.changes);
+  if (invalidated === "all") {
     return {
       ...emptyTranscriptWindow(),
       epoch: input.epoch,
@@ -761,17 +795,28 @@ export function applyIndexChange(
   // a frame from a coordinate space this client has already left.
   if (input.epoch !== window.epoch) return window;
 
-  let skeleton = [...window.skeleton];
-  const updatedOrdinals: number[] = [];
+  const skeleton = [...window.skeleton];
+  // Appended entries are seated at the ordinals they NAME - which begin at the
+  // PRE-delta `rowCount` - and never at `skeleton.length`. The two are equal
+  // only once the skeleton is complete, and the skeleton is deliberately
+  // sparse while its chunks are still streaming: its length is then "one past
+  // the highest ordinal delivered so far", which is BELOW `rowCount`.
+  // Appending by length in that window seats the new tail rows over ordinals
+  // whose real entries have not arrived yet, so every identity check against
+  // those ordinals rejects a valid range or drops a held span, while the
+  // ordinals the rows actually occupy stay holes forever.
+  let appendCursor = window.rowCount;
   for (const change of input.changes) {
     if (change.type === "appended") {
-      skeleton = [...skeleton, ...change.entries];
+      for (const entry of change.entries) {
+        skeleton[appendCursor] = entry;
+        appendCursor += 1;
+      }
       continue;
     }
     if (change.type === "updated") {
       for (const { ordinal, entry } of change.entries) {
         skeleton[ordinal] = entry;
-        updatedOrdinals.push(ordinal);
       }
     }
   }
@@ -785,7 +830,7 @@ export function applyIndexChange(
       window.skeletonComplete && skeleton.length === input.rowCount,
     clock: window.clock + 1,
   };
-  return dropSpansForUpdatedOrdinals(next, updatedOrdinals);
+  return dropSpansForUpdatedOrdinals(next, invalidated);
 }
 
 /**

@@ -214,7 +214,11 @@ function hostPinnedTodoTexts(input: RenderedMessagesInput): string[] {
     messages: input.messages,
     events: input.events,
     activeTurnId: input.activeTurn?.turnId ?? null,
-    chatId: input.epicId,
+    // `ownerId`, matching what the renderer builds setup-card row ids from.
+    // No fixture here produces one, so the two are interchangeable today -
+    // which is exactly why they should agree now, rather than the first
+    // `setup.*` fixture failing for a reason unrelated to the pinned-todo fold.
+    chatId: input.ownerId,
   });
   const todo = foldPinnedTodo(rows, contentBlocksById(input.messages));
   return (todo?.items ?? []).map((item) => item.text);

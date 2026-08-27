@@ -77,6 +77,24 @@ function textBlock(
   };
 }
 
+function steerBlock(
+  blockId: string,
+  timestamp: number,
+  messageId: string,
+): Extract<Message, { role: "assistant" }>["blocks"][number] {
+  return {
+    type: "steer",
+    blockId,
+    status: "completed",
+    timestamp,
+    queueItemId: `q-${blockId}`,
+    messageId,
+    content: CONTENT,
+    mode: "safe_point",
+    sender: null,
+  };
+}
+
 function assistantMessage(input: {
   messageId: string;
   timestamp: number;
@@ -316,6 +334,44 @@ describe("latestForkableAssistantMessageId renderer/protocol equivalence", () =>
     });
 
     expect(rendererResult).toBe("a-legacy-2");
+    expect(protocolResult).toBe(rendererResult);
+  });
+
+  it("agree on a STOPPED steer-only turn, whose boundary row is synthesized", () => {
+    // The one turn shape that produces no assistant SLICE at all, so its
+    // trailing row is numbered `part:0` rather than "one past the last slice"
+    // (`row-projection.test.ts` pins that id string). Both sides read the same
+    // `nextChunkIndex` to synthesize it, which is why the projection assertion
+    // alone cannot catch renderer-side drift here and this half is needed too.
+    const { rendererResult, protocolResult } = bothForkBoundaries({
+      messages: [
+        assistantMessage({
+          messageId: "a-1",
+          timestamp: 2000,
+          turnId: "turn-1",
+          blocks: [steerBlock("b-1", 2000, "u-gone")],
+        }),
+      ],
+      events: [
+        {
+          eventId: "e-stop",
+          type: "turn.stopped",
+          timestamp: 2500,
+          clientActionId: null,
+          actor: null,
+          message: null,
+          turnId: "turn-1",
+          messageId: null,
+          queueItemId: null,
+          approvalId: null,
+          blockId: null,
+          severity: "info",
+          metadata: null,
+        },
+      ],
+    });
+
+    expect(rendererResult).toBe("a-1");
     expect(protocolResult).toBe(rendererResult);
   });
 });

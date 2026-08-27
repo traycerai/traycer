@@ -127,7 +127,7 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
       // merely for an unrelated field-name difference.
       accumulatedFileChangeCount: 0,
       // No transcriptEpoch / rowCount / tail / derived - the windowed-only
-      // fields a real 1.7 snapshot must carry.
+      // fields a real 1.8 snapshot must carry.
     };
 
     expect(
@@ -141,7 +141,7 @@ describe("chatSubscribeWindowedServerFrameSchema's snapshot variant", () => {
 // ─── Group 2: the 1.6 freeze is real ────────────────────────────────────────
 
 describe("the chat.subscribe@1.6 freeze", () => {
-  it("declares schemaVersion 1.6, and 1.7 declares 1.7", () => {
+  it("declares schemaVersion 1.6, and the windowed line declares 1.8", () => {
     expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
   });
@@ -247,7 +247,7 @@ describe("the chat.subscribe@1.6 freeze", () => {
   });
 });
 
-// ─── Group 3: the 1.7 frame unions ──────────────────────────────────────────
+// ─── Group 3: the 1.8 frame unions ──────────────────────────────────────────
 
 describe("chatSubscribeWindowedServerFrameSchema's frame kinds", () => {
   const WINDOWED_SERVER_KINDS = [

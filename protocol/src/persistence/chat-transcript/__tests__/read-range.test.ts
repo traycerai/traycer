@@ -563,7 +563,7 @@ describe("sliceTranscriptTail", () => {
     expect(result.fromOrdinal).toBe(1);
   });
 
-  it("still hydrates the rows BEFORE an unfittable last row is reached", () => {
+  it("abandons the rows BEFORE an unfittable last row, because the tail is contiguous", () => {
     // Walking backward, the huge row is hit first and stops the walk - so the
     // tail is empty even though earlier rows would have fit. That is the
     // honest consequence of a contiguous tail, and it is pinned here so a

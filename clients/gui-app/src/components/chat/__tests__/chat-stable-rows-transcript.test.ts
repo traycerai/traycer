@@ -81,6 +81,31 @@ describe("stable transcript list rows", () => {
     expect(next.result[0]).toBe(previous.result[0]);
   });
 
+  it("does not reuse a placeholder whose entry arrived", () => {
+    // A skeleton chunk landing under a rendered placeholder moves `entry` from
+    // `null` to a delivered one. Nothing about the row's KEY changes, so a
+    // reuse rule keyed on identity alone would hold the old element - and the
+    // placeholder's height is derived from `byteLength`, so the row would keep
+    // the 120px "nothing known" guess for a row the skeleton now describes.
+    const previous = computeStableTranscriptListRows(
+      [placeholder("r-1", 1, null)],
+      EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE,
+    );
+    const next = computeStableTranscriptListRows(
+      [
+        placeholder("r-1", 1, {
+          rowId: "r-1",
+          createdAt: 1000,
+          role: "assistant",
+          byteLength: 65_536,
+        }),
+      ],
+      previous,
+    );
+
+    expect(next.result[0]).not.toBe(previous.result[0]);
+  });
+
   it("does not reuse a row when it changes from placeholder to hydrated", () => {
     const entry: RowSkeletonEntry = {
       rowId: "r-1",

@@ -81,7 +81,7 @@ function windowOf(input: {
     liveMessages: [],
     liveEvents: [],
     hydratedBytes: input.spans.reduce((sum, held) => sum + held.bytes, 0),
-    unsettledByteRowIds: [],
+    unsettledByteMessageIds: [],
     invalidated: input.invalidated,
     clock: 1,
   };

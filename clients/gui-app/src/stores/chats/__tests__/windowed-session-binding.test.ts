@@ -26,11 +26,12 @@ import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-
  * user sends it twice, which is worse than any rendering bug in this feature.
  * These tests pin the sequencing that prevents it.
  *
- * The frames are delivered straight to the store's callbacks. That is not a
- * shortcut around the transport - `chatSubscribeV18` is unregistered, so no
- * handshake can negotiate the windowed line at all (the client declares its own
- * canonical minor whenever the host's is newer). The callback surface is where
- * this behaviour lives either way.
+ * The frames are delivered straight to the store's callbacks rather than
+ * through a negotiated stream. That is deliberate rather than a shortcut: this
+ * behaviour lives on the callback surface, and driving it directly is what lets
+ * a test place an `indexChanged` between a `loadRange` and its answer - the
+ * reordering these fixtures exist to pin, and one a real handshake gives no way
+ * to schedule.
  */
 
 const EPIC_ID = "epic-w";
@@ -175,6 +176,15 @@ interface WindowedHarness {
   readonly rangeRequests: ChatLoadRangeRequest[];
   readonly resnapshotCount: () => number;
   callbacks(): ChatStreamCallbacks;
+  /**
+   * The id a `range` frame must carry to be seated.
+   *
+   * The store discards a response that does not answer its outstanding
+   * request, so a fixture inventing an id would be testing the discard path
+   * rather than the seat path. Throws when nothing is outstanding, because
+   * that is a frame the host has no reason to send.
+   */
+  lastRangeRequestId(): string;
 }
 
 function createWindowedHarness(): WindowedHarness {
@@ -211,6 +221,11 @@ function createWindowedHarness(): WindowedHarness {
     callbacks: () => {
       if (callbacks === null) throw new Error("Expected callbacks");
       return callbacks;
+    },
+    lastRangeRequestId: () => {
+      const last = rangeRequests.at(-1);
+      if (last === undefined) throw new Error("Expected an outstanding range");
+      return last.requestId;
     },
   };
 }
@@ -366,7 +381,7 @@ describe("windowed snapshot whose tail arrived empty", () => {
         epicId: EPIC_ID,
         chatId: CHAT_ID,
         range: {
-          requestId: "req-1",
+          requestId: harness.lastRangeRequestId(),
           epoch: 4,
           fromOrdinal: 0,
           rowIds: ["row-0", "row-1"],
@@ -409,7 +424,7 @@ describe("windowed snapshot whose tail arrived empty", () => {
         epicId: EPIC_ID,
         chatId: CHAT_ID,
         range: {
-          requestId: "req-1",
+          requestId: harness.lastRangeRequestId(),
           epoch: 4,
           fromOrdinal: 0,
           rowIds: ["row-0", "row-1"],
@@ -479,6 +494,21 @@ describe("accumulated-change chunks", () => {
         digest: `d-${filePath}`,
         counts: { additions: 1, deletions: 0 },
       });
+
+      // The chunks follow a windowed snapshot on the wire, and the store now
+      // requires that: a chunk arriving on a session that has NOT negotiated
+      // the windowed line is a straggler from an abandoned epoch, and seating
+      // it would leave the panel serving rows the legacy line has no way to
+      // clear.
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 1,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0)],
+          accumulatedFileChangeCount: 3,
+        }),
+      );
 
       harness.callbacks().onAccumulatedChanges({
         kind: "accumulatedChanges",
@@ -668,6 +698,28 @@ describe("a record that arrives with no ordinal", () => {
         message: acceptedMessage("m-live", 9),
       });
 
+      // The index catches up and names a row for it. That un-hydrates the
+      // tail, which is what makes the client ask - a `range` only ever arrives
+      // in answer to a `loadRange`, so the fetch has to be real for the
+      // response below to be one the host could send.
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 4,
+        rowCount: 2,
+        changes: [
+          {
+            type: "appended",
+            entries: [
+              { rowId: "row-1", createdAt: 9, role: "user", byteLength: 128 },
+            ],
+          },
+        ],
+      });
+      expect(harness.rangeRequests).toHaveLength(1);
+
       // The host's own copy, now with an ordinal.
       harness.callbacks().onRange({
         kind: "range",
@@ -675,7 +727,7 @@ describe("a record that arrives with no ordinal", () => {
         epicId: EPIC_ID,
         chatId: CHAT_ID,
         range: {
-          requestId: "req-1",
+          requestId: harness.lastRangeRequestId(),
           epoch: 4,
           fromOrdinal: 0,
           rowIds: ["row-0", "row-1"],
@@ -1020,7 +1072,8 @@ describe("a row-targeted delta on the windowed line", () => {
       // written per delta - so nothing else here can tell them apart, and a
       // silent switch back to eager would be an invisible regression.
       expect(
-        harness.handle.store.getState().transcriptWindow.unsettledByteRowIds,
+        harness.handle.store.getState().transcriptWindow
+          .unsettledByteMessageIds,
       ).toEqual(["a-live"]);
     } finally {
       harness.handle.dispose();

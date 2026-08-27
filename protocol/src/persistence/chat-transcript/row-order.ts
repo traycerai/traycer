@@ -93,7 +93,6 @@ export function sortIntoCanonicalRowOrder<T>(
 }
 
 /**
-/**
  * A metadata value the renderer would accept as present.
  *
  * Mirrors `metadataString` in `rendered-messages.ts`, and the EMPTY-STRING case

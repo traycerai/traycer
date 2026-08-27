@@ -3,7 +3,6 @@ import type {
   ChatEvent,
   ChatEventType,
 } from "@traycer/protocol/persistence/epic/chat-events";
-import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import {
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
@@ -39,20 +38,6 @@ function makeChatEvent(fields: {
     blockId: null,
     severity: "info",
     metadata: fields.metadata,
-  };
-}
-
-function makeUserMessage(fields: {
-  messageId: string;
-  timestamp: number;
-}): Message {
-  return {
-    role: "user",
-    messageId: fields.messageId,
-    sender: { type: "user", userId: "u-1" },
-    message: { kind: "user", content: {} },
-    timestamp: fields.timestamp,
-    sessionAnchor: null,
   };
 }
 

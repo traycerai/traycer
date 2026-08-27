@@ -674,12 +674,23 @@ export function chunkRowSkeleton(
  * means the index-change path has exactly one oversized-delta behaviour instead
  * of a chunking protocol whose edge cases nobody would exercise often enough to
  * trust.
+ *
+ * Which is why the fallback array is exempt from the measurement: an answer
+ * that could itself fail to fit is not an answer. The exemption is on an array
+ * that is NOTHING BUT `reindexed` - the shape the fallback actually produces -
+ * and deliberately not on any array that happens to contain one. Exempting the
+ * latter would let `[{appended, 4000 entries}, {reindexed}]` skip the ceiling
+ * altogether, which is the measurement being waived by the very member that
+ * exists to make waiving unnecessary.
  */
 export function indexChangeFits(
   changes: readonly ChatIndexChange[],
   maxBytes: number,
 ): boolean {
-  if (changes.some((change) => change.type === "reindexed")) return true;
+  const isFallback =
+    changes.length > 0 &&
+    changes.every((change) => change.type === "reindexed");
+  if (isFallback) return true;
   return (
     utf8ByteLength(JSON.stringify(changes)) <
     Math.min(maxBytes, INDEX_CHANGE_MAX_BYTES)

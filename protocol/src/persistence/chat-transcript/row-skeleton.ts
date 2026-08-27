@@ -23,10 +23,11 @@ import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation"
  * separate per-row cursor would be a second coordinate whose only consumer is
  * a check the epoch already performs.
  *
- * **No per-row write stamp.** Staleness is carried by `indexChanged`'s
- * `changedEntries`: inclusion IS the signal, and the client drops the body of
- * every id it names. A `lastWriteSeq` to compare against would be redundant
- * with the list that is already on the wire.
+ * **No per-row write stamp.** Staleness is carried by the `updated` member of
+ * an `indexChanged` frame's `changes` array, whose `entries` are
+ * `{ordinal, entry}` pairs: inclusion IS the signal, and the client drops the
+ * body of every ordinal it names. A `lastWriteSeq` to compare against would be
+ * redundant with the list that is already on the wire.
  *
  * **No body, and no field derived from a body that can grow.** `byteLength` is
  * the exception and it is a HINT (see its doc). Everything else here is either
