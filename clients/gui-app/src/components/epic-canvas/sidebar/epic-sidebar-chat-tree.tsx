@@ -2065,8 +2065,27 @@ interface NodeChevronProps {
 
 function NodeChevron(props: NodeChevronProps) {
   const { hasChildren, expanded, onToggle } = props;
+  const surface = useChatTreeSurface();
   if (!hasChildren) return <TreeChevronSpacer />;
-  return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  if (surface === null) {
+    return <TreeChevron expanded={expanded} onToggle={onToggle} />;
+  }
+  // Desktop's chevron is an 11.25px glyph INSIDE the row button, which is fine
+  // for a cursor and not for a thumb: a near-miss lands on the row instead, and
+  // on a surface that closes itself on activation that miss dismisses the sheet
+  // rather than merely doing nothing. So the hit box grows and the glyph does
+  // not - an absolutely-positioned pseudo takes no space in flow, so the column
+  // stays desktop's exact width and the density ruling is untouched. `onToggle`
+  // moves to this wrapper so one handler owns the whole enlarged box; it
+  // already stops propagation, which is what keeps the row from opening.
+  return (
+    <span
+      onClick={onToggle}
+      className="relative inline-flex cursor-pointer before:absolute before:-inset-2 before:content-['']"
+    >
+      <TreeChevron expanded={expanded} onToggle={undefined} />
+    </span>
+  );
 }
 
 interface ChatNodeChildrenProps {
