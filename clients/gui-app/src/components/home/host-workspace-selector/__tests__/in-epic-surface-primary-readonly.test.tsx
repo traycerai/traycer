@@ -10,6 +10,8 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
+import type { OwnerTeardownSnapshot } from "@/lib/worktree/owner-teardown-snapshot";
+import { teardownHolderKey } from "@/lib/worktree/owner-teardown-snapshot";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -44,9 +46,14 @@ const recentMocks = vi.hoisted(() => ({
   recordRecentAsync: vi.fn(),
 }));
 const teardownMocks = vi.hoisted(() => ({
-  snapshot: vi.fn(
-    (_dropped: readonly string[]): readonly WorktreeBusyHolder[] => [],
-  ),
+  snapshot: vi.fn((_dropped: readonly string[]): OwnerTeardownSnapshot => ({
+    holders: [],
+    stopTargets: [],
+  })),
+}));
+const teardownStopMocks = vi.hoisted(() => ({
+  stopShell: vi.fn().mockResolvedValue({}),
+  stopAgent: vi.fn().mockResolvedValue({ stoppedAgentIds: [] }),
 }));
 const listByPathsMocks = vi.hoisted(() => ({
   workspaces: [] as WorktreeWorkspaceSummaryV15[],
@@ -94,6 +101,24 @@ vi.mock("@/hooks/worktree/use-worktree-list-by-workspace-paths-query", () => ({
 }));
 vi.mock("@/hooks/worktree/use-owner-teardown-snapshot", () => ({
   useOwnerTeardownSnapshot: () => teardownMocks.snapshot,
+}));
+vi.mock(
+  "@/hooks/managed-command/use-managed-command-lifecycle-mutations",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/managed-command/use-managed-command-lifecycle-mutations")
+    >()),
+    useManagedCommandStop: () => ({
+      mutateAsync: teardownStopMocks.stopShell,
+      isPending: false,
+    }),
+  }),
+);
+vi.mock("@/hooks/agent/use-stop-agent-mutation", () => ({
+  useAgentStop: () => ({
+    mutateAsync: teardownStopMocks.stopAgent,
+    isPending: false,
+  }),
 }));
 vi.mock("@/hooks/worktree/use-worktree-workspaces-refresh", () => ({
   useWorktreeWorkspacesRefresh: () => ({
@@ -304,7 +329,12 @@ beforeEach(() => {
   recentMocks.recordRecentAsync.mockResolvedValue({});
   mutationMocks.createWorktree.mockResolvedValue({ perEntry: [] });
   mutationMocks.removeBindingFolder.mockResolvedValue({});
-  teardownMocks.snapshot.mockImplementation(() => []);
+  teardownStopMocks.stopShell.mockResolvedValue({});
+  teardownStopMocks.stopAgent.mockResolvedValue({ stoppedAgentIds: [] });
+  teardownMocks.snapshot.mockImplementation(() => ({
+    holders: [],
+    stopTargets: [],
+  }));
 });
 
 afterEach(() => {
@@ -313,6 +343,8 @@ afterEach(() => {
   mutationMocks.createWorktree.mockReset();
   mutationMocks.recordRecent.mockReset();
   mutationMocks.removeBindingFolder.mockReset();
+  teardownStopMocks.stopShell.mockReset();
+  teardownStopMocks.stopAgent.mockReset();
   teardownMocks.snapshot.mockReset();
   listByPathsMocks.workspaces = [];
   recentMocks.prepareRecent.mockReset();
@@ -512,16 +544,37 @@ const TERMINAL_STAGING_KEY = {
   ownerId: "owner-1",
 };
 
-function shellHolder(label: string): WorktreeBusyHolder {
+function shellHolder(
+  label: string,
+  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"] = "terminal-agent",
+): WorktreeBusyHolder {
   return {
     ownerRef: {
       epicId: "epic-1",
-      ownerKind: "terminal-agent",
+      ownerKind,
       ownerId: "owner-1",
     },
     holdKind: "supervised-shell",
     activity: "working",
     label,
+  };
+}
+
+function shellSnapshot(
+  label: string,
+  commandId = "sh-1",
+  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"] = "terminal-agent",
+): OwnerTeardownSnapshot {
+  const holder = shellHolder(label, ownerKind);
+  return {
+    holders: [holder],
+    stopTargets: [
+      {
+        kind: "supervised-shell",
+        commandId,
+        holderKey: teardownHolderKey(holder),
+      },
+    ],
   };
 }
 
@@ -581,7 +634,9 @@ async function openTerminalFolderPopover(): Promise<void> {
 
 it("stages a TUI folder removal and discloses a shell under it on Update", async () => {
   teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
-    dropped.includes("/repo/alpha") ? [shellHolder("npm run dev")] : [],
+    dropped.includes("/repo/alpha")
+      ? shellSnapshot("npm run dev")
+      : { holders: [], stopTargets: [] },
   );
 
   await openTerminalFolderPopover();
@@ -615,7 +670,7 @@ it("stages a TUI folder removal and discloses a shell under it on Update", async
 
 it("re-discloses when TUI staging mutates under an open confirmation", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => [shellHolder("npm run dev")]);
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -650,7 +705,7 @@ it("re-discloses when TUI staging mutates under an open confirmation", async () 
 
 it("commits the disclosed TUI draft when staging is unchanged", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => [shellHolder("npm run dev")]);
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -670,4 +725,143 @@ it("commits the disclosed TUI draft when staging is unchanged", async () => {
     }>;
   };
   expect(createArg.entries[0]?.branch?.name).toBe("feat-a");
+});
+
+it("awaits a disclosed shell stop before worktree.create", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  let releaseStop: ((value: unknown) => void) | null = null;
+  teardownStopMocks.stopShell.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releaseStop = resolve;
+      }),
+  );
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(teardownStopMocks.stopShell).toHaveBeenCalledWith({
+      hostId: "host-test",
+      epicId: "epic-1",
+      commandId: "sh-1",
+    });
+  });
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+
+  act(() => {
+    releaseStop?.({});
+  });
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("keeps the dialog open and skips create when a disclosed stop fails", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  teardownStopMocks.stopShell.mockRejectedValue(
+    new Error("shell still running"),
+  );
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+
+  expect(
+    (await screen.findByTestId("teardown-holder-failure")).textContent,
+  ).toBe("shell still running");
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+});
+
+it("discloses idle-chat folder removal when a live shell is under the folder", async () => {
+  teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
+    dropped.includes("/repo/alpha")
+      ? shellSnapshot("npm run dev", "sh-1", "chat")
+      : { holders: [], stopTargets: [] },
+  );
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
+
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
+    "npm run dev",
+  );
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+  await waitFor(() => {
+    expect(teardownStopMocks.stopShell).toHaveBeenCalled();
+  });
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "chat",
+      workspacePath: "/repo/alpha",
+    });
+  });
+});
+
+it("keeps a newer TUI draft after an in-flight commit of an older capture", async () => {
+  seedResolvedBindingMetadata();
+  let releaseCreate: ((value: unknown) => void) | null = null;
+  mutationMocks.createWorktree.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releaseCreate = resolve;
+      }),
+  );
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  await waitFor(() => {
+    expect(mutationMocks.createWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  act(() => {
+    useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+      entries: [newWorktreeIntent("/repo/alpha", "feat-b")],
+    });
+  });
+  act(() => {
+    releaseCreate?.({
+      perEntry: [
+        {
+          workspacePath: "/repo/alpha",
+          ok: true,
+          worktreePath: "/wt/alpha",
+          branch: "feat-a",
+          errorMessage: null,
+        },
+      ],
+    });
+  });
+
+  await waitFor(() => {
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(TERMINAL_STAGING_KEY)
+      ]?.entries[0],
+    ).toMatchObject({ branch: { name: "feat-b" } });
+  });
 });

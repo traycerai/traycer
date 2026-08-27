@@ -1211,6 +1211,8 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               open={view.teardownCommit.open}
               choice={view.teardownCommit.choice}
               holders={view.teardownCommit.holders}
+              immediateDisabled={view.teardownCommit.immediateDisabled}
+              refusalReason={view.teardownCommit.refusalReason}
               onImmediate={view.teardownCommit.onImmediate}
               onDefer={view.teardownCommit.onDismiss}
               onDismiss={view.teardownCommit.onDismiss}
@@ -1232,6 +1234,16 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
 // Aggregates the full chat-tile view model (session handle, ui reducer, derived
 // run/permission/handoff state). The branch count reflects the number of
 // independent UI concerns surfaced for one tile, not reducible nesting.
+// eslint-disable-next-line complexity
+function teardownSendRefusalReason(
+  canAct: boolean,
+  signedIn: boolean,
+): string | undefined {
+  if (!canAct) return "You don't have permission to send.";
+  if (!signedIn) return "Sign in to send this message.";
+  return undefined;
+}
+
 // eslint-disable-next-line complexity
 function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const { handle, node, viewTabId, isActive, currentEpicId } = props;
@@ -2038,22 +2050,23 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         ownerKind: "chat",
         ownerId: node.id,
       };
+      const snapshot = snapshotTeardownHolders(
+        droppedRunDirectoriesFromDraft({
+          binding: state.worktreeBinding,
+          draft: readStagedWorktreeIntent(stagedKey),
+          removedWorkspacePaths: [],
+        }),
+      );
       const capture: WorktreeCommitCapture = {
         draft: readStagedWorktreeIntent(stagedKey),
         revision: stagedWorktreeIntentRevision(stagedKey),
         binding: state.worktreeBinding,
         removedWorkspacePaths: [],
+        stopTargets: snapshot.stopTargets,
       };
-      const holders = snapshotTeardownHolders(
-        droppedRunDirectoriesFromDraft({
-          binding: capture.binding,
-          draft: capture.draft,
-          removedWorkspacePaths: capture.removedWorkspacePaths,
-        }),
-      );
-      if (holders.length > 0) {
+      if (snapshot.holders.length > 0) {
         pendingSubmitRef.current = { input, capture };
-        setTeardownDialog({ holders });
+        setTeardownDialog({ holders: snapshot.holders });
         return false;
       }
       return dispatchUserSend(input);
@@ -2592,11 +2605,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       open: teardownDialog !== null,
       choice: "submit" as const,
       holders: teardownDialog?.holders ?? [],
+      immediateDisabled: !canAct || profile === null,
+      refusalReason: teardownSendRefusalReason(canAct, profile !== null),
       onImmediate: () => {
+        if (!canAct) {
+          toast("You don't have permission to send.");
+          return;
+        }
+        if (profile === null) {
+          toast("Sign in to send this message.");
+          return;
+        }
         const armed = takeArmedTeardownSubmit(pendingSubmitRef);
-        setTeardownDialog(null);
         if (armed === null) return;
-        if (!canAct || profile === null) return;
         const stagedKey: WorktreeStagingKey = {
           surface: "owner",
           hostId: activeHostId,
@@ -2604,26 +2625,28 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           ownerKind: "chat",
           ownerId: node.id,
         };
+        const liveSnapshot = snapshotTeardownHolders(
+          droppedRunDirectoriesFromDraft({
+            binding: state.worktreeBinding,
+            draft: readStagedWorktreeIntent(stagedKey),
+            removedWorkspacePaths: [],
+          }),
+        );
         const live: WorktreeCommitCapture = {
           draft: readStagedWorktreeIntent(stagedKey),
           revision: stagedWorktreeIntentRevision(stagedKey),
           binding: state.worktreeBinding,
           removedWorkspacePaths: [],
+          stopTargets: liveSnapshot.stopTargets,
         };
         if (worktreeCommitCaptureIsStale(armed.capture, live)) {
-          const holders = snapshotTeardownHolders(
-            droppedRunDirectoriesFromDraft({
-              binding: live.binding,
-              draft: live.draft,
-              removedWorkspacePaths: live.removedWorkspacePaths,
-            }),
-          );
-          if (holders.length > 0) {
+          if (liveSnapshot.holders.length > 0) {
             pendingSubmitRef.current = { input: armed.input, capture: live };
-            setTeardownDialog({ holders });
+            setTeardownDialog({ holders: liveSnapshot.holders });
             return;
           }
         }
+        setTeardownDialog(null);
         dispatchUserSend(armed.input);
       },
       onDismiss: () => {

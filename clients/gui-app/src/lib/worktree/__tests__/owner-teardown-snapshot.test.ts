@@ -8,7 +8,9 @@ import type {
 import {
   droppedRunDirectoriesFromDraft,
   pathContainsDirectory,
+  snapshotOwnerTeardown,
   snapshotOwnerTeardownHolders,
+  teardownHolderKey,
   type OwnerTeardownSnapshotInput,
 } from "../owner-teardown-snapshot";
 
@@ -151,6 +153,55 @@ describe("snapshotOwnerTeardownHolders", () => {
           ],
         }),
       ),
+    ).toEqual([]);
+  });
+
+  it("attaches a stop target with the shell id for GUI-composed teardown", () => {
+    const snapshot = snapshotOwnerTeardown(
+      input({
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-1",
+            description: "watch",
+            command: "npm run dev",
+            cwd: "/wt/old",
+            live: true,
+          },
+        ],
+      }),
+    );
+    expect(snapshot.holders).toHaveLength(1);
+    expect(snapshot.stopTargets).toEqual([
+      {
+        kind: "supervised-shell",
+        commandId: "sh-1",
+        holderKey: teardownHolderKey({
+          ownerRef: OWNER,
+          holdKind: "supervised-shell",
+          activity: "working",
+          label: "npm run dev",
+        }),
+      },
+    ]);
+  });
+
+  it("attaches a chat-turn stop target only for chat owners", () => {
+    expect(
+      snapshotOwnerTeardown(input({ hasActiveTurn: true })).stopTargets,
+    ).toEqual([
+      {
+        kind: "chat-turn",
+        holderKey: "chat:chat-1:chat-turn:Planner is working",
+      },
+    ]);
+    expect(
+      snapshotOwnerTeardown(
+        input({
+          ownerRef: { ...OWNER, ownerKind: "terminal-agent" },
+          hasActiveTurn: true,
+        }),
+      ).stopTargets,
     ).toEqual([]);
   });
 

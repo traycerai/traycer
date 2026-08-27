@@ -21,6 +21,10 @@ export function TeardownCommitDialog(props: {
   readonly open: boolean;
   readonly choice: TeardownCommitChoice | null;
   readonly holders: readonly WorktreeBusyHolder[];
+  readonly failures?: Readonly<Record<string, string>>;
+  readonly immediateDisabled?: boolean;
+  readonly immediatePending?: boolean;
+  readonly refusalReason?: string;
   readonly onImmediate: () => void;
   readonly onDefer: () => void;
   readonly onDismiss: () => void;
@@ -45,9 +49,21 @@ export function TeardownCommitDialog(props: {
         <DialogHeader className="space-y-1 px-6 pt-6 pb-2">
           <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
+          {props.refusalReason === undefined ||
+          props.refusalReason.length === 0 ? null : (
+            <p
+              className="text-ui-sm text-destructive"
+              data-testid="teardown-commit-refusal"
+            >
+              {props.refusalReason}
+            </p>
+          )}
         </DialogHeader>
         <div className="px-6 py-2">
-          <TeardownDisclosure holders={props.holders} />
+          <TeardownDisclosure
+            holders={props.holders}
+            failures={props.failures}
+          />
         </div>
         <DialogFooter className="mx-0 mb-0 mt-2 gap-2 rounded-b-xl border-t border-border/40 bg-foreground/2 px-6 py-4">
           <Button
@@ -84,6 +100,10 @@ export function TeardownCommitDialog(props: {
               type="button"
               variant="default"
               size="sm"
+              disabled={
+                props.immediateDisabled === true ||
+                props.immediatePending === true
+              }
               onClick={props.onImmediate}
               data-testid="teardown-commit-immediate"
             >

@@ -1,10 +1,10 @@
 import { useCallback } from "react";
-import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import {
-  snapshotOwnerTeardownHolders,
+  snapshotOwnerTeardown,
   type OwnerTeardownShell,
+  type OwnerTeardownSnapshot,
 } from "@/lib/worktree/owner-teardown-snapshot";
 
 export type OwnerTeardownSnapshotArgs = {
@@ -24,7 +24,7 @@ export type OwnerTeardownSnapshotArgs = {
  */
 export function useOwnerTeardownSnapshot(
   args: OwnerTeardownSnapshotArgs,
-): (droppedRunDirectories: readonly string[]) => readonly WorktreeBusyHolder[] {
+): (droppedRunDirectories: readonly string[]) => OwnerTeardownSnapshot {
   const {
     epicId,
     hostId,
@@ -36,7 +36,7 @@ export function useOwnerTeardownSnapshot(
   } = args;
   return useCallback(
     (droppedRunDirectories: readonly string[]) =>
-      snapshotOwnerTeardownHolders({
+      snapshotOwnerTeardown({
         ownerRef: { epicId, ownerKind, ownerId },
         ownerLabel,
         hasActiveTurn,

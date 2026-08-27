@@ -39,6 +39,26 @@ export type OwnerTeardownSnapshotInput = {
   readonly droppedRunDirectories: readonly string[];
 };
 
+export type TeardownStopTarget =
+  | {
+      readonly kind: "supervised-shell";
+      readonly commandId: string;
+      readonly holderKey: string;
+    }
+  | {
+      readonly kind: "chat-turn";
+      readonly holderKey: string;
+    };
+
+export type OwnerTeardownSnapshot = {
+  readonly holders: readonly WorktreeBusyHolder[];
+  readonly stopTargets: readonly TeardownStopTarget[];
+};
+
+export function teardownHolderKey(holder: WorktreeBusyHolder): string {
+  return `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}:${holder.holdKind}:${holder.label}`;
+}
+
 export function runDirectoryOfBindingEntry(
   entry: WorktreeBindingEntry,
 ): string {
@@ -107,17 +127,25 @@ export function pathContainsDirectory(
   );
 }
 
-export function snapshotOwnerTeardownHolders(
+export function snapshotOwnerTeardown(
   input: OwnerTeardownSnapshotInput,
-): readonly WorktreeBusyHolder[] {
+): OwnerTeardownSnapshot {
   const holders: WorktreeBusyHolder[] = [];
+  const stopTargets: TeardownStopTarget[] = [];
   if (input.hasActiveTurn) {
-    holders.push({
+    const holder: WorktreeBusyHolder = {
       ownerRef: input.ownerRef,
       holdKind: "chat-turn",
       activity: "working",
       label: `${input.ownerLabel} is working`,
-    });
+    };
+    holders.push(holder);
+    if (input.ownerRef.ownerKind === "chat") {
+      stopTargets.push({
+        kind: "chat-turn",
+        holderKey: teardownHolderKey(holder),
+      });
+    }
   }
   if (input.ptyLive) {
     holders.push({
@@ -132,14 +160,26 @@ export function snapshotOwnerTeardownHolders(
     if (!shellBelongsToDroppedPaths(shell, input.droppedRunDirectories)) {
       continue;
     }
-    holders.push({
+    const holder: WorktreeBusyHolder = {
       ownerRef: input.ownerRef,
       holdKind: "supervised-shell",
       activity: "working",
       label: shellLabel(shell),
+    };
+    holders.push(holder);
+    stopTargets.push({
+      kind: "supervised-shell",
+      commandId: shell.id,
+      holderKey: teardownHolderKey(holder),
     });
   }
-  return holders;
+  return { holders, stopTargets };
+}
+
+export function snapshotOwnerTeardownHolders(
+  input: OwnerTeardownSnapshotInput,
+): readonly WorktreeBusyHolder[] {
+  return snapshotOwnerTeardown(input).holders;
 }
 
 function shellBelongsToDroppedPaths(

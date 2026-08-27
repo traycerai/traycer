@@ -1,5 +1,6 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import { cn } from "@/lib/utils";
+import { teardownHolderKey } from "@/lib/worktree/owner-teardown-snapshot";
 
 /**
  * Renders a T2 holder list as "what will be stopped". Source-agnostic: the
@@ -8,6 +9,7 @@ import { cn } from "@/lib/utils";
  */
 export function TeardownDisclosure(props: {
   readonly holders: readonly WorktreeBusyHolder[];
+  readonly failures?: Readonly<Record<string, string>>;
 }) {
   if (props.holders.length === 0) return null;
   const working = props.holders.filter(
@@ -25,6 +27,7 @@ export function TeardownDisclosure(props: {
           heading={workingHeading(working)}
           holders={working}
           tone="working"
+          failures={props.failures}
         />
       ) : null}
       {idle.length > 0 ? (
@@ -33,6 +36,7 @@ export function TeardownDisclosure(props: {
           heading={idleHeading(idle)}
           holders={idle}
           tone="idle"
+          failures={props.failures}
         />
       ) : null}
     </div>
@@ -44,6 +48,7 @@ function HolderGroup(props: {
   readonly heading: string;
   readonly holders: readonly WorktreeBusyHolder[];
   readonly tone: "working" | "idle";
+  readonly failures: Readonly<Record<string, string>> | undefined;
 }) {
   return (
     <section
@@ -61,22 +66,38 @@ function HolderGroup(props: {
         {props.heading}
       </p>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
-        {props.holders.map((holder) => (
-          <li
-            key={holderKey(holder)}
-            className={cn(
-              "flex min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-ui-sm",
-              props.tone === "working" ? "bg-foreground/8" : "bg-foreground/3",
-            )}
-          >
-            <span className="min-w-0 flex-1 truncate text-foreground">
-              {holder.label}
-            </span>
-            <span className="shrink-0 text-ui-xs text-muted-foreground">
-              {holdKindLabel(holder.holdKind)}
-            </span>
-          </li>
-        ))}
+        {props.holders.map((holder) => {
+          const key = teardownHolderKey(holder);
+          const failure = props.failures?.[key];
+          return (
+            <li
+              key={key}
+              className={cn(
+                "flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 text-ui-sm",
+                props.tone === "working"
+                  ? "bg-foreground/8"
+                  : "bg-foreground/3",
+              )}
+            >
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-foreground">
+                  {holder.label}
+                </span>
+                <span className="shrink-0 text-ui-xs text-muted-foreground">
+                  {holdKindLabel(holder.holdKind)}
+                </span>
+              </div>
+              {failure === undefined ? null : (
+                <span
+                  className="text-ui-xs text-destructive"
+                  data-testid="teardown-holder-failure"
+                >
+                  {failure}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
@@ -115,8 +136,4 @@ function idleHeading(holders: readonly WorktreeBusyHolder[]): string {
   return holders.length === 1
     ? "1 background process will be stopped"
     : `${holders.length} background processes will be stopped`;
-}
-
-function holderKey(holder: WorktreeBusyHolder): string {
-  return `${holder.ownerRef.ownerKind}:${holder.ownerRef.ownerId}:${holder.holdKind}:${holder.label}`;
 }

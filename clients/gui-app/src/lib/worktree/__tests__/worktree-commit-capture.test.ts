@@ -36,6 +36,7 @@ function capture(
     revision: 1,
     binding: { entries: [] },
     removedWorkspacePaths: [],
+    stopTargets: [],
     ...overrides,
   };
 }

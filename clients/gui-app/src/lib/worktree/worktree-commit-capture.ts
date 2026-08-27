@@ -2,16 +2,20 @@ import type {
   WorktreeBinding,
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
+import type { TeardownStopTarget } from "@/lib/worktree/owner-teardown-snapshot";
 
 /**
  * Gesture-time snapshot of the draft a disclosure was computed from. Confirm
  * must apply this capture (or re-disclose) — never a later staging mutation.
+ * `stopTargets` are the GUI-composed teardown actions for the holders shown
+ * at disclosure time (phase-1; see `runGuiComposedTeardown`).
  */
 export type WorktreeCommitCapture = {
   readonly draft: WorktreeIntent | null;
   readonly revision: number;
   readonly binding: WorktreeBinding | null;
   readonly removedWorkspacePaths: readonly string[];
+  readonly stopTargets: readonly TeardownStopTarget[];
 };
 
 export type ArmedTeardownSubmit<T> = {

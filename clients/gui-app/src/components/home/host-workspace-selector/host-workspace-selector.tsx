@@ -130,12 +130,18 @@ import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 import { droppedRunDirectoriesFromDraft } from "@/lib/worktree/owner-teardown-snapshot";
+import {
+  failuresByHolderKey,
+  runGuiComposedTeardown,
+} from "@/lib/worktree/gui-composed-teardown";
 import { isWorktreeRebindBlocked } from "@/lib/worktree/is-worktree-rebind-blocked";
 import {
   worktreeCommitCaptureIsStale,
   type WorktreeCommitCapture,
 } from "@/lib/worktree/worktree-commit-capture";
 import { useOwnerTeardownSnapshot } from "@/hooks/worktree/use-owner-teardown-snapshot";
+import { useManagedCommandStop } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
+import { useAgentStop } from "@/hooks/agent/use-stop-agent-mutation";
 import {
   TeardownCommitDialog,
   type TeardownCommitChoice,
@@ -1735,6 +1741,7 @@ type FolderEditorAction =
       readonly workspacePaths: ReadonlyArray<string>;
     }
   | { readonly type: "stageRemoval"; readonly workspacePath: string }
+  | { readonly type: "unstageRemoval"; readonly workspacePath: string }
   | { readonly type: "resumed" };
 function folderEditorReducer(
   state: FolderEditorState,
@@ -1760,6 +1767,12 @@ function folderEditorReducer(
           action.workspacePath,
         ]),
       };
+    }
+    case "unstageRemoval": {
+      if (!state.pendingRemovedPaths.has(action.workspacePath)) return state;
+      const next = new Set(state.pendingRemovedPaths);
+      next.delete(action.workspacePath);
+      return { ...state, pendingRemovedPaths: next };
     }
     case "resumed":
       return {
@@ -1803,7 +1816,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     "WORKTREE_REBIND_BLOCKED",
   ]);
   const worktreeCreatePending = worktreeCreateMutation.isPending;
-  const snapshotTeardownHolders = useOwnerTeardownSnapshot({
+  const snapshotOwnerTeardown = useOwnerTeardownSnapshot({
     epicId: surface.epicId,
     hostId: surface.hostId,
     ownerKind,
@@ -1812,11 +1825,16 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     hasActiveTurn: surface.hasActiveTurn,
     ptyLive: surface.kind === "terminal-agent" && surface.isOwnerActive,
   });
+  const stopManagedCommand = useManagedCommandStop();
+  const stopAgent = useAgentStop();
   const [teardownDialog, setTeardownDialog] = useState<{
     readonly choice: TeardownCommitChoice;
     readonly holders: readonly WorktreeBusyHolder[];
     readonly capture: WorktreeCommitCapture;
+    readonly failures: Readonly<Record<string, string>>;
+    readonly restoreRemovalOnDismiss: string | null;
   } | null>(null);
+  const [teardownCommitPending, setTeardownCommitPending] = useState(false);
   const removeBindingEntryMutation = useWorkspaceBindingRemoveEntryForClient(
     props.hostClient,
   );
@@ -1926,8 +1944,8 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   const unstageWorktreeEntry = useWorktreeIntentStagingStore(
     (s) => s.unstageEntry,
   );
-  const clearStagedWorktreeIntent = useWorktreeIntentStagingStore(
-    (s) => s.clear,
+  const releaseIntentForDispatch = useWorktreeIntentStagingStore(
+    (s) => s.releaseIntentForDispatch,
   );
   const stagedKey = useMemo<WorktreeStagingKey>(
     () => ({
@@ -2030,13 +2048,28 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     changedWorkspacePathsSinceResume,
   );
   const readLiveCommitCapture = useCallback((): WorktreeCommitCapture => {
+    const draft = readStagedWorktreeIntent(stagedKey);
+    const removedWorkspacePaths = [...editor.pendingRemovedPaths];
+    const snapshot = snapshotOwnerTeardown(
+      droppedRunDirectoriesFromDraft({
+        binding: surface.binding,
+        draft,
+        removedWorkspacePaths,
+      }),
+    );
     return {
-      draft: readStagedWorktreeIntent(stagedKey),
+      draft,
       revision: stagedWorktreeIntentRevision(stagedKey),
       binding: surface.binding,
-      removedWorkspacePaths: [...editor.pendingRemovedPaths],
+      removedWorkspacePaths,
+      stopTargets: snapshot.stopTargets,
     };
-  }, [editor.pendingRemovedPaths, stagedKey, surface.binding]);
+  }, [
+    editor.pendingRemovedPaths,
+    snapshotOwnerTeardown,
+    stagedKey,
+    surface.binding,
+  ]);
   const applyStagedFoldersAndResume = useCallback(
     (capture: WorktreeCommitCapture): void => {
       if (stagedWorktreeIntentIsSuspended(stagedKey)) return;
@@ -2061,7 +2094,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         ]),
       );
       const finishAndResume = (): void => {
-        clearStagedWorktreeIntent(stagedKey);
+        releaseIntentForDispatch(stagedKey, capture.revision);
         dispatchEditor({ type: "resumed" });
         handleBindingCommitted(changedWorkspacePaths);
       };
@@ -2106,10 +2139,13 @@ function InEpicSurface(props: InEpicSurfaceProps) {
               draft: live.draft,
               removedWorkspacePaths: live.removedWorkspacePaths,
             });
+            const blocked = snapshotOwnerTeardown(dropped);
             setTeardownDialog({
               choice: "blocked",
-              holders: snapshotTeardownHolders(dropped),
-              capture: live,
+              holders: blocked.holders,
+              capture: { ...live, stopTargets: blocked.stopTargets },
+              failures: {},
+              restoreRemovalOnDismiss: null,
             });
           });
       };
@@ -2148,29 +2184,36 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       surface.ownerId,
       ownerKind,
       stagedKey,
-      clearStagedWorktreeIntent,
+      releaseIntentForDispatch,
       unstageWorktreeEntry,
       handleBindingCommitted,
-      snapshotTeardownHolders,
+      snapshotOwnerTeardown,
     ],
   );
   const requestStagedFolderCommit = useCallback((): void => {
     const capture = readLiveCommitCapture();
-    const dropped = droppedRunDirectoriesFromDraft({
-      binding: capture.binding,
-      draft: capture.draft,
-      removedWorkspacePaths: capture.removedWorkspacePaths,
-    });
-    const holders = snapshotTeardownHolders(dropped);
-    if (holders.length === 0) {
+    const snapshot = snapshotOwnerTeardown(
+      droppedRunDirectoriesFromDraft({
+        binding: capture.binding,
+        draft: capture.draft,
+        removedWorkspacePaths: capture.removedWorkspacePaths,
+      }),
+    );
+    if (snapshot.holders.length === 0) {
       applyStagedFoldersAndResume(capture);
       return;
     }
-    setTeardownDialog({ choice: "commit", holders, capture });
+    setTeardownDialog({
+      choice: "commit",
+      holders: snapshot.holders,
+      capture: { ...capture, stopTargets: snapshot.stopTargets },
+      failures: {},
+      restoreRemovalOnDismiss: null,
+    });
   }, [
     applyStagedFoldersAndResume,
     readLiveCommitCapture,
-    snapshotTeardownHolders,
+    snapshotOwnerTeardown,
   ]);
   // Terminal-agent add/remove commit to the binding but deliberately do NOT
   // resume — only the explicit "Update" does. Mark the binding dirty so
@@ -2189,6 +2232,58 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     },
     [stagedKey, unstageWorktreeEntry],
   );
+  // Phase-1 GUI-composed teardown: stop disclosed owner-scoped holders
+  // (managed-command stop, agent.stop) before removeBindingEntry /
+  // worktree.create. create has no commitIntent (protocol frozen behind
+  // the pin). Upgrade with listHolders + create-with-intent in the same
+  // follow-up as the snapshot provider.
+  const confirmImmediateCommit = useCallback(async (): Promise<void> => {
+    const dialog = teardownDialog;
+    if (dialog === null || teardownCommitPending) return;
+    const live = readLiveCommitCapture();
+    if (worktreeCommitCaptureIsStale(dialog.capture, live)) {
+      setTeardownDialog(null);
+      requestStagedFolderCommit();
+      return;
+    }
+    setTeardownCommitPending(true);
+    const failures = await runGuiComposedTeardown({
+      stopTargets: dialog.capture.stopTargets,
+      stopShell: (commandId) =>
+        stopManagedCommand.mutateAsync({
+          hostId: surface.hostId,
+          epicId: surface.epicId,
+          commandId,
+        }),
+      stopTurn: () =>
+        stopAgent.mutateAsync({
+          epicId: surface.epicId,
+          agentId: surface.ownerId,
+          cascade: false,
+        }),
+    });
+    setTeardownCommitPending(false);
+    if (failures.length > 0) {
+      setTeardownDialog({
+        ...dialog,
+        failures: failuresByHolderKey(failures),
+      });
+      return;
+    }
+    setTeardownDialog(null);
+    applyStagedFoldersAndResume(dialog.capture);
+  }, [
+    applyStagedFoldersAndResume,
+    readLiveCommitCapture,
+    requestStagedFolderCommit,
+    stopAgent,
+    stopManagedCommand,
+    surface.epicId,
+    surface.hostId,
+    surface.ownerId,
+    teardownCommitPending,
+    teardownDialog,
+  ]);
   const removeFolderNow = useCallback(
     (workspacePath: string): void => {
       removeBindingEntryMutation.mutate(
@@ -2221,6 +2316,42 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       surface.kind,
       surface.ownerId,
       unstageWorktreeEntry,
+    ],
+  );
+  const requestChatFolderRemoval = useCallback(
+    (workspacePath: string): void => {
+      const snapshot = snapshotOwnerTeardown(
+        droppedRunDirectoriesFromDraft({
+          binding: surface.binding,
+          draft: null,
+          removedWorkspacePaths: [workspacePath],
+        }),
+      );
+      if (snapshot.holders.length === 0) {
+        removeFolderNow(workspacePath);
+        return;
+      }
+      stageFolderRemoval(workspacePath);
+      setTeardownDialog({
+        choice: "commit",
+        holders: snapshot.holders,
+        capture: {
+          draft: readStagedWorktreeIntent(stagedKey),
+          revision: stagedWorktreeIntentRevision(stagedKey),
+          binding: surface.binding,
+          removedWorkspacePaths: [workspacePath],
+          stopTargets: snapshot.stopTargets,
+        },
+        failures: {},
+        restoreRemovalOnDismiss: workspacePath,
+      });
+    },
+    [
+      removeFolderNow,
+      snapshotOwnerTeardown,
+      stageFolderRemoval,
+      stagedKey,
+      surface.binding,
     ],
   );
   useEffect(() => {
@@ -2638,7 +2769,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                   stageFolderRemoval(ws.workspacePath);
                   return;
                 }
-                removeFolderNow(ws.workspacePath);
+                requestChatFolderRemoval(ws.workspacePath);
               },
             };
           }
@@ -2712,7 +2843,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
                 stageFolderRemoval(ws.workspacePath);
                 return;
               }
-              removeFolderNow(ws.workspacePath);
+              requestChatFolderRemoval(ws.workspacePath);
             },
           };
         }),
@@ -2726,7 +2857,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
       handleBindingCommitted,
       markBindingDirtyWithoutResume,
       remainingVisibleFolders,
-      removeFolderNow,
+      requestChatFolderRemoval,
       stageFolderRemoval,
       stagedKey,
       unstageWorktreeEntry,
@@ -2951,21 +3082,29 @@ function InEpicSurface(props: InEpicSurfaceProps) {
         open={teardownDialog !== null}
         choice={teardownDialog?.choice ?? null}
         holders={teardownDialog?.holders ?? []}
+        failures={teardownDialog?.failures}
+        immediatePending={teardownCommitPending}
         onImmediate={() => {
-          const dialog = teardownDialog;
-          setTeardownDialog(null);
-          if (dialog === null) return;
-          const live = readLiveCommitCapture();
-          if (worktreeCommitCaptureIsStale(dialog.capture, live)) {
-            requestStagedFolderCommit();
-            return;
-          }
-          applyStagedFoldersAndResume(dialog.capture);
+          void confirmImmediateCommit();
         }}
         onDefer={() => {
+          const restore = teardownDialog?.restoreRemovalOnDismiss;
+          if (restore !== null && restore !== undefined) {
+            dispatchEditor({
+              type: "unstageRemoval",
+              workspacePath: restore,
+            });
+          }
           setTeardownDialog(null);
         }}
         onDismiss={() => {
+          const restore = teardownDialog?.restoreRemovalOnDismiss;
+          if (restore !== null && restore !== undefined) {
+            dispatchEditor({
+              type: "unstageRemoval",
+              workspacePath: restore,
+            });
+          }
           setTeardownDialog(null);
         }}
       />

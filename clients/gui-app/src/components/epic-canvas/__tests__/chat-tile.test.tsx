@@ -3417,15 +3417,12 @@ describe("<ChatTile />", () => {
     });
   }
 
-  it("consumes an armed send confirmation so a later submit re-discloses", async () => {
+  it("keeps the send confirmation open with a reason when it cannot proceed", async () => {
     stageChatWorktreeDraft("/wt/a");
     await loadChatWithDroppedShell();
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
-    expect(screen.getByTestId("teardown-disclosure").textContent).toContain(
-      "npm run dev",
-    );
     expect(chatHarness.sent).toHaveLength(0);
 
     act(() => {
@@ -3441,7 +3438,10 @@ describe("<ChatTile />", () => {
     });
     fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
     expect(chatHarness.sent).toHaveLength(0);
-    expect(screen.queryByTestId("teardown-commit-dialog")).toBeNull();
+    expect(screen.getByTestId("teardown-commit-dialog")).toBeTruthy();
+    expect(screen.getByTestId("teardown-commit-refusal").textContent).toBe(
+      "You don't have permission to send.",
+    );
 
     act(() => {
       emitChatSnapshotWithMessages({
@@ -3454,12 +3454,8 @@ describe("<ChatTile />", () => {
         managedCommands: [runningShellOnProject()],
       });
     });
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Send" })).not.toBeNull();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
-    expect(chatHarness.sent).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+    expect(chatHarness.sent).toHaveLength(1);
   });
 
   it("re-discloses when staging mutates under an armed chat send", async () => {

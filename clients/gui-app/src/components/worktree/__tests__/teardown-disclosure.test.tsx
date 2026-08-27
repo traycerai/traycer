@@ -47,18 +47,18 @@ describe("TeardownDisclosure", () => {
         ]}
       />,
     );
-    expect(screen.getByTestId("teardown-disclosure-working").textContent).toContain(
-      "Planner is working",
-    );
-    expect(screen.getByTestId("teardown-disclosure-working").textContent).toContain(
-      "1 agent is still working",
-    );
-    expect(screen.getByTestId("teardown-disclosure-idle").textContent).toContain(
-      "1 background process will be stopped",
-    );
-    expect(screen.getByTestId("teardown-disclosure-idle").textContent).toContain(
-      "npm test",
-    );
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("Planner is working");
+    expect(
+      screen.getByTestId("teardown-disclosure-working").textContent,
+    ).toContain("1 agent is still working");
+    expect(
+      screen.getByTestId("teardown-disclosure-idle").textContent,
+    ).toContain("1 background process will be stopped");
+    expect(
+      screen.getByTestId("teardown-disclosure-idle").textContent,
+    ).toContain("npm test");
   });
 
   it("labels each holder kind instead of saying busy", () => {
@@ -81,5 +81,25 @@ describe("TeardownDisclosure", () => {
     expect(screen.getByText("Terminal")).toBeTruthy();
     expect(screen.getByText("Shell")).toBeTruthy();
     expect(screen.queryByText(/busy/i)).toBeNull();
+  });
+
+  it("names a stop failure on the matching holder row", () => {
+    const shell = holder({
+      holdKind: "supervised-shell",
+      activity: "working",
+      label: "npm run dev",
+    });
+    render(
+      <TeardownDisclosure
+        holders={[shell]}
+        failures={{
+          "terminal-agent:tui-1:supervised-shell:npm run dev":
+            "shell still running",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("teardown-holder-failure").textContent).toBe(
+      "shell still running",
+    );
   });
 });
