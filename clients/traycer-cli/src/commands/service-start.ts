@@ -3,6 +3,7 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
   serviceLabelFor,
+  type ServiceLabel,
   type ServiceStatus,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
@@ -58,6 +59,30 @@ export const serviceStartCommand: CommandFn = async (
           exitCode: 1,
         });
       }
+      // Already running: report it and touch NOTHING. The platform start is
+      // skipped deliberately rather than relied on to no-op, because on
+      // Windows it does not. The Scheduled Task is registered
+      // `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against a
+      // live task is suppressed - and `runTaskAndVerifyStart` requires
+      // POST-BASELINE spawn evidence before it will call the start a success.
+      // Suppressed run plus no new evidence means it polls for the whole
+      // verify timeout and then throws `E_SERVICE_CONTROL_FAILED`, so
+      // "start an already-running host" would have been a slow hard failure
+      // on Windows instead of the idempotent no-op this command advertises.
+      // launchctl kickstart and `systemctl --user start` genuinely do no-op,
+      // so returning early costs those platforms nothing and gives all three
+      // one answer.
+      if (before.state === "running") {
+        ctx.runtime.logger.info("Service start command found a running host", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+        });
+        return {
+          data: startData(label, before.state, before, true),
+          human: humanSummary(label.id, before.state, before),
+          exitCode: 0,
+        };
+      }
       ctx.progress({
         stage: "start",
         message: `starting service '${label.id}'`,
@@ -66,12 +91,6 @@ export const serviceStartCommand: CommandFn = async (
         totalBytes: null,
         workUnits: null,
       });
-      // Idempotent by contract on every backend (`launchctl kickstart` of a
-      // loaded job, `systemctl --user start` of a running unit, and the
-      // Windows task launcher all no-op), matching `host stop`'s own
-      // already-stopped behaviour - so an already-running host is reported,
-      // never refused.
-      //
       // `externally-managed` (macOS, Desktop's SMAppService registration owns
       // the label) is deliberately NOT refused: a registration exists, the
       // user asked for the host to be running, and the macOS backend already
@@ -87,22 +106,31 @@ export const serviceStartCommand: CommandFn = async (
         state: after.state,
       });
       return {
-        data: {
-          label: label.id,
-          environment: label.environment,
-          priorState: before.state,
-          state: after.state,
-          pid: after.pid,
-          listenUrl: after.listenUrl,
-          version: after.version,
-          alreadyRunning: before.state === "running",
-        },
+        data: startData(label, before.state, after, false),
         human: humanSummary(label.id, before.state, after),
         exitCode: 0,
       };
     },
   );
 };
+
+function startData(
+  label: ServiceLabel,
+  priorState: ServiceStatus["state"],
+  observed: ServiceStatus,
+  alreadyRunning: boolean,
+): Record<string, unknown> {
+  return {
+    label: label.id,
+    environment: label.environment,
+    priorState,
+    state: observed.state,
+    pid: observed.pid,
+    listenUrl: observed.listenUrl,
+    version: observed.version,
+    alreadyRunning,
+  };
+}
 
 function humanSummary(
   labelId: string,

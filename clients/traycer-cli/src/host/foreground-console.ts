@@ -52,6 +52,13 @@ export interface ForegroundStartModeInput {
   readonly serviceManaged: boolean;
   readonly json: boolean;
   readonly quiet: boolean;
+  /**
+   * `--no-progress`. The only structured thing this command emits IS a
+   * `progress` event, so the flag that says "suppress progress events" has to
+   * suppress it - otherwise `--json --no-progress` puts a `type: "progress"`
+   * line on the stdout of automation that explicitly asked for none.
+   */
+  readonly noProgress: boolean;
   /** stdout is a terminal. False under launchd/systemd/schtasks and pipes. */
   readonly interactive: boolean;
 }
@@ -60,7 +67,7 @@ export function resolveForegroundStartMode(
   input: ForegroundStartModeInput,
 ): ForegroundStartMode {
   if (input.serviceManaged) return "silent";
-  if (input.json) return "events";
+  if (input.json) return input.noProgress ? "silent" : "events";
   if (input.quiet) return "silent";
   return input.interactive ? "mirror" : "silent";
 }

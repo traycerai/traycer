@@ -147,6 +147,41 @@ describe("startLogTail", () => {
     expect(text()).toBe(`${beforeRotation}short\n`);
   });
 
+  // The catch block cannot tell a deleted file from a one-poll Windows
+  // scanner lock or a momentary EACCES, so it must NOT rewind the offset:
+  // doing so re-emits the entire log from byte zero on the next successful
+  // tick, which for the foreground `host start` mirror floods a terminal with
+  // history it started at EOF precisely to avoid. Replacement and truncation
+  // stay handled where they can be OBSERVED - the `size < offset` check.
+  it("does not replay history after a transient read failure that leaves the file longer than the offset", async () => {
+    const head = `${"a".repeat(120)}\n`;
+    writeFileSync(logPath, "");
+    const { onBytes, text } = collector();
+    tail = startLogTail({
+      path: logPath,
+      onBytes,
+      onExhausted: () => undefined,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      maxMissingRetries: 60,
+    });
+
+    appendFileSync(logPath, head);
+    await waitFor(() => text().includes(head), 2_000);
+
+    // Make several ticks fail, then restore a file that is LONGER than the
+    // consumed offset - the shape a transient failure leaves behind, as
+    // opposed to the shorter file a real rotation leaves.
+    unlinkSync(logPath);
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS * 6));
+    writeFileSync(logPath, `${head}tail-only\n`);
+    await waitFor(() => text().includes("tail-only"), 3_000);
+
+    // Exactly one copy of the head: the follower resumed at its offset rather
+    // than re-reading from zero.
+    expect(text().split(head).length - 1).toBe(1);
+    expect(text()).toBe(`${head}tail-only\n`);
+  });
+
   it("stop() is idempotent and no bytes are emitted afterwards", async () => {
     writeFileSync(logPath, "");
     const { chunks, onBytes, text } = collector();

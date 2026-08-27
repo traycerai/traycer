@@ -84,12 +84,20 @@ export function buildHostApplyCommand(args: HostApplyArgs): CommandFn {
   };
 }
 
-function isConverged(outcome: ApplyHostOutcome): boolean {
-  return (
-    outcome.outcome === "applied" &&
-    outcome.postSwapError === null &&
-    outcome.runningActivated
-  );
+/**
+ * Did this apply leave the host running the bytes it committed?
+ *
+ * `null`, NOT `false`, for every outcome that committed nothing. A `no-op`
+ * (nothing staged, install already current) and a `stage-fingerprint-mismatch`
+ * both return without probing or touching the running host, so this command
+ * holds no evidence either way - and a healthy, already-running installation
+ * reported as `converged: false` is a claim it never made. Three states,
+ * because there are three: converged, demonstrably not converged, and not
+ * asked.
+ */
+function isConverged(outcome: ApplyHostOutcome): boolean | null {
+  if (outcome.outcome !== "applied") return null;
+  return outcome.postSwapError === null && outcome.runningActivated;
 }
 
 function humanSummary(outcome: ApplyHostOutcome): string {

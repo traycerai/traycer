@@ -686,7 +686,8 @@ function registerHostCommands(program: Command): void {
           "  Interactive runs print a banner naming the host log, then mirror new",
           "  host log lines until the host exits. Service-manager runs, non-TTY runs",
           "  and --quiet stay silent, exactly as before; --json emits one structured",
-          "  lifecycle event and never raw log lines.",
+          "  lifecycle progress event and never raw log lines, and --no-progress",
+          "  suppresses that event too.",
           "  The host writes to one log either way - see 'traycer host logs --follow'.",
           "",
         ].join("\n"),
@@ -716,6 +717,9 @@ function registerHostCommands(program: Command): void {
         serviceLabel !== null || transitionId !== null || probeNonce !== null,
       json: opts.json === true,
       quiet: opts.quiet === true,
+      // Commander materialises `--no-progress` as `progress: false`, matching
+      // `extractRunnerFlags`' own reading of the same option.
+      noProgress: opts.progress === false,
       interactive: process.stdout.isTTY === true,
     });
     logger.info("Host supervisor command invoked", {
@@ -1046,8 +1050,10 @@ function registerHostCommands(program: Command): void {
           "  Exit 0 means the staged bytes were committed. It does NOT mean the host is",
           "  running them: a post-swap service start that fails is reported as a successful",
           "  'applied' result carrying postSwapError, and there is no rollback.",
-          "  Read `converged` in the result (or the human line) to tell the two apart, then",
-          "  run 'traycer host doctor'. 'traycer host update' is the composite that stages,",
+          "  Read `converged` in the result (or the human line) to tell the two apart - it is",
+          "  null when nothing was committed, since no-op and stage-mismatch outcomes never",
+          "  probe the running host. On false, run 'traycer host doctor'.",
+          "  'traycer host update' is the composite that stages,",
           "  applies, health-checks, and exits non-zero when the host does not come back.",
           "",
         ].join("\n"),
@@ -1224,7 +1230,7 @@ function registerHostCommands(program: Command): void {
       )
       .option(
         "--all",
-        "Deregister the OS service first, then stop the running host cooperatively, then remove the bytes - so nothing is left registered. A host that refuses the shutdown claim keeps its pid metadata and log.",
+        "Deregister the OS service first, then ask the running host to stop, then remove the bytes - so nothing is left registered. The stop is cooperative and best-effort: a host that denies or outlives the shutdown claim is left running, and its pid metadata and log are preserved rather than purged.",
       )
       .addHelpText(
         "after",
@@ -1236,8 +1242,13 @@ function registerHostCommands(program: Command): void {
           "           serves until it exits and the surviving registration then has no valid",
           "           install to launch. Recover with 'traycer host install', or clean up with",
           "           'traycer host service uninstall'.",
-          "  --all    Service deregistered (which also stops the supervised host), host stopped,",
-          "           bytes removed, and pid/log runtime cleared once the stop is confirmed.",
+          "  --all    Service deregistered (which also stops the supervised host on every",
+          "           platform), the host asked to stand down, and the bytes removed. The stop",
+          "           is cooperative: if the host denies the claim or outlives it, the bytes are",
+          "           still removed but the process may keep serving until it exits, and its",
+          "           pid metadata and log are kept rather than purged. The result's",
+          "           `purgedRuntime` (and the summary line) say which happened - re-run with",
+          "           'traycer host stop --force' if a host is still up.",
           "Neither mode touches your data or credentials under ~/.traycer.",
           "",
         ].join("\n"),

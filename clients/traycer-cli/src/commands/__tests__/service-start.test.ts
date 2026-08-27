@@ -138,14 +138,15 @@ describe("serviceStartCommand", () => {
     expect(result.exitCode).toBe(0);
   });
 
-  it("reports alreadyRunning: true without failing when the service was already running (idempotent, like host stop)", async () => {
+  // Idempotent like `host stop`, and it gets there by SKIPPING the platform
+  // start rather than trusting it to no-op. On Windows the Scheduled Task is
+  // registered `MultipleInstancesPolicy=IgnoreNew`, so `schtasks /Run` against
+  // a live task is suppressed - and `runTaskAndVerifyStart` only accepts
+  // POST-BASELINE spawn evidence, so a suppressed run polls out its verify
+  // timeout and throws E_SERVICE_CONTROL_FAILED. Calling `start` here would
+  // have made "start an already-running host" a slow hard failure on Windows.
+  it("reports alreadyRunning: true without ever calling controller.start when the service was already running", async () => {
     mocks.statusResponses = [
-      {
-        state: "running",
-        version: "1.2.3",
-        listenUrl: "ws://127.0.0.1:58036/rpc",
-        pid: 4242,
-      },
       {
         state: "running",
         version: "1.2.3",
@@ -156,8 +157,11 @@ describe("serviceStartCommand", () => {
 
     const result = await serviceStartCommand(fakeCtx());
 
+    expect(mocks.controllerCalls).toEqual([]);
     expect(result.data).toMatchObject({
       priorState: "running",
+      state: "running",
+      pid: 4242,
       alreadyRunning: true,
     });
     expect(result.exitCode).toBe(0);

@@ -16,6 +16,7 @@ describe("resolveForegroundStartMode", () => {
     serviceManaged: false,
     json: false,
     quiet: false,
+    noProgress: false,
     interactive: false,
   };
 
@@ -34,6 +35,28 @@ describe("resolveForegroundStartMode", () => {
       "events",
     ],
     ["json, non-interactive", { json: true }, "events"],
+    // The only structured thing this command emits is a `progress` event, so
+    // `--no-progress` - documented as "suppress progress events" - has to
+    // suppress it. Without this, `--json --no-progress` put a
+    // `type: "progress"` line on the stdout of automation that asked for none.
+    [
+      "json + --no-progress suppresses the lifecycle event",
+      { json: true, noProgress: true },
+      "silent",
+    ],
+    [
+      "json + --no-progress, interactive TTY",
+      { json: true, noProgress: true, interactive: true },
+      "silent",
+    ],
+    // `--no-progress` on its own is not a mirror gate: the mirror is log
+    // content, not progress reporting, and `--quiet` is the flag that silences
+    // human output.
+    [
+      "--no-progress alone leaves an interactive mirror alone",
+      { noProgress: true, interactive: true },
+      "mirror",
+    ],
     ["quiet, interactive TTY", { quiet: true, interactive: true }, "silent"],
     ["quiet, non-interactive", { quiet: true }, "silent"],
     ["interactive TTY, no other flags", { interactive: true }, "mirror"],
@@ -50,15 +73,18 @@ describe("resolveForegroundStartMode", () => {
   it("serviceManaged is silent across the full remaining flag matrix", () => {
     for (const json of [false, true]) {
       for (const quiet of [false, true]) {
-        for (const interactive of [false, true]) {
-          expect(
-            resolveForegroundStartMode({
-              serviceManaged: true,
-              json,
-              quiet,
-              interactive,
-            }),
-          ).toBe("silent");
+        for (const noProgress of [false, true]) {
+          for (const interactive of [false, true]) {
+            expect(
+              resolveForegroundStartMode({
+                serviceManaged: true,
+                json,
+                quiet,
+                noProgress,
+                interactive,
+              }),
+            ).toBe("silent");
+          }
         }
       }
     }

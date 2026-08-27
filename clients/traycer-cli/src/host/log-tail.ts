@@ -99,13 +99,23 @@ export function startLogTail(options: LogTailOptions): LogTail {
     } catch {
       // ENOENT or transient. The supervisor recreates the log on the next
       // start, so a short gap during rotation is expected rather than fatal.
+      //
+      // The offset is deliberately NOT rewound here. This catch cannot tell a
+      // deleted file from a one-poll Windows scanner lock, a momentary EACCES,
+      // or a failed close - and rewinding on those re-emits the whole log from
+      // byte zero on the next successful tick, which for the foreground mirror
+      // means flooding a terminal with history it started at EOF precisely to
+      // avoid. Replacement and truncation are already handled where they can
+      // be OBSERVED rather than guessed: the `stats.size < offset` check above
+      // rewinds as soon as a readable file turns out to be shorter than what
+      // has been consumed, which is exactly what a rotated-and-recreated log
+      // looks like.
       missingRetries += 1;
       if (missingRetries > options.maxMissingRetries) {
         stopped = true;
         options.onExhausted();
         return;
       }
-      offset = 0;
     }
     if (chunk !== null) options.onBytes(chunk);
     schedule();

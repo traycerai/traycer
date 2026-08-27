@@ -252,7 +252,17 @@ function humanSummary(args: {
     parts.push(`removed host ${args.removedVersion}`);
   }
   if (args.serviceUninstalled) parts.push("deregistered OS service");
-  if (args.purgedRuntime) parts.push("cleared environment runtime state");
+  if (args.purgedRuntime) {
+    parts.push("cleared environment runtime state");
+  } else if (args.serviceUninstalled) {
+    // `--all`'s stop is cooperative and best-effort: `stopServiceBeforeRuntimePurge`
+    // returns false when the host denied the claim or outlived it, and the
+    // removal proceeds anyway. Saying nothing here is how an operator walks
+    // away from `--all` believing the host is down while it keeps serving.
+    parts.push(
+      "the host did not confirm shutdown, so it may still be running and its pid/log runtime was kept - run 'traycer host stop --force' if it is still up",
+    );
+  }
   // The default path's end state, spelled out. Leaving a registered
   // supervisor pointed at an install that no longer exists is the one
   // outcome of this command a user is most likely not to have intended, and
