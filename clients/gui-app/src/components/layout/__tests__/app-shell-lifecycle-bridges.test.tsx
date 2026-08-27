@@ -66,6 +66,12 @@ vi.mock("@/components/layout/header/windows-menu-bar", () => ({
   WindowsMenuBar: () => null,
 }));
 
+// NOTE: there is deliberately NO stub for `use-epic-open-in-new-window` here.
+// `RootDndProvider` used to call that flow, which reaches `useRouterState` and
+// throws without a router, so this provider-light test needed a stub. The flow
+// now lives in `TabDetachOwner`, mounted in the ROUTE tree - so it never mounts
+// here at all. If a stub for it ever becomes necessary again, the dependency
+// has moved back into the provider and the fix has regressed.
 vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => (
     <div data-testid="resource-monitor-header-button" />

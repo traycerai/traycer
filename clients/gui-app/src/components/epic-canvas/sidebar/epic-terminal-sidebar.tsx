@@ -349,11 +349,24 @@ function TerminalRow(props: TerminalRowProps) {
   };
 
   const commitRename = () => {
-    actions.submitRename(renameValue, () => setIsRenaming(false));
+    // Settle the editor on COMMIT, not on the ack - the same contract as the
+    // two epic sidebar trees and `useInlineRename`. The optimistic cache patch
+    // is the feedback. Waiting to be called back held this editor open for the
+    // whole round trip, and open FOREVER on a failure or a refusal, neither of
+    // which called anything back.
+    //
+    // But a REFUSAL still has to hold the editor open, or the typed title is
+    // gone with nothing sent: rename can go unavailable while this editor is
+    // up (the host stops being mutable, or another row's rename is in flight -
+    // that pending flag is panel-wide). This reads a synchronous return, not a
+    // `mutate`-scoped callback, so it keeps the settle on the gesture.
+    // `onBlur` routes here too, and holding the editor through a blur is the
+    // point: the text survives until the rename can actually be sent, and
+    // Escape still discards it.
+    if (actions.submitRename(renameValue)) setIsRenaming(false);
   };
 
   const handleRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (actions.renamePending) return;
     if (event.key === "Enter") {
       event.preventDefault();
       commitRename();
@@ -401,7 +414,6 @@ function TerminalRow(props: TerminalRowProps) {
                   ref={renameInputRef}
                   data-testid={`epic-terminal-sidebar-rename-input-${session.sessionId}`}
                   value={renameValue}
-                  disabled={actions.renamePending}
                   onChange={(event) => setRenameValue(event.target.value)}
                   onBlur={commitRename}
                   onKeyDown={handleRenameKeyDown}

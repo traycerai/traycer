@@ -587,6 +587,9 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
 function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
   return {
     id,
+    // An ordinary registry-backed agent - this suite exercises selector
+    // behavior, not doc residency.
+    docResident: false,
     harnessId,
     title: "Codex",
     parentId: null,

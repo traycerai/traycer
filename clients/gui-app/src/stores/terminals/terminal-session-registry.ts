@@ -115,6 +115,23 @@ export class TerminalSessionRegistry {
   }
 
   /**
+   * Live tab-instance ids bound to one host. Overview's `host.status`
+   * refresh uses this so a membership change on host B does not void
+   * host A's settled busy. Reads `entry.hostId` (the acquire-time
+   * identity), not the WeakMap the React hook stamps — that map is only
+   * set by `useTerminalSessionHandle`.
+   */
+  membershipIdsForHost(hostId: string): string[] {
+    const ids: string[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.hostId !== hostId) continue;
+      ids.push(entry.instanceId);
+    }
+    ids.sort();
+    return ids;
+  }
+
+  /**
    * Live tab-instance ids. The xterm host registry keeps still-live
    * terminal-agent engines warm keyed by `instanceId`; it uses this to drop a
    * warm engine once its instance leaves the registry (the agent exited and its

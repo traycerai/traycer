@@ -63,6 +63,17 @@ interface TestState {
   readonly deleteArtifactMutateAsync: Mock;
   readonly deleteChatMutateAsync: Mock;
   readonly deleteTuiAgentMutateAsync: Mock;
+  /**
+   * Rename RPCs, deliberately NEVER settled by default (they return a promise
+   * that stays pending). The rename editor must close on COMMIT, not on the
+   * ack, so a mock that resolved would make that assertion vacuous - it would
+   * pass on the old close-on-success code too.
+   */
+  readonly renameChatMutateAsync: Mock;
+  readonly renameTuiAgentMutateAsync: Mock;
+  /** Phase 1.1 optimistic-overlay stamps, as the rename path calls them. */
+  readonly beginRenameMutation: Mock;
+  readonly retirePendingMutation: Mock;
   readonly exportArtifactsMutate: Mock;
   readonly localDeleteArtifact: Mock;
   readonly closeCanvasTab: Mock;
@@ -163,6 +174,10 @@ const testState = vi.hoisted<TestState>(() => ({
   deleteArtifactMutateAsync: vi.fn(),
   deleteChatMutateAsync: vi.fn(),
   deleteTuiAgentMutateAsync: vi.fn(),
+  renameChatMutateAsync: vi.fn(() => new Promise(() => {})),
+  renameTuiAgentMutateAsync: vi.fn(() => new Promise(() => {})),
+  beginRenameMutation: vi.fn(() => "req-rename-1"),
+  retirePendingMutation: vi.fn(),
   exportArtifactsMutate: vi.fn(),
   localDeleteArtifact: vi.fn(),
   closeCanvasTab: vi.fn(),
@@ -482,7 +497,17 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
     mutateAsync: testState.deleteChatMutateAsync,
     isPending: false,
   }),
-  useEpicRenameChat: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameChat: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameChatMutateAsync,
+    // Honest pending, derived from the spy: every call returns a promise that
+    // never settles, so once one has been issued the rename IS in flight. A
+    // hardcoded `false` makes any "second rename while the first is pending"
+    // assertion VACUOUS - a re-introduced pending guard would never see a
+    // pending state under it, so the test would pass against the very code it
+    // exists to reject. Cleared per test by `vi.clearAllMocks()`.
+    isPending: testState.renameChatMutateAsync.mock.calls.length > 0,
+  }),
 }));
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
@@ -585,7 +610,12 @@ vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
     mutateAsync: testState.deleteTuiAgentMutateAsync,
     isPending: false,
   }),
-  useEpicRenameTuiAgent: () => ({ mutate: vi.fn(), isPending: false }),
+  useEpicRenameTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameTuiAgentMutateAsync,
+    // Honest pending, for the same reason as `useEpicRenameChat` above.
+    isPending: testState.renameTuiAgentMutateAsync.mock.calls.length > 0,
+  }),
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -601,6 +631,14 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
         getState: () => ({
           deleteArtifact: testState.localDeleteArtifact,
           renameArtifact: vi.fn(),
+          // The rename path stamps an optimistic overlay patch before firing
+          // the RPC, and reads the stamp tombstone back on settle. An empty
+          // `tuiAgents` map is the doc-resident reading for an agent row,
+          // which is what an absent union entry means.
+          beginRenameMutation: testState.beginRenameMutation,
+          retirePendingMutation: testState.retirePendingMutation,
+          isLatestRenameStamp: () => true,
+          tuiAgents: { byId: {} },
         }),
         subscribe: () => () => undefined,
       },
@@ -3852,6 +3890,80 @@ describe("chat row archive", () => {
       screen.getByTestId("epic-sidebar-rename-input-chat-root"),
     ).toBeTruthy();
     expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+  });
+
+  // --- rename settles the editor on COMMIT, not on the ack ----------------
+
+  it("closes the rename input on commit while the rename RPC is still in flight", () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-root"));
+    const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+    fireEvent.change(input, { target: { value: "Renamed while in flight" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The optimistic patch is stamped and the RPC issued - and by construction
+    // of `renameChatMutateAsync` that RPC has NOT settled, so this asserts the
+    // editor closed on the commit itself. Under the previous close-on-success
+    // code the input was still mounted here, and stayed mounted for the whole
+    // round trip (and forever on a failure, whose arm never closed it at all).
+    expect(testState.beginRenameMutation).toHaveBeenCalledWith(
+      "chat-root",
+      "Renamed while in flight",
+    );
+    expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Renamed while in flight" }),
+    );
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
+  });
+
+  it("issues a second rename committed while the first is still in flight", () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const commitRename = (value: string): void => {
+      fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-root"));
+      const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    };
+
+    commitRename("First title");
+    commitRename("Second title");
+
+    // Closing on commit is what makes "renaming" and "pending" concurrent for
+    // the first time, and `renameChatMutateAsync` never settles - so the second
+    // commit here happens with the first rename genuinely still on the wire.
+    // The `if (renamePending) return` guard this change removed sat at the top
+    // of `commitRename`, so under it the second rename reached NEITHER the
+    // overlay nor the RPC and the user got no feedback that it was dropped.
+    // Asserting both calls is the point: a count of 1 was the old behaviour,
+    // and the rename hook mocks report `isPending` from their own call log, so
+    // a re-introduced guard in any form genuinely fires here.
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      1,
+      "chat-root",
+      "First title",
+    );
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      2,
+      "chat-root",
+      "Second title",
+    );
+    expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2);
+    expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Second title" }),
+    );
+    // Neither has acked, so nothing may have been retired yet - a stamp retired
+    // early is what would let a late ack overwrite the newer title.
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
   });
 
   // --- B6: row menu entry -------------------------------------------------

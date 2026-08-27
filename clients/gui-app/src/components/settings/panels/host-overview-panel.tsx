@@ -60,6 +60,7 @@ import {
   useHostOverviewStatusQuery,
   useHostRestart,
   useHostServiceStatusQuery,
+  useRefreshOverviewStatusOnSessionActivity,
 } from "@/components/settings/panels/host-overview-rpc";
 import { newTransitionId } from "@/components/settings/panels/host-overview-transition-id";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
@@ -263,7 +264,15 @@ export function HostOverviewPanel(props: {
     restartForceRoute: forceRestartLocalHostId !== null,
   });
 
-  const statusQuery = useHostOverviewStatusQuery({ client, enabled: usable });
+  const statusQuery = useHostOverviewStatusQuery({
+    client,
+    enabled: usable,
+    hostId: scope.hostId,
+  });
+  useRefreshOverviewStatusOnSessionActivity({
+    hostId: scope.hostId,
+    enabled: usable,
+  });
   const identityQuery = useHostIdentityQuery({
     client,
     enabled: usable && identityDegrade === null,

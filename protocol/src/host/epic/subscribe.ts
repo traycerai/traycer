@@ -90,6 +90,17 @@ import {
   snapshotMetaEpicSchemaV10,
   snapshotMetaEpicSchemaV12,
 } from "@traycer/protocol/host/epic/snapshot-meta";
+import {
+  deletedReviewArtifactSchema,
+  deletedSpecArtifactSchema,
+  deletedStoryArtifactSchema,
+  deletedTicketArtifactSchema,
+  reviewArtifactSchema,
+  specArtifactSchema,
+  storyArtifactSchema,
+  ticketArtifactSchema,
+} from "@traycer/protocol/persistence/epic/artifacts";
+import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
 
 /**
  * The frozen `@1.0` / `@1.1` / `@1.2` open request, as shipped.
@@ -679,4 +690,281 @@ export const epicSubscribeV13 = defineStreamRpcContract({
   openRequestSchema: epicSubscribeOpenRequestSchema,
   serverFrameSchema: epicSubscribeServerFrameSchemaV13,
   clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+// ─── `epic.subscribe@2.0` - per-artifact typed-state/body planes ──────────
+//
+// This is intentionally a new major rather than another @1 minor: @1's root
+// Y.Doc, eager artifact-room delivery, and root awareness are its frozen
+// behaviour. The @2 stream keeps metadata in a typed replacement-state plane
+// and transfers bodies only after an artifact is explicitly attached.
+//
+// Resolver ordering obligation: install root-doc observers before reading the
+// replacement-state snapshot, buffer/coalesce their output until the snapshot
+// has been emitted, then flush it in `seq` order. A mutation must never land
+// between the snapshot read and observer registration.
+
+/** The @2 open request has no root-document delta-seed offer. */
+export const epicSubscribeOpenRequestSchemaV20 = z.object({
+  epicId: z.string(),
+});
+export type EpicSubscribeOpenRequestV20 = z.infer<
+  typeof epicSubscribeOpenRequestSchemaV20
+>;
+
+/**
+ * One artifact record in the @2 typed metadata plane.
+ *
+ * This deliberately derives from the released persistence variants instead
+ * of maintaining a second field/status vocabulary. `artifactRoomId` is a
+ * routing detail of the host's cloud rooms; @2 clients attach by `artifactId`
+ * and must never receive it.
+ */
+export const epicArtifactRecordSchema = z.discriminatedUnion("kind", [
+  specArtifactSchema.omit({ artifactRoomId: true }),
+  ticketArtifactSchema.omit({ artifactRoomId: true }),
+  storyArtifactSchema.omit({ artifactRoomId: true }),
+  reviewArtifactSchema.omit({ artifactRoomId: true }),
+]);
+export type EpicArtifactRecord = z.infer<typeof epicArtifactRecordSchema>;
+
+/**
+ * Tombstone counterpart of {@link epicArtifactRecordSchema}. Like live
+ * records, it reuses the persisted variants and leaves room routing host-only.
+ */
+export const epicDeletedArtifactRecordSchema = z.discriminatedUnion("kind", [
+  deletedSpecArtifactSchema.omit({ artifactRoomId: true }),
+  deletedTicketArtifactSchema.omit({ artifactRoomId: true }),
+  deletedStoryArtifactSchema.omit({ artifactRoomId: true }),
+  deletedReviewArtifactSchema.omit({ artifactRoomId: true }),
+]);
+export type EpicDeletedArtifactRecord = z.infer<
+  typeof epicDeletedArtifactRecordSchema
+>;
+
+/** The root-doc metadata that remains visible to the @2 metadata plane. */
+export const epicMetaSchema = z.object({
+  title: z.string(),
+  updatedAt: z.number(),
+});
+export type EpicMeta = z.infer<typeof epicMetaSchema>;
+
+/**
+ * Resolver identity carried by every @2 server frame.
+ *
+ * `streamEpoch` changes whenever the resolver is rebuilt. A client must discard
+ * frames from an older epoch, including body frames whose Yjs/doc-guid logic
+ * otherwise has no way to distinguish a stale resolver.
+ */
+const epicSubscribeV2EpochField = {
+  streamEpoch: z.string().min(1),
+} as const;
+
+/**
+ * Replacement-state ordering fields.
+ *
+ * Only frames that mutate the replacement-state projection carry `seq`:
+ * snapshot, artifact upsert/remove, epic metadata changes, and role-claim
+ * replacements. `seq` is
+ * monotonic within an epoch; a snapshot resets that epoch's high-water mark.
+ * Invalidations and idempotent lifecycle signals deliberately do not imply
+ * ordering or gap-detection semantics.
+ */
+const epicSubscribeV2StateOrderingFields = {
+  ...epicSubscribeV2EpochField,
+  seq: z.number().int().nonnegative(),
+} as const;
+
+const epicSubscribeV2TextFrameFields = {
+  hasBinaryPayload: z.literal(false),
+} as const;
+
+const epicSubscribeV2TypedServerFrameSchemas = [
+  z.object({
+    kind: z.literal("epicStateSnapshot"),
+    artifactRecords: z.array(epicArtifactRecordSchema),
+    deletedArtifacts: z.array(epicDeletedArtifactRecordSchema),
+    roleClaims: z.array(roleClaimSchema),
+    epicMeta: epicMetaSchema,
+    ...epicSubscribeV2StateOrderingFields,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("artifactRecordUpsert"),
+    record: epicArtifactRecordSchema,
+    ...epicSubscribeV2StateOrderingFields,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("artifactRecordRemove"),
+    artifactId: z.string(),
+    tombstone: epicDeletedArtifactRecordSchema,
+    ...epicSubscribeV2StateOrderingFields,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("epicMetaChanged"),
+    epicMeta: epicMetaSchema.partial(),
+    ...epicSubscribeV2StateOrderingFields,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("roleClaimsChanged"),
+    roleClaims: z.array(roleClaimSchema),
+    ...epicSubscribeV2StateOrderingFields,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("commentThreadsChanged"),
+    artifactIds: z.array(z.string()),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  // The established fast path is still needed: it permits workspace UI to
+  // render while cloud room hydration delays the replacement-state snapshot.
+  z.object({
+    kind: z.literal("earlyMeta"),
+    meta: earlyMetaEpicSchema,
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("permissionChanged"),
+    permissionRole: permissionRoleSchema.nullable(),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("cloudSyncStatus"),
+    status: epicCloudSyncStatusSchema,
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("migrationStarted"),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("migrationProgress"),
+    phase: epicMigrationPhaseSchema,
+    chunksDone: z.number().int().nonnegative(),
+    chunksTotal: z.number().int().positive(),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("migrationFailed"),
+    reason: z.string(),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("migrationNotAllowed"),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+  z.object({
+    kind: z.literal("epicDeleted"),
+    deletedByDisplayName: z.string().nullable(),
+    deletedByTraycerUserId: z.string().nullable(),
+    ...epicSubscribeV2EpochField,
+    ...epicSubscribeV2TextFrameFields,
+  }),
+] as const;
+
+export const epicSubscribeServerFrameSchemaV20 = z.discriminatedUnion("kind", [
+  ...epicSubscribeV2TypedServerFrameSchemas,
+  z.object({
+    kind: z.literal("artifactDoc"),
+    artifactId: z.string(),
+    docGuid: z.string().min(1),
+    stateVectorBase64: z.string(),
+    ...epicSubscribeV2EpochField,
+    hasBinaryPayload: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("artifactDocUpdate"),
+    artifactId: z.string(),
+    docGuid: z.string().min(1),
+    ...epicSubscribeV2EpochField,
+    hasBinaryPayload: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("artifactDocAck"),
+    artifactId: z.string(),
+    docGuid: z.string().min(1),
+    coverageStateVectorBase64: z.string(),
+    ...epicSubscribeV2EpochField,
+    hasBinaryPayload: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("artifactDocAwareness"),
+    artifactId: z.string(),
+    ...epicSubscribeV2EpochField,
+    hasBinaryPayload: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("artifactUnavailable"),
+    artifactId: z.string(),
+    reason: z.string(),
+    terminal: z.boolean(),
+    ...epicSubscribeV2EpochField,
+    hasBinaryPayload: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("pong"),
+    // Heartbeats are intercepted by the shared connection handler before a
+    // resolver is selected, so it cannot mint a resolver-local epoch. This is
+    // intentionally the same transport-level shape as @1's pong.
+    hasBinaryPayload: z.literal(false),
+  }),
+]);
+export type EpicSubscribeServerFrameV20 = z.infer<
+  typeof epicSubscribeServerFrameSchemaV20
+>;
+
+export const epicSubscribeClientFrameSchemaV20 = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("attachArtifact"),
+    artifactId: z.string(),
+    knownDocGuid: z.string().min(1).optional(),
+    stateVectorBase64: z.string().min(1).optional(),
+    hasBinaryPayload: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("detachArtifact"),
+    artifactId: z.string(),
+    hasBinaryPayload: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("artifactDocApplyUpdate"),
+    artifactId: z.string(),
+    docGuid: z.string().min(1),
+    hasBinaryPayload: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("artifactDocAwareness"),
+    artifactId: z.string(),
+    hasBinaryPayload: z.literal(true),
+  }),
+  z.object({
+    kind: z.literal("retryMigration"),
+    hasBinaryPayload: z.literal(false),
+  }),
+  z.object({
+    kind: z.literal("ping"),
+    hasBinaryPayload: z.literal(false),
+  }),
+]);
+export type EpicSubscribeClientFrameV20 = z.infer<
+  typeof epicSubscribeClientFrameSchemaV20
+>;
+
+export const epicSubscribeV20 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchemaV20,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV20,
+  clientFrameSchema: epicSubscribeClientFrameSchemaV20,
 });
