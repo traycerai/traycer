@@ -154,7 +154,13 @@ export class TerminalSessionRegistry {
     const existing = this.entries.get(instanceId);
     if (existing !== undefined) {
       this.cancelLinger(existing);
+      const wasLeaseFree = existing.leases === 0;
       existing.leases += 1;
+      // Lease-free keep-warm / linger was tagged `cache`. A tile looking
+      // again is presentation; intent is open-frame-only so this reopens.
+      if (wasLeaseFree) {
+        existing.handle.store.getState().setViewer("presentation");
+      }
       return existing.handle;
     }
     const handle = factory();
@@ -266,7 +272,20 @@ export class TerminalSessionRegistry {
     return true;
   }
 
-  release(instanceId: string, handle: TerminalSessionStoreHandle): void {
+  /**
+   * Drop one lease. `transportAlive` is the acquire effect's readiness at
+   * cleanup time (directory entry + signed-in user still present). A last
+   * lease with a live transport retags the keep-warm / linger subscribe as
+   * `cache`. A disappearing transport must not reopen: the captured factory
+   * throws when the directory or user is gone, and a throw from effect
+   * cleanup would leave a lease-free entry whose old stream is already
+   * closed. Fail toward disposal instead.
+   */
+  release(
+    instanceId: string,
+    handle: TerminalSessionStoreHandle,
+    transportAlive: boolean,
+  ): void {
     const entry = this.entries.get(instanceId);
     if (entry === undefined) return;
     // A defunct handle may be replaced while an older consumer is still
@@ -276,10 +295,27 @@ export class TerminalSessionRegistry {
     if (entry.leases <= 0) return;
     entry.leases -= 1;
     if (entry.leases > 0) return;
-    if (shouldKeepLeaseFree(entry.handle)) return;
-    if (shouldLingerLeaseFree(entry.handle)) {
-      this.parkLingering(entry);
-      return;
+    const keepOrLinger =
+      shouldKeepLeaseFree(entry.handle) || shouldLingerLeaseFree(entry.handle);
+    if (keepOrLinger && transportAlive) {
+      try {
+        // Attachment intent follows lease state, not session kind: a
+        // lease-free running terminal-agent (indefinite keep-warm) or
+        // lingering plain terminal must not claim attention.
+        // `terminal.subscribe@1.6` carries viewer only on the open frame,
+        // so this reopens as `cache`.
+        entry.handle.store.getState().setViewer("cache");
+      } catch {
+        this.entries.delete(instanceId);
+        this.disposeEntry(entry);
+        this.notify();
+        return;
+      }
+      if (shouldKeepLeaseFree(entry.handle)) return;
+      if (shouldLingerLeaseFree(entry.handle)) {
+        this.parkLingering(entry);
+        return;
+      }
     }
     this.entries.delete(instanceId);
     this.disposeEntry(entry);
