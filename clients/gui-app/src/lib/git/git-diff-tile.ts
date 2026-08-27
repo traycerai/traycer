@@ -11,6 +11,7 @@ import type {
 import { createDiffTileViewState } from "@/lib/diff/diff-tile-view-state";
 import {
   isImageAssetPath,
+  isPdfAssetPath,
   isSvgAssetPath,
 } from "@/lib/assets/image-extension-allowlist";
 
@@ -184,6 +185,27 @@ export function gitImageDiffRouting(file: GitChangedFile): GitImageDiffRouting {
   const routeToImageDiff =
     (isImage || isPreviousImage) && (file.isBinary || isSvg || isConflicted);
   return { routeToImageDiff, isSvg };
+}
+
+/**
+ * Whether the single-file diff tile shows the PDF summary-card view (PDF
+ * preview design, Q7 follow-up): per-side "PDF · size · View" cards instead
+ * of the plain binary placeholder. Checked AFTER `gitImageDiffRouting` in
+ * the tile - a rename straddling both allowlists (`a.png -> b.pdf`) keeps
+ * routing to the image diff, whose non-image side already explains itself.
+ * Same either-path rule as images so `old.pdf -> new.bin` still offers its
+ * old side; same conflicted exemption from `isBinary` (a PDF is always
+ * binary to git, but the conflicted numstat gap applies identically). The
+ * caller additionally gates on the host advertising
+ * `git.streamFileAsset >= 1.1` - capability, not extension, so it lives at
+ * the component, not here.
+ */
+export function gitRoutesToPdfDiffCards(file: GitChangedFile): boolean {
+  const isPdf = isPdfAssetPath(file.path);
+  const isPreviousPdf =
+    file.previousPath !== null && isPdfAssetPath(file.previousPath);
+  const isConflicted = file.stage === "conflicted";
+  return (isPdf || isPreviousPdf) && (file.isBinary || isConflicted);
 }
 
 export function gitDiffRepositoryContextLabel(

@@ -36,23 +36,21 @@ interface PdfRoutingTestState {
   triggerOpenExternally: Mock;
 }
 
-const state = vi.hoisted(
-  (): PdfRoutingTestState => ({
-    asset: {
-      status: "ready",
-      url: "blob:pdf",
-      meta: null,
-      reason: null,
-      totalBytes: null,
-      servedFromCache: false,
-    },
-    assetRequests: [],
-    assetStreamVersion: { major: 1, minor: 1 },
-    readFileCalls: 0,
-    openPaths: vi.fn(),
-    triggerOpenExternally: vi.fn(),
-  }),
-);
+const state = vi.hoisted((): PdfRoutingTestState => ({
+  asset: {
+    status: "ready",
+    url: "blob:pdf",
+    meta: null,
+    reason: null,
+    totalBytes: null,
+    servedFromCache: false,
+  },
+  assetRequests: [],
+  assetStreamVersion: { major: 1, minor: 1 },
+  readFileCalls: 0,
+  openPaths: vi.fn(),
+  triggerOpenExternally: vi.fn(),
+}));
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest) => {

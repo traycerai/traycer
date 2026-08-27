@@ -26,8 +26,11 @@ import {
   gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
+  gitRoutesToPdfDiffCards,
   gitStageLabel,
 } from "@/lib/git/git-diff-tile";
+import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
+import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
 import { gitChangedFileBelongsToBundleGroup } from "@/lib/git/panel-file-rendering";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
 import { getBasename, getDirname } from "@/lib/path/cross-platform-path";
@@ -482,6 +485,18 @@ interface GitFileDiffPanelProps {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const tabHostClient = useTabHostClient();
+  // PDF cards need the host to serve PDFs on `git.streamFileAsset` (>= 1.1,
+  // the minor that widened the media-type enum). Fails closed to the plain
+  // binary placeholder - the exact pre-PDF behavior - on an old host or
+  // before a handshake completes.
+  const gitAssetStreamVersion = useHostMethodSchemaVersion(
+    props.node.hostId,
+    "git.streamFileAsset",
+  );
+  const pdfCardsSupported =
+    gitAssetStreamVersion !== null &&
+    gitAssetStreamVersion.major === 1 &&
+    gitAssetStreamVersion.minor >= 1;
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
   const editorOpen = useEditorOpenForClient(tabHostClient, "file");
   const {
@@ -596,6 +611,30 @@ function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
           fileName={props.file.path}
           conflicted={sides.conflicted}
           compact={false}
+          onOpenExternally={handleOpenExternally}
+          openExternallyOpening={openExternallyOpening}
+        />
+      </>
+    );
+  }
+
+  // After the image routing (a rename straddling both allowlists stays an
+  // image diff), before the generic binary placeholder it upgrades.
+  if (gitRoutesToPdfDiffCards(props.file) && pdfCardsSupported) {
+    const sides = gitImageDiffSides(props.file);
+    const revisionKey = gitImageDiffRevisionKey(props.file, props.headSha);
+    return (
+      <>
+        {svgToggle}
+        <PdfDiffView
+          key={revisionKey}
+          runningDir={props.node.diff.runningDir}
+          filePath={props.file.path}
+          previousPath={props.file.previousPath}
+          revisionKey={revisionKey}
+          oldStage={sides.oldStage}
+          newStage={sides.newStage}
+          sizeBytes={props.file.sizeBytes}
           onOpenExternally={handleOpenExternally}
           openExternallyOpening={openExternallyOpening}
         />
