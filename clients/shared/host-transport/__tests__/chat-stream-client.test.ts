@@ -1126,6 +1126,8 @@ function windowedSnapshotFrame(): StreamFrameEnvelope {
         pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: null,
         restorableSetupInterruption: null,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
       },
     },
   };

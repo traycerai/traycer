@@ -80,6 +80,8 @@ function baseWindowedSnapshot(): Record<string, unknown> {
       pinnedTaskTodoItems: [],
       latestForkableAssistantMessageId: null,
       restorableSetupInterruption: null,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
     },
   };
 }

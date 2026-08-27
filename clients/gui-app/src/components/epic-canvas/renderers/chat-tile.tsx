@@ -1888,9 +1888,20 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // Host-pending blocks this transcript renders no card for. Yields a stable
   // empty array whenever nothing is stuck, so the composer memo chain below
   // does not churn per streaming token.
+  //
+  // On the windowed line the rendered scan is a scan of a SUBSET, so the host's
+  // judgement decides which of its misses are real - see the function's own
+  // doc. `null` is the legacy line, where absence in the transcript is proof.
   const unanswerableInterviews = useMemo(
-    () => findUnanswerableInterviews(renderedMessages, state.pendingInterviews),
-    [renderedMessages, state.pendingInterviews],
+    () =>
+      findUnanswerableInterviews(
+        renderedMessages,
+        state.pendingInterviews,
+        state.transcriptDerived === null
+          ? null
+          : state.transcriptDerived.interviewAnswerability,
+      ),
+    [renderedMessages, state.pendingInterviews, state.transcriptDerived],
   );
   const unanswerableInterviewsBusy = unanswerableInterviews.some((interview) =>
     interviewActionBlockIds.has(interview.blockId),

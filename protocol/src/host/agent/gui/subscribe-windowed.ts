@@ -19,6 +19,12 @@ import {
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
+  interviewAnswerabilitySchema,
+  judgeInterviewAnswerability,
+  type InterviewAnswerability,
+} from "@traycer/protocol/persistence/chat-transcript/interview-answerability";
+import { latestAssistantAuthFailureTurnKey } from "@traycer/protocol/persistence/chat-transcript/provider-auth-failure";
+import {
   restorableSetupInterruptionSchema,
   selectRestorableSetupInterruption,
   type RestorableSetupInterruption,
@@ -320,6 +326,25 @@ export {
   type RestorableSetupInterruption,
 };
 
+/**
+ * The two answers a windowed client would otherwise read out of an ABSENCE.
+ *
+ * Both back a destructive consumer. `findUnanswerableInterviews` offers to
+ * error out a question whose block it cannot find, and the store's persisted
+ * auth nudge declines to mount the re-auth banner for a failure it cannot see -
+ * one destroys an answer, the other leaves a chat sending against a credential
+ * the host has already poisoned. Their derivations and the reasoning live in
+ * `persistence/chat-transcript/`, beside the row projection they read; they are
+ * re-exported here for the same reason the setup interruption is, so a producer
+ * reads this module alone.
+ */
+export {
+  interviewAnswerabilitySchema,
+  judgeInterviewAnswerability,
+  latestAssistantAuthFailureTurnKey,
+  type InterviewAnswerability,
+};
+
 export const chatTranscriptDerivedSchema = z.object({
   /**
    * The most recent assistant usage report, for the context chip. Nullable
@@ -392,6 +417,33 @@ export const chatTranscriptDerivedSchema = z.object({
    * that space needs its own carriage.
    */
   restorableSetupInterruption: restorableSetupInterruptionSchema.nullable(),
+  /**
+   * Where each host-pending interview's answer card would render.
+   *
+   * One entry per id in the same snapshot's own `pendingInterviews` (see
+   * `chatWindowedSnapshotSchema`), so the two are read as a pair: an `ordinal`
+   * says the card is merely cold and names the row to hydrate, a `null` ordinal
+   * says no row can ever draw it, and a pending id with no entry at all says
+   * the host has not judged it yet. The dismiss affordance is gated on the
+   * second of those three and nothing else - see `interview-answerability.ts`
+   * for why the third is a real state on this line and not on the legacy one.
+   *
+   * Empty for the overwhelming majority of snapshots, because it is bounded by
+   * a pending set that is usually empty.
+   */
+  interviewAnswerability: z.array(interviewAnswerabilitySchema),
+  /**
+   * The nudge key of the latest assistant turn when that turn ended in a
+   * recoverable provider-auth failure, `null` when it did not.
+   *
+   * `null` is the ordinary state and means "the last turn did not fail on a
+   * credential" - never "not hydrated". That distinction is the whole point:
+   * the store's own backwards scan cannot tell the two apart once `messages` is
+   * a window, and it resolves the ambiguity by staying silent, so a headless
+   * failure followed by a few user rows silently stops mounting the re-auth
+   * banner. See `provider-auth-failure.ts`, which both lines call.
+   */
+  latestAssistantAuthFailureTurnKey: z.string().nullable(),
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 
