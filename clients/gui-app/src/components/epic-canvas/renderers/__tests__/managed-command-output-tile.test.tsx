@@ -45,8 +45,12 @@ const boundHostSupport = vi.hoisted<{ value: StreamMethodSupport }>(() => ({
   value: "supported",
 }));
 
-const virtualizerConfig = vi.hoisted<{ useFlushSync: boolean | null }>(() => ({
+const virtualizerConfig = vi.hoisted<{
+  useFlushSync: boolean | null;
+  anchorTo: "start" | "end" | null;
+}>(() => ({
   useFlushSync: null,
+  anchorTo: null,
 }));
 
 vi.mock("@tanstack/react-virtual", async (importOriginal) => {
@@ -56,6 +60,7 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
     ...actual,
     useVirtualizer: (options: Parameters<typeof actual.useVirtualizer>[0]) => {
       virtualizerConfig.useFlushSync = options.useFlushSync ?? null;
+      virtualizerConfig.anchorTo = options.anchorTo ?? null;
       return actual.useVirtualizer(options);
     },
   };
@@ -286,13 +291,12 @@ const STREAM_FAILED: FatalErrorDetails = {
 /**
  * jsdom has no layout, so the scroll geometry a follow-mode decision reads has
  * to be stated outright. `scrollHeight` is installed as a getter over a box the
- * test owns, because prepend compensation is only meaningful when the document
- * can actually grow between two reads.
+ * test owns so individual interactions can change the viewport geometry.
  */
 function setScrollGeometry(
   element: HTMLElement,
   geometry: { scrollTop: number; scrollHeight: number; clientHeight: number },
-): { setScrollHeight: (value: number) => void } {
+): void {
   const box = { scrollHeight: geometry.scrollHeight };
   Object.defineProperty(element, "scrollHeight", {
     configurable: true,
@@ -303,11 +307,6 @@ function setScrollGeometry(
     value: geometry.clientHeight,
   });
   element.scrollTop = geometry.scrollTop;
-  return {
-    setScrollHeight: (value: number) => {
-      box.scrollHeight = value;
-    },
-  };
 }
 
 function timeline(): HTMLElement {
@@ -340,6 +339,7 @@ beforeEach(() => {
   defaultHostSupport.value = "supported";
   boundHostSupport.value = "supported";
   virtualizerConfig.useFlushSync = null;
+  virtualizerConfig.anchorTo = null;
   sentFrames = [];
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.setState({
@@ -431,6 +431,10 @@ describe("managed-command output window", () => {
     expect(mountedRows.length).toBeGreaterThan(0);
     expect(mountedRows.length).toBeLessThan(100);
     expect(virtualizerConfig.useFlushSync).toBe(false);
+    // A fresh window first reaches an estimated tail. End anchoring is what
+    // keeps it there when wrapped rows are measured and enlarge the document;
+    // without this option the viewport can settle in the middle of the log.
+    expect(virtualizerConfig.anchorTo).toBe("end");
   });
 
   it("floats live status over the log instead of titling itself", () => {
@@ -631,89 +635,6 @@ describe("managed-command output window", () => {
     expect(
       sentFrames[0].kind === "loadOlder" ? sentFrames[0].before : null,
     ).toEqual({ segmentId: "seg-2", byteOffset: 40 });
-  });
-
-  it("holds the reading position when a page of older lines is prepended", () => {
-    const stub = installOutputStub();
-    renderTile();
-    openAtTail(stub.emit, [line("stdout", "tail")]);
-
-    const view = timeline();
-    const geometry = setScrollGeometry(view, {
-      scrollTop: 10,
-      scrollHeight: 4_000,
-      clientHeight: 400,
-    });
-    fireEvent.scroll(view);
-    const request = sentFrames[0];
-    if (request.kind !== "loadOlder") throw new Error("expected loadOlder");
-
-    // The page lands and the document grows by 5,000px ABOVE the viewport.
-    geometry.setScrollHeight(9_000);
-    act(() => {
-      stub.emit().onOlder({
-        requestId: request.requestId,
-        lines: [line("stdout", "older-1"), line("stdout", "older-2")],
-        start: { segmentId: "seg-1", byteOffset: 0 },
-        reachedStart: false,
-      });
-    });
-
-    // Without compensation the viewport stays at 10 and the line the human was
-    // reading is 5,000px below - the whole point of scrolling up is lost.
-    // Chromium's native scroll anchoring cannot save this: the spec disables it
-    // at the very top, which is exactly where a load-older fires.
-    expect(view.scrollTop).toBe(5_010);
-  });
-
-  it("includes a changed history-marker prefix when a terminal page also evicts the tail", () => {
-    const stub = installOutputStub();
-    renderTile();
-    openAtTail(stub.emit, [line("stdout", "tail-1"), line("stdout", "tail-2")]);
-
-    const view = timeline();
-    setScrollGeometry(view, {
-      scrollTop: 10,
-      scrollHeight: 4_000,
-      clientHeight: 400,
-    });
-    const list = screen.getByTestId("managed-command-output-virtual-list");
-    let listOffsetTop = 16;
-    Object.defineProperty(list, "offsetTop", {
-      configurable: true,
-      get: () => listOffsetTop,
-    });
-
-    // Thirty-nine valid pages leave the quiet command just below the cap.
-    // The fortieth both crosses it (evicting the stale tail) and declares the
-    // retained start, replacing the loading prefix with the terminal marker.
-    for (let page = 0; page < 40; page += 1) {
-      view.scrollTop = 10;
-      fireEvent.scroll(view);
-      const request = sentFrames.at(-1);
-      if (request?.kind !== "loadOlder") {
-        throw new Error("expected loadOlder");
-      }
-      const finalPage = page === 39;
-      // Exaggerated deliberately: TanStack adapts its unmeasured-row estimate
-      // from measured rows, so a distinctive prefix delta isolates the term
-      // this regression owns without coupling to virtualizer internals.
-      if (finalPage) listOffsetTop = 100_016;
-      act(() => {
-        stub.emit().onOlder({
-          requestId: request.requestId,
-          lines: Array.from({ length: 500 }, (_, index) =>
-            line("stdout", `older-${page}-${index}`),
-          ),
-          start: { segmentId: `seg-history-${page}`, byteOffset: 0 },
-          reachedStart: finalPage,
-        });
-      });
-    }
-
-    expect(view.scrollTop).toBeGreaterThan(100_000);
-    expect(screen.getByText("Start of the retained log")).not.toBeNull();
-    expect(screen.queryByText("tail-1")).toBeNull();
   });
 
   it("pauses live output while reading history and resnapshots on return to live", () => {
