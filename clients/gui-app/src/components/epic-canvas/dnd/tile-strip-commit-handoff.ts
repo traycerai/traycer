@@ -39,6 +39,10 @@ export function armTileStripCommitHandoff(groupId: string): void {
   armedGroupIds.add(groupId);
 }
 
+export function disarmTileStripCommitHandoff(): void {
+  armedGroupIds.clear();
+}
+
 export function runTileStripCommitHandoff(groupId: string): void {
   const armed = armedGroupIds.has(groupId);
   for (const entry of entries.values()) {

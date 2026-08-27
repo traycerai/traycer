@@ -397,7 +397,7 @@ describe("tab detach channel wiring", () => {
     expect(requestOpen.mock.calls[0][0]).toMatchObject({ id: EPIC_TAB.id });
   });
 
-  it("S2.9 - a tear-off with no detach owner warns with the tab id and reorders nothing", async () => {
+  it("S2.9 - a tear-off with no detach owner warns and falls through safely", async () => {
     // The diagnostic added for the missing-owner case. Before it, a tear-off
     // released below the strip with no owner mounted did NOTHING, silently -
     // indistinguishable from a gesture the user aborted. This drives the same
@@ -429,8 +429,9 @@ describe("tab detach channel wiring", () => {
       tabKind: "epic",
     });
 
-    // A release below the strip is a tear-off attempt, not a reorder. Failing
-    // to detach must not fall through into moving the tab within the strip.
+    // The ordinary drop path is allowed to run when detach cannot. Entering
+    // the tear-off region already withdrew the reorder preview, so the safe
+    // fall-through preserves the order rather than swallowing the gesture.
     expect(useTabsStore.getState().stripOrder).toEqual(orderBefore);
   });
 

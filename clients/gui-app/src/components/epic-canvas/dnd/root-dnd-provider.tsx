@@ -17,6 +17,7 @@ import {
   getPaneCorridorPositionFromPoint,
   readComposerAttachmentDropTargetData,
   readEpicCanvasDropTargetData,
+  type ComposerAttachmentDropTargetData,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
@@ -84,6 +85,7 @@ import {
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -138,8 +140,14 @@ import {
   type TabDetachHandler,
 } from "@/components/layout/tabs/tab-detach-channel";
 import { appLogger } from "@/lib/logger";
-import { armHeaderStripCommitHandoff } from "@/components/layout/tabs/header-strip-commit-handoff";
-import { armTileStripCommitHandoff } from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
+import {
+  armHeaderStripCommitHandoff,
+  disarmHeaderStripCommitHandoff,
+} from "@/components/layout/tabs/header-strip-commit-handoff";
+import {
+  armTileStripCommitHandoff,
+  disarmTileStripCommitHandoff,
+} from "@/components/epic-canvas/dnd/tile-strip-commit-handoff";
 import {
   DwellLatch,
   browserDwellTimer,
@@ -159,6 +167,9 @@ import {
  */
 const HEADER_TAB_TEAR_OFF_THRESHOLD_PX = 24;
 
+/** Smaller leave threshold prevents jitter from pumping the strip at the edge. */
+const HEADER_TAB_TEAR_OFF_RELEASE_PX = 16;
+
 /** Stable empty map so clearing offsets never churns store identity. */
 const EMPTY_HEADER_OFFSETS: ReadonlyMap<string, number> = new Map();
 
@@ -171,6 +182,9 @@ const EMPTY_HEADER_OFFSETS: ReadonlyMap<string, number> = new Map();
  * hooks lint forbids. Cleared on drag end and cancel.
  */
 let activeHeaderStripGeometry: StripDragGeometry | null = null;
+
+/** Hysteresis latch for the header tear-off preview/commit boundary. */
+let headerTearOffActive = false;
 
 /**
  * Latest raw pointer x, tracked independently of dnd-kit's render cycle.
@@ -212,17 +226,38 @@ const PANE_BODY_ARM_STILLNESS_PX = 6;
 let replayCanvasPreview: (() => void) | null = null;
 
 /**
- * A preview tile promoted by drag start, so a CANCELLED drag can put it back.
+ * A preview tile promoted by drag start, so a drag that commits nothing can
+ * put it back.
  *
- * Promotion is state, so a tile left promoted by a cancel is a residual - the
- * same standard as "Esc restores order and geometry exactly". A completed drop
- * keeps the promotion; only a cancel undoes it.
+ * Promotion is state, so a tile left promoted by a cancel or neutral-corridor
+ * release is a residual. A completed drop keeps the promotion; every no-commit
+ * exit restores it.
  */
 let promotedPreviewOnDrag: {
   readonly viewTabId: string;
   readonly groupId: string;
   readonly tileId: string;
 } | null = null;
+
+function restorePromotedPreview(): void {
+  const promoted = promotedPreviewOnDrag;
+  if (promoted === null) return;
+  useEpicCanvasStore
+    .getState()
+    .restorePreviewInTab(promoted.viewTabId, promoted.groupId, promoted.tileId);
+}
+
+/** Prevent a measurement failure from flooding the log on every pointer move. */
+let stripGeometryFailureReported = false;
+
+function reportStripGeometryFailure(strip: "header" | "tile"): void {
+  if (stripGeometryFailureReported) return;
+  stripGeometryFailureReported = true;
+  appLogger.warn(
+    `[root-dnd] ${strip} strip geometry became unavailable; strip-model commits are disabled for this gesture`,
+    { strip },
+  );
+}
 
 /** Last header-drag inputs, so a self-waking latch can re-resolve at them. */
 let lastHeaderDrag: {
@@ -364,6 +399,7 @@ let lastPointerDownX: number | null = null;
 function trackPointerDownX(event: PointerEvent): void {
   lastPointerDownX = event.clientX;
   latestPointerX = event.clientX;
+  latestPointerY = event.clientY;
 }
 
 /** The press position for a starting gesture, most reliable source first. */
@@ -502,10 +538,9 @@ function updateCanvasSourcePreview(
   // highlight so switching from a row hover back to canvas works.
   clearSidebarReparentPreview(refs);
   if (updateArtifactTileStripPreview(source, point, refs)) return;
+  clearDepartedArtifactStripState(source);
   if (updateHeaderStripTearOffPreview(source, event, point, refs)) {
     paneBodyDwell().reset();
-    dndStore.headerStripDragStateChanged(null);
-    dndStore.tileStripOffsetsChanged(new Map());
     return;
   }
   dndStore.headerStripDropIndexChanged(null);
@@ -531,7 +566,6 @@ function updateCanvasSourcePreview(
   ) {
     refs.lastResolved.current = null;
     dndStore.dropPreviewChanged(null);
-    dndStore.tileStripOffsetsChanged(new Map());
     return;
   }
   const preview = resolveCanvasDropPreview({
@@ -554,6 +588,14 @@ function updateCanvasSourcePreview(
   dndStore.dropPreviewChanged(preview);
 }
 
+function clearDepartedArtifactStripState(
+  source: EpicCanvasDragSourceData,
+): void {
+  if (source.kind !== ARTIFACT_TAB_DND_TYPE) return;
+  useEpicDndStore.getState().headerStripDragStateChanged(null);
+  closeSourceTileStripGap();
+}
+
 function updateArtifactTileStripPreview(
   source: EpicCanvasDragSourceData,
   point: PointLike | null,
@@ -564,6 +606,40 @@ function updateArtifactTileStripPreview(
     updateTileStripPreview(source, point, refs);
   if (ownsFrame) useEpicDndStore.getState().headerStripDropIndexChanged(null);
   return ownsFrame;
+}
+
+/** Fail shut when the strip model can no longer be mapped to live DOM slots. */
+function rejectTileStripFrame(refs: ReparentRefs): true {
+  reportStripGeometryFailure("tile");
+  refs.lastResolved.current = null;
+  const dndStore = useEpicDndStore.getState();
+  dndStore.dropPreviewChanged(null);
+  dndStore.headerStripDragStateChanged(null);
+  dndStore.tileStripOffsetsChanged(new Map());
+  return true;
+}
+
+/** Close the source strip's gap while an artifact tile is outside every strip. */
+function closeSourceTileStripGap(): void {
+  const dndStore = useEpicDndStore.getState();
+  const drag = activeTileDrag;
+  if (drag === null) {
+    dndStore.tileStripOffsetsChanged(new Map());
+    return;
+  }
+  const geometry = remapGeometryToSlots(
+    drag.geometry,
+    readTileStripSlots(drag.groupId),
+  );
+  if (geometry === null) {
+    reportStripGeometryFailure("tile");
+    dndStore.tileStripOffsetsChanged(new Map());
+    return;
+  }
+  activeTileDrag = { ...drag, geometry };
+  dndStore.tileStripOffsetsChanged(
+    new Map([[drag.groupId, stripOffsetsFor(geometry, null)]]),
+  );
 }
 
 /**
@@ -614,7 +690,11 @@ function updateTileStripPreview(
 ): boolean {
   const dndStore = useEpicDndStore.getState();
   const drag = activeTileDrag;
-  if (drag === null || point === null) return false;
+  // Initial measurement can be unavailable while the independent header-strip
+  // tear-off path remains valid. Only a geometry that existed and then fails
+  // to remap is a mid-gesture model failure that must own and cancel the frame.
+  if (drag === null) return false;
+  if (point === null) return false;
   const groupId = tileStripGroupAtPoint(point, source.viewTabId);
   if (groupId === null) return false;
   // Over a strip: the body gesture is not a candidate this frame.
@@ -624,10 +704,10 @@ function updateTileStripPreview(
   let index: number;
   if (groupId === drag.groupId) {
     const contentOriginX = readTileStripContentOriginX(groupId);
-    if (contentOriginX === null) return false;
+    if (contentOriginX === null) return rejectTileStripFrame(refs);
     const slots = readTileStripSlots(groupId);
     const geometry = remapGeometryToSlots(drag.geometry, slots);
-    if (geometry === null) return false;
+    if (geometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry };
     const next = resolveStripDragState({
       geometry,
@@ -644,10 +724,10 @@ function updateTileStripPreview(
       drag.geometry,
       readTileStripSlots(drag.groupId),
     );
-    if (sourceGeometry === null) return false;
+    if (sourceGeometry === null) return rejectTileStripFrame(refs);
     activeTileDrag = { ...drag, geometry: sourceGeometry };
     const foreign = measureForeignTileStrip(groupId);
-    if (foreign === null) return false;
+    if (foreign === null) return rejectTileStripFrame(refs);
     index = insertionIndexFromPointer(
       foreign.slots,
       foreign.contentOriginX,
@@ -705,14 +785,14 @@ function updateHeaderTabSourcePreview(input: {
       ? null
       : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
   if (validDrop !== null) {
+    headerTearOffActive = false;
     headerMergeDwell().reset();
-    lastHeaderDrag = null;
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    dndStore.topLevelStripPairPreviewChanged(null);
     if (validDrop.target.kind === "top-level-fillable-slot") {
       edgeDwell.reset();
-      dndStore.topLevelStripPairPreviewChanged(null);
       return;
     }
     edgeDwell.setTargetValidator(
@@ -721,12 +801,31 @@ function updateHeaderTabSourcePreview(input: {
     edgeDwell.observe(validDrop.target);
     return;
   }
+  // Once the pointer visibly leaves the strip for tear-off, stop advertising a
+  // reorder that the available detach handler may replace at release. Preview
+  // and commit use the same point source and threshold predicate.
+  if (
+    isHeaderTearOffPoint(
+      currentReleasePointerPoint(),
+      activeHeaderStripGeometry?.stripBottom ?? null,
+    )
+  ) {
+    headerMergeDwell().reset();
+    edgeDwell.reset();
+    dndStore.headerStripDropIndexChanged(null);
+    dndStore.headerStripDragStateChanged(null);
+    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
+    dndStore.topLevelStripPairPreviewChanged(null);
+    return;
+  }
   // The dwell machine owns edge splits only; strip merge lives in the model, so
   // the two can never disagree about where a boundary is.
   edgeDwell.reset();
   if (point === null) {
+    headerMergeDwell().reset();
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
+    dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
@@ -756,6 +855,7 @@ function publishHeaderStripDragState(input: {
       : remapGeometryToSlots(input.geometry, readHeaderStripSlots());
   activeHeaderStripGeometry = geometry;
   if (geometry === null || contentOriginX === null) {
+    reportStripGeometryFailure("header");
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
@@ -1057,27 +1157,17 @@ function resolveDetachRequest(detach: HeaderTab | null): DetachRequest | null {
 function resolveTearOff(input: {
   readonly event: DragEndEvent;
   readonly stripBottom: number | null;
+  readonly canvasTearOffAllowed: boolean;
 }): HeaderTab | null {
   const { event, stripBottom } = input;
   // The activator position plus the final delta keeps advancing after the
   // pointer has left every target, unlike collision coordinates. Used for
   // tear-off detection only - drop math still reads the collision point.
-  const point =
-    latestPointerX === null || latestPointerY === null
-      ? getLastCollisionPointerPoint()
-      : { x: latestPointerX, y: latestPointerY };
-  const outsideViewport = pointIsOutsideViewport(point, {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  });
+  const point = currentReleasePointerPoint();
   const headerTab = readHeaderTabDragData(event.active.data.current);
   if (headerTab !== null) {
     if (hasValidTopLevelDrop(event, headerTab)) return null;
-    const pulledBelowStrip =
-      point !== null &&
-      stripBottom !== null &&
-      point.y > stripBottom + HEADER_TAB_TEAR_OFF_THRESHOLD_PX;
-    if (!outsideViewport && !pulledBelowStrip) return null;
+    if (!isHeaderTearOffPoint(point, stripBottom)) return null;
     return (
       getHeaderTabs().find(
         (tab) => tab.kind === headerTab.tabKind && tab.id === headerTab.tabId,
@@ -1086,6 +1176,11 @@ function resolveTearOff(input: {
   }
   const source = readActiveDragSource(event.active);
   if (source?.kind !== ARTIFACT_TAB_DND_TYPE) return null;
+  if (!input.canvasTearOffAllowed) return null;
+  const outsideViewport = pointIsOutsideViewport(point, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
   if (!outsideViewport && !isAtViewportEdge(point)) {
     return null;
   }
@@ -1094,6 +1189,34 @@ function resolveTearOff(input: {
       (tab) => tab.kind === "epic" && tab.id === source.viewTabId,
     ) ?? null
   );
+}
+
+/** The final pointer source shared by tear-off preview and commit. */
+function currentReleasePointerPoint(): PointLike | null {
+  return latestPointerX === null || latestPointerY === null
+    ? getLastCollisionPointerPoint()
+    : { x: latestPointerX, y: latestPointerY };
+}
+
+/** Whether a header tab has visibly entered the tear-off region. */
+function isHeaderTearOffPoint(
+  point: PointLike | null,
+  stripBottom: number | null,
+): boolean {
+  const outsideViewport = pointIsOutsideViewport(point, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  const pulledBelowStrip =
+    point !== null &&
+    stripBottom !== null &&
+    point.y >
+      stripBottom +
+        (headerTearOffActive
+          ? HEADER_TAB_TEAR_OFF_RELEASE_PX
+          : HEADER_TAB_TEAR_OFF_THRESHOLD_PX);
+  headerTearOffActive = outsideViewport || pulledBelowStrip;
+  return headerTearOffActive;
 }
 
 function hasValidTopLevelDrop(
@@ -1118,6 +1241,61 @@ function armTileHandoffForDrop(
     armTileStripCommitHandoff(source.sourceGroupId);
     armTileStripCommitHandoff(drop.preview.groupId);
   }
+}
+
+interface AcceptedComposerDrop {
+  readonly source: EpicCanvasDragSourceData;
+  readonly target: ComposerAttachmentDropTargetData;
+}
+
+function acceptedComposerDrop(
+  source: EpicCanvasDragSourceData | null,
+  event: DragEndEvent,
+): AcceptedComposerDrop | null {
+  if (source === null) return null;
+  const target = readComposerAttachmentDropTargetData(event.over?.data.current);
+  return target?.accepts(source) === true ? { source, target } : null;
+}
+
+function commitOrdinaryDrop(input: {
+  readonly event: DragEndEvent;
+  readonly source: EpicCanvasDragSourceData | null;
+  readonly navigate: UseNavigateResult<string>;
+  readonly navigateNested: NavigateNestedFocus;
+  readonly edgeDwell: EdgeSplitDwellMachine;
+  readonly resolvedDrop: ResolvedEpicCanvasDrop | null;
+}): boolean {
+  const dndStore = useEpicDndStore.getState();
+  const headerStripIndex = dndStore.headerStripDropIndex;
+  const headerDragState = dndStore.headerStripDragState;
+  if (input.source === null) {
+    commitHeaderTabDrop({
+      event: input.event,
+      navigate: input.navigate,
+      edgeDwell: input.edgeDwell,
+      geometry: activeHeaderStripGeometry,
+      dragState: headerDragState,
+    });
+    return false;
+  }
+  if (headerStripIndex !== null && canDropOnHeaderStrip(input.source)) {
+    const result = commitHeaderStripDropAtIndex(input.source, headerStripIndex);
+    if (result === null) return false;
+    navigateToTabIntent(
+      input.navigate,
+      existingEpicTabIntent({
+        epicId: result.epicId,
+        tabId: result.tabId,
+        focus: undefined,
+      }),
+      undefined,
+    );
+    return true;
+  }
+  const drop = input.resolvedDrop;
+  if (drop === null) return false;
+  armTileHandoffForDrop(input.source, drop);
+  return commitResolvedCanvasDrop(drop, input.navigateNested);
 }
 
 /** Within a few px of any viewport edge - a canvas tile dragged off-window. */
@@ -1148,8 +1326,8 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
-  // Widths measured once per gesture; the strip's content origin is re-read
-  // every frame instead, because the strip scrolls itself mid-drag.
+  // Strip geometry and content origin are re-read while dragging because the
+  // strip can scroll or change layout without a corresponding pointer move.
   // A stationary pointer emits no events, so the merge dwell needs its own
   // timer or it can only ever fire on release - committing a split that was
   // never previewed.
@@ -1258,6 +1436,13 @@ export function RootDndProvider(props: RootDndProviderProps) {
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
+      // A handoff is normally consumed by the layout effect immediately after
+      // commit. Defensively clear any arm left by a commit that removed its
+      // whole strip before that boundary could run.
+      disarmHeaderStripCommitHandoff();
+      disarmTileStripCommitHandoff();
+      stripGeometryFailureReported = false;
+      headerTearOffActive = false;
       lastResolvedDropRef.current = null;
       lastReparentDropRef.current = null;
       clearSpringLoad(springLoadRef);
@@ -1436,21 +1621,14 @@ export function RootDndProvider(props: RootDndProviderProps) {
     // event. "Unreachable today" is the reasoning that already failed once in
     // this function.
     replayCanvasPreview = null;
+    stripGeometryFailureReported = false;
+    headerTearOffActive = false;
     useEpicDndStore.getState().dragEnded();
   }, [clearMergeDwellTimer, edgeDwell]);
 
   useEffect(
     () => () => {
-      const promoted = promotedPreviewOnDrag;
-      if (promoted !== null) {
-        useEpicCanvasStore
-          .getState()
-          .restorePreviewInTab(
-            promoted.viewTabId,
-            promoted.groupId,
-            promoted.tileId,
-          );
-      }
+      restorePromotedPreview();
       endGesture();
     },
     [endGesture],
@@ -1458,26 +1636,34 @@ export function RootDndProvider(props: RootDndProviderProps) {
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
+      const source = readActiveDragSource(event.active);
+      // Pointer-up can race the final collision update. Refresh first so an
+      // explicit in-app target wins over the viewport-edge tear-off affordance
+      // on overlapping edge pixels.
+      updateDropPreview(event);
+      const composerDrop = acceptedComposerDrop(source, event);
       const detach = resolveTearOff({
         event,
         stripBottom: activeHeaderStripGeometry?.stripBottom ?? null,
+        canvasTearOffAllowed:
+          lastReparentDropRef.current === null &&
+          lastResolvedDropRef.current === null &&
+          useEpicDndStore.getState().headerStripDropIndex === null &&
+          composerDrop === null,
       });
-      const source = readActiveDragSource(event.active);
       const detachRequest = resolveDetachRequest(detach);
-      if (detach !== null) {
-        detachRequest?.handler.requestOpen(detachRequest.tab);
+      if (detachRequest !== null) {
+        restorePromotedPreview();
+        detachRequest.handler.requestOpen(detachRequest.tab);
         endGesture();
         return;
       }
-      // Pointer-up can race the final collision update: refresh the resolved
-      // drop from the end event before committing, mirroring the previous
-      // controller's last-resolved-ref behavior.
-      updateDropPreview(event);
       clearSpringLoad(springLoadRef);
       // A sidebar-row/panel reparent wins over the canvas/header commit:
       // commit it (with the canReparent re-check inside) and skip the rest.
       const reparent = lastReparentDropRef.current;
       if (reparent !== null) {
+        restorePromotedPreview();
         commitSidebarReparentDrop({
           epicId: reparent.epicId,
           sourceNodeId: reparent.sourceNodeId,
@@ -1489,50 +1675,20 @@ export function RootDndProvider(props: RootDndProviderProps) {
         endGesture();
         return;
       }
-      const composerTarget = readComposerAttachmentDropTargetData(
-        event.over?.data.current,
-      );
-      if (
-        source !== null &&
-        composerTarget !== null &&
-        composerTarget.accepts(source)
-      ) {
-        composerTarget.attach(source);
+      if (composerDrop !== null) {
+        composerDrop.target.attach(composerDrop.source);
         endGesture();
         return;
       }
-      const headerStripIndex = useEpicDndStore.getState().headerStripDropIndex;
-      const headerDragState = useEpicDndStore.getState().headerStripDragState;
-      if (source !== null) {
-        if (headerStripIndex !== null && canDropOnHeaderStrip(source)) {
-          const result = commitHeaderStripDropAtIndex(source, headerStripIndex);
-          if (result !== null) {
-            navigateToTabIntent(
-              navigate,
-              existingEpicTabIntent({
-                epicId: result.epicId,
-                tabId: result.tabId,
-                focus: undefined,
-              }),
-              undefined,
-            );
-          }
-        } else {
-          const drop = lastResolvedDropRef.current;
-          if (drop !== null) {
-            armTileHandoffForDrop(source, drop);
-            commitResolvedCanvasDrop(drop, navigateNested);
-          }
-        }
-      } else {
-        commitHeaderTabDrop({
-          event,
-          navigate,
-          edgeDwell,
-          geometry: activeHeaderStripGeometry,
-          dragState: headerDragState,
-        });
-      }
+      const committed = commitOrdinaryDrop({
+        event,
+        source,
+        navigate,
+        navigateNested,
+        edgeDwell,
+        resolvedDrop: lastResolvedDropRef.current,
+      });
+      if (!committed) restorePromotedPreview();
       endGesture();
     },
     [
@@ -1548,16 +1704,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const handleDragCancel = useCallback(() => {
     // Cancel means cancel: undo the drag-start promotion so no state survives
     // a gesture the user abandoned.
-    const promoted = promotedPreviewOnDrag;
-    if (promoted !== null) {
-      useEpicCanvasStore
-        .getState()
-        .restorePreviewInTab(
-          promoted.viewTabId,
-          promoted.groupId,
-          promoted.tileId,
-        );
-    }
+    restorePromotedPreview();
     endGesture();
   }, [endGesture]);
 

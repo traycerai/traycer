@@ -2,10 +2,10 @@
  * DOM measurement for the header strip drag model. Kept apart from the model
  * itself so the model stays a pure function testable without a browser.
  *
- * Widths are measured ONCE at drag start; the strip's content origin is re-read
- * every frame. That split matters: widths are stable for the gesture, but the
- * strip is `overflow-x-auto` and dnd-kit's autoScroll is enabled, so the origin
- * moves without any user input and a cached one desyncs every neighbour centre.
+ * Slots and widths are re-measured while dragging so layout changes cannot
+ * stale the model. The strip's content origin is also re-read every frame:
+ * dnd-kit's autoScroll can move it without pointer input. Render transforms are
+ * subtracted from slot measurements to recover stable layout-space geometry.
  */
 import {
   HEADER_MERGE_BAND_PX,
