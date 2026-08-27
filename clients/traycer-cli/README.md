@@ -74,7 +74,7 @@ Most commands support `--json`, which emits structured NDJSON events suitable fo
 
 ## Agent and Workspace Commands
 
-Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current epic, communicate with other agents, and create worktrees:
+Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current Task, communicate with other agents, and create worktrees:
 
 ```sh
 traycer agent list
