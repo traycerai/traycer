@@ -143,6 +143,9 @@ function chat(
 function agent(id: string, title: string): TuiAgentProjection {
   return {
     id,
+    // An ordinary registry-backed agent - this suite exercises the open
+    // command's subpages, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title,
     parentId: null,

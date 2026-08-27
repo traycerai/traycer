@@ -294,28 +294,35 @@ export interface LiveBusySessionCountOptions {
  *
  * So three things demote a retained value to `null` — no live source:
  *
- *   - the last read ERRORED (retained ≠ current);
  *   - fetching is PAUSED (offline; nothing will correct it);
- *   - the value has gone STALE with nothing in flight to correct it.
+ *   - the value has gone STALE with nothing in flight to correct it;
+ *   - there is no live source at all (`hasLiveSource` is the route gate).
+ *
+ * A refetch in flight — including a retry after an error — keeps the last
+ * successful number on screen. `isError` used to win over `fetching` and
+ * blanked the Overview busy chip for the round trip, which is the opposite
+ * of the display/settled split: showing a slightly-behind count costs a
+ * moment of imprecision; hiding it costs a hole in the status row. Nothing
+ * destructive may be armed from a retained number; see
+ * {@link settledBusySessionCount}, which is what the force reads.
  *
  * The staleness check is the one that catches the quiet case, where nothing
  * failed loudly and the data simply stopped being refreshed.
- *
- * Stale WHILE a replacement is in flight keeps rendering the retained number,
- * and that is a display decision only. It is not a claim the number is current —
- * "the fresh answer is in flight" does not make the old one fresh — it is a
- * choice not to blank a panel for the length of a round trip. Nothing
- * destructive may be armed from it; see {@link settledBusySessionCount}, which
- * is what the force reads.
  */
 function isUsableBusySource(options: LiveBusySessionCountOptions): boolean {
   if (!options.hasLiveSource) {
     return false;
   }
+  // Replacement in flight: keep the last answer, even if the previous
+  // attempt errored. Error must not blank the chip for the length of a
+  // round trip — that is what `settledBusySessionCount` refuses to arm from.
+  if (options.fetchStatus === "fetching") {
+    return true;
+  }
   if (options.isError || options.fetchStatus === "paused") {
     return false;
   }
-  if (options.isStale && options.fetchStatus !== "fetching") {
+  if (options.isStale) {
     return false;
   }
   return true;

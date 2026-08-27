@@ -68,6 +68,7 @@ import {
   type ProjectedReparentNode,
 } from "@/lib/reparent-projection-rules";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { appLogger } from "@/lib/logger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { epicNodeRefForNodeId } from "@/lib/epic-selectors";
@@ -625,26 +626,65 @@ export interface SidebarReparentDropInput {
  * chats-off-YJS, and the host resolves a pre-migration chat through the same
  * storage seam, so the RPC is correct for a chat on every host that has the
  * method at all.
+ *
+ * ## ABSENCE STOPPED BEING THE TEST at `epic.listTuiAgents@1.1`
+ *
+ * "Absent from the record slice" was a sound proxy only while the record slice
+ * was registry-only. `@1.1` serves the doc-resident remainder too - it has to,
+ * because `epic.subscribe@2` has no doc replica to union those agents in from
+ * - so a foreign-bound agent now ARRIVES as a record and absence goes quiet.
+ *
+ * Read literally, this function would then answer `false` for exactly the
+ * agents it exists to catch, and route them to `epic.reparentChat` with an id
+ * naming no registry chat: the host error described above, reintroduced by a
+ * change that was fixing a different symptom. The row carries `docResident`
+ * precisely so the distinction survives the union, and both tests are kept -
+ * absence still covers a `@1.0` host, which sends no marker at all.
  */
 function isDocOnlyTerminalAgent(
   state: OpenEpicState,
   node: ProjectedReparentNode,
 ): boolean {
-  return (
-    node.type === "terminal-agent" &&
-    !Object.hasOwn(state.tuiAgentRecords.byId, node.id)
-  );
+  if (node.type !== "terminal-agent") return false;
+  // Read the UNION, not the record slice. Absence from `tuiAgentRecords` is
+  // still a doc-only tell on a `@1.0` host, but it is the union that holds
+  // every agent the user can actually grab, and its `docResident` answers for
+  // both planes on every host version.
+  //
+  // `Object.hasOwn` rather than an `=== undefined` compare, for the same
+  // reason the record-slice version used it: `byId` is a `Record<string, T>`,
+  // so indexing it types as `T` even though a miss is plainly reachable here
+  // - a node id the union does not carry. The undefined check is unreachable
+  // to the type system and reachable at runtime, which is exactly the shape
+  // `no-unnecessary-condition` refuses to let through.
+  const byId = state.tuiAgents.byId;
+  if (!Object.hasOwn(byId, node.id)) return true;
+  return byId[node.id].docResident;
 }
 
 /**
  * Imperative reparent commit for a `sidebar-node` released on a reparent
  * target. Resolves the live epic session via the registry (`peek`, never
- * `acquire`), RE-RUNS `canReparent` against the current doc (Decision D: this
- * closes the drag-over→drag-end TOCTOU and keeps the throwing store action
- * unreachable), then flips `parentId` through the standard `reparentArtifact`
- * action (`LOCAL_ORIGIN`, replicated over the Y stream). Silent no-op when the
- * session is gone or the re-check fails - matching the "invalid drop = silent
- * cancel" rule.
+ * `acquire`), RE-RUNS `canReparent` against the projected tree (Decision D:
+ * this closes the drag-over→drag-end TOCTOU), then persists:
+ *   - registry-backed agents → `epic.reparentChat`, under an optimistic
+ *     overlay patch (`beginReparentMutation`) so the row moves at drop time
+ *     rather than a record round-trip later
+ *   - artifacts → local `reparentArtifact` (Y stream) **and**
+ *     `epic.reparentArtifact` (host cloud-sync / the persist path that
+ *     survives dropping the doc arm). Dual-write is safe: host `update()`
+ *     skips `validateReparent` when `parentId` is already the target, then
+ *     LWW-sets the same value (same shape as `epic.renameArtifact`).
+ *   - doc-only terminal agents → local `reparentArtifact` only (Q1)
+ * Silent no-op when the session is gone or the re-check fails - matching
+ * the "invalid drop = silent cancel" rule.
+ *
+ * `reparentArtifact` can still throw, and this file does not assume it cannot.
+ * Task 4.3 moved the store's own validation onto the SAME projected evaluator
+ * the gate above uses, so a rejection here would mean two reads of one tree
+ * disagreed - which nothing enforces. The throw is caught in the doc-write
+ * branch below, and `handleDragEnd` additionally ends the drag in a `finally`
+ * so no future escape from this function can strand the session.
  */
 export function commitSidebarReparentDrop(
   input: SidebarReparentDropInput,
@@ -689,6 +729,20 @@ export function commitSidebarReparentDrop(
     if (client === null) return;
     const sessionHostId = getEpicSessionHandleHostId(handle);
     const movedNodeType = evaluation.node.type;
+    // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
+    // entry, so without this the drop had no local feedback and the node sat
+    // under its old parent until the record round-trip - the one branch of
+    // this commit that was pure RPC. `begin` re-evaluates against the same
+    // projected tree the gate above read, synchronously, so it cannot refuse
+    // a move that gate accepted; `null` (same parent, viewer) makes retire a
+    // no-op.
+    const requestId = handle.store
+      .getState()
+      .beginReparentMutation(input.sourceNodeId, input.newParentId);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      handle.store.getState().retirePendingMutation(requestId, outcome);
+    };
     void client
       .request("epic.reparentChat", {
         epicId: input.epicId,
@@ -702,13 +756,21 @@ export function commitSidebarReparentDrop(
         // the 20s poll would - so re-ask now, the way every hook-based record
         // mutation does on success. Scoped to the session's host: that is
         // the client the request was sent on.
+        //
+        // "landed" keeps the overlay patch applied until the refreshed rows
+        // actually arrive - the ack is proof the host holds the new parent -
+        // so the row never snaps back under the old one while the refetch
+        // (or, on a refetch failure, the next poll) is in flight. The
+        // projection's dead sweep forgets the stamp once the row catches up.
         if (movedNodeType === "terminal-agent") {
           invalidateEpicTuiAgentRecords(input.queryClient, sessionHostId);
         } else {
           invalidateEpicChatRecords(input.queryClient, sessionHostId);
         }
+        retire("landed");
       })
       .catch((error: unknown) => {
+        retire("failed");
         toastFromHostError(
           toHostRpcError(error, "epic.reparentChat"),
           "Couldn't move this agent.",
@@ -716,12 +778,70 @@ export function commitSidebarReparentDrop(
       });
   } else {
     // Artifacts, whose pointer has always lived in the doc - and the one
-    // agent-family case that still does, a doc-only terminal agent. Both are
-    // the same Y write they were before the record channel existed; see
-    // `isDocOnlyTerminalAgent`.
-    handle.store
-      .getState()
-      .reparentArtifact(input.sourceNodeId, input.newParentId);
+    // agent-family case that still does, a doc-only terminal agent. The Y
+    // write stays until the doc arm dies; artifacts additionally dual-write
+    // `epic.reparentArtifact` so persist does not depend on that arm.
+    // Doc-only TUI stays Y-only until listTuiAgents is on the floor (Q1):
+    // this RPC names an artifact id, not a tuiAgents map entry.
+    // As of task 4.3 `reparentArtifact` validates against the PROJECTED TREE
+    // too - the same `evaluateProjectedReparent` the gate above called, on the
+    // same `state.tree`, reached synchronously with nothing able to mutate it
+    // in between. So the pairing that used to wedge a drag session:
+    //
+    //   a doc-only terminal agent  ->  dropped onto a RECORD-BACKED chat
+    //
+    // now commits. Both nodes are in the projected tree, same family, no cycle;
+    // the parent's missing DOC entry no longer decides anything, because the
+    // write resolves the dragged NODE's entry and the parent is only a value
+    // being written.
+    //
+    // The catch stays. "Both callers use one evaluator on one tree" is a
+    // property of this file's current control flow, not an invariant anything
+    // checks - one `await` introduced above, or one caller that reads the tree
+    // earlier and passes it down, reopens the gap. 4.3a is the record of what
+    // that gap costs: an uncaught throw escaped `handleDragEnd` before
+    // `dragEnded()` ran and left a dead sidebar until remount, from one
+    // ordinary drop. The guard is a branch; the failure is unrecoverable
+    // without a remount.
+    //
+    // A rejection is logged, never toasted: an invalid drop is a silent cancel
+    // by this file's own rule, and two reads of one tree disagreeing is an
+    // internal invariant mismatch the user cannot act on.
+    let mutated = false;
+    try {
+      mutated = handle.store
+        .getState()
+        .reparentArtifact(input.sourceNodeId, input.newParentId);
+    } catch (error: unknown) {
+      appLogger.error(
+        "[epic-dnd] doc reparent rejected after the projected gate passed",
+        {
+          epicId: input.epicId,
+          sourceNodeId: input.sourceNodeId,
+          newParentId: input.newParentId,
+          nodeType: evaluation.node.type,
+        },
+        error,
+      );
+      return;
+    }
+    if (mutated && evaluation.node.family === "artifact") {
+      const artifactClient = getEpicSessionHandleHostClient(handle);
+      if (artifactClient !== null) {
+        void artifactClient
+          .request("epic.reparentArtifact", {
+            epicId: input.epicId,
+            artifactId: input.sourceNodeId,
+            newParentId: input.newParentId,
+          })
+          .catch((error: unknown) => {
+            toastFromHostError(
+              toHostRpcError(error, "epic.reparentArtifact"),
+              "Couldn't move this artifact.",
+            );
+          });
+      }
+    }
   }
   // Reveal the moved node under its new parent: a quick drop onto a collapsed
   // or previously-leaf row only flips `parentId`, and spring-load only fires

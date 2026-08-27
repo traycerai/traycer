@@ -201,6 +201,7 @@ export function EpicSidebarCloudChatRow(
         // surfaces.
         aria-label={ownerReachable ? title : `${title} — ${lockCopy.ariaLabel}`}
         data-testid={`epic-sidebar-cloud-item-${chat.identity.chatId}`}
+        data-sidebar-node-id={chat.identity.chatId}
         data-owner-host-id={chat.ownerHostId}
         className={cn(
           "group/tree-item flex min-h-7 w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2",

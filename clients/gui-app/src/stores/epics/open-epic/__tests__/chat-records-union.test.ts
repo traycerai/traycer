@@ -173,15 +173,18 @@ afterEach(() => {
 describe("chats.byId unions the host's records with the doc projection", () => {
   it("gives a swept chat back its record, its tree row and its parent", () => {
     const session = newSession(seedChats([]));
-    session.handle.store.getState().applyChatRecords([
-      record({ chatId: "parent", title: "Parent" }),
-      record({
-        chatId: "swept",
-        title: "Swept chat",
-        parentChatId: "parent",
-        isTitleEditedByUser: true,
-      }),
-    ]);
+    session.handle.store.getState().applyChatRecords(
+      [
+        record({ chatId: "parent", title: "Parent" }),
+        record({
+          chatId: "swept",
+          title: "Swept chat",
+          parentChatId: "parent",
+          isTitleEditedByUser: true,
+        }),
+      ],
+      null,
+    );
 
     const state = session.handle.store.getState();
     // The doc knows about neither - that is the post-sweep steady state.
@@ -269,16 +272,19 @@ describe("chats.byId unions the host's records with the doc projection", () => {
         ],
       ]),
     );
-    session.handle.store.getState().applyChatRecords([
-      record({
-        chatId: "both",
-        title: "Renamed since",
-        isTitleEditedByUser: true,
-        parentChatId: null,
-        archived: true,
-        archivedAt: 5_000,
-      }),
-    ]);
+    session.handle.store.getState().applyChatRecords(
+      [
+        record({
+          chatId: "both",
+          title: "Renamed since",
+          isTitleEditedByUser: true,
+          parentChatId: null,
+          archived: true,
+          archivedAt: 5_000,
+        }),
+      ],
+      null,
+    );
 
     const state = session.handle.store.getState();
     expect(state.chats.allIds).toEqual(["both"]);
@@ -315,7 +321,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     const store = session.handle.store;
     store
       .getState()
-      .applyChatRecords([record({ chatId: "both", title: "Row title" })]);
+      .applyChatRecords([record({ chatId: "both", title: "Row title" })], null);
     const before = store.getState().chats;
     expect(before.byId.both.title).toBe("Row title");
 
@@ -331,6 +337,63 @@ describe("chats.byId unions the host's records with the doc projection", () => {
       "Doc renamed underneath",
     );
     expect(store.getState().chats).toBe(before);
+    session.handle.dispose();
+  });
+
+  it("un-aliases `chats` from `docChats` the moment a record answers, even when the projected content is byte-for-byte identical", () => {
+    // The reverse of the alias-preserving test above: doc-only mode publishes
+    // `chats` AS `docChats` (same object), and `chats === docChats` is what a
+    // consumer reads as "no record layer here". If the FIRST record answer
+    // for a row projects to content structurally equal to what the doc
+    // already held, a naive splice of both sides independently would hand
+    // back the same shared `prev` object for both - `chats` would still ===
+    // `docChats` after the record layer arrived, silently lying about it.
+    const session = newSession(
+      seedChats([
+        [
+          "both",
+          (() => {
+            const chat = docChatEntry({
+              id: "both",
+              title: "Same content",
+              parentId: null,
+              hostId: "host-1",
+            });
+            // Match every field `chatProjectionFromRecord` will produce below,
+            // so the two projections compare EQUAL field-for-field.
+            chat.set("userId", "user-a");
+            chat.set("updatedAt", 2);
+            chat.set("archivedAt", null);
+            return chat;
+          })(),
+        ],
+      ]),
+    );
+    const store = session.handle.store;
+    expect(store.getState().chats).toBe(store.getState().docChats);
+    const beforeRow = store.getState().chats.byId.both;
+
+    store.getState().applyChatRecords(
+      [
+        record({
+          chatId: "both",
+          title: "Same content",
+          ownerUserId: "user-a",
+          originHostId: "host-1",
+          updatedAt: 2,
+          archived: false,
+          archivedAt: null,
+        }),
+      ],
+      null,
+    );
+
+    // Un-aliased even though nothing about the content changed.
+    expect(store.getState().chats).not.toBe(store.getState().docChats);
+    // But the row itself - and the id array - are still the SAME references:
+    // only the outer wrapper is new, content identity is preserved throughout.
+    expect(store.getState().chats.byId.both).toBe(beforeRow);
+    expect(store.getState().chats.byId.both.title).toBe("Same content");
     session.handle.dispose();
   });
 
@@ -357,7 +420,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     );
     session.handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "both", title: "Renamed" })]);
+      .applyChatRecords([record({ chatId: "both", title: "Renamed" })], null);
 
     const state = session.handle.store.getState();
     expect(state.chats.byId.both.title).toBe("Renamed");
@@ -381,7 +444,10 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     );
     session.handle.store
       .getState()
-      .applyChatRecords([record({ chatId: "swept", title: "Live title" })]);
+      .applyChatRecords(
+        [record({ chatId: "swept", title: "Live title" })],
+        null,
+      );
     // What `ChatDocEntrySweep` does once publication is proven.
     session.mutateDoc((chats) => chats.delete("swept"));
 
@@ -403,10 +469,13 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     const session = newSession(seedChats([]));
     session.handle.store
       .getState()
-      .applyChatRecords([
-        record({ chatId: "mine", ownerUserId: "user-a" }),
-        record({ chatId: "theirs", ownerUserId: "user-b" }),
-      ]);
+      .applyChatRecords(
+        [
+          record({ chatId: "mine", ownerUserId: "user-a" }),
+          record({ chatId: "theirs", ownerUserId: "user-b" }),
+        ],
+        null,
+      );
 
     const state = session.handle.store.getState();
     expect(state.chats.allIds).toEqual(["mine"]);
@@ -419,20 +488,71 @@ describe("chats.byId unions the host's records with the doc projection", () => {
     const store = session.handle.store;
     store
       .getState()
-      .applyChatRecords([record({ chatId: "a" }), record({ chatId: "b" })]);
+      .applyChatRecords(
+        [record({ chatId: "a" }), record({ chatId: "b" })],
+        null,
+      );
     const afterFirst = store.getState().chats;
 
     // An identical answer writes nothing - the poll behind this must not
     // re-render an epic that has not changed.
     store
       .getState()
-      .applyChatRecords([record({ chatId: "a" }), record({ chatId: "b" })]);
+      .applyChatRecords(
+        [record({ chatId: "a" }), record({ chatId: "b" })],
+        null,
+      );
     expect(store.getState().chats).toBe(afterFirst);
 
     // A deleted chat simply stops being served.
-    store.getState().applyChatRecords([record({ chatId: "a" })]);
+    store.getState().applyChatRecords([record({ chatId: "a" })], null);
     expect(store.getState().chats.allIds).toEqual(["a"]);
     expect(store.getState().tree.nodeById.b).toBeUndefined();
+    session.handle.dispose();
+  });
+
+  it("rejects a STALE poll answer for a row a later poll already advanced past", () => {
+    // The same `revision <= held.revision` guard `applyChatRecordDelta`
+    // applies to a push, now on the poll's OWN merge path: a delayed
+    // `epic.listChatRecords` answer serving an OLDER revision of a row must
+    // not regress it, or a healthy pending rename's overlay chain would read
+    // the regression as a peer overwrite and get terminally swept.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Current", revision: 2 })],
+        null,
+      );
+    expect(store.getState().chats.byId.c.title).toBe("Current");
+
+    // A stale answer, fenced `null` (the caller had no ingest-seq to capture).
+    store
+      .getState()
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Stale", revision: 1 })],
+        null,
+      );
+    expect(store.getState().chats.byId.c.title).toBe("Current");
+
+    // Equal is stale too, same as the delta path's guard.
+    store
+      .getState()
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Also stale", revision: 2 })],
+        null,
+      );
+    expect(store.getState().chats.byId.c.title).toBe("Current");
+
+    // A genuinely newer revision still applies normally.
+    store
+      .getState()
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Newer", revision: 3 })],
+        null,
+      );
+    expect(store.getState().chats.byId.c.title).toBe("Newer");
     session.handle.dispose();
   });
 });
@@ -441,7 +561,7 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   it("lands a brand-new chat, tree row included, with no poll in between", () => {
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+    store.getState().applyChatRecords([record({ chatId: "existing" })], null);
 
     store.getState().applyChatRecordDelta({
       kind: "upsert",
@@ -517,14 +637,17 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    store.getState().applyChatRecords([
-      record({ chatId: "mine", ownerUserId: "user-a" }),
-      record({
-        chatId: "theirs",
-        ownerUserId: "user-b",
-        origin: "foreign",
-      }),
-    ]);
+    store.getState().applyChatRecords(
+      [
+        record({ chatId: "mine", ownerUserId: "user-a" }),
+        record({
+          chatId: "theirs",
+          ownerUserId: "user-b",
+          origin: "foreign",
+        }),
+      ],
+      null,
+    );
     store.getState().markChatRecordListAuthoritative();
     expect(store.getState().chats.allIds).toEqual(["mine"]);
     expect(store.getState().chatRecordListAuthoritative).toBe(true);
@@ -614,9 +737,10 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     const store = session.handle.store;
     store
       .getState()
-      .applyChatRecords([
-        record({ chatId: "c", title: "Current", revision: 5 }),
-      ]);
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Current", revision: 5 })],
+        null,
+      );
 
     store.getState().applyChatRecordDelta({
       kind: "upsert",
@@ -648,7 +772,10 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     const store = session.handle.store;
     store
       .getState()
-      .applyChatRecords([record({ chatId: "a" }), record({ chatId: "gone" })]);
+      .applyChatRecords(
+        [record({ chatId: "a" }), record({ chatId: "gone" })],
+        null,
+      );
     expect(store.getState().tree.rootIds.slice().sort()).toEqual(["a", "gone"]);
 
     store.getState().applyChatRecordDelta({
@@ -694,7 +821,7 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     const store = session.handle.store;
     store
       .getState()
-      .applyChatRecords([record({ chatId: "gone", revision: 1 })]);
+      .applyChatRecords([record({ chatId: "gone", revision: 1 })], null);
     store.getState().applyChatRecordDelta({
       kind: "remove",
       epicId: "epic-test",
@@ -712,7 +839,7 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     // An `epic.listChatRecords` answer issued BEFORE the removal, landing after.
     store
       .getState()
-      .applyChatRecords([record({ chatId: "gone", revision: 1 })]);
+      .applyChatRecords([record({ chatId: "gone", revision: 1 })], null);
     expect(store.getState().chats.allIds).toEqual([]);
     expect(store.getState().chatRetractions).toEqual({ gone: "deleted" });
     session.handle.dispose();
@@ -721,7 +848,9 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
   it("is idempotent on a redelivered removal", () => {
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    store.getState().applyChatRecords([record({ chatId: "a", revision: 2 })]);
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "a", revision: 2 })], null);
     const before = store.getState().chats;
 
     store.getState().applyChatRecordDelta({
@@ -746,7 +875,9 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
     expect(store.getState().chats).toBe(afterFirstRemove);
 
     // And an unchanged poll answer still writes nothing, as it always has.
-    store.getState().applyChatRecords([record({ chatId: "a", revision: 2 })]);
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "a", revision: 2 })], null);
     expect(store.getState().chats).toBe(afterFirstRemove);
     session.handle.dispose();
   });
@@ -761,15 +892,16 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
  * share.
  */
 describe("pending chat creations", () => {
-  it("survives the poll's clear-and-replace when the answer does not include it yet", () => {
+  it("survives the poll's omission retraction when the answer does not include it yet", () => {
     signedInAs("user-a");
     // Ablation: this is the whole point of the ticket. Fold the union out of
     // `publishChatRecords` and the second `applyChatRecords` below - which
-    // rebuilds `chatRecordRows` from scratch and knows nothing about
-    // "just-created" - evicts it exactly like any other stale entry would be.
+    // reconciles `chatRecordRows` against what the answer carries and knows
+    // nothing about "just-created" - evicts it exactly like any other stale
+    // entry would be.
     const session = newSession(seedChats([]));
     const store = session.handle.store;
-    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+    store.getState().applyChatRecords([record({ chatId: "existing" })], null);
     store.getState().beginPendingChatCreation({
       chatId: "just-created",
       hostId: "host-1",
@@ -784,7 +916,7 @@ describe("pending chat creations", () => {
 
     // A poll answer issued before the create was even sent - it cannot know
     // about "just-created" - landing after.
-    store.getState().applyChatRecords([record({ chatId: "existing" })]);
+    store.getState().applyChatRecords([record({ chatId: "existing" })], null);
 
     expect(store.getState().chats.allIds.slice().sort()).toEqual([
       "existing",
@@ -813,14 +945,17 @@ describe("pending chat creations", () => {
       "submit-host",
     );
 
-    store.getState().applyChatRecords([
-      record({
-        chatId: "just-created",
-        title: "Served title",
-        originHostId: "served-host",
-        parentChatId: null,
-      }),
-    ]);
+    store.getState().applyChatRecords(
+      [
+        record({
+          chatId: "just-created",
+          title: "Served title",
+          originHostId: "served-host",
+          parentChatId: null,
+        }),
+      ],
+      null,
+    );
 
     const state = store.getState();
     expect(
@@ -1033,7 +1168,7 @@ describe("pending chat creations", () => {
     expect(store.getState().chats.byId.c.hostId).toBe("host-1");
 
     // Poll path.
-    store.getState().applyChatRecords([theirs]);
+    store.getState().applyChatRecords([theirs], null);
     expect(store.getState().chats.allIds).toEqual(["c"]);
     expect(store.getState().chats.byId.c.userId).toBe("user-a");
 
@@ -1041,7 +1176,10 @@ describe("pending chat creations", () => {
     // identity, not a blanket refusal to reconcile.
     store
       .getState()
-      .applyChatRecords([record({ chatId: "c", title: "Mine", revision: 3 })]);
+      .applyChatRecords(
+        [record({ chatId: "c", title: "Mine", revision: 3 })],
+        null,
+      );
     expect(store.getState().chats.byId.c.title).toBe("Mine");
     expect(store.getState().chats.byId.c.hostId).toBe("host-1");
     session.handle.dispose();
@@ -1053,10 +1191,11 @@ describe("pending chat creations", () => {
     // answers.
     //
     // Ablation: refuse the registration in that case - "there is already a real
-    // row, nothing to stand in for" - and the older list answer below, issued
-    // before the chat existed and landing after it, clear-and-replaces that row
-    // away leaving NEITHER a record nor a stand-in. The chat vanishes until
-    // another poll, which cross-host is the minutes-long replication path.
+    // row, nothing to stand in for" - and the list answer below, issued after
+    // the push was ingested yet legitimately omitting the row (cross-host, the
+    // session host's own SQLite lags a foreign commit by the replication
+    // path), retracts that row leaving NEITHER a record nor a stand-in. The
+    // chat vanishes until another poll, which cross-host is minutes away.
     signedInAs("user-a");
     const session = newSession(seedChats([]));
     const store = session.handle.store;
@@ -1078,16 +1217,19 @@ describe("pending chat creations", () => {
     expect(store.getState().chats.allIds).toEqual(["c"]);
     expect(store.getState().chats.byId.c.title).toBe("Served");
 
-    // The stale answer lands.
-    store.getState().applyChatRecords([]);
+    // The omitting answer lands, fenced AFTER the push ingest - so the
+    // omission is sanctioned to retract the served row (an answer whose fence
+    // predated the ingest would hold it instead; that fence behavior is the
+    // monotonic-merge contract's own test, in the applyChatRecords block).
+    store.getState().applyChatRecords([], store.getState().peekChatIngestSeq());
     expect(store.getState().chats.allIds).toEqual(["c"]);
     expect(store.getState().chats.byId.c.title).toBe("");
 
     // The next answer that carries the row hands over and retires the stand-in
     // - proven by the answer after it, which now empties the table for real.
-    store.getState().applyChatRecords([served]);
+    store.getState().applyChatRecords([served], null);
     expect(store.getState().chats.byId.c.title).toBe("Served");
-    store.getState().applyChatRecords([]);
+    store.getState().applyChatRecords([], null);
     expect(store.getState().chats.allIds).toEqual([]);
     session.handle.dispose();
   });
@@ -1117,7 +1259,9 @@ describe("pending chat creations", () => {
     // ...and still user-a's when they come back, where its own record retires it.
     signedInAs("user-a");
     expect(store.getState().chats.allIds).toEqual(["created-as-a"]);
-    store.getState().applyChatRecords([record({ chatId: "created-as-a" })]);
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "created-as-a" })], null);
     expect(store.getState().chats.byId["created-as-a"].userId).toBe("user-a");
     session.handle.dispose();
   });

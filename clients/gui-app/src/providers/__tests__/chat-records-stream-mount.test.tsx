@@ -258,7 +258,9 @@ describe("<ChatRecordsStreamMount />", () => {
 
   it("routes a remove, and the retraction reason with it", () => {
     const handle = openEpic("epic-1", "host-A");
-    handle.store.getState().applyChatRecords([record({ chatId: "gone" })]);
+    handle.store
+      .getState()
+      .applyChatRecords([record({ chatId: "gone" })], null);
     render(<ChatRecordsStreamMount />);
 
     emit({
@@ -354,7 +356,9 @@ describe("<ChatRecordsStreamMount />", () => {
     // method the host will refuse on every reconnect.
     streamState.support = "unsupported";
     const handle = openEpic("epic-1", "host-A");
-    handle.store.getState().applyChatRecords([record({ chatId: "polled" })]);
+    handle.store
+      .getState()
+      .applyChatRecords([record({ chatId: "polled" })], null);
 
     render(<ChatRecordsStreamMount />);
 
@@ -363,10 +367,10 @@ describe("<ChatRecordsStreamMount />", () => {
     expect(handle.store.getState().chats.allIds).toEqual(["polled"]);
     handle.store
       .getState()
-      .applyChatRecords([
-        record({ chatId: "polled" }),
-        record({ chatId: "polled-again" }),
-      ]);
+      .applyChatRecords(
+        [record({ chatId: "polled" }), record({ chatId: "polled-again" })],
+        null,
+      );
     expect(handle.store.getState().chats.allIds.slice().sort()).toEqual([
       "polled",
       "polled-again",
