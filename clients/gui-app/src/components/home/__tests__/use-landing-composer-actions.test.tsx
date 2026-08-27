@@ -31,6 +31,10 @@ import type { ComposerPromptEditorHandle } from "@/components/chat/composer/comp
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  sessionCreatedEpicHostId,
+  wasEpicCreatedRecentlyThisSession,
+} from "@/lib/epics/session-created-epics";
 
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
@@ -144,6 +148,19 @@ function foldedChatIdFromCreateEpicPayload(payload: unknown): string | null {
   if (!("chatId" in chat)) return null;
   const chatId = chat.chatId;
   return typeof chatId === "string" ? chatId : null;
+}
+
+// Same structural-narrowing shape as the chat-id reader above, for the
+// epic's own id - present on both flows' `epic.create` payload (`chat` is
+// `null` on the terminal-agent flow, but `epic.id` always rides along).
+function epicIdFromCreateEpicPayload(payload: unknown): string | null {
+  if (typeof payload !== "object" || payload === null) return null;
+  if (!("epic" in payload)) return null;
+  const epic = payload.epic;
+  if (typeof epic !== "object" || epic === null) return null;
+  if (!("id" in epic)) return null;
+  const id = epic.id;
+  return typeof id === "string" ? id : null;
 }
 const WORKSPACE_PATH = "/tmp/traycer";
 const DRAFT_WORKSPACE_PATH = "/tmp/draft-workspace";
@@ -2370,6 +2387,140 @@ describe("useLandingComposerActions", () => {
       await waitFor(() => {
         expect(result.current.isPending).toBe(false);
       });
+      queryClient.clear();
+    });
+  });
+
+  // `markEpicCreatedThisSession` fires once before `epic.create` (for the
+  // existence reconciler) and again in each flow's SUCCESS handler, to
+  // re-anchor `CREATE_RACE_WINDOW_MS` (2 minutes) on COMPLETION rather than on
+  // the request. `epic.create` can legitimately hold a 30s host RPC deadline
+  // (longer under retry), so anchoring on the request alone would let a slow
+  // create hand an already-expired seed to the session that opens right after
+  // it - reintroducing the exact NOT_FOUND race this marker exists to
+  // prevent. `Date` is faked (not the timer queue) so the clock is fully
+  // controllable while `waitFor`'s own real-timer polling - and every
+  // TanStack Query internal `setTimeout(0)` hop the mutation pipeline relies
+  // on - keeps working unmodified.
+  describe("create-race window re-anchoring on completion", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps the create-race window open 90s after a GUI-chat create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      setSingleWorkspace();
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          toolbar: defaultToolbar(),
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
+      queryClient.clear();
+    });
+
+    it("keeps the create-race window open 90s after a terminal-agent create resolves, even though the request itself took 60s", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const createGate = deferred<unknown>();
+      landingMocks.request.mockImplementation((method) =>
+        method === "epic.create" ? createGate.promise : Promise.resolve({}),
+      );
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        { wrapper: queryClientWrapper(queryClient) },
+      );
+
+      act(() => {
+        result.current.selectTerminalAgent(
+          {
+            harnessId: "claude",
+            model: null,
+            reasoningEffort: null,
+            terminalAgentArgs: "",
+            profileId: null,
+          },
+          null,
+        );
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      const epicId = epicIdFromCreateEpicPayload(createEpicCall?.[1]);
+      if (epicId === null) throw new Error("expected an epic id");
+
+      // The request is still pending - advance 60s before it resolves.
+      vi.advanceTimersByTime(60_000);
+
+      await act(async () => {
+        createGate.resolve({ roomInfo: null });
+        await createGate.promise;
+      });
+      await waitFor(() => {
+        expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+      });
+
+      // 90s after completion - 150s after the request, past the 2-minute
+      // window if it were still anchored there. Only the success handler's
+      // re-anchor keeps this seed alive.
+      vi.advanceTimersByTime(90_000);
+
+      expect(sessionCreatedEpicHostId(epicId)).toBe(TEST_HOST_ID);
+      expect(wasEpicCreatedRecentlyThisSession(epicId)).toBe(true);
+
       queryClient.clear();
     });
   });

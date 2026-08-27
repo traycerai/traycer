@@ -6,7 +6,10 @@ import { removeDeletedEpicsFromCloudTaskCaches } from "@/lib/cloud-epic-tasks-qu
 import { epicAccessToast } from "@/lib/toast/channels";
 import { subscribeDeletedEpicNotifications } from "@/lib/epics/deleted-epic-events";
 import { isUnavailableEpicCode } from "@/lib/epics/unavailable-epic";
-import { wasEpicCreatedRecentlyThisSession } from "@/lib/epics/session-created-epics";
+import {
+  CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
+  wasEpicCreatedRecentlyThisSession,
+} from "@/lib/epics/session-created-epics";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
@@ -19,27 +22,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
-
-/**
- * Silent re-subscribe schedule before the eject, for an `unavailable` verdict
- * on an epic THIS renderer created moments ago. `epic.create` is local-first:
- * the cloud record is written by the create host's deferred background
- * connect, so a session served by any OTHER host can observe a cloud
- * `NOT_FOUND` for an epic that provably exists - replication lag wearing an
- * adjudicated code. Each entry is the delay before one
- * `requestFreshSnapshot`; exhausting the schedule falls through to the normal
- * close, so a genuinely deleted epic still ejects (just those seconds later).
- *
- * Three things stay OUT of the grace, and each for its own reason: deletes and
- * revokes, because those verdicts are first-hand rather than inferred from
- * absence; epics past the create-race window
- * (`wasEpicCreatedRecentlyThisSession`), because after it a `NOT_FOUND` means
- * what it says; and any replica holding local work (`holdsUnsyncedWork`),
- * because the retry itself is destructive.
- */
-const CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS: ReadonlyArray<number> = [
-  2_000, 5_000, 10_000,
-];
 
 /**
  * App-level coordinator that force-closes an epic tab when the user loses

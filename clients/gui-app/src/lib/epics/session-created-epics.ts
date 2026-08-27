@@ -62,6 +62,29 @@ function isWithinCreateRaceWindow(entry: SessionCreatedEpicEntry): boolean {
   return Date.now() - entry.recordedAt <= CREATE_RACE_WINDOW_MS;
 }
 
+/**
+ * The access coordinator's silent re-subscribe schedule for an `unavailable`
+ * (cloud `NOT_FOUND`) verdict on an epic still inside the window above - each
+ * entry the delay before one `requestFreshSnapshot`, the eject running only
+ * once the last one is spent.
+ *
+ * It lives here, beside the window it serves, rather than in the coordinator:
+ * that is a component module, and a constant exported from one breaks Fast
+ * Refresh (`react/only-export-components`). Co-locating also keeps the two
+ * create-race timings legible against each other.
+ *
+ * The TOTAL is what matters, and it is sized to outlast a create that is
+ * STILL IN FLIGHT rather than to look tidy. The terminal-agent flow opens its
+ * tab before the `epic.create` round-trip, so this schedule can be spent
+ * while the create has not returned - and the host's own RPC deadline is 30s
+ * (`ws-rpc-client.ts`), so a shorter schedule ejects a tab whose epic was
+ * still legitimately being created, leaving it in history only: the very bug
+ * the grace exists to prevent. 62s covers that deadline with margin.
+ */
+export const CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS: ReadonlyArray<number> = [
+  2_000, 5_000, 10_000, 15_000, 30_000,
+];
+
 export function markEpicCreatedThisSession(
   epicId: string,
   hostId: string,

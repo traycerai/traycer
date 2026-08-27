@@ -21,6 +21,7 @@ import {
 import { DELETED_EPIC_NOTIFICATION_STORAGE_KEY } from "@/lib/epics/deleted-epic-events";
 import {
   clearSessionCreatedEpics,
+  CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 import {
@@ -611,7 +612,7 @@ describe("EpicAccessCoordinator", () => {
     }
   });
 
-  it("ejects a created-this-session epic once all 3 grace retries are spent and 'unavailable' lands again", async () => {
+  it("ejects a created-this-session epic once every grace retry is spent and 'unavailable' lands again", async () => {
     vi.useFakeTimers();
     try {
       markEpicCreatedThisSession("epic-1", "host-x");
@@ -632,19 +633,9 @@ describe("EpicAccessCoordinator", () => {
         await Promise.resolve();
       });
 
-      // Attempt 1: fires at +2s, then the retry's own failure re-arrives.
-      act(() => {
-        handle.store.setState({ snapshotFetchError: unavailableError });
-      });
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(2_000);
-      });
-      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(1);
-      // `requestFreshSnapshot` resets `snapshotFetchError` to null; simulate
-      // the retry itself failing the same way the real reconnect would.
+      // Driven by the PRODUCTION schedule rather than a copy of it: this test
+      // asserts "every slot, then eject", and hardcoding the delays here made
+      // that claim silently wrong the moment the schedule was resized.
       act(() => {
         handle.store.setState({ snapshotFetchError: unavailableError });
       });
@@ -652,33 +643,26 @@ describe("EpicAccessCoordinator", () => {
         await Promise.resolve();
       });
 
-      // Attempt 2: fires at +5s.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000);
-      });
-      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(2);
-      act(() => {
-        handle.store.setState({ snapshotFetchError: unavailableError });
-      });
-      await act(async () => {
-        await Promise.resolve();
-      });
-
-      // Attempt 3: fires at +10s. The budget is now spent.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
-      });
-      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(3);
-      expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
-      expect(toastInfo).not.toHaveBeenCalled();
-
-      // The 3rd retry's own failure signal - no slot left, so this one ejects.
-      act(() => {
-        handle.store.setState({ snapshotFetchError: unavailableError });
-      });
-      await act(async () => {
-        await Promise.resolve();
-      });
+      let attempt = 0;
+      for (const delay of CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(delay);
+        });
+        attempt += 1;
+        expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(attempt);
+        // Still open: a spent slot is not a verdict.
+        expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
+        expect(toastInfo).not.toHaveBeenCalled();
+        // `requestFreshSnapshot` resets `snapshotFetchError` to null; simulate
+        // the retry itself failing the same way the real reconnect would, so
+        // the next slot is taken by a genuine re-arrival.
+        act(() => {
+          handle.store.setState({ snapshotFetchError: unavailableError });
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
 
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
       expect(router.state.location.pathname).toBe("/");
@@ -686,8 +670,10 @@ describe("EpicAccessCoordinator", () => {
         expect.stringContaining("no longer available"),
         { id: "epic-access:epic-1", cancel: null },
       );
-      // No 4th retry was scheduled - the eject ran instead.
-      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(3);
+      // No retry beyond the schedule was scheduled - the eject ran instead.
+      expect(requestFreshSnapshotSpy).toHaveBeenCalledTimes(
+        CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS.length,
+      );
     } finally {
       vi.useRealTimers();
     }

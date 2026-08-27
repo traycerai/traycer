@@ -503,6 +503,12 @@ export function useLandingComposerActions(
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
           clearConsumedLandingWorktreeIntent(workspaceContext);
+          // Re-anchor the create-race window on COMPLETION - see the terminal
+          // flow's copy for why. This flow needs it most: the tab is opened
+          // below, INSIDE this handler, so a create slower than the window
+          // would hand the session an already-expired seed and open it on the
+          // effective host - the exact race this marker exists to prevent.
+          markEpicCreatedThisSession(epicId, activeHostId);
           // The host already kicked the provider turn from `initialMessage`;
           // jump the handoff straight to `sending` so the driver does not
           // re-send. (Re-sends are harmless - the host dedupes on
@@ -788,6 +794,14 @@ export function useLandingComposerActions(
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
             clearConsumedLandingWorktreeIntent(workspaceContext);
+            // Re-anchor the create-race window on COMPLETION. The marker
+            // above is written before the request because the reconciler
+            // needs it that early, but the race it bounds - the host's
+            // deferred cloud connect - only starts now, and `epic.create`
+            // can legitimately hold a 30s host-side deadline before landing.
+            // Measured from the request instead, a slow create burns its own
+            // window and the session it protects opens unprotected.
+            markEpicCreatedThisSession(epicId, hostId);
             return terminalAgentCreateFn({
               epicId,
               tabId,
