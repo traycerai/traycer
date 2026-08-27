@@ -86,7 +86,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       handlers,
     });
 
-    relaySocket.pokeKeepalive();
+    relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
     expect(handlers.closeEvents).toEqual([]);
     expect(socket.sent).toEqual([]);
@@ -103,7 +103,7 @@ describe("RelaySocket.pokeKeepalive", () => {
     });
     socket.onopen?.({ type: "open" });
 
-    relaySocket.pokeKeepalive();
+    relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
     expect(socket.sent).toEqual(["relay-ping"]);
     expect(handlers.closeEvents).toEqual([]);
@@ -127,7 +127,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       // whose keepalive interval was frozen (device sleep, a suspended
       // WebView) and never got the chance to notice the drop on its own.
       vi.setSystemTime(RELAY_PONG_TIMEOUT_MS + 1);
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
       expect(handlers.closeEvents).toEqual([
         { code: 4004, reason: "relay-missed-pongs" },
@@ -135,7 +135,7 @@ describe("RelaySocket.pokeKeepalive", () => {
 
       // The socket is already failed - a second poke must not report a
       // second drop.
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(handlers.closeEvents).toHaveLength(1);
     } finally {
       vi.useRealTimers();
@@ -157,7 +157,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       relaySocket.close(1000, "caller-teardown");
 
       vi.setSystemTime(RELAY_PONG_TIMEOUT_MS + 1);
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
       // Caller-initiated `close()` does not itself report a drop, and a poke
       // afterwards must not manufacture one either.
@@ -180,7 +180,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       });
       socket.onopen?.({ type: "open" });
 
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(socket.sent).toEqual(["relay-ping"]);
       // The far end answers before the probe deadline.
       socket.onmessage?.({ type: "text", data: "relay-pong" });
@@ -207,7 +207,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       socket.onopen?.({ type: "open" });
 
       // The far end has gone silent - no pong ever arrives.
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(handlers.closeEvents).toEqual([]);
 
       vi.advanceTimersByTime(RELAY_WAKE_PROBE_TIMEOUT_MS - 1);
@@ -218,6 +218,60 @@ describe("RelaySocket.pokeKeepalive", () => {
         { code: 4006, reason: "relay-wake-probe-timeout" },
       ]);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a retired arm's captured deadline callback is inert against the fresh arm", () => {
+    vi.useFakeTimers();
+    const scheduledCallbacks: Array<() => void> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    vi.stubGlobal(
+      "setTimeout",
+      (callback: () => void, delayMs: number): NodeJS.Timeout => {
+        scheduledCallbacks.push(callback);
+        return originalSetTimeout(callback, delayMs);
+      },
+    );
+    try {
+      vi.setSystemTime(0);
+      const handlers = buildHandlers();
+      const relaySocket = new RelaySocket({
+        attachBaseUrl: "wss://relay.test/attach",
+        grantJws: "grant-jws",
+        webSocketFactory: factory,
+        handlers,
+      });
+      socket.onopen?.({ type: "open" });
+
+      // Arm A with a short deadline and a strong policy, then answer it.
+      const beforeArmA = scheduledCallbacks.length;
+      relaySocket.pokeKeepalive(1_000, true);
+      expect(scheduledCallbacks.length).toBe(beforeArmA + 1);
+      const armADeadline = scheduledCallbacks[beforeArmA];
+      socket.onmessage?.({ type: "text", data: "relay-pong" });
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // Arm B: longer deadline, weaker policy.
+      relaySocket.pokeKeepalive(5_000, false);
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // The stale capture of A's deadline fires anyway - a runtime is free to
+      // deliver it however late. Manual invocation (not timer advancement) is
+      // the point: `clearTimeout` would hide a broken token guard.
+      armADeadline();
+      expect(handlers.closeEvents).toEqual([]);
+      expect(relaySocket.hasUnansweredImmediateRedialProbe()).toBe(false);
+
+      // B still runs to ITS OWN deadline, producing exactly one close.
+      vi.advanceTimersByTime(4_999);
+      expect(handlers.closeEvents).toEqual([]);
+      vi.advanceTimersByTime(2);
+      expect(handlers.closeEvents).toEqual([
+        { code: 4006, reason: "relay-wake-probe-timeout" },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
       vi.useRealTimers();
     }
   });
@@ -236,7 +290,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       socket.onopen?.({ type: "open" });
 
       // First wake: answered, so this probe is spent.
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       socket.onmessage?.({ type: "text", data: "relay-pong" });
 
       // A second wake INSIDE the first probe's original window - an app
@@ -245,7 +299,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       // rather than being swallowed by the answered window, and the earlier
       // pong must not count as its answer.
       vi.advanceTimersByTime(RELAY_WAKE_PROBE_TIMEOUT_MS / 2);
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(handlers.closeEvents).toEqual([]);
 
       vi.advanceTimersByTime(RELAY_WAKE_PROBE_TIMEOUT_MS + 1);
@@ -274,9 +328,9 @@ describe("RelaySocket.pokeKeepalive", () => {
       // A burst of pokes - one per subscriber on a single visibility edge.
       // The outstanding probe is already asking this question, so the later
       // pokes send nothing at all: one ping on the wire, not one per caller.
-      relaySocket.pokeKeepalive();
-      relaySocket.pokeKeepalive();
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
       expect(socket.sent).toEqual(["relay-ping"]);
 
       vi.advanceTimersByTime(RELAY_WAKE_PROBE_TIMEOUT_MS + 1);
@@ -303,7 +357,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       socket.onopen?.({ type: "open" });
 
       vi.setSystemTime(RELAY_PONG_TIMEOUT_MS + 1);
-      relaySocket.pokeKeepalive();
+      relaySocket.pokeKeepalive(RELAY_WAKE_PROBE_TIMEOUT_MS, false);
 
       // The scheduled-check verdict, not the shorter wake-probe one - the
       // socket never got as far as sending a fresh probe ping.

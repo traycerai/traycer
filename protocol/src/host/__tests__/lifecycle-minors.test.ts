@@ -21,6 +21,7 @@ import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
 } from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   terminalSubscribeOpenRequestSchema,
   terminalSubscribeOpenRequestSchemaV16,
@@ -28,6 +29,8 @@ import {
 import {
   worktreeDeleteRequestSchema,
   worktreeDeleteRequestSchemaV11,
+  worktreeListHoldersRequestSchema,
+  worktreeListHoldersResponseSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   worktreeDeleteByPathOpenRequestSchema,
@@ -311,5 +314,57 @@ describe("worktree.deleteByPath@1.1 stopOwners + failed holders", () => {
     if (parsed.kind === "failed") {
       expect(parsed).not.toHaveProperty("holders");
     }
+  });
+});
+
+describe("worktree.listHolders@1.0", () => {
+  const listHoldersRegistry = hostRpcRegistry["worktree.listHolders"];
+
+  it("is registered as latest minor 0 with unsupported degrade", () => {
+    expect(listHoldersRegistry.degrade).toEqual({ kind: "unsupported" });
+    expect(listHoldersRegistry[1].latestMinor).toBe(0);
+    expect(listHoldersRegistry[1].versions[0].contract.schemaVersion).toEqual({
+      major: 1,
+      minor: 0,
+    });
+  });
+
+  it("is absent from the released floor (old-client method-set unchanged)", () => {
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("worktree.listHolders");
+  });
+
+  it("defaults absent owner to null (path mode)", () => {
+    const parsed = worktreeListHoldersRequestSchema.parse({
+      worktreePath: "/wt",
+    });
+    expect(parsed).toEqual({ worktreePath: "/wt", owner: null });
+  });
+
+  it("accepts an owner filter (owner mode)", () => {
+    const parsed = worktreeListHoldersRequestSchema.parse({
+      worktreePath: "/wt",
+      owner: {
+        epicId: "epic-1",
+        ownerKind: "chat",
+        ownerId: "chat-1",
+      },
+    });
+    expect(parsed.owner).toEqual({
+      epicId: "epic-1",
+      ownerKind: "chat",
+      ownerId: "chat-1",
+    });
+  });
+
+  it("response accepts an empty holders list (unknown path/owner)", () => {
+    const parsed = worktreeListHoldersResponseSchema.parse({ holders: [] });
+    expect(parsed.holders).toEqual([]);
+  });
+
+  it("response accepts T2 holders", () => {
+    const parsed = worktreeListHoldersResponseSchema.parse({
+      holders: [holder],
+    });
+    expect(parsed.holders).toEqual([holder]);
   });
 });

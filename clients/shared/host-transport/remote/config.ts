@@ -149,6 +149,37 @@ export const RELAY_PONG_TIMEOUT_MS = 60_000;
 export const RELAY_WAKE_PROBE_TIMEOUT_MS = 10_000;
 
 /**
+ * The wake-probe deadline for a runtime that KNOWS it was just backgrounded
+ * briefly (a mobile app switch measured under
+ * {@link WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS}).
+ *
+ * The 10s default above is sized for a desktop wake, where the socket usually
+ * survived and a false positive re-dials a healthy localhost link. An iOS app
+ * switch inverts the odds: the OS suspends the WebView and typically kills its
+ * sockets, so the probe exists to catch the RARE survivor quickly, not to
+ * protect the common one. The pong is auto-answered at the relay's edge, so a
+ * healthy link answers in round-trip time; 3s is generous for that and cheap
+ * to be wrong about - a false positive costs one redial of a socket that was
+ * probably dead anyway.
+ */
+export const RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS = 3_000;
+
+/**
+ * Background dwell beyond which a resuming mobile runtime stops probing its
+ * old socket and re-dials outright.
+ *
+ * Duration is the discriminator because it tracks what iOS actually does: a
+ * quick app switch often returns before the OS has torn the socket down (worth
+ * a short probe - see the constant above), while after ~10s of background the
+ * socket is almost certainly gone and a probe only delays the redial the user
+ * is already waiting on. A resume that cannot state its background duration
+ * (desktop, web, a shell that missed the hidden edge) keeps the default probe
+ * path - forcing a redial there would tear down healthy desktop sockets on
+ * every lid-open.
+ */
+export const WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS = 10_000;
+
+/**
  * How often the keepalive loop WAKES. Distinct from how often it PINGS: the
  * loop now runs two cadences (below) and a single timer that ticks at the
  * faster of them is what lets it switch between them without tearing the

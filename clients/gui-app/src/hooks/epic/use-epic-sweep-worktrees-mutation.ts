@@ -35,6 +35,8 @@ export interface SweepTargetWorktree {
    * the host could not identify the repo (no parseable origin).
    */
   readonly repoIdentifier: RemovedBranchRepo | null;
+  /** In-use rows the user selected deliberately: deleteByPath with stopOwners. */
+  readonly stopOwners: boolean;
 }
 
 export interface SweepWorktreesVariables {
@@ -82,12 +84,17 @@ export function useEpicSweepWorktrees(): UseMutationResult<
       toast.info(
         `Sweeping ${count} worktree${count === 1 ? "" : "s"} in the background…`,
       );
-      const outcome = await runWorktreeCleanup(
-        openStreamTransport,
-        variables.hostId,
-        variables.worktrees.map((target) => target.worktreePath),
-        "task_sweep",
+      const stopOwnersPaths = new Set(
+        variables.worktrees.flatMap((target) =>
+          target.stopOwners ? [target.worktreePath] : [],
+        ),
       );
+      const outcome = await runWorktreeCleanup(openStreamTransport, {
+        hostId: variables.hostId,
+        paths: variables.worktrees.map((target) => target.worktreePath),
+        source: "task_sweep",
+        stopOwnersPaths,
+      });
       return { ...outcome, hostId: variables.hostId };
     },
     onSuccess: (result, variables) => {
@@ -191,7 +198,9 @@ function isSweepWorktreesVariables(
 function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
   if (value === null || typeof value !== "object") return false;
   if (!("worktreePath" in value)) return false;
-  return typeof value.worktreePath === "string";
+  if (typeof value.worktreePath !== "string") return false;
+  if (!("stopOwners" in value)) return true;
+  return typeof value.stopOwners === "boolean";
 }
 
 export interface SweepWorktreeSummary {
