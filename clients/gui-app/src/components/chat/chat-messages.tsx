@@ -164,6 +164,12 @@ interface ChatMessagesProps {
    * a live arrival from (re)hydrated history without guessing from row shape.
    */
   baselineEpoch: number;
+  /**
+   * `ChatSessionState.transcriptHydrationSequence` - bumped when a range
+   * response seated rows the reader scrolled to, so the deriver can absorb
+   * them as history rather than announce them as arrivals.
+   */
+  hydrationSequence: number;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -934,6 +940,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getMessageActions,
     backgroundItems,
     baselineEpoch,
+    hydrationSequence,
     composerOverlayHeight,
     identity,
     instanceId,
@@ -2571,7 +2578,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Liveness is NOT inferred here: `useChatAnnouncements` reads the store's
   // transcript baseline (which connection hydrated these rows) and reports
   // the semantic transition. This layer only renders it.
-  const announcement = useChatAnnouncements({ messages, baselineEpoch });
+  const announcement = useChatAnnouncements({
+    messages,
+    baselineEpoch,
+    hydrationSequence,
+  });
   // The rendered sentence is FROZEN when the announcement is made, not
   // recomputed per render: `taskTitle` is live (a chat is auto-titled right
   // after its first turn, and can be renamed any time). Recomputing would

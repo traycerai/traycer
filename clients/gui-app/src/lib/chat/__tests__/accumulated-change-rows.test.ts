@@ -54,8 +54,14 @@ describe("accumulatedChangeRows", () => {
         counts: { additions: 1, deletions: 1 },
         hasContents: true,
         // No host version names this file yet, so there is nothing to quote in
-        // a contents request - the segment tile is what opens its diff.
+        // a contents request - the segment tile is what opens its diff, and
+        // `liveDiff` is the address it opens on.
         digest: null,
+        liveDiff: {
+          sourceBlockIds: ["change-1"],
+          beforeHash: "a".repeat(64),
+          afterHash: "b".repeat(64),
+        },
       },
     ]);
   });
@@ -169,6 +175,135 @@ describe("accumulatedChangeRows", () => {
       { filePath: "/repo/src/app.ts", counts: { additions: 5, deletions: 5 } },
     ]);
   });
+
+  describe("what decides the order", () => {
+    it("keeps the host's order when the hydrated rows disagree with it", () => {
+      // The panel's order is first-touched across the WHOLE chat, and the
+      // host's list is exactly that. On the windowed line the rendered rows are
+      // the hydrated tail, so deriving the order from them put a file the
+      // recent turns touched ahead of one first touched in unhydrated history.
+      //
+      // Here the host says `old.ts` was touched first; the only hydrated
+      // message mentions `recent.ts` first. The host wins.
+      const changes = accumulatedChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-5",
+            runState: null,
+            segments: [
+              fileChangeSegment({
+                id: "change-5a",
+                filePath: "/repo/src/recent.ts",
+                beforeHash: "a".repeat(64),
+                afterHash: "b".repeat(64),
+                additions: 1,
+                deletions: 0,
+              }),
+              fileChangeSegment({
+                id: "change-5b",
+                filePath: "/repo/src/old.ts",
+                beforeHash: "c".repeat(64),
+                afterHash: "d".repeat(64),
+                additions: 1,
+                deletions: 0,
+              }),
+            ],
+          }),
+        ],
+        [
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/old.ts", counts: null }),
+          ),
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/recent.ts", counts: null }),
+          ),
+        ],
+        null,
+      );
+
+      expect(changes.map((row) => row.filePath)).toEqual([
+        "/repo/src/old.ts",
+        "/repo/src/recent.ts",
+      ]);
+    });
+
+    it("appends an active-turn file the host has no row for", () => {
+      // A path no host row names has not been touched by any completed turn,
+      // so the running turn is its first toucher and it sorts last - after
+      // every file the host knows, whether or not any of them are hydrated.
+      const changes = accumulatedChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-6",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-6",
+                filePath: "/repo/src/brand-new.ts",
+                beforeHash: null,
+                afterHash: "f".repeat(64),
+                additions: 7,
+                deletions: 0,
+              }),
+            ],
+          }),
+        ],
+        [
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/first.ts", counts: null }),
+          ),
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/second.ts", counts: null }),
+          ),
+        ],
+        "turn-6",
+      );
+
+      expect(changes.map((row) => row.filePath)).toEqual([
+        "/repo/src/first.ts",
+        "/repo/src/second.ts",
+        "/repo/src/brand-new.ts",
+      ]);
+    });
+
+    it("keeps a host row in place even when the active turn re-touches it", () => {
+      // The host's row wins wholesale where one exists, and that includes its
+      // POSITION: an active-turn edit to a long-known file must not lift it to
+      // the front of the panel.
+      const changes = accumulatedChangeRows(
+        [
+          assistantMessage({
+            id: "assistant:turn-7",
+            runState: "running",
+            segments: [
+              fileChangeSegment({
+                id: "change-7",
+                filePath: "/repo/src/second.ts",
+                beforeHash: "a".repeat(64),
+                afterHash: "b".repeat(64),
+                additions: 2,
+                deletions: 0,
+              }),
+            ],
+          }),
+        ],
+        [
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/first.ts", counts: null }),
+          ),
+          rowFromAccumulatedChangeSummary(
+            summary({ filePath: "/repo/src/second.ts", counts: null }),
+          ),
+        ],
+        "turn-7",
+      );
+
+      expect(changes.map((row) => row.filePath)).toEqual([
+        "/repo/src/first.ts",
+        "/repo/src/second.ts",
+      ]);
+    });
+  });
 });
 
 describe("rowFromAccumulatedChange", () => {
@@ -224,6 +359,9 @@ describe("rowFromAccumulatedChangeSummary", () => {
       counts: { additions: 4, deletions: 2 },
       hasContents: true,
       digest: "digest-1",
+      // A summary always names a host version, so cumulative resolution
+      // answers for it and there is no live address to fall back to.
+      liveDiff: null,
     });
   });
 

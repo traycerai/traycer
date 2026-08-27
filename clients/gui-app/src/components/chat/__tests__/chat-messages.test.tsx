@@ -766,6 +766,8 @@ interface RenderChatMessagesOptions {
   readonly freshOpen?: boolean;
   /** `ChatSessionState.transcriptBaselineEpoch`; see `ChatMessages`. */
   readonly baselineEpoch?: number;
+  /** `ChatSessionState.transcriptHydrationSequence`; see `ChatMessages`. */
+  readonly hydrationSequence?: number;
   /** Test-only seam: captures the adapter registered by ChatMessages. */
   readonly tileFindContext?: TileFindContextValue;
 }
@@ -773,6 +775,7 @@ interface RenderChatMessagesOptions {
 interface ChatMessagesRenderState {
   messages: ReadonlyArray<ChatMessageModel>;
   baselineEpoch: number;
+  hydrationSequence: number;
   /** Mutable: a chat is auto-titled after its first turn and can be renamed. */
   taskTitle: string;
   systemOverlayActive: boolean;
@@ -799,6 +802,35 @@ function makeDefaultTestIdentity(
   return makeTestIdentity(tileInstanceId, "epic-1", "task-1");
 }
 
+/**
+ * The mutable slice `rerenderWith` patches, with every default applied.
+ *
+ * Extracted from `renderChatMessages` rather than inlined there: each `??` is
+ * a branch, and the harness was already at the complexity ceiling.
+ */
+function initialRenderState(
+  options: RenderChatMessagesOptions,
+): ChatMessagesRenderState {
+  return {
+    messages: options.messages,
+    // Default 0: these rows arrived on a hydrated connection, which is what
+    // every non-announcement test wants. The announcement suite drives this
+    // explicitly to model mount hydration and reconnect backfill.
+    baselineEpoch: options.baselineEpoch ?? 0,
+    // Default 0 for the same reason: no range has seated anything, so every
+    // row these tests render arrived live.
+    hydrationSequence: options.hydrationSequence ?? 0,
+    taskTitle: options.taskTitle ?? "Test chat",
+    systemOverlayActive: options.systemOverlayActive ?? false,
+    scrollRequest: options.scrollRequest ?? null,
+    backgroundItems: options.backgroundItems,
+    visible: options.visible ?? true,
+    tileActive: options.tileActive ?? true,
+    composerOverlayHeight:
+      options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
+  };
+}
+
 function renderChatMessages(options: RenderChatMessagesOptions) {
   // Production keys the dual-key tab half by `instanceId`. Call sites that
   // only pass `scrollStateKey` still work: it becomes the instanceId.
@@ -823,21 +855,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
     });
   }
 
-  const state: ChatMessagesRenderState = {
-    messages: options.messages,
-    // Default 0: these rows arrived on a hydrated connection, which is what
-    // every non-announcement test wants. The announcement suite drives this
-    // explicitly to model mount hydration and reconnect backfill.
-    baselineEpoch: options.baselineEpoch ?? 0,
-    taskTitle: options.taskTitle ?? "Test chat",
-    systemOverlayActive: options.systemOverlayActive ?? false,
-    scrollRequest: options.scrollRequest ?? null,
-    backgroundItems: options.backgroundItems,
-    visible: options.visible ?? true,
-    tileActive: options.tileActive ?? true,
-    composerOverlayHeight:
-      options.composerOverlayHeight ?? DEFAULT_COMPOSER_OVERLAY_HEIGHT_PX,
-  };
+  const state = initialRenderState(options);
 
   const hostedPaneId = options.hostedPaneId;
   const scopeAttributes: Record<string, string> =
@@ -877,6 +895,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           hostId={null}
           messages={state.messages}
           baselineEpoch={state.baselineEpoch}
+          hydrationSequence={state.hydrationSequence}
           backgroundItems={state.backgroundItems}
           getMessageActions={() => null}
           nextStepActions={null}
@@ -1554,6 +1573,104 @@ describe("ChatMessages scroll policy", () => {
       await settleLegendList();
 
       expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("does not announce settled rows a range hydrated into unloaded history", async () => {
+      const knownUser = makeMessage(5, "user");
+      const knownAssistant: ChatMessageModel = {
+        ...makeMessage(6, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, knownAssistant],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        scrollStateKey: "aria-range-hydration-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      // Scrolling up on the windowed line hydrates older spans. Those rows are
+      // settled turns from days ago that were always there - the reader
+      // travelled backwards to reach them. The connection never dropped, so
+      // `baselineEpoch` cannot say so; the hydration counter is what does.
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_699_990_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          {
+            ...makeMessage(2, "assistant"),
+            completedAt: 1_699_991_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          knownUser,
+          knownAssistant,
+        ],
+      });
+      await settleLegendList();
+
+      expect(live?.textContent ?? "").toBe("");
+    });
+
+    it("still announces a live turn settling in the commit that hydrates history", async () => {
+      // The absorption is scoped to rows that FIRST APPEAR under a hydration
+      // bump. A row already on screen that reaches a settled state is news
+      // whatever else landed alongside it - otherwise a turn finishing while
+      // the reader happens to be scrolling would go unannounced.
+      const knownUser = makeMessage(5, "user");
+      const running: ChatMessageModel = {
+        ...makeMessage(6, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderWith } = renderChatMessages({
+        messages: [knownUser, running],
+        baselineEpoch: 0,
+        hydrationSequence: 0,
+        scrollStateKey: "aria-range-hydration-live-key",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+      rerenderWith({
+        hydrationSequence: 1,
+        messages: [
+          {
+            ...makeMessage(1, "assistant"),
+            completedAt: 1_699_990_000_000,
+            stopped: null,
+            runState: null,
+            showCompletionFooter: true,
+          },
+          knownUser,
+          {
+            ...running,
+            completedAt: 1_700_000_005_000,
+            runState: null,
+            showCompletionFooter: true,
+          },
+        ],
+      });
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
     });
 
     it("announces a turn that arrives whole past every known message", async () => {
@@ -4447,6 +4564,7 @@ describe("ChatMessages scroll policy", () => {
             hostId={null}
             messages={messages}
             baselineEpoch={0}
+            hydrationSequence={0}
             backgroundItems={undefined}
             getMessageActions={() => null}
             nextStepActions={null}

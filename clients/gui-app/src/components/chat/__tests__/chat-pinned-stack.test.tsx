@@ -205,5 +205,6 @@ function fileChange(): AccumulatedChangeRow {
     counts: { additions: 1, deletions: 1 },
     hasContents: true,
     digest: null,
+    liveDiff: null,
   };
 }

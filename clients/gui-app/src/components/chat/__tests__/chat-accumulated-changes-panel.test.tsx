@@ -42,6 +42,66 @@ describe("<ChatAccumulatedChangesPanel />", () => {
     expect(reviewAll).toHaveBeenCalledTimes(1);
   });
 
+  it("opens an active-turn row through the SEGMENT tile, not the cumulative one", () => {
+    // The active turn's own row is the client's view of a file no host version
+    // names yet: `digest: null`, and absent from both host arrays. Cumulative
+    // resolution addresses a file by digest or by the inline change array, so
+    // it can resolve neither - the tile it opened could only ever say
+    // source-unavailable. The edit's `file_change` blocks ARE hydrated (the row
+    // is on screen because they are), so it opens on those instead.
+    const segment = vi.fn(() => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }));
+    const cumulative = vi.fn(() => ({
+      onClick: vi.fn(),
+      onDoubleClick: vi.fn(),
+    }));
+
+    renderPanel({
+      changes: [liveChange("/repo/src/streaming.ts")],
+      activeTurnStatus: "running",
+      opener: {
+        segment,
+        cumulative,
+        hash: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulativeBundle: vi.fn(() => vi.fn()),
+      },
+    });
+    fireEvent.click(screen.getByText("1 file changed"));
+
+    expect(segment).toHaveBeenCalledWith({
+      filePath: "/repo/src/streaming.ts",
+      sourceBlockIds: ["block-1"],
+      beforeHash: "a".repeat(64),
+      afterHash: "b".repeat(64),
+    });
+    expect(cumulative).not.toHaveBeenCalled();
+  });
+
+  it("opens a host row through the cumulative tile", () => {
+    // The other side of the same branch: a row a host version names resolves
+    // through the cumulative surface, which is the only one that can show the
+    // whole-chat before→after the panel is about.
+    const segment = vi.fn(() => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }));
+    const cumulative = vi.fn(() => ({
+      onClick: vi.fn(),
+      onDoubleClick: vi.fn(),
+    }));
+
+    renderPanel({
+      changes: [fileChange("/repo/src/app.ts")],
+      activeTurnStatus: null,
+      opener: {
+        segment,
+        cumulative,
+        hash: () => ({ onClick: vi.fn(), onDoubleClick: vi.fn() }),
+        cumulativeBundle: vi.fn(() => vi.fn()),
+      },
+    });
+    fireEvent.click(screen.getByText("1 file changed"));
+
+    expect(cumulative).toHaveBeenCalledWith("/repo/src/app.ts");
+    expect(segment).not.toHaveBeenCalled();
+  });
+
   it("hides Review all when no diff target is available", () => {
     renderPanel({
       changes: [fileChange("/repo/src/app.ts")],
@@ -228,6 +288,23 @@ function fileChange(filePath: string): AccumulatedChangeRow {
     // A host row on the pre-windowed line: its contents rode the snapshot, so
     // there is no version to quote and nothing to fetch.
     digest: null,
+    liveDiff: null,
+  };
+}
+
+/**
+ * The client's own row for a file the ACTIVE turn is writing - what
+ * `activeTurnRow` produces. No host version names it, so it carries the
+ * block-addressed `liveDiff` its segment tile opens on.
+ */
+function liveChange(filePath: string): AccumulatedChangeRow {
+  return {
+    ...fileChange(filePath),
+    liveDiff: {
+      sourceBlockIds: ["block-1"],
+      beforeHash: "a".repeat(64),
+      afterHash: "b".repeat(64),
+    },
   };
 }
 
@@ -245,5 +322,6 @@ function streamingChange(
     counts,
     hasContents: true,
     digest: null,
+    liveDiff: null,
   };
 }

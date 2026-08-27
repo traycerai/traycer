@@ -564,6 +564,23 @@ export interface ChatSessionState {
    * value, since those carry live news too.
    */
   readonly transcriptBaselineEpoch: number;
+  /**
+   * Bumped whenever a range response seated rows the reader SCROLLED to.
+   *
+   * The third way transcript data reaches this client, and the one
+   * `transcriptBaselineEpoch` cannot describe. That epoch separates "the
+   * transcript was rehydrated wholesale" from "we have been watching since the
+   * last observation", and on the windowed line neither fits a range: the
+   * connection is unchanged and watching, yet the rows that just appeared are
+   * settled history the reader travelled backwards to reach, not news.
+   *
+   * Consumers that would otherwise read a newly-present settled row as a live
+   * arrival (see `useChatAnnouncements`, which would announce a turn from last
+   * week as it scrolled into view) absorb rows that appear across a change in
+   * this counter. Always `0` off the windowed line, where nothing hydrates
+   * ranges.
+   */
+  readonly transcriptHydrationSequence: number;
   readonly chat: ChatSessionRecord | null;
   readonly access: ChatAccess | null;
   readonly messages: ReadonlyArray<Message>;
@@ -1021,6 +1038,20 @@ export interface ChatSessionStoreHandle {
 export function isChatRunInProgress(runStatus: ChatRunStatus): boolean {
   return runStatus === "running" || runStatus === "stopping";
 }
+
+/**
+ * How long an unanswered range or resnapshot request is waited on before its
+ * dedup latch is released and the plan re-issued.
+ *
+ * Generous, because an oversized range rides the BULK lane behind whatever else
+ * is queued there. Self-limiting rather than a retry counter: at most one
+ * request of each kind is outstanding at a time, so a link that keeps dropping
+ * them costs one round trip per timeout rather than a loop.
+ *
+ * Module scope rather than the store closure so the helpers that arm it cannot
+ * out-order its declaration.
+ */
+const HYDRATION_REQUEST_TIMEOUT_MS = 30_000;
 
 const EMPTY_QUEUE: ChatQueueState = { status: "idle", items: [] };
 
@@ -2277,7 +2308,47 @@ export function createChatSessionStoreWithNotificationDependencies(
      */
     let resnapshotRequestedForEpoch: number | null = null;
 
-    /** Ask for whatever the window says is missing, if anything. */
+    let resnapshotRequestTimer: number | null = null;
+
+    const clearResnapshotRequest = (): void => {
+      resnapshotRequestedForEpoch = null;
+      if (resnapshotRequestTimer === null) return;
+      window.clearTimeout(resnapshotRequestTimer);
+      resnapshotRequestTimer = null;
+    };
+
+    /**
+     * Ask for a `resnapshot`, at most one per epoch - and not forever.
+     *
+     * The latch is a dedup key, and it wedges for exactly the reason an
+     * unanswered range request does (see {@link clearInFlightHydration}): a
+     * request or its answer dropped on a stream that stays OPEN clears nothing,
+     * and only a snapshot clears the latch - which is the very thing that is
+     * not coming. The consequence is worse here than for a range, because an
+     * invalidated window is the WHOLE transcript rather than one visible gap:
+     * every ordinal belongs to a coordinate space this client has left, so
+     * nothing on screen can be repaired until a snapshot lands.
+     *
+     * Same bounded wait, and the retry is the same shape: the latch is released
+     * and the next windowed frame asks again. A late answer to the abandoned
+     * request costs nothing - a resnapshot is idempotent, and the snapshot it
+     * produces clears the latch whichever request it answers.
+     */
+    const requestResnapshotOnceForEpoch = (epoch: number): void => {
+      const client = streamClient;
+      if (client === null) return;
+      if (resnapshotRequestedForEpoch === epoch) return;
+      clearResnapshotRequest();
+      resnapshotRequestedForEpoch = epoch;
+      resnapshotRequestTimer = window.setTimeout(() => {
+        resnapshotRequestTimer = null;
+        if (disposed || resnapshotRequestedForEpoch !== epoch) return;
+        resnapshotRequestedForEpoch = null;
+        requestPlannedHydration();
+      }, HYDRATION_REQUEST_TIMEOUT_MS);
+      client.requestResnapshot();
+    };
+
     /**
      * Ask the host to start the accumulated-summary stream over.
      *
@@ -2293,47 +2364,84 @@ export function createChatSessionStoreWithNotificationDependencies(
      * for a frame that stales both at once.
      */
     const requestSummaryRestream = (): void => {
-      const client = streamClient;
-      if (client === null) return;
-      const epoch = get().transcriptWindow.epoch;
-      if (resnapshotRequestedForEpoch === epoch) return;
-      resnapshotRequestedForEpoch = epoch;
-      client.requestResnapshot();
+      requestResnapshotOnceForEpoch(get().transcriptWindow.epoch);
+    };
+
+    let hydrationRequestTimer: number | null = null;
+
+    /**
+     * Release the slot an unanswered range request is holding.
+     *
+     * The slot is the dedup key: while it holds a request for a range, every
+     * later plan for that same range is suppressed as already-asked. That is
+     * right for a request that is going to be answered, and a wedge for one
+     * that is not - a `loadRange` or its response dropped on a stream that
+     * stays OPEN clears nothing, and the visible gap then stays placeholders
+     * for as long as the viewport does not move. Nothing else recovers it:
+     * `applyVisibleTranscriptRange` returns early on an unchanged report, and
+     * the other two clear sites are a snapshot and a downgrade, both of which
+     * need a reconnect.
+     *
+     * So the wait is bounded ({@link HYDRATION_REQUEST_TIMEOUT_MS}) and the
+     * plan is simply re-issued. A late answer to the abandoned request is
+     * discarded by `rangeResponseIsStale` on its request id.
+     */
+    const clearInFlightHydration = (): void => {
+      inFlightHydrationRequest = null;
+      if (hydrationRequestTimer === null) return;
+      window.clearTimeout(hydrationRequestTimer);
+      hydrationRequestTimer = null;
     };
 
     const requestPlannedHydration = (): void => {
       const client = streamClient;
       if (client === null) return;
-      const window = get().transcriptWindow;
-      if (window.invalidated) {
+      // NOT named `window`: the timeout below is armed off the global one, and
+      // a local of that name would shadow it.
+      const transcriptWindow = get().transcriptWindow;
+      if (transcriptWindow.invalidated) {
         // A void index cannot be repaired by a range: every ordinal it would
         // name belongs to a coordinate space this client has left.
-        if (resnapshotRequestedForEpoch === window.epoch) return;
-        resnapshotRequestedForEpoch = window.epoch;
-        client.requestResnapshot();
+        requestResnapshotOnceForEpoch(transcriptWindow.epoch);
         return;
       }
-      const next = planTranscriptHydration(window, visibleTranscriptRange);
+      const next = planTranscriptHydration(
+        transcriptWindow,
+        visibleTranscriptRange,
+      );
       if (next === null) return;
       const inFlight = inFlightHydrationRequest;
       if (
         inFlight !== null &&
-        inFlight.epoch === window.epoch &&
+        inFlight.epoch === transcriptWindow.epoch &&
         inFlight.range.fromOrdinal === next.fromOrdinal &&
         inFlight.range.toOrdinal === next.toOrdinal
       ) {
         return;
       }
       const requestId = uuidv4();
+      // Clears the previous request's timeout as well as its slot: replanning
+      // over an outstanding request abandons it, and its deadline with it.
+      clearInFlightHydration();
       inFlightHydrationRequest = {
         requestId,
-        epoch: window.epoch,
+        epoch: transcriptWindow.epoch,
         range: next,
         superseded: new Set<number>(),
       };
+      hydrationRequestTimer = window.setTimeout(() => {
+        hydrationRequestTimer = null;
+        // Only the request this timeout was armed for. Anything else already
+        // replaced the slot - and took the deadline with it.
+        if (disposed || inFlightHydrationRequest?.requestId !== requestId) {
+          return;
+        }
+        inFlightHydrationRequest = null;
+        requestPlannedHydration();
+      }, HYDRATION_REQUEST_TIMEOUT_MS);
       client.requestTranscriptRange({
         requestId,
-        epoch: window.epoch,
+        epoch: transcriptWindow.epoch,
         fromOrdinal: next.fromOrdinal,
         // The two bounds mean different things and the conversion is here.
         // `OrdinalRange.toOrdinal` is EXCLUSIVE (see its declaration);
@@ -2456,12 +2564,20 @@ export function createChatSessionStoreWithNotificationDependencies(
      * The steady-state path for every windowed frame that changes hydration
      * without being authoritative about anything else.
      */
-    const publishWindowedTranscript = (window: TranscriptWindow): void => {
+    const publishWindowedTranscript = (
+      window: TranscriptWindow,
+      // How the rows got here, when that is something a consumer has to know.
+      // `null` for the ordinary frames, which say nothing beyond "this is what
+      // the window holds now"; a range response passes its counter bump so the
+      // rows and their provenance land in ONE `set`.
+      provenance: Pick<ChatSessionState, "transcriptHydrationSequence"> | null,
+    ): void => {
       const records = hydratedRecords(window);
       set({
         transcriptWindow: window,
         messages: records.messages,
         events: records.events,
+        ...(provenance ?? {}),
       });
     };
 
@@ -2484,6 +2600,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     }): void => {
       publishWindowedTranscript(
         appendLiveRecords(get().transcriptWindow, input),
+        null,
       );
     };
 
@@ -2616,9 +2733,17 @@ export function createChatSessionStoreWithNotificationDependencies(
      * new window above all (see `applyAuthoritativeSnapshot`'s doc for why
      * setting it in a separate earlier `set` mis-suppresses rows). When the
      * fold runs, `aux` rides its atomic `set`; when the frame defers, `aux`
-     * is set now, alone - the deferral cases are a rebase (no spans, so
-     * nothing to mis-suppress) or a same-epoch snapshot whose retained spans
-     * already agree with the rendered models.
+     * rides a single `set` with the window's own hydrated records.
+     *
+     * Those records go out on the DEFERRAL path too, and that is the point.
+     * The deferral cases are a rebase (no spans) or a same-epoch snapshot whose
+     * retained spans already agree with the rendered models - so publishing is
+     * a no-op in the second and the whole fix in the first. A rebase moves the
+     * transcript into a new coordinate space and `applyWindowedSnapshot`
+     * returns an empty window for it; leaving `messages`/`events` alone there
+     * keeps the PREVIOUS epoch's rows on screen, where the row merge reads them
+     * as unplaced rows of the new space. If the tail that would replace them is
+     * slow or lost, the reader keeps seeing a transcript that no longer exists.
      */
     const applyOrDeferWindowedSnapshot = (
       frame: ChatWindowedSnapshotFrame,
@@ -2626,7 +2751,8 @@ export function createChatSessionStoreWithNotificationDependencies(
       aux: Partial<ChatSessionState>,
     ): void => {
       if (!isTailHydrated(window)) {
-        set(aux);
+        const records = hydratedRecords(window);
+        set({ ...aux, messages: records.messages, events: records.events });
         deferredWindowedSnapshot = frame;
         return;
       }
@@ -2654,8 +2780,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         // publish (`extra` below), and fall back to the legacy shape the
         // discriminator now reports.
         windowedLine = false;
-        inFlightHydrationRequest = null;
-        resnapshotRequestedForEpoch = null;
+        clearInFlightHydration();
+        clearResnapshotRequest();
         deferredWindowedSnapshot = null;
         applyAuthoritativeSnapshot(frame, {
           transcriptWindow: emptyTranscriptWindow(),
@@ -2707,10 +2833,10 @@ export function createChatSessionStoreWithNotificationDependencies(
         windowedLine = true;
         // See the field's own doc: a snapshot means a (re)connection settled,
         // and any request the previous connection had in flight is gone.
-        inFlightHydrationRequest = null;
+        clearInFlightHydration();
         // A fresh snapshot IS the answer an invalidated window was waiting
         // for, whether or not this one was sent in reply to that request.
-        resnapshotRequestedForEpoch = null;
+        clearResnapshotRequest();
         // Before the fold, exactly as the legacy path flushes: a queued delta
         // applied after an authoritative snapshot would re-add a block the
         // snapshot already carries.
@@ -2770,7 +2896,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Can DROP bodies, not just add entries: this is where a tail seated
         // with no ids to check against finally meets the rows it claimed.
         const window = applySkeletonChunk(get().transcriptWindow, frame.chunk);
-        publishWindowedTranscript(window);
+        publishWindowedTranscript(window, null);
         requestPlannedHydration();
       },
       onIndexChanged: (frame) => {
@@ -2793,7 +2919,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           rowCount: frame.rowCount,
           changes: frame.changes,
         });
-        publishWindowedTranscript(window);
+        publishWindowedTranscript(window, null);
         // Covers the `reindexed` case too: `requestPlannedHydration` sends a
         // `resnapshot` rather than a range when the window is invalidated.
         requestPlannedHydration();
@@ -2821,7 +2947,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // outstanding replaces the slot, so the first answer back is already
         // one this store has moved on from.
         if (tracked !== null && tracked.requestId === frame.range.requestId) {
-          inFlightHydrationRequest = null;
+          clearInFlightHydration();
         }
         if (stale) {
           // Seat nothing. The ordinals stay unhydrated, so the re-plan below
@@ -2839,15 +2965,21 @@ export function createChatSessionStoreWithNotificationDependencies(
           // forecloses.
           visibleTranscriptRange,
         );
+        // Rides the same `set` as the rows it describes, so no consumer can
+        // observe the rows without the fact that a range delivered them.
+        const hydrated = {
+          transcriptHydrationSequence: get().transcriptHydrationSequence + 1,
+        };
         const deferred = deferredWindowedSnapshot;
         if (deferred === null) {
-          publishWindowedTranscript(window);
+          publishWindowedTranscript(window, hydrated);
         } else {
           // The tail this response was asked for may have arrived. The fold
           // publishes `messages`/`events` itself - with the window riding the
           // same `set` - so it replaces the steady-state publish above.
           applyOrDeferWindowedSnapshot(deferred, window, {
             transcriptWindow: window,
+            ...hydrated,
           });
         }
         requestPlannedHydration();
@@ -3891,6 +4023,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       fatalClose: null,
       snapshotLoaded: false,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
+      transcriptHydrationSequence: 0,
       chat: null,
       access: null,
       messages: [],
@@ -4978,6 +5111,8 @@ export function createChatSessionStoreWithNotificationDependencies(
         unsubscribeLiveCompletionAcknowledgements();
         lease.unregister();
         clearBufferedDeltas();
+        clearInFlightHydration();
+        clearResnapshotRequest();
         closeStreamClient();
       },
     };

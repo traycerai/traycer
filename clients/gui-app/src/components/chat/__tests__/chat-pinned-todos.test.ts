@@ -428,6 +428,81 @@ describe("buildPinnedTodoRenderState", () => {
       );
     });
 
+    it("a live turn that only ADVANCES a host-known task still moves the dock", () => {
+      // The task tools are a delta protocol: a `TaskComplete` carries the task
+      // id and nothing else. Folded onto an empty state it names a task the
+      // fold has never seen and is dropped, so the live fold produced no todo
+      // at all and the dock sat on the host's baseline - showing `in_progress`
+      // for a task the running turn had already finished - until the next
+      // turn-boundary snapshot. Seeding the fold from the host's items is what
+      // lets the delta land.
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [
+            toolSegment("task-complete-live", "TaskComplete", {
+              taskId: "todo-host task",
+            }),
+          ],
+          "running",
+        ),
+      ];
+      const hostTodo: PinnedTodoSnapshot = {
+        id: "host-todo-1",
+        items: [todoItem("host task", "in_progress")],
+      };
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: hostTodo,
+      });
+
+      // The host's item, carried forward by id with the live status applied -
+      // NOT the stale baseline, which is what `toBe(hostTodo)` would catch.
+      expect(state.todo).not.toBe(hostTodo);
+      expect(state.todo?.items).toEqual([
+        {
+          id: "todo-host task",
+          text: "host task",
+          status: "completed",
+          priority: null,
+          activeForm: null,
+        },
+      ]);
+    });
+
+    it("a live turn that CREATES replaces the host's list rather than merging into it", () => {
+      // The seeded fold arms its reset for the same reason the whole-history
+      // fold does: the user row that started this turn is outside the filtered
+      // subset by construction, so the first `create` after it must clear the
+      // seeded items. Without the arming, seeding would append the new
+      // checklist to the previous turn's.
+      const messages = [
+        makeAssistantMessage(
+          "assistant-1",
+          [
+            toolSegment("task-create-live", "TaskCreate", {
+              id: "fresh-1",
+              subject: "Fresh task",
+            }),
+          ],
+          "running",
+        ),
+      ];
+
+      const state = buildPinnedTodoRenderState(messages, {
+        kind: "host",
+        todo: {
+          id: "host-todo-1",
+          items: [todoItem("host task", "in_progress")],
+        },
+      });
+
+      expect(state.todo?.items.map((item) => item.text)).toEqual([
+        "Fresh task",
+      ]);
+    });
+
     it("a still-streaming row's own todo outranks the host's baseline", () => {
       // The live row is delta-built and therefore strictly fresher than
       // whatever the host's last snapshot emit folded - `runState` non-null

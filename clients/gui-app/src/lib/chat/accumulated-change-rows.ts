@@ -17,7 +17,10 @@ import {
   diffLineCountsFromContents,
   type DiffLineCounts,
 } from "@/lib/file-change-diff-hunks";
-import { mergeSnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
+import {
+  mergeSnapshotSourceBlockIds,
+  type SnapshotSourceBlockIds,
+} from "@/lib/chat/snapshot-source-block-ids";
 
 /**
  * # What the accumulated-changes panel renders, on either line
@@ -71,6 +74,26 @@ export interface AccumulatedChangeRow {
    * file the active turn is still writing, which no host version names yet.
    */
   readonly digest: string | null;
+  /**
+   * Where this row's diff lives when the CUMULATIVE surfaces cannot answer for
+   * it, or `null` when they can.
+   *
+   * Non-null on exactly one kind of row: the client's own view of a file the
+   * active turn is writing, which no host summary covers and no inline change
+   * carries. Cumulative resolution addresses a file either by `digest` or by
+   * the host's inline change array, and that row has neither - so a cumulative
+   * open resolves to nothing and the tile can only say source-unavailable.
+   *
+   * The edit's `file_change` blocks ARE hydrated (the row is on screen because
+   * they are), so the diff is reachable through the segment tile that addresses
+   * them by block id. This is that address, in the shape
+   * `ChatSnapshotDiffOpener.segment` takes.
+   */
+  readonly liveDiff: {
+    readonly sourceBlockIds: SnapshotSourceBlockIds;
+    readonly beforeHash: string | null;
+    readonly afterHash: string | null;
+  } | null;
 }
 
 /**
@@ -102,6 +125,9 @@ export function rowFromAccumulatedChange(
       : null,
     hasContents,
     digest: null,
+    // Contents rode the snapshot; `resolveSnapshotDiffContent` finds them in
+    // the inline change array this row was built from.
+    liveDiff: null,
   };
 }
 
@@ -125,6 +151,8 @@ export function rowFromAccumulatedChangeSummary(
     counts: summary.counts,
     hasContents: summary.hasContents,
     digest: summary.digest,
+    // A summary always names a host version, so the cumulative fetch answers.
+    liveDiff: null,
   };
 }
 
@@ -173,81 +201,72 @@ export function undeliveredHostChangeCount(input: {
  *
  * The host recomputes its accumulated set at turn boundaries, so mid-turn it is
  * one turn behind: a file the running turn has just created is not in it at
- * all. Walking the rendered messages supplies both the missing rows and the
- * panel's ORDER (first-touched, across the whole chat).
+ * all. Walking the rendered messages supplies those missing rows.
  *
- * Unchanged in behaviour by the windowed line - it operates on rows now rather
- * than on content-bearing changes, and a host row still wins wholesale wherever
- * one exists. That last part is deliberate and predates this: mid-turn the
- * host's number is one turn stale, and showing a stale number for a file the
- * host knows beats showing a per-edit number that means something different
- * from every other row in the list.
+ * ## The HOST list is the order, not the rendered rows
+ *
+ * The panel's documented order is first-touched across the whole chat, and the
+ * host's list is already exactly that - `computeAccumulatedFileChanges` walks
+ * `earliestEntriesByPath(chat.events)`, whose insertion order IS whole-history
+ * first touch. Deriving the order from the rendered rows instead agreed with it
+ * only while those rows WERE the whole chat.
+ *
+ * On the windowed line they are not: `messages` is the hydrated tail, so every
+ * file the recent turns touched sorted ahead of files first touched earlier in
+ * unhydrated history, and the panel resorted itself as spans hydrated and were
+ * evicted. Taking the host's order fixes that at the root and needs no
+ * line-conditional, because the host's answer is the same definition on both.
+ *
+ * What the rendered rows still supply is the TAIL of the list: a path the host
+ * has no row for is one no completed turn has touched, so the active turn is
+ * its first toucher and it belongs after everything the host knows.
+ *
+ * (A file reverted mid-chat leaves the host's list and re-enters at its true
+ * first-touch position on the next refresh, so it appears at the end for the
+ * rest of the running turn. Same reorder the previous shape had, and the host's
+ * refresh is what settles it either way.)
+ *
+ * A host row WINS wholesale wherever one exists. That is deliberate and
+ * predates this: mid-turn the host's number is one turn stale, and showing a
+ * stale number for a file the host knows beats showing a per-edit number that
+ * means something different from every other row in the list.
  */
 export function accumulatedChangeRows(
   messages: ReadonlyArray<ChatMessage>,
   fromHost: ReadonlyArray<AccumulatedChangeRow>,
   activeTurnId: string | null,
 ): ReadonlyArray<AccumulatedChangeRow> {
-  const { order, activeSegments, activePaths } = collectMessageSegments(
-    messages,
-    activeTurnId,
-  );
-  const hostByPath = new Map(fromHost.map((row) => [row.filePath, row]));
-  const out: AccumulatedChangeRow[] = [];
-  const seen = new Set<string>();
-  for (const filePath of order) {
-    const hostEntry = hostByPath.get(filePath);
-    if (activePaths.has(filePath)) {
-      const activeRow = activeTurnRow(activeSegments.get(filePath), hostEntry);
-      if (activeRow !== null) {
-        out.push(activeRow);
-      }
-      seen.add(filePath);
-      continue;
-    }
-    if (hostEntry !== undefined) {
-      out.push(hostEntry);
-      seen.add(filePath);
-    }
-  }
-  for (const row of fromHost) {
-    if (seen.has(row.filePath)) continue;
-    out.push(row);
+  const active = collectActiveTurnFileChanges(messages, activeTurnId);
+  const hostPaths = new Set(fromHost.map((row) => row.filePath));
+  const out: AccumulatedChangeRow[] = [...fromHost];
+  for (const [filePath, merged] of active) {
+    if (hostPaths.has(filePath)) continue;
+    const activeRow = activeTurnRow(merged);
+    if (activeRow !== null) out.push(activeRow);
   }
   return out;
 }
 
-function collectMessageSegments(
+/**
+ * The active turn's file edits, merged per path, in the order it touched them.
+ *
+ * A `Map` rather than a set plus a parallel array: insertion order IS the
+ * first-touch order this returns, and the lookup the caller needs comes free.
+ */
+function collectActiveTurnFileChanges(
   messages: ReadonlyArray<ChatMessage>,
   activeTurnId: string | null,
-): {
-  readonly order: string[];
-  readonly activeSegments: Map<string, FileChangeSegment>;
-  readonly activePaths: Set<string>;
-} {
-  // `order` keeps first-seen path order; `seen` mirrors its membership so
-  // de-duping is O(1) instead of an `order.includes` scan. This runs on every
-  // stream delta, so the array scan was O(n^2) over the turn's file count.
-  const paths: PathOrder = { order: [], seen: new Set() };
-  const activeSegments = new Map<string, FileChangeSegment>();
-  const activePaths = new Set<string>();
+): ReadonlyMap<string, FileChangeSegment> {
+  const active = new Map<string, FileChangeSegment>();
   for (const message of messages) {
-    const isActiveTurn = activeTurnMessage(message, activeTurnId);
+    if (!activeTurnMessage(message, activeTurnId)) continue;
     for (const segment of message.segments) {
-      if (segment.kind === "file_change_group") {
-        for (const file of segment.files) {
-          recordPathOrder(paths, file.filePath);
-        }
-        continue;
-      }
-      if (isActiveTurn) {
-        for (const file of activeFileChangesFromSegment(segment)) {
-          recordActiveFileChange(paths, activeSegments, activePaths, file);
-        }
+      for (const file of activeFileChangesFromSegment(segment)) {
+        recordActiveFileChange(active, file);
       }
     }
   }
-  return { order: paths.order, activeSegments, activePaths };
+  return active;
 }
 
 function activeFileChangesFromSegment(
@@ -262,26 +281,11 @@ function activeFileChangesFromSegment(
   return [];
 }
 
-interface PathOrder {
-  readonly order: string[];
-  readonly seen: Set<string>;
-}
-
-function recordPathOrder(paths: PathOrder, filePath: string): void {
-  if (paths.seen.has(filePath)) return;
-  paths.seen.add(filePath);
-  paths.order.push(filePath);
-}
-
 function recordActiveFileChange(
-  paths: PathOrder,
   activeSegments: Map<string, FileChangeSegment>,
-  activePaths: Set<string>,
   file: FileChangeSegment,
 ): void {
   if (!isRealFileChange(file)) return;
-  recordPathOrder(paths, file.filePath);
-  activePaths.add(file.filePath);
   const existing = activeSegments.get(file.filePath);
   if (existing === undefined) {
     activeSegments.set(file.filePath, file);
@@ -315,18 +319,18 @@ function activeTurnMessage(
   );
 }
 
-function activeTurnRow(
-  merged: FileChangeSegment | undefined,
-  fromHost: AccumulatedChangeRow | undefined,
-): AccumulatedChangeRow | null {
-  if (merged === undefined) return null;
-  // When the host already has this file its row wins wholesale. Otherwise emit
-  // the client's own row for a file no host version names yet - its counts are
-  // the per-edit magnitudes summed across the turn, which is what lets the
-  // panel move on every edit rather than sit at nothing until the turn ends.
-  // Dropped when the active edit is a net no-op (equal content-addressed
-  // endpoints).
-  if (fromHost !== undefined) return fromHost;
+/**
+ * The client's own row for a file no host version names yet.
+ *
+ * Its counts are the per-edit magnitudes summed across the turn, which is what
+ * lets the panel move on every edit rather than sit at nothing until the turn
+ * ends. `null` when the active edit is a net no-op (equal content-addressed
+ * endpoints).
+ *
+ * Only reached for a path the host has no row for; where it has one, that row
+ * wins wholesale and this is never consulted.
+ */
+function activeTurnRow(merged: FileChangeSegment): AccumulatedChangeRow | null {
   if (merged.beforeHash === merged.afterHash) return null;
   return {
     filePath: merged.filePath,
@@ -336,11 +340,18 @@ function activeTurnRow(
     undoable: true,
     artifact: null,
     counts: { additions: merged.additions, deletions: merged.deletions },
-    // The blocks exist, so a diff is openable - through the SEGMENT tile, which
-    // addresses them by block id. What is absent is a host-named cumulative
-    // version, which is what a `null` digest says.
     hasContents: merged.diffSource !== "none",
     digest: null,
+    // The blocks exist, so a diff IS openable - through the SEGMENT tile, which
+    // addresses them by block id. Carrying that address is what makes the row
+    // clickable: a `null` digest and no host entry means cumulative resolution
+    // has nothing to resolve, so a cumulative open could only ever land on
+    // source-unavailable.
+    liveDiff: {
+      sourceBlockIds: merged.sourceBlockIds,
+      beforeHash: merged.beforeHash,
+      afterHash: merged.afterHash,
+    },
   };
 }
 

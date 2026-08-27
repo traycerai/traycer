@@ -22,7 +22,13 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
  *   backfill). Everything visible at that moment is history by construction -
  *   it is silently absorbed as the new baseline, however it sorts and
  *   whenever it completed.
- * - While the epoch is unchanged the client is connected and watching, so any
+ * - `hydrationSequence` changes whenever a range response seated rows the
+ *   reader SCROLLED to. Those rows are settled history that was always there,
+ *   reached by travelling backwards through it - so a row that first APPEARS
+ *   across such a change is absorbed too. Without this, a windowed transcript
+ *   announced every turn in unloaded history as a fresh completion as the
+ *   reader scrolled up through it.
+ * - While both are unchanged the client is connected and watching, so any
  *   row that reaches a settled state - or whose background-completion digest
  *   changes - is news, again regardless of position or timestamp.
  *
@@ -154,12 +160,18 @@ export interface ChatAnnouncementsInput {
    * "we have been connected and watching since the last observation".
    */
   readonly baselineEpoch: number;
+  /**
+   * `ChatSessionState.transcriptHydrationSequence` - bumped when a range
+   * response seated rows the reader scrolled to. A change means "rows that
+   * just appeared are unloaded history, not arrivals".
+   */
+  readonly hydrationSequence: number;
 }
 
 export function useChatAnnouncements(
   input: ChatAnnouncementsInput,
 ): ChatAnnouncement | null {
-  const { messages, baselineEpoch } = input;
+  const { messages, baselineEpoch, hydrationSequence } = input;
   const [announcement, setAnnouncement] = useState<ChatAnnouncement | null>(
     null,
   );
@@ -167,6 +179,7 @@ export function useChatAnnouncements(
     null,
   );
   const baselineEpochRef = useRef<number | null>(null);
+  const hydrationSequenceRef = useRef<number | null>(null);
   const sequenceRef = useRef(0);
 
   useLayoutEffect(() => {
@@ -177,16 +190,25 @@ export function useChatAnnouncements(
     }
     const previous = observedRef.current;
     const previousEpoch = baselineEpochRef.current;
+    const previousHydration = hydrationSequenceRef.current;
     observedRef.current = observed;
     baselineEpochRef.current = baselineEpoch;
+    hydrationSequenceRef.current = hydrationSequence;
     // First observation, or a snapshot that re-established the transcript:
     // absorb it as the baseline. History never announces.
     if (previous === null || previousEpoch !== baselineEpoch) return;
+    // A range response seated rows the reader scrolled to. Rows already known
+    // are still evaluated - a live turn can settle in the same commit that
+    // hydrates old scrollback - but a row that FIRST appears here is history
+    // arriving late, not news.
+    const hydrating = previousHydration !== hydrationSequence;
     let kind: ChatAnnouncementKind | null = null;
     for (const message of messages) {
       const next = observed.get(message.id);
       if (next === undefined) continue;
-      const candidate = announcementKindFor(previous.get(message.id), next);
+      const prior = previous.get(message.id);
+      if (prior === undefined && hydrating) continue;
+      const candidate = announcementKindFor(prior, next);
       // Last announceable row wins: a batch that settles one turn while
       // appending the next running one announces the settled turn.
       if (candidate !== null) kind = candidate;
@@ -198,7 +220,7 @@ export function useChatAnnouncements(
     // latch and a live-region child, neither of which belongs in the commit
     // that produced the rows.
     queueMicrotask(() => setAnnouncement({ sequence, kind }));
-  }, [messages, baselineEpoch]);
+  }, [messages, baselineEpoch, hydrationSequence]);
 
   return announcement;
 }

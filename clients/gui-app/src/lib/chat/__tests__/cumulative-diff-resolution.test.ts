@@ -20,6 +20,7 @@ function row(input: {
     counts: { additions: 1, deletions: 1 },
     hasContents: input.hasContents ?? true,
     digest: input.digest,
+    liveDiff: null,
   };
 }
 

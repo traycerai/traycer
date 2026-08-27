@@ -1132,6 +1132,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 transcriptWindow={view.transcriptWindow}
                 onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
                 baselineEpoch={view.transcriptBaselineEpoch}
+                hydrationSequence={view.transcriptHydrationSequence}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
                 surfaceVisible={view.surfaceVisible}
@@ -1360,6 +1361,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
+      transcriptHydrationSequence: s.transcriptHydrationSequence,
       chat: s.chat,
       access: s.access,
       messages: s.messages,
@@ -2562,6 +2564,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     currentEpicId,
     snapshotLoaded: state.snapshotLoaded,
     transcriptBaselineEpoch: state.transcriptBaselineEpoch,
+    transcriptHydrationSequence: state.transcriptHydrationSequence,
     fatalClose: state.fatalClose,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
@@ -2620,6 +2623,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly onVisibleOrdinalRangeChange: (range: OrdinalRange | null) => void;
   /** Which connection's snapshot established `messages`; see `ChatMessages`. */
   readonly baselineEpoch: number;
+  /** Whether a range seated these rows; see `ChatMessages`. */
+  readonly hydrationSequence: number;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
@@ -2706,6 +2711,7 @@ function ChatSessionMessagesSurface(
               transcriptWindow={props.transcriptWindow}
               onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
               baselineEpoch={props.baselineEpoch}
+              hydrationSequence={props.hydrationSequence}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}

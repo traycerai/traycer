@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import {
   useChatSnapshotDiffOpener,
+  type ChatSnapshotDiffOpener,
   type DiffRowClickHandlers,
 } from "@/components/chat/chat-diff-target";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
@@ -217,17 +218,7 @@ export function ChatAccumulatedChangesPanel(
                   counts={change.counts ?? { additions: 0, deletions: 0 }}
                   gate={gate}
                   pending={restore.restoreActionPending}
-                  clickHandlers={
-                    // `hasContents: false` (a `diffSource: "none"` summary) is
-                    // a row with no before/after to show at all: the fetch
-                    // list excludes it by construction and the windowed
-                    // inline-change array is empty, so an advertised click
-                    // opens a tile that can only say source-unavailable.
-                    // Rendered as the plain row the contract describes.
-                    opener === null || !change.hasContents
-                      ? null
-                      : opener.cumulative(change.filePath)
-                  }
+                  clickHandlers={rowClickHandlers(opener, change)}
                   onUndo={() =>
                     // A per-row Undo targets this exact path, so artifacts are
                     // always included (the opt-out is only for bulk reverts).
@@ -469,6 +460,40 @@ function ArtifactAccumulatedHeader(props: {
       </span>
     </>
   );
+}
+
+/**
+ * Which tile a row opens, or `null` for a row that opens nothing.
+ *
+ * Every branch here answers one question: can the surface this click opens
+ * actually RESOLVE this row's contents? An advertised click that lands on
+ * source-unavailable is worse than a plain row, so a row only becomes
+ * interactive once something can answer for it.
+ *
+ * - `hasContents: false` (a `diffSource: "none"` summary) has no before/after
+ *   to show at all - the fetch list excludes it by construction and the
+ *   windowed inline-change array is empty.
+ * - {@link AccumulatedChangeRow.liveDiff} is the active turn's own row, which
+ *   no host version names yet: cumulative resolution has neither a digest nor
+ *   an inline change for it. Its `file_change` blocks are hydrated, so it opens
+ *   the SEGMENT tile that addresses them by block id instead.
+ * - Everything else is a host row, and the cumulative surface answers for it.
+ */
+function rowClickHandlers(
+  opener: ChatSnapshotDiffOpener | null,
+  change: AccumulatedChangeRow,
+): DiffRowClickHandlers | null {
+  if (opener === null || !change.hasContents) return null;
+  const live = change.liveDiff;
+  if (live !== null) {
+    return opener.segment({
+      filePath: change.filePath,
+      sourceBlockIds: live.sourceBlockIds,
+      beforeHash: live.beforeHash,
+      afterHash: live.afterHash,
+    });
+  }
+  return opener.cumulative(change.filePath);
 }
 
 function revertGate(restore: ChatRestoreContextValue): RevertGate {

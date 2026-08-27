@@ -7,6 +7,7 @@ import {
   applyParsedTaskTodoItems,
   createTaskTodoState,
   isTaskTodoToolName,
+  seedTaskTodoState,
   type ParsedTaskTodo,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
 
@@ -45,6 +46,20 @@ interface DerivedPinnedTodo {
   readonly suppressTaskTools: boolean;
 }
 
+/** Where {@link derivePinnedTodo} picks the accumulator up from. */
+interface PinnedTodoFoldSeed {
+  /** Task items already accumulated by whoever folded the prefix. */
+  readonly taskItems: ReadonlyArray<SegmentTodoItem>;
+  /** Whether a user row has been seen since the last `create`. */
+  readonly resetOnFirstCreate: boolean;
+}
+
+/** The seed for a fold that starts at the beginning of the transcript. */
+const EMPTY_PINNED_TODO_SEED: PinnedTodoFoldSeed = {
+  taskItems: [],
+  resetOnFirstCreate: false,
+};
+
 /**
  * Resolves the pinned todo snapshot - from the rendered rows on the legacy
  * line, from the host's whole-transcript fold on the windowed one (see
@@ -61,7 +76,7 @@ export function buildPinnedTodoRenderState(
   const derived: DerivedPinnedTodo =
     authority.kind === "host"
       ? hostAuthorityPinnedTodo(messages, authority.todo)
-      : derivePinnedTodo(messages);
+      : derivePinnedTodo(messages, EMPTY_PINNED_TODO_SEED);
   const filtered = messages
     .map((message) => {
       return filterTodoSegmentsFromMessage(message, derived.suppressTaskTools);
@@ -101,10 +116,28 @@ function filteredMessagesChanged(
  * hydrated rows has no such order: an old span's todo would outrank a newer
  * one the host found in an unhydrated region.
  *
- * The accumulator's user-row reset needs no seeding here: the live rows start
- * the fold on an empty task state, which is what the reset would produce, and
- * an update-only turn that yields no items falls back to the baseline rather
- * than pinning a fragment.
+ * ## The overlay RESUMES the host's fold rather than restarting it
+ *
+ * The task tools are a delta protocol: an `update`/`complete`/`cancel` payload
+ * carries an id and a status, not the task's text. Folded onto an empty state
+ * those payloads name nothing and are dropped, so a turn that only advances
+ * tasks created before the last snapshot used to produce no live todo at all -
+ * and the dock sat on the host's baseline, showing the OLD statuses, for the
+ * whole streaming turn. That is precisely the freeze this overlay exists to
+ * prevent, and the legacy fold does not have it: running over the whole
+ * history, it still holds the items those updates refer to.
+ *
+ * So the live fold starts from the host's items ({@link seedTaskTodoState}),
+ * which is the same state the legacy fold would be carrying at this point in
+ * the transcript.
+ *
+ * `resetOnFirstCreate` starts ARMED for the same reason. The rule is "the first
+ * `create` after a user row", and the user row that started this turn is
+ * outside the filtered subset by construction - only rows with a `runState`
+ * survive it. Seeding without arming would merge a fresh turn's new checklist
+ * into the previous one's; arming without seeding is today's behaviour. The two
+ * together are what make the overlay agree with the legacy fold on both a
+ * create-bearing turn and an update-only one.
  */
 function hostAuthorityPinnedTodo(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -112,6 +145,10 @@ function hostAuthorityPinnedTodo(
 ): DerivedPinnedTodo {
   const live = derivePinnedTodo(
     messages.filter((message) => message.runState !== null),
+    {
+      taskItems: hostTodo === null ? [] : hostTodo.items,
+      resetOnFirstCreate: true,
+    },
   );
   const todo = live.todo ?? hostTodo;
   return { todo, suppressTaskTools: todo !== null };
@@ -125,13 +162,19 @@ function hostAuthorityPinnedTodo(
  *  - a semantic todo outranks the task list within the same message,
  *  - the accumulated task items reset on the first `create` after a user row
  *    (steer interjections render as user rows, so they reset too).
+ *
+ * `seed` is where the fold PICKS UP. A fold over the whole history starts at
+ * {@link EMPTY_PINNED_TODO_SEED}; the windowed overlay resumes from the host's
+ * answer - see {@link hostAuthorityPinnedTodo} for why both of its fields have
+ * to move together.
  */
 function derivePinnedTodo(
   messages: ReadonlyArray<ChatMessageModel>,
+  seed: PinnedTodoFoldSeed,
 ): DerivedPinnedTodo {
-  let taskTodoState = createTaskTodoState();
+  let taskTodoState = seedTaskTodoState(seed.taskItems);
   let latestTodo: PinnedTodoSnapshot | null = null;
-  let resetTaskItemsOnNextCreate = false;
+  let resetTaskItemsOnNextCreate = seed.resetOnFirstCreate;
 
   for (const message of messages) {
     if (message.role === "user") {

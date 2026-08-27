@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
@@ -12,6 +12,7 @@ import {
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { isTailHydrated } from "@/stores/chats/transcript-window";
 
 /**
  * # The wait-for-tail rule
@@ -447,6 +448,144 @@ describe("windowed snapshot whose tail arrived empty", () => {
       harness.handle.dispose();
     }
   });
+
+  it("clears the previous epoch's rows instead of leaving them on screen", () => {
+    // A reconnect or reindex rebases the transcript into a new coordinate
+    // space, and `applyWindowedSnapshot` returns an empty window for it. The
+    // fold is held until the new tail lands - but the rows the reader is
+    // looking at belong to the epoch that just ended, and holding them means
+    // the row merge treats them as unplaced rows of a space they were never
+    // numbered in. If the tail is slow or lost, that is what stays on screen.
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("old-0", 1), userMessage("old-1", 2)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(
+        harness.handle.store
+          .getState()
+          .messages.map((message) => message.messageId),
+      ).toEqual(["old-0", "old-1"]);
+
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 40,
+          tailFromOrdinal: 40,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+
+      const state = harness.handle.store.getState();
+      expect(state.transcriptWindow.epoch).toBe(5);
+      // Proof this is the DEFERRAL path rather than the fold: the window has
+      // no span covering the last row, so the store is waiting on a tail it
+      // has just asked for. (`snapshotLoaded` says nothing here - it latched
+      // true on the first snapshot and a deferral does not clear it.)
+      expect(isTailHydrated(state.transcriptWindow)).toBe(false);
+      expect(harness.rangeRequests.at(-1)?.epoch).toBe(5);
+      // And nothing from epoch 4 survived into it.
+      expect(state.messages).toEqual([]);
+      expect(state.events).toEqual([]);
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+});
+
+describe("an unanswered range request", () => {
+  it("is retried once its wait runs out", () => {
+    // The in-flight slot is the dedup key: while it holds a request for a
+    // range, every later plan for that range is suppressed as already-asked.
+    // A `loadRange` or its response dropped on a stream that stays OPEN clears
+    // nothing, so the gap stays placeholders until the viewport moves or the
+    // connection is rebuilt - neither of which is guaranteed to happen.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 40,
+          tailFromOrdinal: 40,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.rangeRequests).toHaveLength(1);
+      const first = harness.rangeRequests[0];
+
+      // Nothing answers. Re-planning on its own is suppressed by the slot,
+      // which is the wedge - so the wait has to expire.
+      vi.advanceTimersByTime(29_000);
+      expect(harness.rangeRequests).toHaveLength(1);
+      vi.advanceTimersByTime(2_000);
+
+      expect(harness.rangeRequests).toHaveLength(2);
+      const retry = harness.rangeRequests[1];
+      // The same gap, asked again under a NEW id - so the abandoned request's
+      // answer, if it ever arrives, is discarded rather than seated.
+      expect(retry.fromOrdinal).toBe(first.fromOrdinal);
+      expect(retry.toOrdinal).toBe(first.toOrdinal);
+      expect(retry.epoch).toBe(first.epoch);
+      expect(retry.requestId).not.toBe(first.requestId);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("is not retried once it has been answered", () => {
+    // The timeout is armed per request id and released with the slot. A
+    // response that seats its range must take the deadline with it, or every
+    // answered request mints a duplicate one timeout later.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 2,
+          tailMessages: [],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      expect(harness.rangeRequests).toHaveLength(1);
+
+      harness.callbacks().onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+      expect(harness.handle.store.getState().snapshotLoaded).toBe(true);
+
+      vi.advanceTimersByTime(120_000);
+
+      expect(harness.rangeRequests).toHaveLength(1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("index deltas", () => {
@@ -480,6 +619,89 @@ describe("index deltas", () => {
       expect(harness.rangeRequests).toHaveLength(rangesBefore);
     } finally {
       harness.handle.dispose();
+    }
+  });
+
+  it("asks again when the resnapshot it was waiting for never arrives", () => {
+    // The same wedge an unanswered range request has, and worse: the latch
+    // that keeps an invalidated window from asking once per frame is cleared
+    // only by a snapshot, which is exactly what is missing. Every ordinal in a
+    // void index belongs to a coordinate space this client has left, so
+    // nothing on screen can be repaired until one lands.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 5,
+        rowCount: 2,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(1);
+
+      // Nothing answers, and no further frame arrives to re-drive the plan.
+      vi.advanceTimersByTime(31_000);
+
+      expect(harness.resnapshotCount()).toBe(2);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops asking once the snapshot lands", () => {
+    // The latch and its deadline are released together, so an answered
+    // resnapshot does not mint a duplicate one timeout later.
+    vi.useFakeTimers();
+    const harness = createWindowedHarness();
+    try {
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 4,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      harness.callbacks().onIndexChanged({
+        kind: "indexChanged",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        epoch: 5,
+        rowCount: 2,
+        changes: [{ type: "reindexed" }],
+      });
+      expect(harness.resnapshotCount()).toBe(1);
+
+      harness.callbacks().onWindowedSnapshot(
+        windowedSnapshot({
+          epoch: 5,
+          rowCount: 2,
+          tailFromOrdinal: 0,
+          tailMessages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          accumulatedFileChangeCount: 0,
+        }),
+      );
+      vi.advanceTimersByTime(120_000);
+
+      expect(harness.resnapshotCount()).toBe(1);
+    } finally {
+      harness.handle.dispose();
+      vi.useRealTimers();
     }
   });
 });

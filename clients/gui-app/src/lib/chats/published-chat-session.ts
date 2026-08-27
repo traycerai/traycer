@@ -266,6 +266,8 @@ export function publishedChatSessionState(
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
     transcriptBaselineEpoch: 0,
+    // Frozen, so nothing hydrates and this never moves.
+    transcriptHydrationSequence: 0,
     chat: {
       parentId: null,
       id: input.chatId,
