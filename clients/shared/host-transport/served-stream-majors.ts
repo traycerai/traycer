@@ -1,4 +1,5 @@
 import type { ServedMajorsByMethod } from "@traycer/protocol/framework/capability-manifest";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 /**
  * The stream majors THIS CLIENT can actually serve, per method.
@@ -45,4 +46,10 @@ export const CLIENT_SERVED_STREAM_MAJORS: ServedMajorsByMethod = {
    * session factory - not before, and not separately.
    */
   "epic.subscribe": [1],
-};
+  // `satisfies` pins every key to a REGISTRY stream method name: a registry
+  // rename would otherwise leave a stale key behind, `buildStreamManifest`
+  // would look the renamed method up as absent, and the restriction this
+  // file exists for would silently lift - every installed major advertised.
+} satisfies Partial<
+  Readonly<Record<keyof HostStreamRpcRegistry, readonly number[]>>
+>;

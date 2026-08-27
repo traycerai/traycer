@@ -7,8 +7,16 @@ import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
-import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import {
+  getEpicSessionHandleHostClient,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { updateEpicTitleInCloudTaskCaches } from "@/lib/cloud-epic-tasks-query/cache";
 
 /**
  * Fills the mobile-header right-actions slot on the epic route with the tab
@@ -59,6 +67,7 @@ export function MobileEpicHeaderTitle(props: {
   const { epicId, title } = props;
   const canEdit = isEditableRole(useRegisteredEpicPermissionRole(epicId));
   const updateTitle = useEpicUpdateTitle();
+  const queryClient = useQueryClient();
   const handleCommit = useCallback(
     (next: string) => {
       // Optimistic overlay, so this control behaves identically to the wide
@@ -75,22 +84,64 @@ export function MobileEpicHeaderTitle(props: {
       // those on unmount, and this control UNMOUNTS on the very resize the
       // 768px parity contract is about. Contract note in
       // `use-rename-canvas-tab.ts`.
+      const retire = (outcome: "landed" | "failed"): void => {
+        if (requestId === null) return;
+        handle?.store.getState().retirePendingMutation(requestId, outcome);
+      };
+      // HOST-SCOPED where a live session exists, exactly as the wide
+      // viewport's tab strip resolves `epicRenameClient(tab.hostId)`: the
+      // overlay above was stamped on the SESSION's store, so the RPC must go
+      // to the session's host - an app-wide client pointed elsewhere during
+      // a host switch would ack a rename the session can never echo, leaving
+      // the landed stamp masking the real title until expiry (and renaming
+      // the wrong host's copy). A session with no serving client right now,
+      // or no session at all, falls back to the app-wide mutation - all this
+      // surface ever had before sessions carried a host.
+      const sessionClient =
+        handle === null ? null : getEpicSessionHandleHostClient(handle);
+      if (sessionClient !== null) {
+        const hostId = sessionClient.getActiveHostId();
+        const userId = sessionClient.getRequestContextUserId();
+        void sessionClient
+          .request("epic.updateTitle", {
+            epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
+          })
+          .then(
+            () => {
+              retire("landed");
+              toast.success("Epic renamed");
+              if (userId === null) return;
+              updateEpicTitleInCloudTaskCaches(
+                queryClient,
+                { hostId, userId },
+                epicId,
+                next,
+              );
+            },
+            (error: unknown) => {
+              retire("failed");
+              toastFromHostError(
+                toHostRpcError(error, "epic.updateTitle"),
+                "Couldn't rename epic.",
+              );
+            },
+          );
+        return;
+      }
       void updateTitle
         .mutateAsync({
           epicDelta: { id: epicId, title: next, updatedAt: Date.now() },
         })
         .then(
           () => {
-            if (requestId === null) return;
-            handle?.store.getState().retirePendingMutation(requestId, "landed");
+            retire("landed");
           },
           () => {
-            if (requestId === null) return;
-            handle?.store.getState().retirePendingMutation(requestId, "failed");
+            retire("failed");
           },
         );
     },
-    [epicId, updateTitle],
+    [epicId, queryClient, updateTitle],
   );
   return (
     <InlineTitleField

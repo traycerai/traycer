@@ -269,8 +269,10 @@ function chainFor(
   return chain;
 }
 
-/** Node ids carrying at least one pending mutation of the given kind. */
-function nodesWithPending(
+/** Node ids carrying at least one RETAINED mutation of the given kind -
+ * landed or not; "pending" is reserved for un-landed (see
+ * `pendingMutationCount`). */
+function nodesWithMutations(
   overlay: PendingMetadataOverlay,
   kind: PendingMetadataMutation["kind"],
 ): readonly string[] {
@@ -299,8 +301,8 @@ export function applyPendingOverlayToArtifacts(
   if (overlay.size === 0) return artifacts;
   let byId: Record<string, ArtifactProjection> | null = null;
   const touched = new Set<string>([
-    ...nodesWithPending(overlay, "rename"),
-    ...nodesWithPending(overlay, "reparent"),
+    ...nodesWithMutations(overlay, "rename"),
+    ...nodesWithMutations(overlay, "reparent"),
   ]);
   for (const id of touched) {
     // `Object.hasOwn`, not an `=== undefined` check on the read: `byId` is a
@@ -337,8 +339,8 @@ export function applyPendingOverlayToChats(
   if (overlay.size === 0) return chats;
   let byId: Record<string, ChatProjection> | null = null;
   const touched = new Set<string>([
-    ...nodesWithPending(overlay, "rename"),
-    ...nodesWithPending(overlay, "reparent"),
+    ...nodesWithMutations(overlay, "rename"),
+    ...nodesWithMutations(overlay, "reparent"),
   ]);
   for (const id of touched) {
     if (!Object.hasOwn(chats.byId, id)) continue;
@@ -371,8 +373,8 @@ export function applyPendingOverlayToTuiAgents(
   if (overlay.size === 0) return tuiAgents;
   let byId: Record<string, TuiAgentProjection> | null = null;
   const touched = new Set<string>([
-    ...nodesWithPending(overlay, "rename"),
-    ...nodesWithPending(overlay, "reparent"),
+    ...nodesWithMutations(overlay, "rename"),
+    ...nodesWithMutations(overlay, "reparent"),
   ]);
   for (const id of touched) {
     if (!Object.hasOwn(tuiAgents.byId, id)) continue;

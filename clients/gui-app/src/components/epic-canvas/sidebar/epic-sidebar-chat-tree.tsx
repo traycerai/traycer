@@ -1599,6 +1599,20 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
+    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
+    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
+    // so the overlay path would only ever roll back.
+    if (artifactType === "terminal-agent") {
+      const agents = epicHandle.store.getState().tuiAgents.byId;
+      if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+          renameArtifactInTab(tabId, nodeId, trimmed);
+        }
+        setIsRenaming(false);
+        return;
+      }
+    }
     // The optimistic overlay, in place of the `renameArtifact` doc write this
     // used to do. That write no-opped for every registry-backed row — which
     // post chats-off-YJS is most of this tree — so these renames had no local

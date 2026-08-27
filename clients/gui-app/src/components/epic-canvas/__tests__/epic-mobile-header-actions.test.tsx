@@ -1,5 +1,7 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EpicMobileSwitcherTrigger,
@@ -62,6 +64,19 @@ describe("<EpicMobileSwitcherTrigger />", () => {
   });
 });
 
+/**
+ * `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
+ * success arm's cloud-cache patch, so it must render under a provider - the
+ * mocked mutation hook used to hide that dependency.
+ */
+function renderWithQueryClient(element: ReactElement) {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      {element}
+    </QueryClientProvider>,
+  );
+}
+
 describe("<MobileEpicHeaderTitle />", () => {
   beforeEach(() => {
     holder.role = "owner";
@@ -71,14 +86,18 @@ describe("<MobileEpicHeaderTitle />", () => {
   afterEach(cleanup);
 
   it("renders the epic title as an editable control for an editor", () => {
-    render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
     const title = screen.getByTestId("mobile-epic-header-title");
     expect(title.tagName).toBe("BUTTON");
     expect(title.textContent).toBe("My Epic");
   });
 
   it("commits a new title via the epic title mutation", async () => {
-    render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Renamed epic" } });
     fireEvent.blur(input);
@@ -93,7 +112,9 @@ describe("<MobileEpicHeaderTitle />", () => {
   });
 
   it("Escape cancels the edit without committing", () => {
-    render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "Discarded" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -104,7 +125,9 @@ describe("<MobileEpicHeaderTitle />", () => {
   });
 
   it("an empty commit keeps the previous title and does not mutate", () => {
-    render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
     const input = openEdit("mobile-epic-header-title");
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.blur(input);
@@ -116,7 +139,9 @@ describe("<MobileEpicHeaderTitle />", () => {
 
   it("renders plain text for a viewer (no editable control)", () => {
     holder.role = "viewer";
-    render(<MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />);
+    renderWithQueryClient(
+      <MobileEpicHeaderTitle epicId="epic-1" title="My Epic" />,
+    );
     const title = screen.getByTestId("mobile-epic-header-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-epic-header-title-input")).toBeNull();

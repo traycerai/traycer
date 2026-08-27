@@ -4,11 +4,6 @@
  * move that isn't an ACKED local target; a landed-only chain stays alive
  * until the host visibly catches up to its LAST landed target).
  *
- * STAGED, NOT YET RUN: written from the contract description handed off by
- * the assigning agent ("CONTRACT CHANGE" message) ahead of the actual core
- * rewrite landing. Do not run until the "core landed" signal - exact export
- * names/shapes (especially the dead-chain report) may still change.
- *
  * Mutations are constructed by hand and folded over hand-built slices, so
  * these tests pin the anchoring/row-wins/dead-chain rules in isolation from
  * everything that stamps a mutation.

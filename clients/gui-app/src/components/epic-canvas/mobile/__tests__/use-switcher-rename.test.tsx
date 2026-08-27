@@ -355,9 +355,42 @@ describe("useSwitcherRename", () => {
     unmount();
   });
 
-  it("a terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", () => {
+  it("a REGISTRY-backed terminal-agent rename routes through beginRenameMutation and the tui-agent mutation", () => {
     const handle = newSession();
     mocks.handle.current = handle;
+    // A registry row (docResident: false) is what routes to the RPC; a
+    // doc-resident agent takes the doc-write branch instead (pinned in
+    // `use-rename-canvas-tab.test.tsx`, whose hook shares the routing).
+    handle.store.getState().applyTuiAgentRecords(
+      [
+        {
+          tuiAgentId: "agent-1",
+          ownerUserId: "user-1",
+          hostId: "host-1",
+          harnessId: "claude",
+          harnessSessionId: null,
+          parentId: null,
+          title: "An agent",
+          isTitleEditedByUser: false,
+          createdAt: 1,
+          updatedAt: 2,
+          archived: false,
+          archivedAt: null,
+          workspaceFolders: [],
+          workspaceMode: null,
+          model: null,
+          reasoningEffort: null,
+          agentMode: "regular",
+          profileId: null,
+          terminalAgentArgs: null,
+          terminalShellCommand: null,
+          terminalShellArgs: null,
+          revision: 1,
+          docResident: false,
+        },
+      ],
+      null,
+    );
     const { result, unmount } = renderHook(() => useSwitcherRename(EPIC_ID));
 
     act(() => {

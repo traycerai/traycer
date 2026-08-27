@@ -447,7 +447,11 @@ describe("applyTuiAgentRecordDelta always reports registry provenance", () => {
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
       epicId: "epic-test",
-      record: row({ tuiAgentId: "tui-1" }),
+      // Deliberately `true` on the way in: the fixture's default is `false`,
+      // so an implementation that PASSED the field THROUGH instead of
+      // stamping the delta plane's own `false` would also pass a
+      // default-valued row. It must not survive this one.
+      record: row({ tuiAgentId: "tui-1", docResident: true }),
     });
 
     expect(

@@ -53,6 +53,24 @@ export function useRenameCanvasTab(
       if (trimmed.length === 0) return;
       if (tab.type === "terminal") return;
       const id = tab.id;
+      // DOC-RESIDENT terminal agents keep the direct doc write: an agent
+      // whose title still lives in the epic Y.Doc (bound to an un-upgraded
+      // peer host) has no registry row on the serving host, so
+      // `epic.renameTuiAgent` refuses it (`E_AGENT_NOT_LOCAL`) and the
+      // overlay would only ever roll back. Same union-carried `docResident`
+      // routing fact the reparent commit reads (`isDocOnlyTerminalAgent`),
+      // absent-from-union included. The doc write is synchronous authority -
+      // no stamp to retire - and the snapshot follows the write's own
+      // success.
+      if (tab.type === "terminal-agent") {
+        const agents = epicHandle.store.getState().tuiAgents.byId;
+        if (!Object.hasOwn(agents, id) || agents[id].docResident) {
+          if (epicHandle.store.getState().renameArtifact(id, trimmed)) {
+            renameArtifactInTab(viewTabId, id, trimmed);
+          }
+          return;
+        }
+      }
       // The optimistic overlay, NOT the doc write this used to do. The doc
       // write covered artifacts and doc-backed chats and silently no-opped for
       // every registry-backed row, which post chats-off-YJS is most of the

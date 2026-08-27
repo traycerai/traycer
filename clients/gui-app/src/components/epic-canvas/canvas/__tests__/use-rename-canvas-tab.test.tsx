@@ -25,6 +25,7 @@ import {
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   EpicArtifactRef,
   EpicTerminalRef,
@@ -176,6 +177,59 @@ function newSession(): OpenEpicStoreHandle {
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return handle;
+}
+
+/** A REGISTRY row (docResident: false) - the shape that routes to the RPC. */
+function agentRecord(tuiAgentId: string): TuiAgentRecordSummaryV11 {
+  return {
+    tuiAgentId,
+    ownerUserId: "user-1",
+    hostId: HOST_ID,
+    harnessId: "claude",
+    harnessSessionId: null,
+    parentId: null,
+    title: "An agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: [],
+    workspaceMode: null,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 1,
+    docResident: false,
+  };
+}
+
+/** A DOC-RESIDENT agent: a `tuiAgents` Y.Map entry, no registry row. */
+function createTerminalAgentInDocForTests(doc: Y.Doc): string {
+  const id = "doc-agent-1";
+  const agent = new Y.Map<unknown>();
+  agent.set("id", id);
+  agent.set("harnessId", "codex");
+  agent.set("title", "Doc agent");
+  agent.set("parentId", null);
+  agent.set("createdAt", 1);
+  agent.set("updatedAt", 1);
+  agent.set("hostId", HOST_ID);
+  agent.set("workspaceFolders", ["/repo"]);
+  agent.set("model", null);
+  agent.set("reasoningEffort", null);
+  agent.set("agentMode", "regular");
+  agent.set("harnessSessionId", null);
+  agent.set("terminalShellCommand", null);
+  agent.set("terminalShellArgs", null);
+  const tuiAgents = new Y.Map<unknown>();
+  tuiAgents.set(id, agent);
+  doc.getMap("epic").set("tuiAgents", tuiAgents);
+  return id;
 }
 
 function artifactTile(id: string): EpicArtifactRef {
@@ -387,9 +441,15 @@ describe("useRenameCanvasTab", () => {
     unmount();
   });
 
-  it("routes a terminal-agent tab rename through beginRenameMutation and the tui-agent mutation", () => {
+  it("routes a REGISTRY-backed terminal-agent tab rename through beginRenameMutation and the tui-agent mutation", () => {
     const handle = newSession();
     mocks.handle.current = handle;
+    // A registry row (docResident: false) is what routes to the RPC; an
+    // agent absent from the union - or doc-resident - takes the doc-write
+    // branch instead, which the next test pins.
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([agentRecord("agent-1")], null);
     const { result, unmount } = renderHook(() =>
       useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
     );
@@ -401,6 +461,30 @@ describe("useRenameCanvasTab", () => {
     expect(mocks.tuiCalls).toEqual([
       { tuiAgentId: "agent-1", title: "New agent name" },
     ]);
+    unmount();
+  });
+
+  it("routes a DOC-RESIDENT terminal agent through the doc write, never epic.renameTuiAgent", () => {
+    // An agent whose title still lives in the epic Y.Doc (bound to an
+    // un-upgraded peer host) has no registry row on the serving host -
+    // `epic.renameTuiAgent` would refuse it (E_AGENT_NOT_LOCAL) and the
+    // overlay would only ever roll back. The hook routes it to the direct
+    // doc write instead, exactly as the reparent commit does.
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const agentId = createTerminalAgentInDocForTests(handle.doc);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    act(() => {
+      result.current(terminalAgentTile(agentId), "Doc agent name");
+    });
+
+    expect(mocks.tuiCalls).toEqual([]);
+    expect(handle.store.getState().tuiAgents.byId[agentId].title).toBe(
+      "Doc agent name",
+    );
     unmount();
   });
 

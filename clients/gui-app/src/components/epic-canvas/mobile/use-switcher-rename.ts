@@ -69,16 +69,32 @@ export function useSwitcherRename(
 
   return useCallback(
     (kind, nodeId, title) => {
-      if (kind === "terminal") {
-        renameTerminal.mutate({ sessionId: nodeId, title });
-        return;
-      }
-      // Trimmed for BOTH the stamp and the RPC. The overlay stamps the
-      // trimmed value, so sending the raw string would make the host land a
-      // value the landed-entry bookkeeping never acked - and the desktop twin
-      // already trims, which the 768px parity contract makes binding here.
+      // Trimmed for BOTH the stamp and the RPC - and for the raw terminal
+      // too, whose arm previously sat above this guard and would send a
+      // whitespace-only title straight to `terminal.rename`. The overlay
+      // stamps the trimmed value, so sending the raw string would make the
+      // host land a value the landed-entry bookkeeping never acked - and the
+      // desktop twin already trims, which the 768px parity contract makes
+      // binding here.
       const trimmed = title.trim();
       if (trimmed.length === 0) return;
+      if (kind === "terminal") {
+        renameTerminal.mutate({ sessionId: nodeId, title: trimmed });
+        return;
+      }
+      // DOC-RESIDENT terminal agents keep the direct doc write - see the
+      // same branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent`
+      // refuses a row the serving host has no registry entry for
+      // (`E_AGENT_NOT_LOCAL`), so the overlay path would only ever roll
+      // back. No snapshot on this surface; the doc write is its own
+      // synchronous feedback.
+      if (kind === "terminal-agent") {
+        const agents = epicHandle.store.getState().tuiAgents.byId;
+        if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+          epicHandle.store.getState().renameArtifact(nodeId, trimmed);
+          return;
+        }
+      }
       const requestId = epicHandle.store
         .getState()
         .beginRenameMutation(nodeId, trimmed);

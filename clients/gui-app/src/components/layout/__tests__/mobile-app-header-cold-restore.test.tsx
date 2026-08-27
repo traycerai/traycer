@@ -16,6 +16,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import {
   __getOpenEpicRegistryForTests,
@@ -134,7 +135,14 @@ function renderRestoredAtLanding(): void {
     routeTree,
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
-  render(<RouterProvider router={router} />);
+  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
+  // success arm's cloud-cache patch; the mocked mutation hook used to hide
+  // that dependency.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 /**
