@@ -52,4 +52,20 @@ describe("TeardownCommitDialog", () => {
     expect(screen.getByTestId("teardown-commit-defer")).toBeTruthy();
     expect(screen.queryByTestId("teardown-commit-immediate")).toBeNull();
   });
+
+  it("offers stop-now and cancel only on a removal gesture", () => {
+    render(
+      <TeardownCommitDialog
+        open
+        choice="remove"
+        holders={[HOLDER]}
+        onImmediate={vi.fn()}
+        onDefer={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("teardown-commit-immediate")).toBeTruthy();
+    expect(screen.getByTestId("teardown-commit-cancel")).toBeTruthy();
+    expect(screen.queryByTestId("teardown-commit-defer")).toBeNull();
+  });
 });

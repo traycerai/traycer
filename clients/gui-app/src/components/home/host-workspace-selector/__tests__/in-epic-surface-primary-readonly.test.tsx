@@ -543,6 +543,13 @@ const TERMINAL_STAGING_KEY = {
   ownerKind: "terminal-agent" as const,
   ownerId: "owner-1",
 };
+const CHAT_STAGING_KEY = {
+  surface: "owner" as const,
+  hostId: "host-test",
+  epicId: "epic-1",
+  ownerKind: "chat" as const,
+  ownerId: "owner-1",
+};
 
 function shellHolder(
   label: string,
@@ -863,5 +870,114 @@ it("keeps a newer TUI draft after an in-flight commit of an older capture", asyn
         worktreeStagingKeyString(TERMINAL_STAGING_KEY)
       ]?.entries[0],
     ).toMatchObject({ branch: { name: "feat-b" } });
+  });
+});
+
+it("does not apply remove or create if the user cancels during in-flight teardown", async () => {
+  seedResolvedBindingMetadata();
+  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+  let releaseStop: ((value: unknown) => void) | null = null;
+  teardownStopMocks.stopShell.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        releaseStop = resolve;
+      }),
+  );
+
+  await openTerminalFolderPopover();
+  fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+  fireEvent.click(await screen.findByTestId("teardown-commit-immediate"));
+  await waitFor(() => {
+    expect(teardownStopMocks.stopShell).toHaveBeenCalled();
+  });
+  fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+  act(() => {
+    releaseStop?.({});
+  });
+  await Promise.resolve();
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(TERMINAL_STAGING_KEY)
+    ]?.entries[0],
+  ).toMatchObject({ branch: { name: "feat-a" } });
+});
+
+it("applies only the disclosed folder removal and leaves a staged draft intact", async () => {
+  teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
+    dropped.includes("/repo/beta")
+      ? shellSnapshot("npm run dev", "sh-1", "chat")
+      : { holders: [], stopTargets: [] },
+  );
+  useWorktreeIntentStagingStore.getState().stageIntent(CHAT_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) beta(?: to Recent)?$/,
+      })
+    )[0],
+  );
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  fireEvent.click(screen.getByTestId("teardown-commit-immediate"));
+
+  await waitFor(() => {
+    expect(mutationMocks.removeBindingFolder).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "chat",
+      workspacePath: "/repo/beta",
+    });
+  });
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(CHAT_STAGING_KEY)
+    ]?.entries[0],
+  ).toMatchObject({
+    workspacePath: "/repo/alpha",
+    branch: { name: "feat-a" },
+  });
+});
+
+it("restores a same-folder draft when a removal disclosure is dismissed", async () => {
+  teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
+    dropped.includes("/repo/alpha")
+      ? shellSnapshot("npm run dev", "sh-1", "chat")
+      : { holders: [], stopTargets: [] },
+  );
+  useWorktreeIntentStagingStore.getState().stageIntent(CHAT_STAGING_KEY, {
+    entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
+  });
+
+  renderBoundSurface("chat", true);
+  fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
+  fireEvent.click(
+    (
+      await screen.findAllByRole("button", {
+        name: /^(?:Move|Remove) alpha(?: to Recent)?$/,
+      })
+    )[0],
+  );
+  expect(await screen.findByTestId("teardown-commit-dialog")).toBeTruthy();
+  expect(screen.queryByTestId("teardown-commit-defer")).toBeNull();
+  fireEvent.click(screen.getByTestId("teardown-commit-cancel"));
+
+  expect(mutationMocks.removeBindingFolder).not.toHaveBeenCalled();
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(CHAT_STAGING_KEY)
+    ]?.entries[0],
+  ).toMatchObject({
+    workspacePath: "/repo/alpha",
+    branch: { name: "feat-a" },
   });
 });

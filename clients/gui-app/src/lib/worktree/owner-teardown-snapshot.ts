@@ -37,6 +37,8 @@ export type OwnerTeardownSnapshotInput = {
   readonly ptyLive: boolean;
   readonly shells: readonly OwnerTeardownShell[];
   readonly droppedRunDirectories: readonly string[];
+  readonly queuedMessageCount: number;
+  readonly backgroundItemCount: number;
 };
 
 export type TeardownStopTarget =
@@ -132,15 +134,16 @@ export function snapshotOwnerTeardown(
 ): OwnerTeardownSnapshot {
   const holders: WorktreeBusyHolder[] = [];
   const stopTargets: TeardownStopTarget[] = [];
+  const agentStopClearsOwner = chatTurnWillCallAgentStop(input);
   if (input.hasActiveTurn) {
     const holder: WorktreeBusyHolder = {
       ownerRef: input.ownerRef,
       holdKind: "chat-turn",
       activity: "working",
-      label: `${input.ownerLabel} is working`,
+      label: chatTurnHolderLabel(input, agentStopClearsOwner),
     };
     holders.push(holder);
-    if (input.ownerRef.ownerKind === "chat") {
+    if (agentStopClearsOwner) {
       stopTargets.push({
         kind: "chat-turn",
         holderKey: teardownHolderKey(holder),
@@ -157,7 +160,10 @@ export function snapshotOwnerTeardown(
   }
   for (const shell of input.shells) {
     if (!shell.live) continue;
-    if (!shellBelongsToDroppedPaths(shell, input.droppedRunDirectories)) {
+    if (
+      !agentStopClearsOwner &&
+      !shellBelongsToDroppedPaths(shell, input.droppedRunDirectories)
+    ) {
       continue;
     }
     const holder: WorktreeBusyHolder = {
@@ -180,6 +186,31 @@ export function snapshotOwnerTeardownHolders(
   input: OwnerTeardownSnapshotInput,
 ): readonly WorktreeBusyHolder[] {
   return snapshotOwnerTeardown(input).holders;
+}
+
+function chatTurnWillCallAgentStop(input: OwnerTeardownSnapshotInput): boolean {
+  return input.hasActiveTurn && input.ownerRef.ownerKind === "chat";
+}
+
+function chatTurnHolderLabel(
+  input: OwnerTeardownSnapshotInput,
+  agentStopClearsOwner: boolean,
+): string {
+  const base = `${input.ownerLabel} is working`;
+  if (!agentStopClearsOwner) return base;
+  const named: string[] = [];
+  if (input.queuedMessageCount === 1) named.push("1 queued message");
+  if (input.queuedMessageCount > 1) {
+    named.push(`${input.queuedMessageCount} queued messages`);
+  }
+  if (input.backgroundItemCount === 1) named.push("1 background item");
+  if (input.backgroundItemCount > 1) {
+    named.push(`${input.backgroundItemCount} background items`);
+  }
+  if (named.length > 0) {
+    return `${base}. Stopping it also clears ${named.join(" and ")}`;
+  }
+  return `${base}. Stopping the agent also stops its background shells and clears queued messages`;
 }
 
 function shellBelongsToDroppedPaths(

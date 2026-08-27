@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { TeardownDisclosure } from "@/components/worktree/teardown-disclosure";
 
-export type TeardownCommitChoice = "commit" | "submit" | "blocked";
+export type TeardownCommitChoice = "commit" | "submit" | "blocked" | "remove";
 
 /**
  * Gesture-time confirm for a worktree commit that would tear holders down.
@@ -31,6 +31,8 @@ export function TeardownCommitDialog(props: {
 }) {
   const blocked = props.choice === "blocked";
   const submit = props.choice === "submit";
+  const removeOnly = props.choice === "remove";
+  const pending = props.immediatePending === true;
   const title = dialogTitle(props.choice);
   const description = dialogDescription(props.choice);
   return (
@@ -71,14 +73,16 @@ export function TeardownCommitDialog(props: {
             variant="ghost"
             size="sm"
             onClick={props.onDismiss}
+            data-testid="teardown-commit-cancel"
           >
             Cancel
           </Button>
-          {submit || blocked ? null : (
+          {submit || blocked || removeOnly ? null : (
             <Button
               type="button"
               variant="outline"
               size="sm"
+              disabled={pending}
               onClick={props.onDefer}
               data-testid="teardown-commit-defer"
             >
@@ -100,10 +104,7 @@ export function TeardownCommitDialog(props: {
               type="button"
               variant="default"
               size="sm"
-              disabled={
-                props.immediateDisabled === true ||
-                props.immediatePending === true
-              }
+              disabled={props.immediateDisabled === true || pending}
               onClick={props.onImmediate}
               data-testid="teardown-commit-immediate"
             >
@@ -121,6 +122,7 @@ function dialogTitle(choice: TeardownCommitChoice | null): string {
     return "Apply this folder change on the next message?";
   }
   if (choice === "submit") return "Send in the new folder?";
+  if (choice === "remove") return "Remove this folder?";
   return "Switch workspace?";
 }
 

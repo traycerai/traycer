@@ -22,6 +22,7 @@ describe("runGuiComposedTeardown", () => {
       ],
       stopShell,
       stopTurn: vi.fn(),
+      isCancelled: () => false,
     });
     expect(failures).toEqual([]);
     expect(stopShell).toHaveBeenCalledWith("sh-1");
@@ -48,6 +49,7 @@ describe("runGuiComposedTeardown", () => {
       ],
       stopShell,
       stopTurn: vi.fn(),
+      isCancelled: () => false,
     });
     expect(failures).toEqual([
       {
@@ -69,9 +71,37 @@ describe("runGuiComposedTeardown", () => {
       ],
       stopShell: vi.fn(),
       stopTurn,
+      isCancelled: () => false,
     });
     expect(failures).toEqual([]);
     expect(stopTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops further targets once cancelled", async () => {
+    let cancelled = false;
+    const stopShell = vi.fn(() => {
+      cancelled = true;
+      return Promise.resolve();
+    });
+    const failures = await runGuiComposedTeardown({
+      stopTargets: [
+        {
+          kind: "supervised-shell",
+          commandId: "sh-1",
+          holderKey: "chat:c1:supervised-shell:npm run dev",
+        },
+        {
+          kind: "supervised-shell",
+          commandId: "sh-2",
+          holderKey: "chat:c1:supervised-shell:watch",
+        },
+      ],
+      stopShell,
+      stopTurn: vi.fn(),
+      isCancelled: () => cancelled,
+    });
+    expect(failures).toEqual([]);
+    expect(stopShell).toHaveBeenCalledTimes(1);
   });
 });
 

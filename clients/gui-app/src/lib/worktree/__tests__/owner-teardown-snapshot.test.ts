@@ -54,6 +54,8 @@ function input(
     ptyLive: false,
     shells: [],
     droppedRunDirectories: [],
+    queuedMessageCount: 0,
+    backgroundItemCount: 0,
     ...overrides,
   };
 }
@@ -63,7 +65,7 @@ describe("snapshotOwnerTeardownHolders", () => {
     expect(snapshotOwnerTeardownHolders(input({}))).toEqual([]);
   });
 
-  it("names a working chat turn", () => {
+  it("names a working chat turn and the agent.stop consequence", () => {
     expect(
       snapshotOwnerTeardownHolders(input({ hasActiveTurn: true })),
     ).toEqual([
@@ -71,7 +73,8 @@ describe("snapshotOwnerTeardownHolders", () => {
         ownerRef: OWNER,
         holdKind: "chat-turn",
         activity: "working",
-        label: "Planner is working",
+        label:
+          "Planner is working. Stopping the agent also stops its background shells and clears queued messages",
       },
     ]);
   });
@@ -192,7 +195,8 @@ describe("snapshotOwnerTeardownHolders", () => {
     ).toEqual([
       {
         kind: "chat-turn",
-        holderKey: "chat:chat-1:chat-turn:Planner is working",
+        holderKey:
+          "chat:chat-1:chat-turn:Planner is working. Stopping the agent also stops its background shells and clears queued messages",
       },
     ]);
     expect(
@@ -203,6 +207,36 @@ describe("snapshotOwnerTeardownHolders", () => {
         }),
       ).stopTargets,
     ).toEqual([]);
+  });
+
+  it("includes a live shell on a retained path when a chat-turn will call agent.stop", () => {
+    const holders = snapshotOwnerTeardownHolders(
+      input({
+        hasActiveTurn: true,
+        droppedRunDirectories: ["/wt/old"],
+        shells: [
+          {
+            id: "sh-keep",
+            description: "keep",
+            command: "sleep 1",
+            cwd: "/wt/keep",
+            live: true,
+          },
+        ],
+      }),
+    );
+    expect(holders.map((holder) => holder.label)).toEqual([
+      "Planner is working. Stopping the agent also stops its background shells and clears queued messages",
+      "sleep 1",
+    ]);
+  });
+
+  it("names queued work on the chat-turn row when evidence exists", () => {
+    expect(
+      snapshotOwnerTeardownHolders(
+        input({ hasActiveTurn: true, queuedMessageCount: 2 }),
+      )[0]?.label,
+    ).toBe("Planner is working. Stopping it also clears 2 queued messages");
   });
 
   it("includes a shell under a pending-removed folder in the teardown set", () => {

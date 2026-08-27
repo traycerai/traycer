@@ -35,9 +35,11 @@ export async function runGuiComposedTeardown(input: {
   readonly stopTargets: readonly TeardownStopTarget[];
   readonly stopShell: (commandId: string) => Promise<unknown>;
   readonly stopTurn: () => Promise<unknown>;
+  readonly isCancelled: () => boolean;
 }): Promise<readonly HolderTeardownFailure[]> {
   const failures: HolderTeardownFailure[] = [];
   for (const target of input.stopTargets) {
+    if (input.isCancelled()) return failures;
     try {
       if (target.kind === "supervised-shell") {
         await input.stopShell(target.commandId);
@@ -50,6 +52,7 @@ export async function runGuiComposedTeardown(input: {
         message: teardownErrorMessage(error),
       });
     }
+    if (input.isCancelled()) return failures;
   }
   return failures;
 }

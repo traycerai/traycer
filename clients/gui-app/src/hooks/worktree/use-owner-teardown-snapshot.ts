@@ -51,6 +51,15 @@ export function useOwnerTeardownSnapshot(
           ptyLive,
         }),
         droppedRunDirectories,
+        ...collectOwnerAgentStopEvidence({
+          epicId,
+          hostId,
+          ownerKind,
+          ownerId,
+          ownerLabel,
+          hasActiveTurn,
+          ptyLive,
+        }),
       }),
     [epicId, hasActiveTurn, hostId, ownerId, ownerKind, ownerLabel, ptyLive],
   );
@@ -80,4 +89,23 @@ function collectOwnerShells(
     }
   }
   return [...byId.values()];
+}
+
+function collectOwnerAgentStopEvidence(args: OwnerTeardownSnapshotArgs): {
+  readonly queuedMessageCount: number;
+  readonly backgroundItemCount: number;
+} {
+  if (args.ownerKind !== "chat") {
+    return { queuedMessageCount: 0, backgroundItemCount: 0 };
+  }
+  const handle = getChatSessionRegistry().peek(
+    args.epicId,
+    args.ownerId,
+    args.hostId,
+  );
+  const state = handle?.store.getState();
+  return {
+    queuedMessageCount: state?.queue.items.length ?? 0,
+    backgroundItemCount: state?.backgroundItems?.length ?? 0,
+  };
 }
