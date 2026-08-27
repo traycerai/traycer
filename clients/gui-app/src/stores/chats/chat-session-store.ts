@@ -715,6 +715,16 @@ export interface ChatSessionState {
    */
   readonly accumulatedFileChangeCount: number;
   /**
+   * Rows rewritten while their span was EVICTED, so the rewrite was dropped.
+   *
+   * Provenance, not content: the body itself is recovered by the next
+   * hydration. What this preserves is that the row's next appearance is NEWS
+   * rather than history - see `rewriteMessageInPlace` and
+   * `ChatAnnouncementsInput.coldRewrittenMessageIds`. Empty on the legacy
+   * line, which evicts nothing.
+   */
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
+  /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
    * Separate from {@link accumulatedFileChanges} rather than replacing it,
@@ -1937,6 +1947,22 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     const applyBufferedDeltas = (): void => {
       if (bufferedDeltas.length === 0) return;
+      // HELD, not dropped, while a windowed snapshot waits for its tail.
+      //
+      // The deferral publishes the snapshot's `aux` but deliberately not its
+      // `activeTurn`, and no assistant row is seated yet - so a delta folded
+      // now has nothing to attach to and `applyBlockDelta` discards it. That
+      // is a permanent loss for the one delta that cannot be recovered from
+      // anywhere else: the oversized tail travels on the BULK lane, so a delta
+      // can overtake a range response that was sliced BEFORE the delta
+      // existed, leaving it absent from the live stream and from the
+      // hydration. The reader then sees a live turn missing a span of its own
+      // output until the next turn boundary rewrites the row.
+      //
+      // Nothing here bounds the buffer, and that is the existing contract: it
+      // is drained by the flush coordinator's tick on every non-deferred beat,
+      // and a deferral resolves on the very next range response.
+      if (deferredWindowedSnapshot !== null) return;
       const batch = bufferedDeltas;
       bufferedDeltas = [];
       if (disposed) return;
@@ -2471,6 +2497,22 @@ export function createChatSessionStoreWithNotificationDependencies(
      * already pays for, since an unrecorded response is discarded, never
      * seated.
      */
+    /**
+     * The summary re-stream this client is currently assembling.
+     *
+     * `-1` rather than 0 so the FIRST generation the host sends (1) is already
+     * a change - a client starting at 0 would match generation 0 and accept a
+     * mid-stream chunk before ever seeing an index-0 one.
+     *
+     * Compared for INEQUALITY, never for ordering. The counter is the host's
+     * PER-SUBSCRIBER one, so a reconnect mints a fresh subscriber that starts
+     * over at 1 - lower than whatever this client accumulated on the previous
+     * connection. What matters is only "is this the stream I am assembling",
+     * and a `>` test here would reject every chunk after a reconnect and leave
+     * the panel permanently empty.
+     */
+    let accumulatedSummaryGeneration = -1;
+
     const outstandingHydrationRequests = new Map<
       string,
       OutstandingHydrationRequest
@@ -2602,9 +2644,18 @@ export function createChatSessionStoreWithNotificationDependencies(
      *
      * - The skeleton is owed until `skeletonComplete`, which only a chunk
      *   carrying `isFinal` sets, and only once its coverage agrees.
-     * - The summaries are owed while fewer are assembled than
+     * - The summaries are owed while the assembled count DISAGREES with
      *   `accumulatedFileChangeCount` - self-gating, because a chat with no
-     *   accumulated changes promises none and `0 < 0` is false.
+     *   accumulated changes promises none and `0 !== 0` is false.
+     *
+     * Any mismatch, not just a short prefix. A revert LOWERS the count, and
+     * the snapshot path deliberately retains the previous summary array until
+     * a replacement chunk starting at index 0 arrives - so if that first
+     * replacement chunk is dropped, the retained array is LONGER than the
+     * count it is being measured against. A `<` reads that as complete,
+     * disarms the watchdog, and leaves reverted paths and stale digests in
+     * the panel for the rest of the connection. Overshoot is exactly as much
+     * evidence of a broken stream as shortfall.
      *
      * Neither can indict a healthy chat, because the only state that reads as
      * incomplete is one where a resnapshot genuinely repairs something:
@@ -2616,7 +2667,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const state = get();
       if (!state.transcriptWindow.skeletonComplete) return true;
       return (
-        state.accumulatedFileChangeSummaries.length <
+        state.accumulatedFileChangeSummaries.length !==
         state.accumulatedFileChangeCount
       );
     };
@@ -2714,10 +2765,19 @@ export function createChatSessionStoreWithNotificationDependencies(
      * Drop every outstanding request's staleness record, so any answer still
      * on the wire is discarded rather than seated.
      *
-     * For the coordinate-space resets only. A snapshot re-frames the window
-     * and a downgrade leaves the windowed line entirely; in both, an ordinal
-     * an outstanding request was framed against no longer denotes the row it
-     * did when the request was sent, and no per-response check can notice.
+     * For the coordinate-space resets only, and "a snapshot arrived" is NOT
+     * one of them. A downgrade leaves the windowed line entirely, and a
+     * snapshot that REBASED (new epoch) or voided the index re-frames every
+     * ordinal - in those, an ordinal an outstanding request was framed against
+     * no longer denotes the row it did when the request was sent, and no
+     * per-response check can notice.
+     *
+     * A same-epoch snapshot is a different animal and calling this for one is
+     * a bug with a plausible comment: aux-only rebroadcasts come through the
+     * same handler, preserve every span, and can overtake a large `loadRange`
+     * answer on the BULK lane. Clearing then makes that still-valid answer
+     * arrive untracked, `rangeResponseIsStale` rejects it, and a steady drip of
+     * approvals or queue changes can discard every slow response in turn.
      */
     const forgetOutstandingHydration = (): void => {
       outstandingHydrationRequests.clear();
@@ -3202,6 +3262,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // but a LATER re-upgrade must start from the same blank state a
             // fresh store does.
             accumulatedFileChangeCount: 0,
+            coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
             accumulatedFileChangeSummaries: [],
           },
           // A downgrade frame is a LEGACY snapshot - full records - so the
@@ -3257,11 +3318,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         // See the field's own doc: a snapshot means a (re)connection settled,
         // and any request the previous connection had in flight is gone.
         clearInFlightHydration();
-        // Its answer is gone with it - a response cannot cross onto the new
-        // connection - and the snapshot re-frames the window regardless, so
-        // the records would only be able to admit an answer framed against
-        // the window this one replaces.
-        forgetOutstandingHydration();
+        // NOT `forgetOutstandingHydration()` unconditionally - see below. A
+        // snapshot is not only a reconnection on this line: an aux-only
+        // rebroadcast (a queue change, an approval) arrives through this same
+        // handler at the SAME epoch and preserves every span, and discarding
+        // the ledger for one makes a large `loadRange` answer still travelling
+        // on the BULK lane arrive untracked and be rejected as stale. Repeated
+        // aux snapshots could therefore discard every slow response in turn and
+        // leave the visible gap unhydrated indefinitely.
+        const epochBeforeSnapshot = get().transcriptWindow.epoch;
         // A fresh snapshot IS the answer an invalidated window was waiting
         // for, whether or not this one was sent in reply to that request.
         clearResnapshotRequest();
@@ -3279,6 +3344,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           applyWindowedSnapshot(get().transcriptWindow, {
             epoch: frame.snapshot.transcriptEpoch,
             rowCount: frame.snapshot.rowCount,
+            indexRevision: frame.snapshot.indexRevision,
             tail: frame.snapshot.tail,
           }),
           TRANSCRIPT_WINDOW_MAX_BYTES,
@@ -3292,6 +3358,18 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.snapshot.pendingInterviews,
           ),
         );
+        // NOW the ledger decision, with the applied window in hand. An
+        // outstanding request's ordinals stop denoting the rows they were
+        // framed against exactly when the COORDINATE SPACE moves - which is
+        // what the epoch versions - or when this snapshot voided the index
+        // outright. In those two cases no per-response check could notice the
+        // mismatch, so the records have to go. In every other case the
+        // ordinals still mean what they meant and a slow answer is still a
+        // valid answer.
+        const rebased = window.epoch !== epochBeforeSnapshot;
+        if (rebased || window.invalidated) {
+          forgetOutstandingHydration();
+        }
         // The window and the snapshot's aux ride the fold's own `set` (or the
         // deferral's single `set`) rather than being published here first - a
         // beat of "new spans, old rendered models" reads to the row merge as
@@ -3300,6 +3378,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           transcriptWindow: window,
           transcriptDerived: frame.snapshot.derived,
           accumulatedFileChangeCount: frame.snapshot.accumulatedFileChangeCount,
+          // A rebase replaces the coordinate space, so a pending "this row was
+          // rewritten while cold" note is about rows that no longer exist under
+          // these ordinals. The announcements hook drops its own consumption
+          // record on the same edge.
+          ...(rebased
+            ? { coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS }
+            : {}),
           // Deliberately NOT resetting `accumulatedFileChangeSummaries` here.
           //
           // A re-stream already resets it: the host chunks the whole set from
@@ -3364,6 +3449,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         const window = applyIndexChange(get().transcriptWindow, {
           epoch: frame.epoch,
           rowCount: frame.rowCount,
+          indexRevision: frame.indexRevision,
           changes: frame.changes,
         });
         publishWindowedTranscript(window, null);
@@ -3434,6 +3520,12 @@ export function createChatSessionStoreWithNotificationDependencies(
             transcriptWindow: window,
             ...hydrated,
           });
+          // Whatever arrived while the snapshot was held. Only once it is
+          // actually seated - `applyOrDeferWindowedSnapshot` can defer AGAIN if
+          // this response was not the tail it was waiting for, and flushing
+          // then would fold the deltas into the same empty state the hold
+          // exists to keep them out of.
+          if (deferredWindowedSnapshot === null) flushBlockDeltas();
         }
         requestPlannedHydration();
       },
@@ -3477,6 +3569,27 @@ export function createChatSessionStoreWithNotificationDependencies(
         // starting at 0 begins a fresh set and any other extends the one being
         // assembled. Splicing at `fromIndex` rather than appending makes a
         // re-sent chunk idempotent instead of duplicating its entries.
+        // Which re-stream this client is assembling. A chunk from a LATER
+        // generation than the one in hand is only seatable at index 0, which is
+        // where every generation starts; anything else means its predecessors -
+        // including that index-0 chunk - were dropped.
+        //
+        // This is the case the gap check below cannot see. The client retains
+        // the previous generation's array until a replacement at index 0
+        // arrives, so when a file changes without changing the COUNT that array
+        // is still at the authoritative length: a later chunk's `fromIndex` is
+        // not greater than it, and it splices cleanly into the wrong
+        // generation. The result is a prefix of the old set with a suffix of
+        // the new one, whose stale digests make every content fetch return
+        // `stale`, and both the gap check and the count watchdog read it as
+        // healthy.
+        if (frame.chunk.generation !== accumulatedSummaryGeneration) {
+          if (frame.chunk.fromIndex !== 0) {
+            requestSummaryRestream();
+            return;
+          }
+          accumulatedSummaryGeneration = frame.chunk.generation;
+        }
         set((state) => {
           const assembled = state.accumulatedFileChangeSummaries;
           // A chunk starting PAST the end is a chunk whose predecessor was
@@ -4584,6 +4697,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       transcriptWindow: emptyTranscriptWindow(),
       transcriptDerived: null,
       accumulatedFileChangeCount: 0,
+      coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
       accumulatedFileChangeSummaries: [],
       backgroundItems: undefined,
       managedCommands: [],
@@ -6522,6 +6636,38 @@ function pendingInterviewOrdinalsOf(
  * on every buffered delta - see `unsettledByteMessageIds` in
  * `transcript-window`.
  */
+/**
+ * `state.coldRewrittenMessageIds` with one more id, bounded.
+ *
+ * A new Set per call, because the value is state and the store's consumers
+ * compare identities. The cap is what keeps this from being a leak on a long
+ * session: the set exists only so a row's FIRST post-hydration appearance can
+ * be classified, and the oldest entries are the ones least likely to still be
+ * waiting for that. Dropping one costs a missed announcement, never
+ * correctness.
+ */
+const MAX_COLD_REWRITTEN_MESSAGE_IDS = 256;
+
+/** Stable empty identity, so a reset does not look like a change. */
+const EMPTY_COLD_REWRITTEN_IDS: ReadonlySet<string> = new Set();
+
+function withColdRewrite(
+  state: ChatSessionState,
+  messageId: string,
+): ReadonlySet<string> {
+  if (state.coldRewrittenMessageIds.has(messageId)) {
+    return state.coldRewrittenMessageIds;
+  }
+  const next = new Set(state.coldRewrittenMessageIds);
+  next.add(messageId);
+  while (next.size > MAX_COLD_REWRITTEN_MESSAGE_IDS) {
+    const oldest = next.values().next();
+    if (oldest.done === true) break;
+    next.delete(oldest.value);
+  }
+  return next;
+}
+
 function rewriteMessageInPlace(
   state: ChatSessionState,
   messageId: string,
@@ -6541,7 +6687,20 @@ function rewriteMessageInPlace(
     charge === "deferred"
       ? streamWindowMessage(state.transcriptWindow, messageId, update)
       : updateWindowMessage(state.transcriptWindow, messageId, update);
-  if (!applied.held) return null;
+  if (!applied.held) {
+    // The row's span is evicted, so the delta is deliberately dropped: the
+    // persisted host body carries it at the next hydration. What is NOT
+    // recoverable is the fact that it happened - the row then first becomes
+    // observable across a hydration-sequence bump, which every consumer reads
+    // as "history arriving late". For the announcements hook that is the
+    // difference between a screen-reader user hearing a detached background
+    // task complete and never learning of it at all.
+    //
+    // Recorded rather than announced here: this is a pure reducer over a
+    // record, and which of these is worth saying out loud is the hook's
+    // question, not this function's.
+    return { coldRewrittenMessageIds: withColdRewrite(state, messageId) };
+  }
   return {
     transcriptWindow: applied.window,
     // `messages` only: republishing `events` from the same fold would hand

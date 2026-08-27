@@ -30,7 +30,17 @@ import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
  */
 
 function entry(rowId: string, preview: string): RowSkeletonEntry {
-  return { rowId, createdAt: 1_000, role: "user", byteLength: 42, preview };
+  // A realistic fixed-width digest: this suite measures ENCODED bytes, so an
+  // entry missing a field every real entry carries would understate the budget
+  // it is asserting.
+  return {
+    rowId,
+    createdAt: 1_000,
+    role: "user",
+    byteLength: 42,
+    bodyDigest: "1z141z30000000",
+    preview,
+  };
 }
 
 /** What the chunk's `entries` array actually costs on the wire. */

@@ -4,8 +4,13 @@ import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
 
 import { utf8ByteLength } from "@traycer/protocol/utils/text/utf8";
+import {
+  finishContentFingerprint,
+  pushContentFingerprint,
+  startContentFingerprint,
+} from "@traycer/protocol/utils/text/digest";
 import { extractPlainTextFromComposerJSONContent } from "@traycer/protocol/common/composer-plain-text";
-import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import { encodeRecord } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   buildTranscriptRecordLookup,
   type TranscriptRecordLookup,
@@ -151,7 +156,15 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
 }
 
 /**
- * A row's size hint, in bytes.
+ * A row's size hint and its body fingerprint, from ONE encoding pass.
+ *
+ * The two answers are together because they are computed from the same bytes
+ * and the encoding is the expensive part: `JSON.stringify` over every record of
+ * every row is the dominant cost of building a 20k-row skeleton, and doing it
+ * once per row for the length and again for the digest would double it to
+ * produce two views of one string.
+ *
+ * ## The size half
  *
  * Charged per ROW, not per record: an assistant turn's records are shared by
  * every slice of that turn, so billing each slice the whole turn would
@@ -160,55 +173,95 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
  * `blockIds` provenance exists for.
  *
  * A hint, never a contract - see `byteLength`'s doc on the schema.
+ *
+ * ## The fingerprint half
+ *
+ * Over exactly the same material, deliberately: the digest's job is to catch
+ * the body changes `byteLength` cannot express, so a digest computed over a
+ * DIFFERENT set of records than the length would leave a gap between the two
+ * that neither one covers.
+ *
+ * A record the lookup cannot resolve contributes nothing to the length and a
+ * MARKER to the digest. Those are different questions and the answers are
+ * deliberately different: a missing record is worth zero bytes of height, but a
+ * record that disappears - a checkpoint removing a steered user message, say -
+ * is a body change, and folding it to "nothing" would make the row's before and
+ * after fingerprint identically.
  */
-function rowByteLength(
+interface RowBodyFingerprint {
+  readonly byteLength: number;
+  readonly bodyDigest: string;
+}
+
+/** Absorbed where a record was expected and not found. See above. */
+const ABSENT_RECORD_MARKER = " absent";
+
+function rowBodyFingerprint(
   source: TranscriptRowSource,
   lookup: TranscriptRecordLookup,
   blocksById: ReadonlyMap<string, ContentBlock>,
-): number {
-  switch (source.kind) {
-    case "user": {
-      const message = lookup.messagesById.get(source.messageId);
-      return message === undefined ? 0 : recordByteLength(message);
+): RowBodyFingerprint {
+  const digest = startContentFingerprint();
+  let byteLength = 0;
+
+  const absorbRecord = (record: Message | ChatEvent | undefined): void => {
+    if (record === undefined) {
+      pushContentFingerprint(digest, ABSENT_RECORD_MARKER);
+      return;
     }
+    const encoded = encodeRecord(record);
+    byteLength += utf8ByteLength(encoded);
+    pushContentFingerprint(digest, encoded);
+  };
+
+  const absorbBlocks = (blockIds: readonly string[]): void => {
+    for (const blockId of blockIds) {
+      const block = blocksById.get(blockId);
+      if (block === undefined) {
+        pushContentFingerprint(digest, ABSENT_RECORD_MARKER);
+        continue;
+      }
+      const encoded = JSON.stringify(block);
+      byteLength += utf8ByteLength(encoded);
+      pushContentFingerprint(digest, encoded);
+    }
+  };
+
+  switch (source.kind) {
+    case "user":
+      absorbRecord(lookup.messagesById.get(source.messageId));
+      break;
     case "assistant-slice":
-      return blockBytes(source.blockIds, blocksById);
-    case "steer": {
+      absorbBlocks(source.blockIds);
+      break;
+    case "steer":
       // BOTH, summed: `rowRecordIds` serves the turn's records and the steered
       // user record for this row, and the renderer draws the steer block
       // (badge, mode, sender) above the message itself. Returning only the
       // message under-reports the row, and the list turns that hint into a
       // placeholder height - so the row reserves too little space and the
       // transcript jumps when the body lands.
-      const block = blockBytes([source.blockId], blocksById);
-      if (source.steeredMessageId === null) return block;
-      const message = lookup.messagesById.get(source.steeredMessageId);
-      return message === undefined ? block : block + recordByteLength(message);
-    }
+      absorbBlocks([source.blockId]);
+      // An ORPHANED steer has no steered record to name at all, which is a
+      // different row from one whose record is merely unresolvable - so it
+      // absorbs nothing rather than the absent marker.
+      if (source.steeredMessageId !== null) {
+        absorbRecord(lookup.messagesById.get(source.steeredMessageId));
+      }
+      break;
     case "stopped-turn":
     case "forked-chat-link":
-    case "notification-anchor": {
-      const event = lookup.eventsById.get(source.eventId);
-      return event === undefined ? 0 : recordByteLength(event);
-    }
+    case "notification-anchor":
+      absorbRecord(lookup.eventsById.get(source.eventId));
+      break;
     case "setup-card":
-      return source.eventIds.reduce((total, eventId) => {
-        const event = lookup.eventsById.get(eventId);
-        return event === undefined ? total : total + recordByteLength(event);
-      }, 0);
+      for (const eventId of source.eventIds) {
+        absorbRecord(lookup.eventsById.get(eventId));
+      }
+      break;
   }
-}
 
-function blockBytes(
-  blockIds: readonly string[],
-  blocksById: ReadonlyMap<string, ContentBlock>,
-): number {
-  return blockIds.reduce((total, blockId) => {
-    const block = blocksById.get(blockId);
-    return block === undefined
-      ? total
-      : total + utf8ByteLength(JSON.stringify(block));
-  }, 0);
+  return { byteLength, bodyDigest: finishContentFingerprint(digest) };
 }
 
 function blocksByIdFrom(
@@ -326,11 +379,13 @@ export function buildRowSkeleton(
     const isLastOfTurn =
       source.kind === "assistant-slice" &&
       lastRowIndexByTurn.get(source.turnKey) === index;
+    const body = rowBodyFingerprint(source, lookup, blocksById);
     return {
       rowId: row.rowId,
       createdAt: row.createdAt,
       role: rowRole(source),
-      byteLength: rowByteLength(source, lookup, blocksById),
+      byteLength: body.byteLength,
+      bodyDigest: body.bodyDigest,
       ...(preview === undefined ? {} : { preview }),
       ...(human.sentByAgent ? { sentByAgent: true } : {}),
       ...((): { usage?: RowSkeletonEntry["usage"] } => {

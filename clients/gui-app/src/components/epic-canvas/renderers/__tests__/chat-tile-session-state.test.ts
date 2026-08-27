@@ -1191,6 +1191,7 @@ function windowedLine(input: {
       restorableSetupInterruption: null,
       interviewAnswerability: [],
       latestAssistantAuthFailureTurnKey: null,
+      setupCardWindows: [],
     },
   };
 }
@@ -1199,7 +1200,7 @@ function skeletonEntry(
   rowId: string,
   role: RowSkeletonEntry["role"],
 ): RowSkeletonEntry {
-  return { rowId, createdAt: 0, role, byteLength: 10 };
+  return { rowId, createdAt: 0, role, byteLength: 10, bodyDigest: "d0" };
 }
 
 describe("shouldGenerateChatTitleForSubmittedMessage", () => {
@@ -1476,5 +1477,6 @@ function derivedWith(
     restorableSetupInterruption: null,
     interviewAnswerability: [],
     latestAssistantAuthFailureTurnKey: null,
+    setupCardWindows: [],
   };
 }

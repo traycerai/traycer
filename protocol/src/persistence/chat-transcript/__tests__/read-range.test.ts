@@ -100,6 +100,7 @@ function sliceRows(
       split: true,
       synthesizedBoundary: false,
       decoratingEventIds: [],
+      steeredMessageIds: [],
     },
     context: {},
   }));

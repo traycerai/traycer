@@ -10,6 +10,7 @@ import {
   seedTaskTodoState,
   type ParsedTaskTodo,
 } from "@traycer/protocol/host/agent/gui/task-todo-tools";
+import { assistantRowTurnKey } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 
 export interface PinnedTodoSnapshot {
   readonly id: string;
@@ -49,6 +50,12 @@ export type PinnedTodoAuthority =
        * deltas address.
        */
       readonly taskItems: ReadonlyArray<SegmentTodoItem>;
+      /**
+       * The running turn's key, or `null` when none is running.
+       *
+       * The LIVE-TURN MEMBERSHIP test - see {@link hostAuthorityPinnedTodo}.
+       */
+      readonly activeTurnId: string | null;
     };
 
 type TodoSegmentModel = Extract<MessageSegment, { kind: "todo" }>;
@@ -88,7 +95,12 @@ export function buildPinnedTodoRenderState(
 ): PinnedTodoRenderState {
   const derived: DerivedPinnedTodo =
     authority.kind === "host"
-      ? hostAuthorityPinnedTodo(messages, authority.todo, authority.taskItems)
+      ? hostAuthorityPinnedTodo(
+          messages,
+          authority.todo,
+          authority.taskItems,
+          authority.activeTurnId,
+        )
       : derivePinnedTodo(messages, EMPTY_PINNED_TODO_SEED);
   const filtered = messages
     .map((message) => {
@@ -162,13 +174,43 @@ function filteredMessagesChanged(
  * together are what make the overlay agree with the legacy fold on both a
  * create-bearing turn and an update-only one.
  */
+/**
+ * Whether this row is part of the turn running right now.
+ *
+ * Turn MEMBERSHIP, not `runState !== null`, and the difference is a whole
+ * slice. The renderer puts `runState` on the trailing assistant slice only, so
+ * a turn split by a safe-point steer has a pre-steer slice with no `runState` -
+ * and that is exactly where the turn's `TaskCreate` lives when the task was
+ * created before the steer. Filtering on `runState` dropped it, so the trailing
+ * `TaskUpdate` looked for a task the seed had never heard of: the host's own
+ * seed predates the live tool call (derived snapshots update at turn
+ * boundaries), so nothing had it. The dock then fell back to the stale host
+ * todo, or emptied, until the turn settled.
+ *
+ * Matched through `assistantRowTurnKey` rather than a local parse of the row
+ * id, for the reason the projection module keeps that helper exported: a second
+ * implementation of the id format is the drift it exists to prevent.
+ */
+function liveTurnSlice(
+  message: ChatMessageModel,
+  activeTurnId: string | null,
+): boolean {
+  if (activeTurnId === null) return message.runState !== null;
+  // `runState` still counts on its own: the LIVE row is synthesized with the
+  // `assistant:live` id before the turn's real key is known, so a membership
+  // test alone would drop the very row the deltas are arriving on.
+  if (message.runState !== null) return true;
+  return assistantRowTurnKey(message.id) === activeTurnId;
+}
+
 function hostAuthorityPinnedTodo(
   messages: ReadonlyArray<ChatMessageModel>,
   hostTodo: PinnedTodoSnapshot | null,
   hostTaskItems: ReadonlyArray<SegmentTodoItem>,
+  activeTurnId: string | null,
 ): DerivedPinnedTodo {
   const live = derivePinnedTodo(
-    messages.filter((message) => message.runState !== null),
+    messages.filter((message) => liveTurnSlice(message, activeTurnId)),
     {
       taskItems: hostTaskItems,
       resetOnFirstCreate: true,

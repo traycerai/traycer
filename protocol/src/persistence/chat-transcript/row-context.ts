@@ -95,6 +95,22 @@ export const transcriptRowContextSchema = z.object({
    */
   setupWindowIndex: z.number().int().nonnegative().optional(),
   setupWindowIsActive: z.boolean().optional(),
+  /**
+   * This user row completed an interrupt-restart steer, so it renders the
+   * steer badge.
+   *
+   * A running fold over the chat's `queue.*` lifecycle
+   * (`steeredMessageIdsFromEvents`), which a later `queue.fallback` can
+   * retract - so the answer depends on events arbitrarily far from the row and
+   * `rowRecordIds` cannot bound them. A user row is served with its message and
+   * NO events at all, so a client hydrating one from cold history re-derives
+   * "not steered" and drops a badge the live session showed.
+   *
+   * Carried only when TRUE, like the other flags here: `false` is what the
+   * renderer's own fold already produces from an isolated span, so speaking it
+   * would be bytes asserting the answer the reader reaches anyway.
+   */
+  completedSteer: z.boolean().optional(),
 });
 
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;

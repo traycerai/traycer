@@ -404,6 +404,7 @@ const CANONICAL_RENDERED_MESSAGES_INPUT: RenderedMessagesInput = {
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 

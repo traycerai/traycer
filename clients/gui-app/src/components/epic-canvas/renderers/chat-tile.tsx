@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -236,6 +237,14 @@ const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 // click. Not tied to the send settling - just long enough that a double-click
 // or double-tap can't fire the compaction twice.
 const COMPACT_ACTION_LOCK_MS = 1500;
+
+/**
+ * Stable identity for the legacy line's "no whole-log partition".
+ *
+ * A fresh `[]` per render would change the identity of a `useMemo` dependency
+ * every time and re-partition the setup lifecycle on every streamed token.
+ */
+const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 
 /** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
 interface CompactChatState {
@@ -1129,10 +1138,12 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 tabHostId={view.tabHostId}
                 workspaceRoots={view.linkResolutionRoots}
                 messages={view.messages}
+                activeTurnId={view.activeTurnId}
                 transcriptWindow={view.transcriptWindow}
                 onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}
                 baselineEpoch={view.transcriptBaselineEpoch}
                 hydrationSequence={view.transcriptHydrationSequence}
+                coldRewrittenMessageIds={view.coldRewrittenMessageIds}
                 backgroundItems={view.lower.backgroundItems}
                 scrollRequest={backgroundScrollRequest}
                 surfaceVisible={view.surfaceVisible}
@@ -1561,6 +1572,11 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       // Published in the same `set` as `messages`, so the rows and what they
       // render WITH can never be a frame apart - see `row-context.ts`.
       rowContext: state.transcriptRowContext,
+      // Chat-level rather than per-row, and that is forced: a setup card's row
+      // id contains the window index, so a client that renumbered cannot look
+      // its own correction up by row id. See `adoptWholeLogIdentity`.
+      setupCardWindows:
+        state.transcriptDerived?.setupCardWindows ?? EMPTY_SETUP_CARD_WINDOWS,
       pendingUserMessages: state.pendingUserMessages,
       liveAssistantMessage: state.liveAssistantMessage,
       activeTurn: state.activeTurn,
@@ -1847,9 +1863,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
               kind: "host",
               todo: state.transcriptDerived.pinnedTodo,
               taskItems: state.transcriptDerived.pinnedTaskTodoItems,
+              activeTurnId,
             },
       ),
-    [displayedMessages, state.transcriptDerived],
+    [displayedMessages, state.transcriptDerived, activeTurnId],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -2587,10 +2604,12 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     snapshotLoaded: state.snapshotLoaded,
     transcriptBaselineEpoch: state.transcriptBaselineEpoch,
     transcriptHydrationSequence: state.transcriptHydrationSequence,
+    coldRewrittenMessageIds: state.coldRewrittenMessageIds,
     fatalClose: state.fatalClose,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
+    activeTurnId,
     // Same line discriminator as the revert-scope resolution above: on the
     // legacy line the window is an inert empty value whose `rowCount` of 0
     // would make the merge treat every rendered row as an unplaced tail row.
@@ -2638,6 +2657,11 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  /**
+   * The running turn's id, or `null`. Seeds the "thinking" verb - see the pick
+   * below for why it is the turn and not a count over `messages`.
+   */
+  readonly activeTurnId: string | null;
   /** The transcript index on the windowed line; `null` on the legacy line.
    *  See `ChatMessagesProps.transcriptWindow`. */
   readonly transcriptWindow: TranscriptWindow | null;
@@ -2647,6 +2671,8 @@ interface ChatSessionMessagesSurfaceProps {
   readonly baselineEpoch: number;
   /** Whether a range seated these rows; see `ChatMessages`. */
   readonly hydrationSequence: number;
+  /** Rows rewritten while cold; see `ChatMessages`. */
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
@@ -2708,14 +2734,20 @@ function ChatSessionMessagesSurface(
   // message + real turn state in one transition; there is no optimistic seed.
   if (!props.snapshotLoaded) return <ChatTileLoading />;
   // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
-  // its completed-turn count - NOT the indicator row id, which flips from
+  // the RUNNING TURN's id - NOT the indicator row id, which flips from
   // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise
-  // reshuffle the word. The count only advances when a turn finishes, so it
-  // stays fixed for the whole run while still varying turn-to-turn.
-  const completedTurnCount = props.messages.filter(
-    (message) => message.role === "assistant" && message.completedAt !== null,
-  ).length;
-  const workingVerb = pickWorkingVerb(`${props.node.id}:${completedTurnCount}`);
+  // reshuffle the word.
+  //
+  // And not a completed-turn count over `messages` either, which is what this
+  // was. On the windowed line `messages` is a bounded, evictable slice rather
+  // than the transcript, so that count moved as the reader scrolled through
+  // cold history and the verb changed underneath a running turn - against this
+  // component's own stability guarantee, and visibly. The turn id is stable
+  // for the turn by construction, needs no latch, and keeps the
+  // "different verb per turn" property the count was there to provide.
+  const workingVerb = pickWorkingVerb(
+    `${props.node.id}:${props.activeTurnId ?? ""}`,
+  );
   return (
     <ChatRestoreProvider value={props.restoreContext}>
       <ChatPlanActionsContext.Provider value={props.planActions}>
@@ -2734,6 +2766,7 @@ function ChatSessionMessagesSurface(
               onVisibleOrdinalRangeChange={props.onVisibleOrdinalRangeChange}
               baselineEpoch={props.baselineEpoch}
               hydrationSequence={props.hydrationSequence}
+              coldRewrittenMessageIds={props.coldRewrittenMessageIds}
               backgroundItems={props.backgroundItems}
               scrollRequest={props.scrollRequest}
               getMessageActions={props.getMessageActions}

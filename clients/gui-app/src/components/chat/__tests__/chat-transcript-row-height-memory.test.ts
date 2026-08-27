@@ -13,6 +13,7 @@ function entry(input: {
     createdAt: 1000,
     role: input.role,
     byteLength: input.byteLength,
+    bodyDigest: "d0",
   };
 }
 

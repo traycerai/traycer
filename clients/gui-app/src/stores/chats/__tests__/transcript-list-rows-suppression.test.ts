@@ -33,7 +33,13 @@ function model(id: string): ChatMessageModel {
 }
 
 function entry(rowId: string): RowSkeletonEntry {
-  return { rowId, createdAt: 1000, role: "assistant", byteLength: 32 };
+  return {
+    rowId,
+    createdAt: 1000,
+    role: "assistant",
+    byteLength: 32,
+    bodyDigest: `d-${rowId}`,
+  };
 }
 
 function span(fromOrdinal: number, rowIds: readonly string[]): HydratedSpan {

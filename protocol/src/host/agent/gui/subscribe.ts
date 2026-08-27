@@ -2668,6 +2668,24 @@ export const chatWindowedSnapshotSchema = z.object({
    */
   rowCount: z.number().int().nonnegative(),
   /**
+   * The index revision this snapshot's skeleton corresponds to - see the same
+   * field on the `indexChanged` frame.
+   *
+   * Present on EVERY snapshot, including an aux-only rebroadcast that
+   * restreams no skeleton, and that is the case it is for: it is how a client
+   * holding a same-epoch skeleton learns that deltas were emitted against it
+   * which the client never saw. Without it a lost update-only frame followed
+   * by any number of auxiliary snapshots leaves the client's stale body
+   * looking perfectly current on both sides.
+   *
+   * `null` means the host holds no index for this subscriber and is about to
+   * stream a fresh skeleton - a bootstrap, or a rebuild after a `resnapshot`.
+   * There is nothing to compare against then, and a client that treated it as
+   * a gap would void the window the chunks are about to fill and request
+   * another resnapshot for it, which is a loop.
+   */
+  indexRevision: z.number().int().nonnegative().nullable(),
+  /**
    * The hydrated tail. Always present, because the tail is where a live turn
    * happens and the client must paint it without a round trip.
    */
@@ -2713,6 +2731,35 @@ const chatSubscribeIndexChangedServerFrameSchema = z.object({
   epoch: z.number().int().nonnegative(),
   /** Row count after the change, kept in step with the snapshot's field. */
   rowCount: z.number().int().nonnegative(),
+  /**
+   * A per-epoch counter of index deltas, incremented by every frame the host
+   * emits and restarted at 0 by the snapshot that seats a fresh index.
+   *
+   * ## What it makes detectable
+   *
+   * The pump is allowed to drop a queued frame on a non-deterministic send
+   * failure while the stream survives, and backpressure compaction drops
+   * queued `indexChanged` frames by design. For an `appended` change the loss
+   * is self-announcing: `rowCount` moves, and the client's own append
+   * accounting notices it.
+   *
+   * An `updated`-only change moves NOTHING observable. Same epoch (an update
+   * renumbers no ordinal), same `rowCount` (it adds no row), and later
+   * same-epoch snapshots retain the existing skeleton rather than restreaming
+   * it. So a lost update-only frame left the client rendering a superseded
+   * body indefinitely - and a visible row's span is protected from eviction,
+   * so the ordinary churn that would have refetched it never fires either.
+   *
+   * A client that sees a gap here re-requests the index instead. Cheap enough
+   * to spend on every frame: one small integer against the alternative of a
+   * transcript that is quietly wrong at one row.
+   *
+   * Deliberately NOT the epoch. The epoch versions the coordinate SPACE, and
+   * conflating "your ordinals moved" with "you missed an edit" would force a
+   * full rebase for a one-row body change - the O(history) frame this whole
+   * line exists to remove.
+   */
+  indexRevision: z.number().int().nonnegative(),
   /**
    * Every change this frame applies, atomically. See
    * {@link chatIndexChangeSchema} for why a mutation is routinely two of them

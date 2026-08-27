@@ -11,7 +11,11 @@ import {
 } from "@/lib/chat/event-metadata";
 // The lifecycle windowing is shared with the host, which reserves an ordinal
 // per window - see `row-projection.ts`.
-import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import {
+  partitionSetupCardWindows,
+  type SetupCardWindow,
+} from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
 import type {
   SetupCardViewModel,
@@ -40,6 +44,12 @@ export interface SetupCardBinding {
  */
 export interface SetupCardRow {
   readonly createdAt: number;
+  /**
+   * The window's position in the host's WHOLE-LOG partition - the value the
+   * card's row id is built from, so it must be the host's and never this
+   * client's local index. See {@link adoptWholeLogIdentity}.
+   */
+  readonly windowIndex: number;
   readonly model: SetupCardViewModel;
   /**
    * True only for the lifecycle window still OPEN at the end of the walk - the
@@ -99,19 +109,86 @@ export interface SetupCardRow {
 export function buildSetupCardRows(
   events: ReadonlyArray<ChatEvent>,
   binding: SetupCardBinding,
+  /**
+   * The host's whole-log partition, when this client is on the windowed line.
+   * Empty on the legacy line, where `events` IS the whole log and the local
+   * partition is already authoritative. See {@link adoptWholeLogIdentity}.
+   */
+  wholeLogWindows: ReadonlyArray<SetupCardWindowIdentity>,
 ): ReadonlyArray<SetupCardRow> {
-  return partitionSetupCardWindows(events).map((window) => ({
-    createdAt: window.createdAt,
-    isActive: window.isActive,
-    hasCreatingEvent: window.hasCreatingEvent,
-    triggeringMessageId: window.triggeringMessageId,
-    model: deriveViewModel(
-      window.events,
-      binding,
-      window.createdAt,
-      window.isActive,
-    ),
-  }));
+  const local = partitionSetupCardWindows(events);
+  const identities = adoptWholeLogIdentity(local, wholeLogWindows);
+  return local.map((window, index) => {
+    const identity = identities[index];
+    return {
+      createdAt: window.createdAt,
+      windowIndex: identity.windowIndex,
+      isActive: identity.isActive,
+      hasCreatingEvent: identity.hasCreatingEvent,
+      triggeringMessageId: window.triggeringMessageId,
+      model: deriveViewModel(
+        window.events,
+        binding,
+        window.createdAt,
+        identity.isActive,
+      ),
+    };
+  });
+}
+
+/**
+ * Re-attach each locally-partitioned window to its whole-log identity.
+ *
+ * On the windowed line `events` is a SLICE, so the local partition answers
+ * three questions wrongly and silently: the first window it can see is numbered
+ * 0 whatever its real position, a historically closed window looks active
+ * because the `worktree.missing` boundary that closed it is outside the slice,
+ * and a genesis window can lose its `setup.creating` the same way. The
+ * renumber is the worst of the three, because `windowIndex` is part of the
+ * card's ROW ID - so the card computes an id the skeleton never published, its
+ * ordinal is suppressed, and it draws unplaced at the tail.
+ *
+ * Matched on `createdAt` walking both lists in order, which is sound because
+ * both are chronological and the local one is a SUBSEQUENCE of the host's: a
+ * local window is a set of the host's own window's events, so it anchors at the
+ * same earliest timestamp. Walking rather than a map lookup is what makes two
+ * lifecycles stamped in the same millisecond map one-to-one instead of both
+ * resolving to the first.
+ *
+ * A window with no match keeps its local answer. That is the legacy line (the
+ * host sent no list, so there is nothing to adopt) and the genuinely new window
+ * whose events arrived as live deltas after the last snapshot - in both cases
+ * the local partition is the best answer available, and asserting a wrong index
+ * would be worse than the one it already has.
+ */
+function adoptWholeLogIdentity(
+  local: ReadonlyArray<SetupCardWindow>,
+  wholeLog: ReadonlyArray<SetupCardWindowIdentity>,
+): ReadonlyArray<SetupCardWindowIdentity> {
+  let cursor = 0;
+  return local.map((window, index) => {
+    while (
+      cursor < wholeLog.length &&
+      wholeLog[cursor].createdAt < window.createdAt
+    ) {
+      cursor += 1;
+    }
+    const match =
+      cursor < wholeLog.length &&
+      wholeLog[cursor].createdAt === window.createdAt
+        ? wholeLog[cursor]
+        : null;
+    if (match === null) {
+      return {
+        createdAt: window.createdAt,
+        windowIndex: index,
+        isActive: window.isActive,
+        hasCreatingEvent: window.hasCreatingEvent,
+      };
+    }
+    cursor += 1;
+    return match;
+  });
 }
 
 /**

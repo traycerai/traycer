@@ -23,6 +23,7 @@ import {
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import { partitionSetupCardWindows } from "@traycer/protocol/persistence/chat-transcript/setup-card-windows";
+import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
 
 /**
  * # The transcript row projection
@@ -127,6 +128,15 @@ export type TranscriptRowSource =
        * range reader charges a record once however many rows introduce it.
        */
       readonly decoratingEventIds: readonly string[];
+      /**
+       * Every surviving steered user record of this turn - see the same field
+       * on the `steer` variant.
+       *
+       * On an assistant slice for the same reason `messageIds` is: the
+       * renderer folds the WHOLE turn out of these shared records, so a slice
+       * hydrated without them regenerates the turn's steer rows as orphans.
+       */
+      readonly steeredMessageIds: readonly string[];
     }
   | {
       readonly kind: "steer";
@@ -143,6 +153,25 @@ export type TranscriptRowSource =
        * alone - so its identity comes from a QUEUE ITEM, not a record.
        */
       readonly steeredMessageId: string | null;
+      /**
+       * EVERY surviving steered user record of the turn, not just this row's.
+       *
+       * The turn is the unit the renderer folds, and it folds it out of the
+       * assistant records that {@link messageIds} names - records every row of
+       * the turn shares. So a range that served only this row's own steered
+       * record still hands the renderer the whole turn, minus the other steers'
+       * user messages: it re-derives those rows, finds no record, and treats
+       * them as ORPHANED. An orphan takes its identity from the queue item
+       * (`steer:<queueItemId>`) rather than from the message, so the id
+       * disagrees with the one the skeleton published, its ordinal is
+       * suppressed, and the row draws unplaced at the tail while a placeholder
+       * sits at its real position.
+       *
+       * Shared across the turn's rows exactly as {@link messageIds} and
+       * `decoratingEventIds` are, and free for the same reason: the range
+       * reader charges a record once however many rows name it.
+       */
+      readonly steeredMessageIds: readonly string[];
       /** The steer block itself, inside one of {@link messageIds}. */
       readonly blockId: string;
       readonly queueItemId: string;
@@ -745,6 +774,10 @@ export function projectTranscriptRows(
   const stoppedByTurnKey = turnStoppedInfoByTurnKey(input.events);
   const decoratingEventIdsByTurnKey = decoratingEventIdsByTurn(input.events);
   const overlappingTurnKeys = turnKeysWithLaterOverlappingChanges(input.events);
+  // Whole-history fold: a `queue.fallback` arbitrarily later than the request
+  // retracts the badge, so this cannot be re-derived from a row's own records.
+  // See `TranscriptRowContext.completedSteer`.
+  const completedSteerMessageIds = steeredMessageIdsFromEvents(input.events);
 
   const base: TranscriptRowDescriptor[] = [];
   const emittedTurns = new Set<string>();
@@ -774,7 +807,9 @@ export function projectTranscriptRows(
         rowId: message.messageId,
         createdAt: message.timestamp,
         source: { kind: "user", messageId: message.messageId },
-        context: EMPTY_ROW_CONTEXT,
+        context: completedSteerMessageIds.has(message.messageId)
+          ? { completedSteer: true }
+          : EMPTY_ROW_CONTEXT,
       });
       continue;
     }
@@ -899,6 +934,15 @@ function describeTurnRows(input: {
       : {}),
   };
 
+  // The turn's surviving steered user records, in block order. Computed once
+  // for the whole turn because every row of it names the same set - see
+  // `steeredMessageIds` on the source variants.
+  const steeredMessageIds: readonly string[] = blocks.flatMap((block) =>
+    block.type === "steer" && input.usersById.has(block.messageId)
+      ? [block.messageId]
+      : [],
+  );
+
   const rows: TranscriptRowDescriptor[] = plan.entries.map((entry) => {
     if (entry.kind === "steer") {
       const block = blocks[entry.blockIndex];
@@ -920,6 +964,7 @@ function describeTurnRows(input: {
           messageIds: turn.messageIds,
           steeredMessageId:
             steeredRecord === undefined ? null : block.messageId,
+          steeredMessageIds,
           blockId: block.blockId,
           queueItemId: block.queueItemId,
         },
@@ -938,6 +983,7 @@ function describeTurnRows(input: {
         split: plan.split,
         synthesizedBoundary: false,
         decoratingEventIds,
+        steeredMessageIds,
       },
       context,
     };
@@ -968,6 +1014,7 @@ function describeTurnRows(input: {
         split: true,
         synthesizedBoundary: true,
         decoratingEventIds,
+        steeredMessageIds,
       },
       context,
     });

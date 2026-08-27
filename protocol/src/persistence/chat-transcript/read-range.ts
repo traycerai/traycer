@@ -171,6 +171,22 @@ export interface RowRecordIds {
 const NO_IDS: readonly string[] = [];
 
 /**
+ * `base` widened by `extra`, allocating only when there is something to add.
+ *
+ * The two lists name records of different ROLES - a turn's assistant records
+ * and its steered user records - so they cannot collide, and the range reader
+ * deduplicates its record union regardless. This exists for the empty case:
+ * most turns carry no steers at all, and `rowRecordIds` runs once per row of
+ * every range, so returning the existing array unchanged is worth the branch.
+ */
+function widenedIds(
+  base: readonly string[],
+  extra: readonly string[],
+): readonly string[] {
+  return extra.length === 0 ? base : [...base, ...extra];
+}
+
+/**
  * Which records a row needs.
  *
  * Enumerated per source kind rather than inferred, because a row that under-
@@ -186,18 +202,28 @@ export function rowRecordIds(source: TranscriptRowSource): RowRecordIds {
       // renderer folds into the elapsed counter and the restore affordance.
       // Both must arrive, or hydration succeeds and the row comes back poorer
       // than the one legacy mode draws.
+      //
+      // The turn's STEERED user records travel with it for a different reason:
+      // they are not this row's content at all. The renderer folds the whole
+      // turn out of the shared assistant records, so hydrating any slice of a
+      // steered turn regenerates that turn's steer rows too - and one whose
+      // user record is absent regenerates as an ORPHAN, under a row id built
+      // from the queue item instead of the message. See `steeredMessageIds`.
       return {
-        messageIds: source.messageIds,
+        messageIds: widenedIds(source.messageIds, source.steeredMessageIds),
         eventIds: source.decoratingEventIds,
       };
     case "steer":
       // The turn's records carry the steer BLOCK (badge, mode, sender); the
-      // steered user record, when it survives, carries the message itself.
+      // steered user records carry the messages themselves.
+      //
+      // ALL of the turn's steers, not just this row's: a turn with several of
+      // them folds as one unit, so serving one steered record and withholding
+      // its siblings renders those siblings as orphans at the tail. Two rows of
+      // one turn hydrated separately also then agree about what the turn
+      // contains, which they did not before.
       return {
-        messageIds:
-          source.steeredMessageId === null
-            ? source.messageIds
-            : [...source.messageIds, source.steeredMessageId],
+        messageIds: widenedIds(source.messageIds, source.steeredMessageIds),
         eventIds: NO_IDS,
       };
     case "stopped-turn":

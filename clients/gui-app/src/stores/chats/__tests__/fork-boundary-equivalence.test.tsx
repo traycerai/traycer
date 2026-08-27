@@ -136,6 +136,7 @@ const CANONICAL_INPUT: RenderedMessagesInput = {
   liveAssistantMessage: null,
   activeTurn: null,
   runStatus: "idle",
+  setupCardWindows: [],
   ...BINDING,
 };
 

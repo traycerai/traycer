@@ -64,8 +64,19 @@ export function ChatAccumulatedChangesPanel(
   const [open, setOpen] = useState(false);
   const [confirmUndoAll, setConfirmUndoAll] = useState(false);
   const gate = useMemo(() => revertGate(restore), [restore]);
+  // CONTENT-BEARING rows only. A `hasContents: false` summary has no
+  // before/after to fetch - `fetchableAccumulatedChanges` drops it and the
+  // durable tile has no inline contents for it either - so including it here
+  // makes the bundle's title count sections the tile can never render, and a
+  // bundle of nothing but such rows opens straight into "source unavailable".
+  //
+  // The panel's own list still shows every row: a content-less change is a real
+  // change and the user should see it. It is only unreviewable.
   const filePaths = useMemo(
-    () => changes.map((change) => change.filePath),
+    () =>
+      changes
+        .filter((change) => change.hasContents)
+        .map((change) => change.filePath),
     [changes],
   );
   // Gated on the summary set being COMPLETE, not just on there being one.
@@ -79,7 +90,11 @@ export function ChatAccumulatedChangesPanel(
     () =>
       opener === null ||
       restore.activeTurnStatus !== null ||
-      restore.undeliveredChangeCount > 0
+      restore.undeliveredChangeCount > 0 ||
+      // Nothing reviewable. Offering the action anyway opens a tile with no
+      // sections at all, which reads as a failure rather than as "these
+      // changes have no contents to diff".
+      filePaths.length === 0
         ? null
         : opener.cumulativeBundle(filePaths),
     [

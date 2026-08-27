@@ -130,6 +130,21 @@ interface RoleCalibration {
   count: number;
 }
 
+/**
+ * What a remembered height was measured UNDER.
+ *
+ * Both members re-flow every row, and neither implies the other: a font-size
+ * change can leave the pixel width identical, and a resize does not touch
+ * typography. A basis that named only one of them silently served heights
+ * measured under the other.
+ */
+export interface RowHeightLayoutBasis {
+  /** The transcript container's measured width, in CSS pixels. */
+  readonly width: number;
+  /** The effective root font size the rows are laid out at, in CSS pixels. */
+  readonly fontSizePx: number;
+}
+
 export interface ChatTranscriptRowHeightMemory {
   /**
    * Point the memory at the current row skeleton, which is how a measured row
@@ -159,13 +174,27 @@ export interface ChatTranscriptRowHeightMemory {
    * goes is the off-screen entries whose width no longer applies. A drag
    * re-fills as fast as it clears, so there is no thrash to trade against.
    *
-   * The FIRST call only records the width. LegendList measures inside its own
-   * layout effect, which runs BEFORE the effect that reports width, so the
-   * opening commit's measurements land before any width has been observed -
+   * The FIRST call only records the basis. LegendList measures inside its own
+   * layout effect, which runs BEFORE the effect that reports it, so the
+   * opening commit's measurements land before any basis has been observed -
    * discarding them would throw away the tail calibration that is the only
    * evidence available before the reader has scrolled anywhere.
+   *
+   * ## Width is not the only thing a height was measured under
+   *
+   * TYPOGRAPHY is the other half, and it was missing. Changing the UI font
+   * size rewrites `document.documentElement.style.fontSize`, which re-flows
+   * every row - but the tile can keep exactly the same pixel width, so a
+   * width-only test preserved heights and a pooled calibration factor measured
+   * at the old size. Cold rows then reserved stale space and jumped when they
+   * hydrated, which is the precise failure this memory exists to prevent.
+   *
+   * One method taking both rather than two observers, so a change to both at
+   * once (a settings panel that resizes the tile AND the font) clears once
+   * instead of twice, and so there is exactly one place that defines what a
+   * remembered height is valid UNDER.
    */
-  observeWidth(width: number): void;
+  observeLayoutBasis(basis: RowHeightLayoutBasis): void;
   /**
    * Record a row's REAL measured height.
    *
@@ -205,7 +234,7 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
    * has been reported. `null` is "no baseline yet", never "zero wide" - the
    * first report adopts a width rather than invalidating against it.
    */
-  let layoutWidth: number | null = null;
+  let layoutBasis: RowHeightLayoutBasis | null = null;
 
   const sample = (entry: RowSkeletonEntry, remembered: RememberedRow): void => {
     if (remembered.sampledRole !== null) return;
@@ -267,17 +296,24 @@ export function createChatTranscriptRowHeightMemory(): ChatTranscriptRowHeightMe
       }
     },
 
-    observeWidth(width): void {
+    observeLayoutBasis(basis): void {
       // A zero or non-finite width is a container that has not been laid out -
       // an unmounted tile, a hidden tab - and adopting it as the baseline would
       // make the next real width read as a change and discard a full memory.
-      if (!Number.isFinite(width) || width <= 0) return;
-      if (layoutWidth === null) {
-        layoutWidth = width;
+      // The same argument covers a font size that has not resolved yet.
+      if (!Number.isFinite(basis.width) || basis.width <= 0) return;
+      if (!Number.isFinite(basis.fontSizePx) || basis.fontSizePx <= 0) return;
+      if (layoutBasis === null) {
+        layoutBasis = basis;
         return;
       }
-      if (layoutWidth === width) return;
-      layoutWidth = width;
+      if (
+        layoutBasis.width === basis.width &&
+        layoutBasis.fontSizePx === basis.fontSizePx
+      ) {
+        return;
+      }
+      layoutBasis = basis;
       // The calibration goes with the heights, not just alongside them: the
       // pooled factor is `sum(measured) / sum(estimated)` over rows measured at
       // the OLD width, so keeping it would carry the stale evidence into every

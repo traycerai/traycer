@@ -68,6 +68,7 @@ describe("stable transcript list rows", () => {
       createdAt: 1000,
       role: "assistant",
       byteLength: 16,
+      bodyDigest: "d0",
     };
     const previous = computeStableTranscriptListRows(
       [placeholder("p", 0, entry)],
@@ -98,6 +99,7 @@ describe("stable transcript list rows", () => {
           createdAt: 1000,
           role: "assistant",
           byteLength: 65_536,
+          bodyDigest: "d1",
         }),
       ],
       previous,
@@ -112,6 +114,7 @@ describe("stable transcript list rows", () => {
       createdAt: 1000,
       role: "assistant",
       byteLength: 16,
+      bodyDigest: "d2",
     };
     const previous = computeStableTranscriptListRows(
       [placeholder("r-1", 1, entry)],

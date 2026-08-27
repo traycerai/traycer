@@ -13,11 +13,10 @@ import type {
   ChatApprovalState,
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
-  ChatQueuedItem,
   ChatQueuedPromptItem,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
-import { chatQueuedItemSchema } from "@traycer/protocol/host/agent/gui/subscribe";
+import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-transcript/steer-lifecycle";
 // The ONE comparator. The host numbers rows with it to build the windowed
 // transcript's skeleton, and this is where those ordinals get drawn - so a
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
@@ -47,11 +46,13 @@ import {
   nestedSteeredMessageIds,
   planAssistantTurnRows,
   queueSteerRowId,
+  setupCardRowId,
   turnStoppedInfoByTurnKey,
   type AssistantTurnRowPlan,
   type TurnStoppedInfo,
 } from "@traycer/protocol/persistence/chat-transcript/row-projection";
 import type { TranscriptRowContext } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   isNoOpCheckpointEntry,
   overlappingCheckpointIds,
@@ -148,6 +149,16 @@ export interface RenderedMessagesInput {
    * is already correct.
    */
   readonly rowContext: Readonly<Record<string, TranscriptRowContext>>;
+  /**
+   * `ChatSessionState.setupCardWindows` - the host's WHOLE-LOG setup partition.
+   *
+   * Separate from {@link rowContext} because the repair it makes possible
+   * cannot be keyed by row id: a setup card's row id contains the very window
+   * index the client would be looking the correction up to obtain. Empty on the
+   * legacy line, where the local partition already sees every event. See
+   * `adoptWholeLogIdentity`.
+   */
+  readonly setupCardWindows: ReadonlyArray<SetupCardWindowIdentity>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
   readonly liveAssistantMessage: LiveAssistantMessage | null;
   readonly activeTurn: ChatActiveTurn | null;
@@ -362,99 +373,6 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
       )
       .join("|"),
   ].join(";");
-}
-
-function steeredMessageIdsFromEvents(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlySet<string> {
-  const steeredMessageIds = new Set<string>();
-  const steerRequestMessageIdsByQueueItemId = new Map<string, string>();
-  for (const event of events) {
-    if (event.type === "queue.steerRequested") {
-      if (
-        event.messageId !== null &&
-        event.queueItemId !== null &&
-        isInterruptRestartSteerRequest(event)
-      ) {
-        steeredMessageIds.add(event.messageId);
-        steerRequestMessageIdsByQueueItemId.set(
-          event.queueItemId,
-          event.messageId,
-        );
-      }
-      continue;
-    }
-
-    if (
-      event.type === "queue.fallback" ||
-      event.type === "queue.resumed" ||
-      event.type === "queue.cancelled" ||
-      event.type === "queue.steerAborted"
-    ) {
-      if (event.messageId !== null) {
-        steeredMessageIds.delete(event.messageId);
-      }
-      if (event.queueItemId !== null) {
-        const messageId = steerRequestMessageIdsByQueueItemId.get(
-          event.queueItemId,
-        );
-        if (messageId !== undefined) {
-          steeredMessageIds.delete(messageId);
-          steerRequestMessageIdsByQueueItemId.delete(event.queueItemId);
-        }
-      }
-      for (const item of queueItemsFromEventMetadata(event.metadata)) {
-        if (queueItemHasActiveInterruptRestartSteer(item)) {
-          continue;
-        }
-        // Only prompt items map back to a rendered user message; a
-        // managed-command item has no message to un-badge.
-        if (item.kind === "prompt") {
-          steeredMessageIds.delete(item.messageId);
-        }
-        steerRequestMessageIdsByQueueItemId.delete(item.queueItemId);
-      }
-    }
-  }
-  return steeredMessageIds;
-}
-
-function isInterruptRestartSteerRequest(event: ChatEvent): boolean {
-  if (event.type !== "queue.steerRequested") return false;
-  const requestedItems = queueItemsFromEventMetadata(event.metadata);
-  for (const item of requestedItems) {
-    if (item.queueItemId !== event.queueItemId) continue;
-    // Managed-command items are never steered, so they never carry a request.
-    if (item.kind !== "prompt") return false;
-    return item.steerRequest?.mode === "interrupt_restart";
-  }
-  return false;
-}
-
-function queueItemHasActiveInterruptRestartSteer(
-  item: ChatQueuedItem,
-): boolean {
-  if (item.kind !== "prompt") return false;
-  return (
-    (item.status === "steer_requested" || item.status === "steering") &&
-    item.steerRequest !== null &&
-    item.steerRequest.mode === "interrupt_restart"
-  );
-}
-
-function queueItemsFromEventMetadata(
-  metadata: ChatEvent["metadata"],
-): ReadonlyArray<ChatQueuedItem> {
-  if (metadata === null) return [];
-  const stateItems = metadata["items"];
-  if (Array.isArray(stateItems)) {
-    return stateItems.flatMap((item) => {
-      const parsed = chatQueuedItemSchema.safeParse(item);
-      return parsed.success ? [parsed.data] : [];
-    });
-  }
-  const parsed = chatQueuedItemSchema.safeParse(metadata["item"]);
-  return parsed.success ? [parsed.data] : [];
 }
 
 /**
@@ -1020,8 +938,8 @@ export function useRenderedMessages(
     [input.events, contextByTurnKey],
   );
   const steeredMessageIds = useMemo(
-    () => steeredMessageIdsFromEvents(input.events),
-    [input.events],
+    () => completedSteerMessageIds(input.events, input.rowContext),
+    [input.events, input.rowContext],
   );
   const turnStoppedByTurnKey = useMemo(
     () => turnStoppedInfoByTurnKey(input.events),
@@ -1038,17 +956,26 @@ export function useRenderedMessages(
   const ownerId = input.ownerId;
   const ownerKind = input.ownerKind;
   const viewTabId = input.viewTabId;
+  const setupCardWindows = input.setupCardWindows;
   const setupCardRows = useMemo(
-    () => buildSetupCardRows(input.events, { epicId, ownerId, ownerKind }),
-    [input.events, epicId, ownerId, ownerKind],
+    () =>
+      buildSetupCardRows(
+        input.events,
+        { epicId, ownerId, ownerKind },
+        setupCardWindows,
+      ),
+    [input.events, epicId, ownerId, ownerKind, setupCardWindows],
   );
   // Project each row into its transcript card PLUS the placement signals the
   // final merge needs (anchor target + genesis-pin discriminator), so that merge
   // never has to index `setupCardRows` positionally in parallel with the cards.
   const setupCardEntries = useMemo(
     () =>
-      setupCardRows.map((row, index) => ({
-        message: buildSetupCardMessage(row, ownerId, viewTabId, index),
+      setupCardRows.map((row) => ({
+        // The HOST's window index, not this array's position - see
+        // `adoptWholeLogIdentity`. Indexing positionally here is what made the
+        // card compute a row id the skeleton never published.
+        message: buildSetupCardMessage(row, ownerId, viewTabId),
         anchorId: row.triggeringMessageId,
         hasCreatingEvent: row.hasCreatingEvent,
       })),
@@ -1463,9 +1390,12 @@ function buildSetupCardMessage(
   row: SetupCardRow,
   ownerId: string,
   viewTabId: string,
-  windowIndex: number,
 ): ChatMessageModel {
-  const id = `setup-card:${ownerId}:${windowIndex}:${row.createdAt}`;
+  // THROUGH the shared builder, not a matching template literal beside it. The
+  // id has to be byte-identical to the one the host published or the card is
+  // unplaceable, and a second copy of the format is exactly the drift
+  // `row-projection.ts` keeps this builder exported to prevent.
+  const id = setupCardRowId(ownerId, row.windowIndex, row.createdAt);
   return {
     id,
     role: "system",
@@ -1480,7 +1410,7 @@ function buildSetupCardMessage(
         // `pinGenesisCard` (`!setupCardEntries[0].hasCreatingEvent`) - only
         // window 0 can ever be genesis-pinned, so this is exact, not a guess.
         anchorMessageId: row.triggeringMessageId,
-        isGenesisPin: windowIndex === 0 && !row.hasCreatingEvent,
+        isGenesisPin: row.windowIndex === 0 && !row.hasCreatingEvent,
       },
     ],
     structuredContent: null,
@@ -1870,6 +1800,49 @@ function userMessagesByIdFromMessages(
  * top-level row, so it decides an ordinal. Shared with the host - see
  * `row-projection.ts`.
  */
+/**
+ * Which user rows render the completed-steer badge.
+ *
+ * The local fold over whatever events this client holds, WIDENED by the rows
+ * the host marked. Both halves are load-bearing and neither subsumes the other:
+ *
+ * - The local fold is the only answer for the live tail, whose `queue.*` events
+ *   arrive as deltas rather than through a range.
+ * - The carried flag is the only answer for cold history. `rowRecordIds` serves
+ *   a user row its message and no events at all, so this fold sees nothing to
+ *   badge it with - the badge was present all session and vanished the moment
+ *   the row was evicted and re-hydrated.
+ *
+ * A union rather than a preference, and the asymmetry is deliberate: the host
+ * speaks only when the answer is TRUE (see `completedSteer` on the schema), so
+ * there is no "host says no" to honour - absence is the projection declining to
+ * speak, and this fold is the fallback the schema's contract asks for.
+ *
+ * The one case the union gets arguably wrong is a `queue.fallback` RETRACTING a
+ * badge for a row whose carried context predates the retraction: the local fold
+ * drops it, the stale flag re-adds it. That is bounded rather than permanent -
+ * a retraction lands on a row in the live tail, which is re-published with fresh
+ * context on the next snapshot - and it is the same context-staleness every
+ * field on this channel has, since `TranscriptRowContext` rides the RANGE and a
+ * context-only change moves no skeleton field. The alternative is dropping the
+ * badge from all cold history, which is the bug.
+ */
+function completedSteerMessageIds(
+  events: ReadonlyArray<ChatEvent>,
+  rowContext: Readonly<Record<string, TranscriptRowContext>>,
+): ReadonlySet<string> {
+  const folded = steeredMessageIdsFromEvents(events);
+  const carried = Object.keys(rowContext).filter(
+    (rowId) => rowContext[rowId].completedSteer === true,
+  );
+  if (carried.length === 0) return folded;
+  // A user row's id IS its message id, which is what makes this lookup direct
+  // rather than a parse - `completedSteer` is only ever set on a user row.
+  const widened = new Set(folded);
+  for (const rowId of carried) widened.add(rowId);
+  return widened;
+}
+
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
   usersById: ReadonlyMap<string, UserMessage>,

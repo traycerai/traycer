@@ -80,6 +80,7 @@ function skeletonEntry(rowId: string, ordinal: number): RowSkeletonEntry {
     createdAt: 1000 + ordinal,
     role: "user",
     byteLength: 128,
+    bodyDigest: `d-${rowId}`,
   };
 }
 

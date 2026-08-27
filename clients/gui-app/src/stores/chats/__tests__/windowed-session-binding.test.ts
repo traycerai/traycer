@@ -391,6 +391,7 @@ function windowedSnapshot(input: {
         restorableSetupInterruption: null,
         interviewAnswerability: [],
         latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
       },
     },
   };
@@ -1252,8 +1253,20 @@ describe("index deltas", () => {
           epoch: 5,
           fromOrdinal: 0,
           entries: [
-            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
-            { rowId: "row-1", createdAt: 2, role: "user", byteLength: 10 },
+            {
+              rowId: "row-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
+            {
+              rowId: "row-1",
+              createdAt: 2,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d1",
+            },
           ],
           isFinal: true,
         },

@@ -27,12 +27,21 @@ import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation"
  * an `indexChanged` frame's `changes` array, whose `entries` are
  * `{ordinal, entry}` pairs: inclusion IS the signal, and the client drops the
  * body of every ordinal it names. A `lastWriteSeq` to compare against would be
- * redundant with the list that is already on the wire.
+ * a second coordinate for a question the list already answers.
  *
- * **No body, and no field derived from a body that can grow.** `byteLength` is
- * the exception and it is a HINT (see its doc). Everything else here is either
- * fixed at write time or bounded by construction, which is what keeps a
- * 20k-row skeleton to ~1-2 MB.
+ * That argument is about the WIRE, and an earlier draft over-read it as also
+ * settling how the host decides what to put in that list. It does not: the
+ * producer of `updated` is a field-by-field comparison of two skeletons, so it
+ * can only see changes some field expresses. `bodyDigest` is that field. It is
+ * not a write stamp - it is not monotonic, not a version, and carries no
+ * ordering - and the client never compares it against anything, because
+ * inclusion in `updated` is still the whole signal it reads.
+ *
+ * **No body, and no field derived from a body that can grow WITH the body.**
+ * `byteLength` and `bodyDigest` are both derived from bodies and both bounded -
+ * a hint and a fixed-width fingerprint. What the rule excludes is a field whose
+ * own size tracks the body's, which is what would turn a 20k-row skeleton from
+ * ~1-2 MB into the transcript it exists to avoid shipping.
  *
  * **No record identity.** An entry is keyed by its ROW id, not by a
  * `(kind, messageId|eventId)` pair. The first version of this schema used
@@ -72,6 +81,41 @@ import { tokenUsageSchema } from "@traycer/protocol/persistence/epic/foundation"
  * error, and the list re-measures on hydration either way.
  */
 const byteLengthSchema = z.number().int().nonnegative();
+
+/**
+ * A fingerprint of the row's BODY, for change detection only.
+ *
+ * ## Why this exists when `updated` already carries staleness
+ *
+ * The `updated` member of an `indexChanged` frame is produced by comparing two
+ * skeletons field by field, so what it can detect is bounded by what those
+ * fields SAY. Every other field here is display metadata, and a row can be
+ * rewritten without moving any of them: a same-length block or status
+ * replacement leaves `byteLength` equal, and `preview` is human-user-rows-only
+ * by design, so an assistant row has no body-derived field at all. The
+ * comparison then reports "unchanged", no `updated` entry is emitted, and a
+ * client that already loaded that row keeps rendering the old body for the
+ * life of the connection - `updated` is its only eviction signal.
+ *
+ * That is the one failure this whole line cannot recover from on its own. A
+ * missing row gets re-requested; a row nobody knows is stale does not.
+ *
+ * ## Why it is admissible under "no field derived from a body that can grow"
+ *
+ * The rule above bounds the skeleton's SIZE, and this is fixed-width by
+ * construction (see `finishContentFingerprint`) however large the body is. It
+ * is derived from a growing body and is itself bounded, which is exactly the
+ * shape the rule permits - `byteLength` is the same bargain.
+ *
+ * ## Not a contract, and not an identity
+ *
+ * Nothing may treat equal digests as proof two rows are interchangeable, or
+ * unequal ones as proof of a MEANINGFUL change: a rebuild that re-encodes a
+ * record identically produces the same digest, and that is the point. It
+ * answers one question - "must I drop what I am holding for this ordinal" -
+ * and a false "yes" costs one refetch while a false "no" is the bug above.
+ */
+const bodyDigestSchema = z.string().min(1).max(32);
 
 /**
  * Preview length cap. Enforced here so a host bug cannot inflate every row.
@@ -124,6 +168,7 @@ export const rowSkeletonEntrySchema = z.object({
    */
   role: z.enum(["user", "assistant", "system"]),
   byteLength: byteLengthSchema,
+  bodyDigest: bodyDigestSchema,
   /**
    * Minimap text for HUMAN user rows only. Assistant rows get their minimap
    * label from role and status, and an A2A row from its sender - so previewing

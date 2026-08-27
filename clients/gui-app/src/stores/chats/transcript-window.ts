@@ -117,6 +117,17 @@ export interface TranscriptWindow {
   readonly skeleton: readonly (RowSkeletonEntry | undefined)[];
   /** Set by the chunk carrying `isFinal`, once its length agrees with `rowCount`. */
   readonly skeletonComplete: boolean;
+  /**
+   * The host index revision this window's skeleton reflects, within its epoch.
+   *
+   * The ONLY signal that an `updated`-only index delta was lost. That frame
+   * moves neither the epoch (an update renumbers nothing) nor `rowCount` (it
+   * adds no row), so the append-count detector below cannot see it and a
+   * later same-epoch snapshot retains the skeleton rather than restreaming it.
+   * The result was a superseded body rendered indefinitely - and a VISIBLE
+   * row's span is protected from eviction, so nothing refetched it either.
+   */
+  readonly indexRevision: number;
   /** Disjoint and sorted by `fromOrdinal`. */
   readonly spans: readonly HydratedSpan[];
   /**
@@ -257,6 +268,7 @@ export function emptyTranscriptWindow(): TranscriptWindow {
     rowCount: 0,
     skeleton: [],
     skeletonComplete: false,
+    indexRevision: 0,
     spans: [],
     liveMessages: [],
     liveEvents: [],
@@ -860,24 +872,65 @@ export function applyWindowedSnapshot(
   input: {
     readonly epoch: number;
     readonly rowCount: number;
+    /**
+     * The revision the HOST believes this client's index is at, or `null` when
+     * it is about to restream the whole skeleton and there is nothing to
+     * compare. See the field's doc on the wire schema.
+     */
+    readonly indexRevision: number | null;
     readonly tail: ChatTranscriptWindow;
   },
 ): TranscriptWindow {
   const rebased = input.epoch !== window.epoch;
   const clock = window.clock + 1;
-  const base: TranscriptWindow = rebased
-    ? {
-        ...emptyTranscriptWindow(),
-        epoch: input.epoch,
-        rowCount: input.rowCount,
-        clock,
-      }
-    : {
-        ...window,
-        rowCount: input.rowCount,
-        invalidated: false,
-        clock,
-      };
+  // A same-epoch snapshot whose revision RAN AHEAD of this client's is proof
+  // that index deltas were emitted against the skeleton it is holding and never
+  // arrived. An aux-only snapshot restreams no skeleton, so nothing in this
+  // frame would repair it; declaring the index void is what gets it
+  // re-requested. Without this, a lost `updated`-only frame survives every
+  // subsequent auxiliary snapshot and the stale body is permanent.
+  //
+  // `null` is the host saying it holds no index for this subscriber and a full
+  // skeleton is on its way - a bootstrap or a post-resnapshot rebuild. Treating
+  // that as a gap would invalidate the window the incoming chunks are about to
+  // fill and request another resnapshot for it, which is a loop.
+  //
+  // And only AHEAD: a snapshot serialized before a delta this client already
+  // applied is a straggler, not a gap.
+  const missedDeltas =
+    !rebased &&
+    input.indexRevision !== null &&
+    input.indexRevision > window.indexRevision;
+  const base: TranscriptWindow =
+    rebased || missedDeltas
+      ? {
+          ...emptyTranscriptWindow(),
+          epoch: input.epoch,
+          rowCount: input.rowCount,
+          indexRevision: input.indexRevision ?? 0,
+          invalidated: missedDeltas,
+          clock,
+        }
+      : {
+          ...window,
+          rowCount: input.rowCount,
+          // A restreaming snapshot (`null`) leaves the held revision alone: the
+          // skeleton chunks that follow do not carry one, so overwriting it here
+          // would lose the client's place in the delta sequence.
+          indexRevision: input.indexRevision ?? window.indexRevision,
+          // RE-DERIVED, never carried. A same-epoch snapshot can raise
+          // `rowCount` - an `indexChanged` append frame that was dropped while
+          // the stream survived is exactly that - and spreading `...window`
+          // carried `skeletonComplete: true` across the change. Aux-only
+          // snapshots do not restream the skeleton and the completion watchdog
+          // reads only this boolean, so the client then declared a SHORT
+          // skeleton complete and never repaired it.
+          skeletonComplete:
+            window.skeletonComplete &&
+            coversEveryOrdinal(window.skeleton, input.rowCount),
+          invalidated: false,
+          clock,
+        };
 
   const tailRowIds = tailRowIdsFor(base, input);
   if (tailRowIds === null) {
@@ -1166,6 +1219,7 @@ export function applyIndexChange(
   input: {
     readonly epoch: number;
     readonly rowCount: number;
+    readonly indexRevision: number;
     readonly changes: readonly ChatIndexChange[];
   },
 ): TranscriptWindow {
@@ -1175,6 +1229,7 @@ export function applyIndexChange(
       ...emptyTranscriptWindow(),
       epoch: input.epoch,
       rowCount: input.rowCount,
+      indexRevision: input.indexRevision,
       invalidated: true,
       clock: window.clock + 1,
     };
@@ -1207,6 +1262,28 @@ export function applyIndexChange(
       ...emptyTranscriptWindow(),
       epoch: input.epoch,
       rowCount: input.rowCount,
+      indexRevision: input.indexRevision,
+      invalidated: true,
+      clock: window.clock + 1,
+    };
+  }
+
+  // The detector for the loss the count above cannot see. Revisions are
+  // consecutive within an epoch, so anything but the immediate successor means
+  // a frame this client never received - and for an `updated`-only frame that
+  // is the difference between noticing and rendering a superseded body until
+  // the connection drops.
+  //
+  // A revision that is not GREATER is a duplicate or a reordered straggler
+  // rather than a gap: applying it again is what the atomic-frame rule already
+  // forbids, so it is dropped rather than treated as loss.
+  if (input.indexRevision <= window.indexRevision) return window;
+  if (input.indexRevision !== window.indexRevision + 1) {
+    return {
+      ...emptyTranscriptWindow(),
+      epoch: input.epoch,
+      rowCount: input.rowCount,
+      indexRevision: input.indexRevision,
       invalidated: true,
       clock: window.clock + 1,
     };
@@ -1241,10 +1318,17 @@ export function applyIndexChange(
     ...window,
     skeleton,
     rowCount: input.rowCount,
+    indexRevision: input.indexRevision,
     // A delta that grew the index past what the client has assembled means the
     // skeleton is no longer complete, even though it was.
+    //
+    // By COVERAGE, not by length - the same distinction `applySkeletonChunk`
+    // draws and for the same reason. The skeleton is sparse, so an append that
+    // seats new entries at `rowCount` can extend the array to exactly the new
+    // length while interior ordinals a dropped frame should have filled stay
+    // holes, and a length test reads that as complete.
     skeletonComplete:
-      window.skeletonComplete && skeleton.length === input.rowCount,
+      window.skeletonComplete && coversEveryOrdinal(skeleton, input.rowCount),
     clock: window.clock + 1,
   };
   return dropSpansForUpdatedOrdinals(next, invalidated);

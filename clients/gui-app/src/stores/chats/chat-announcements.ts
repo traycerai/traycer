@@ -166,12 +166,31 @@ export interface ChatAnnouncementsInput {
    * just appeared are unloaded history, not arrivals".
    */
   readonly hydrationSequence: number;
+  /**
+   * `ChatSessionState.coldRewrittenMessageIds` - rows the store rewrote while
+   * their span was EVICTED, and therefore could not publish at the time.
+   *
+   * The exemption from the history rule below, and the only way this hook can
+   * tell the two cases apart. A detached background task completing in a cold
+   * row is genuinely new - the reader has never seen it - but the store
+   * deliberately drops the live delta (the persisted host body carries it at
+   * the next hydration), so the row first becomes observable across a
+   * hydration and takes the history path. The completion is then announced
+   * NOWHERE: `useChatAnnouncements` is the only `aria-live` path for the
+   * transcript, so a screen-reader user simply never learns of it.
+   */
+  readonly coldRewrittenMessageIds: ReadonlySet<string>;
 }
 
 export function useChatAnnouncements(
   input: ChatAnnouncementsInput,
 ): ChatAnnouncement | null {
-  const { messages, baselineEpoch, hydrationSequence } = input;
+  const {
+    messages,
+    baselineEpoch,
+    coldRewrittenMessageIds,
+    hydrationSequence,
+  } = input;
   const [announcement, setAnnouncement] = useState<ChatAnnouncement | null>(
     null,
   );
@@ -181,6 +200,18 @@ export function useChatAnnouncements(
   const baselineEpochRef = useRef<number | null>(null);
   const hydrationSequenceRef = useRef<number | null>(null);
   const sequenceRef = useRef(0);
+  /**
+   * Cold-rewrite ids this hook has already spent its exemption on.
+   *
+   * The store's set is append-only within an epoch - it records that a rewrite
+   * happened, and has no way to know when a reader was told. One-shot is what
+   * the exemption needs, though: a row exempted, announced, later evicted and
+   * hydrated AGAIN would otherwise announce a completion the reader was
+   * already told about, every time it scrolled past. Keeping the consumption
+   * here rather than round-tripping a clear through the store also keeps this
+   * hook's only output an announcement.
+   */
+  const consumedColdRewritesRef = useRef<Set<string>>(new Set());
 
   useLayoutEffect(() => {
     const observed = new Map<string, RowAnnouncementState>();
@@ -196,18 +227,36 @@ export function useChatAnnouncements(
     hydrationSequenceRef.current = hydrationSequence;
     // First observation, or a snapshot that re-established the transcript:
     // absorb it as the baseline. History never announces.
-    if (previous === null || previousEpoch !== baselineEpoch) return;
+    if (previous === null || previousEpoch !== baselineEpoch) {
+      // The store clears its own set on a rebase, so the consumption record
+      // has to go with it - otherwise an id reused across epochs would find
+      // its exemption already spent.
+      consumedColdRewritesRef.current = new Set();
+      return;
+    }
     // A range response seated rows the reader scrolled to. Rows already known
     // are still evaluated - a live turn can settle in the same commit that
     // hydrates old scrollback - but a row that FIRST appears here is history
     // arriving late, not news.
     const hydrating = previousHydration !== hydrationSequence;
+    // Spends this row's exemption, if it has one. Called only from the branch
+    // that would otherwise skip, so a row arriving on the LIVE path keeps its
+    // exemption for a later eviction rather than burning it on an announcement
+    // it was going to get anyway.
+    const claimColdRewrite = (messageId: string): boolean => {
+      if (!coldRewrittenMessageIds.has(messageId)) return false;
+      if (consumedColdRewritesRef.current.has(messageId)) return false;
+      consumedColdRewritesRef.current.add(messageId);
+      return true;
+    };
     let kind: ChatAnnouncementKind | null = null;
     for (const message of messages) {
       const next = observed.get(message.id);
       if (next === undefined) continue;
       const prior = previous.get(message.id);
-      if (prior === undefined && hydrating) continue;
+      if (prior === undefined && hydrating && !claimColdRewrite(message.id)) {
+        continue;
+      }
       const candidate = announcementKindFor(prior, next);
       // Last announceable row wins: a batch that settles one turn while
       // appending the next running one announces the settled turn.
@@ -220,7 +269,7 @@ export function useChatAnnouncements(
     // latch and a live-region child, neither of which belongs in the commit
     // that produced the rows.
     queueMicrotask(() => setAnnouncement({ sequence, kind }));
-  }, [messages, baselineEpoch, hydrationSequence]);
+  }, [messages, baselineEpoch, coldRewrittenMessageIds, hydrationSequence]);
 
   return announcement;
 }

@@ -170,6 +170,13 @@ interface ChatMessagesProps {
    * them as history rather than announce them as arrivals.
    */
   hydrationSequence: number;
+  /**
+   * `ChatSessionState.coldRewrittenMessageIds` - rows rewritten while their
+   * span was evicted. The announcement deriver exempts these from the history
+   * rule above, once each, because a row updated while cold first appears
+   * during a hydration and is otherwise indistinguishable from old scrollback.
+   */
+  coldRewrittenMessageIds: ReadonlySet<string>;
   /** Live host-owned background items; undefined means the connected host lacks support. */
   backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
   getMessageActions: (message: ChatMessageModel) => ChatMessageActions | null;
@@ -940,6 +947,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getMessageActions,
     backgroundItems,
     baselineEpoch,
+    coldRewrittenMessageIds,
     hydrationSequence,
     composerOverlayHeight,
     identity,
@@ -1045,28 +1053,41 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     rowHeightMemory.observeSkeleton(rowSkeleton);
   }, [rowHeightMemory, rowSkeleton]);
+  // The effective root font size the rows lay out at - `theme-provider` writes
+  // it to `document.documentElement.style.fontSize`, and this is the setting it
+  // writes from. Read here rather than via `getComputedStyle` so a change is
+  // reactive: the height memory has to be told, and nothing else would.
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
   const followLatchRef = useRef<ChatTimelineFollowLatch | null>(null);
   const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
-  // Width invalidates every remembered height at once - see `observeWidth`.
-  // A ResizeObserver on the container rather than React state, for the reason
-  // the memory itself is not state: a resize must not re-render a mounted
-  // transcript, and the width is only wanted as a hint for the placeholders
-  // that mount next. A layout effect for the same ordering as the skeleton
-  // pass above - LegendList measures in its own, which runs first, so the
-  // opening commit's heights are already recorded when the baseline width is
-  // adopted (and `observeWidth` deliberately keeps them).
+  // Width AND typography invalidate every remembered height at once - see
+  // `observeLayoutBasis`. A ResizeObserver on the container rather than React
+  // state, for the reason the memory itself is not state: a resize must not
+  // re-render a mounted transcript, and the basis is only wanted as a hint for
+  // the placeholders that mount next. A layout effect for the same ordering as
+  // the skeleton pass above - LegendList measures in its own, which runs first,
+  // so the opening commit's heights are already recorded when the baseline is
+  // adopted (and `observeLayoutBasis` deliberately keeps them).
+  //
+  // `uiFontSize` is a DEPENDENCY, not just a read: changing it re-flows every
+  // row without necessarily changing the container's width, so the
+  // ResizeObserver may never fire and this effect re-running is the only thing
+  // that reports the new basis.
   useLayoutEffect(() => {
     const container = transcriptContainerRef.current;
     if (container === null) return;
     const report = (): void => {
-      rowHeightMemory.observeWidth(container.getBoundingClientRect().width);
+      rowHeightMemory.observeLayoutBasis({
+        width: container.getBoundingClientRect().width,
+        fontSizePx: uiFontSize,
+      });
     };
     const observer = new ResizeObserver(report);
     observer.observe(container);
     report();
     return () => observer.disconnect();
-  }, [rowHeightMemory]);
+  }, [rowHeightMemory, uiFontSize]);
   const messagesRef = useRef(messages);
   const listRowsRef = useRef(listRows);
   // Seeded EMPTY, not with `buildRowKeyToIndex(listRows)`: a `useRef`
@@ -2600,6 +2621,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const announcement = useChatAnnouncements({
     messages,
     baselineEpoch,
+    coldRewrittenMessageIds,
     hydrationSequence,
   });
   // The rendered sentence is FROZEN when the announcement is made, not

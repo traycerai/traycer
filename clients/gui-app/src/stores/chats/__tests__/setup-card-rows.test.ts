@@ -46,7 +46,7 @@ function setupEvent(
 }
 
 function onlyRow(events: ReadonlyArray<ChatEvent>) {
-  const rows = buildSetupCardRows(events, BINDING);
+  const rows = buildSetupCardRows(events, BINDING, []);
   expect(rows).toHaveLength(1);
   return rows[0];
 }
@@ -57,7 +57,7 @@ describe("buildSetupCardRows", () => {
       setupEvent("turn.started", {}, null),
       setupEvent("turn.completed", {}, null),
     ];
-    expect(buildSetupCardRows(events, BINDING)).toEqual([]);
+    expect(buildSetupCardRows(events, BINDING, [])).toEqual([]);
   });
 
   it("ignores non-setup events while deriving", () => {
@@ -145,6 +145,7 @@ describe("buildSetupCardRows", () => {
         ),
       ],
       BINDING,
+      [],
     );
     expect(rows).toHaveLength(2);
     expect(rows[0].model.workspaces[0].state).toBe("ready");
@@ -500,6 +501,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.succeeded", { workspacePath: "/repo" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -523,6 +525,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.succeeded", { workspacePath: "/new" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -543,6 +546,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/repo" }, 3_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -565,6 +569,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/web" }, 5_000),
       ],
       BINDING,
+      [],
     );
 
     expect(rows).toHaveLength(2);
@@ -632,6 +637,7 @@ describe("buildSetupCardRows", () => {
         setupEvent("setup.running", { workspacePath: "/repo" }, 4_000),
       ],
       BINDING,
+      [],
     );
     // Historical (closed) window inactive; the live re-bind window active.
     expect(rows.map((row) => row.isActive)).toEqual([false, true]);
@@ -656,6 +662,7 @@ describe("buildSetupCardRows", () => {
     const rows = buildSetupCardRows(
       [setupEvent("setup.failed", { code: "SETUP_AWAIT_FAILED" }, null)],
       BINDING,
+      [],
     );
     expect(rows).toEqual([]);
   });

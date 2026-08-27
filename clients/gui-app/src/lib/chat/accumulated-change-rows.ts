@@ -197,6 +197,33 @@ export function undeliveredHostChangeCount(input: {
 }
 
 /**
+ * Whether the delivered summary set AGREES with the host's authoritative count.
+ *
+ * Separate from {@link undeliveredHostChangeCount} because the two questions
+ * differ in exactly the case that goes wrong. That one answers "how many rows
+ * are still missing", so it clamps at zero - a shortfall is a number the panel
+ * shows. This one answers "is the set trustworthy", and an OVERSHOOT is an
+ * emphatic no: a revert lowers `accumulatedFileChangeCount` while the client
+ * retains the previous summary array until a replacement chunk starting at
+ * index 0 arrives, so a dropped first chunk leaves MORE summaries than the
+ * count. The clamp turns that into `0`, which every gate reads as "complete"
+ * and none of them can distinguish from a genuinely finished stream.
+ *
+ * Every visibility and action gate over the summary set reads this, so the
+ * three of them cannot drift into three different definitions of complete.
+ */
+export function accumulatedSummarySetComplete(input: {
+  readonly windowed: boolean;
+  readonly hostChangeCount: number;
+  readonly deliveredSummaryCount: number;
+}): boolean {
+  // The legacy line ships the whole set on the snapshot; there is no stream to
+  // be mid-way through.
+  if (!input.windowed) return true;
+  return input.hostChangeCount === input.deliveredSummaryCount;
+}
+
+/**
  * Merge the host's rows with what the ACTIVE turn is writing right now.
  *
  * The host recomputes its accumulated set at turn boundaries, so mid-turn it is

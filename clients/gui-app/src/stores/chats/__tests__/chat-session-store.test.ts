@@ -10968,6 +10968,7 @@ describe("createChatSessionStore", () => {
           },
           interviewAnswerability: [],
           latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
         },
       }),
     ).toMatchObject({
@@ -11002,6 +11003,7 @@ describe("createChatSessionStore", () => {
           restorableSetupInterruption: null,
           interviewAnswerability: [],
           latestAssistantAuthFailureTurnKey: null,
+          setupCardWindows: [],
         },
       }),
     ).toBeNull();

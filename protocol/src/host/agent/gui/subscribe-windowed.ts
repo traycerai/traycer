@@ -345,6 +345,44 @@ export {
   type InterviewAnswerability,
 };
 
+/**
+ * One setup lifecycle window's identity, as the WHOLE-LOG partition sees it.
+ *
+ * Deliberately not the window's events or its view model - the card renders
+ * from the events a range already serves it. What it cannot derive in isolation
+ * is where the window sits in the sequence and whether it is still open, and
+ * that is exactly what this carries.
+ */
+export const setupCardWindowIdentitySchema = z.object({
+  /**
+   * The window's anchor - the earliest setup-event timestamp in it.
+   *
+   * The MATCH KEY, and the reason this works: a client re-partitioning one
+   * window's events computes the same value, because it is a property of those
+   * events and not of the window's position. Ties are broken by array order,
+   * so two lifecycles stamped in the same millisecond still map one-to-one.
+   */
+  createdAt: z.number(),
+  /** The window's position in the whole-log partition. */
+  windowIndex: z.number().int().nonnegative(),
+  /**
+   * True only for the window still OPEN at the end of the log. A closed window
+   * keeps whatever state its last event left it in - which CAN be `setting-up`
+   * when the worktree vanished mid-setup - so a client must read this rather
+   * than infer liveness from the state.
+   */
+  isActive: z.boolean(),
+  /**
+   * Whether the window holds a `setup.creating` event, which is what
+   * distinguishes a live mid-conversation creation from the back-filled genesis
+   * worktree the transcript pins to the top.
+   */
+  hasCreatingEvent: z.boolean(),
+});
+export type SetupCardWindowIdentity = z.infer<
+  typeof setupCardWindowIdentitySchema
+>;
+
 export const chatTranscriptDerivedSchema = z.object({
   /**
    * The most recent assistant usage report, for the context chip. Nullable
@@ -444,6 +482,32 @@ export const chatTranscriptDerivedSchema = z.object({
    * banner. See `provider-auth-failure.ts`, which both lines call.
    */
   latestAssistantAuthFailureTurnKey: z.string().nullable(),
+  /**
+   * Every setup lifecycle window in the chat, in chronological order.
+   *
+   * ## Why this is chat-level and not per-row context
+   *
+   * A setup card's row id is `setup-card:<chatId>:<windowIndex>:<createdAt>`,
+   * and `windowIndex` is a position in a partition over the chat's WHOLE event
+   * log. A client hydrating one card in isolation re-runs that partition over
+   * that window's events alone, renumbers the card to 0, and can revive a
+   * historically closed window as active.
+   *
+   * `TranscriptRowContext` carries the right answers and cannot deliver them,
+   * because the lookup is CIRCULAR: the context map is keyed by row id, and a
+   * client that renumbered the window computes a different row id, so it cannot
+   * find the entry that would have corrected it. Every repair keyed on the row
+   * id has that shape.
+   *
+   * So the answer travels as chat-level aux, keyed on `createdAt` - which the
+   * client derives identically from the window's own events, because it is the
+   * earliest setup-event timestamp IN that window. That is what breaks the
+   * circle: the match key is local, the index is not.
+   *
+   * Bounded by the number of setup lifecycles a chat has had - one for most
+   * chats, a handful for a heavily re-bound one - never by rows.
+   */
+  setupCardWindows: z.array(setupCardWindowIdentitySchema),
 });
 export type ChatTranscriptDerived = z.infer<typeof chatTranscriptDerivedSchema>;
 
@@ -866,6 +930,24 @@ export const ACCUMULATED_CHANGE_CHUNK_MAX_BYTES = 256 * 1024;
  */
 export const chatAccumulatedChangeChunkSchema = z.object({
   epoch: z.number().int().nonnegative(),
+  /**
+   * Which RE-STREAM this chunk belongs to. Incremented by the host every time
+   * it starts the summary stream over, and unrelated to the transcript epoch.
+   *
+   * The client rebuilds from `fromIndex: 0` on every re-stream, so a chunk is
+   * only ever an extension of chunks from its OWN generation. Without this the
+   * client's only test is `fromIndex > assembled.length`, and the array it
+   * measures is the PREVIOUS generation's - which the client deliberately
+   * retains until a replacement chunk at index 0 arrives. Drop that first
+   * chunk when an existing file changed without changing
+   * `accumulatedFileChangeCount`, and the old array is still at the
+   * authoritative length: a later chunk's `fromIndex` is not greater than it,
+   * so it is accepted, and the panel ends up holding a prefix of the old set
+   * spliced to a suffix of the new one. The stale digests then make every
+   * content fetch return `stale`, and neither the gap check nor the
+   * count-based watchdog has anything left to notice it with.
+   */
+  generation: z.number().int().nonnegative(),
   fromIndex: z.number().int().nonnegative(),
   summaries: z.array(chatAccumulatedFileChangeSummarySchema),
   isFinal: z.boolean(),

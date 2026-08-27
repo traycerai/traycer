@@ -264,6 +264,7 @@ function emitWindowedSnapshot(
         restorableSetupInterruption,
         interviewAnswerability: [],
         latestAssistantAuthFailureTurnKey: null,
+        setupCardWindows: [],
       },
     },
   });

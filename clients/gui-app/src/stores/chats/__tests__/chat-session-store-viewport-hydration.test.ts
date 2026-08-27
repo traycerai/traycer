@@ -113,6 +113,7 @@ function snapshot(input: {
     restorableSetupInterruption: null,
     interviewAnswerability: [],
     latestAssistantAuthFailureTurnKey: null,
+    setupCardWindows: [],
   };
   return {
     kind: "snapshot",
@@ -310,6 +311,7 @@ function skeletonEntry(ordinal: number): RowSkeletonEntry {
     createdAt: ordinal,
     role: "user",
     byteLength: 128,
+    bodyDigest: `d${ordinal}`,
   };
 }
 
