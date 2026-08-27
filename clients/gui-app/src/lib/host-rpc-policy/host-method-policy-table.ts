@@ -990,6 +990,10 @@ export const HOST_METHOD_POLL_TABLE = {
   // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
   // interval here would re-fetch megabytes to re-learn a constant.
   "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // Like the chat attachment read, artifact attachment bytes are addressed by
+  // their content hash and the image cache owns retry after a transient miss.
+  // Polling this unary method would only re-fetch immutable bytes.
+  "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
   // Not polled, and this is a deliberate freshness choice rather than a copy of
   // the row above it. The answer is "which cloud row does this local chat
   // publish into", which changes exactly once in a chat's life - when a fork
@@ -1479,6 +1483,9 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
+  // Pure holder read for teardown disclosures - fetched at gesture time by
+  // the delete/rebind confirm flows, never on a cadence.
+  "worktree.listHolders": { ...LATEST_SCHEDULING, poll: null },
   "speech.getModelStatus": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("speech.getModelStatus", {

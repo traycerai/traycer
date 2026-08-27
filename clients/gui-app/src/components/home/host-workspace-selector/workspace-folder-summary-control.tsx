@@ -145,6 +145,8 @@ export function WorkspaceFolderSummaryControl(props: {
   readonly onUpdate: (() => void) | null;
   readonly updateEnabled: boolean;
   readonly updatePending: boolean;
+  /** Uncommitted workspace draft on the summary chip. */
+  readonly draftPending?: boolean;
   readonly onDiscardStaged: (() => void) | null;
   readonly onEditEnvironment: (workspacePath: string) => void;
   /**
@@ -260,6 +262,7 @@ export function WorkspaceFolderSummaryControl(props: {
         items={props.items}
         readOnly
         bindingResolved={props.bindingResolved}
+        draftPending={props.draftPending === true}
         className="max-w-full"
       />
     );
@@ -305,6 +308,7 @@ export function WorkspaceFolderSummaryControl(props: {
       items={props.items}
       readOnly={false}
       bindingResolved={props.bindingResolved}
+      draftPending={props.draftPending === true}
       className="justify-start overflow-hidden"
     />
   );

@@ -17,6 +17,9 @@ project(':capacitor-device').projectDir = new File('../../../node_modules/.bun/@
 include ':capacitor-keyboard'
 project(':capacitor-keyboard').projectDir = new File('../../../node_modules/.bun/@capacitor+keyboard@8.0.5+f68449e264960a74/node_modules/@capacitor/keyboard/android')
 
+include ':capacitor-network'
+project(':capacitor-network').projectDir = new File('../../../node_modules/.bun/@capacitor+network@8.0.1+f68449e264960a74/node_modules/@capacitor/network/android')
+
 include ':capacitor-push-notifications'
 project(':capacitor-push-notifications').projectDir = new File('../../../node_modules/.bun/@capacitor+push-notifications@8.1.2+f68449e264960a74/node_modules/@capacitor/push-notifications/android')
 

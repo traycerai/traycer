@@ -10,8 +10,9 @@
  * `epic.listChatRecords` or a `host.chatRecords.subscribe` delta - up to a 20s
  * poll away, and further still when the creating host is not the one this
  * window's record stream is keyed to. An optimistic insert into the record map
- * does not survive either: `applyChatRecords` CLEARS AND REPLACES that map from
- * the serving host's snapshot, so the next poll evicts it.
+ * does not survive either: `applyChatRecords` retracts a row the answer omits
+ * once the answer was issued after the row landed, so a fabricated row - which
+ * no answer will ever carry - is evicted within a poll or two.
  *
  * So creations are retained BESIDE the record rows and unioned in at publish
  * time, which is the one seam both the poll and the push path go through. A

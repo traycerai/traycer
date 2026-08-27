@@ -254,6 +254,32 @@ describe("CompatibilityChecker.check", () => {
     expect(clientOlderSide).toEqual({ ok: true });
   });
 
+  it("keeps unary cross-major bridging unchanged when manifests carry supportedMajors", () => {
+    const hostResult = check(
+      registryEchoV20WithBridge,
+      {
+        echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+      },
+      {
+        echo: { major: 1, minor: 1 },
+      },
+      "host",
+    );
+    const clientResult = check(
+      registryEchoV11,
+      {
+        echo: { major: 1, minor: 1 },
+      },
+      {
+        echo: { major: 2, minor: 0, supportedMajors: [1, 2] },
+      },
+      "client",
+    );
+
+    expect(hostResult).toEqual({ ok: true });
+    expect(clientResult).toEqual({ ok: true });
+  });
+
   it("reports no-bridge when the newer side lacks a cross-major downgrade", () => {
     const result = check(
       registryEchoV20NoBridge,

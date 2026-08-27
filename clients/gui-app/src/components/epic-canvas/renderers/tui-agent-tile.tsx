@@ -937,6 +937,7 @@ function TerminalAgentPreLaunchToolbar(
           // signal to distinguish - this field is unread for this surface kind
           // (the notice text is fixed regardless), kept equal for consistency.
           hasActiveTurn: props.isOwnerActive,
+          ownerLabel: props.agent.title,
           // Surfaced on the chip as a per-folder "missing on disk" indicator.
           // The host-computed signal on `worktree.getBinding` — the actual
           // launch gate is the `prepareLaunch` WORKTREE_MISSING reject, but this

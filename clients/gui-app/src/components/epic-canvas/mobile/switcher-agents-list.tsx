@@ -1,33 +1,16 @@
-import { useCallback, useMemo } from "react";
-import { v4 as uuidv4 } from "uuid";
-import { SwitcherAgentIcon } from "@/components/epic-canvas/mobile/switcher-agent-icon";
+import { useMemo, useState } from "react";
+import { SwitcherListHeader } from "@/components/epic-canvas/mobile/switcher-list-row";
+import { SwitcherNewChatAction } from "@/components/epic-canvas/mobile/switcher-create-actions";
+import { SwitcherAgentsViewMenu } from "@/components/epic-canvas/mobile/switcher-view-menu";
+import { SwitcherSearchField } from "@/components/epic-canvas/mobile/switcher-search-field";
+import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
 import {
-  SwitcherListEmpty,
-  SwitcherListRow,
-} from "@/components/epic-canvas/mobile/switcher-list-row";
-import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
-import { SwitcherNewChatRow } from "@/components/epic-canvas/mobile/switcher-create-actions";
-import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
-import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
-import {
-  useEpicArtifactRecords,
-  useEpicNodeHostId,
-  useEpicPermissionRole,
-  type EpicTreeRecord,
-} from "@/lib/epic-selectors";
+  ChatTreeSurfaceContext,
+  type ChatTreeSurface,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { isEditableRole } from "@/lib/epic-permissions";
-import {
-  computeDescendantCounts,
-  formatCascadeSummary,
-} from "@/lib/epic-tree-cascade";
-import { useIsActiveEpicArtifact } from "@/stores/epics/canvas/canvas-selectors";
-import {
-  isOpenableEpicNodeKind,
-  makeOpenableNodeRef,
-} from "@/stores/epics/canvas/types";
-import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
-import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicPermissionRole } from "@/lib/epic-selectors";
 
 interface SwitcherListProps {
   readonly epicId: string;
@@ -36,150 +19,82 @@ interface SwitcherListProps {
 }
 
 /**
- * Agents category: GUI chats and TUI agents interleaved in one flat list
- * (decision: interleaved, flat, no gui/tui filter v1) over the shared
- * `useEpicArtifactRecords()` projection - no duplicated data path and none of
- * the desktop tree's dnd / indentation / hover machinery.
+ * Agents category: this sheet's own header over the DESKTOP sidebar's chat
+ * tree.
+ *
+ * The list under the header used to be the switcher's own, and it surfaced
+ * strictly less than the desktop row it stood in for: two menu entries against
+ * desktop's five, no last-activity time, no shared-with-task marker, no
+ * archived marking, a two-state icon against desktop's status ladder, and no
+ * nesting. Matching a row property by property does not converge - each one
+ * moves while the next drifts - so the tree component itself is mounted here.
+ *
+ * The HEADER stays this surface's, and deliberately. Desktop reaches search and
+ * the view menu from its panel header, which `ChatTreePanelBody` does not
+ * contain and a phone has no keyboard shortcut to substitute for; mounting the
+ * body alone would leave both unreachable. So the sheet keeps the header it
+ * already had and the tree supplies the rows.
+ *
+ * What the surface tells the tree, through {@link ChatTreeSurface} rather than
+ * through a fork of it:
+ *
+ * - **The search query**, which is this sheet's state and not the panel store's.
+ *   A sheet is dismissed the moment a row is tapped, so a persisted query would
+ *   greet the next open with a narrowed list and no memory of why.
+ * - **Closing.** A tap opens the row's preview tile exactly as on desktop - the
+ *   tree still owns what opening means - and the sheet then closes, so the
+ *   chosen tile becomes the full-screen mobile tile.
+ * - **Row controls.** The "⋯" menu and archive shortcut reveal on hover. A
+ *   coarse pointer has none, so they show outright; a fine pointer in a narrow
+ *   window keeps the quieter behaviour.
+ *
+ * Everything else comes with the tree: nesting and its indent rails, the filter
+ * and sort the view menu drives, the paired archive-hiding rule, the filtered
+ * empty states, and a row menu carrying New child agent, Rename, Archive, Share
+ * with task and Delete.
  */
 export function SwitcherAgentsList(props: SwitcherListProps) {
   const { epicId, tabId, onClose } = props;
-  const records = useEpicArtifactRecords();
-  const filtered = useMemo(
-    () =>
-      records.filter(
-        (record) => record.type === "chat" || record.type === "terminal-agent",
-      ),
-    [records],
-  );
-  const agents = useOrderedSwitcherRecords(filtered);
+  const coarsePointer = useCoarsePointer();
   const canMutate = isEditableRole(useEpicPermissionRole());
-  // Sorted for a stable query key: the list itself re-sorts by recency on every
-  // turn, and an order-sensitive key would refetch each time without the set
-  // having changed.
-  const indicatorChatIds = useMemo(
-    () => filtered.map((record) => record.id).sort(),
-    [filtered],
+  const [searchQuery, setSearchQuery] = useState("");
+  const surface = useMemo<ChatTreeSurface>(
+    () => ({
+      onRowActivated: onClose,
+      revealRowControls: coarsePointer,
+      searchQuery,
+    }),
+    [onClose, coarsePointer, searchQuery],
   );
-  // The rows' status glyphs read notification state out of this context. Mobile
-  // had no provider at all, so every host/cloud-derived flag resolved against
-  // the empty default and a failed or waiting agent read as plain idle. Scoped
-  // to the EPIC SESSION host for the same reason the desktop chat tree is: these
-  // agents are this session's, `chatId` is host-minted, and the app-wide active
-  // host would answer about agents it does not own.
-  const epicSessionHostId = useEpicSessionHostId();
-  const indicators = useNotificationIndicators({
-    hostId: epicSessionHostId,
-    epicIds: [],
-    chatIds: indicatorChatIds,
-    enabled: indicatorChatIds.length > 0,
-  });
-
   return (
-    <NotificationIndicatorsProvider indicators={indicators}>
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-x-hidden overflow-y-auto overscroll-contain p-1 pb-safe-bottom">
-        {/* Editor-gated: a viewer's create is server-rejected, so an ungated row
-            would only lead to a dead end. Inside the scroll region and above the
-            items, so it is the first thing in the list either way. */}
-        {canMutate ? (
-          <SwitcherNewChatRow epicId={epicId} tabId={tabId} onClose={onClose} />
-        ) : null}
-        {agents.length === 0 ? (
-          <SwitcherListEmpty message="No agents yet." />
-        ) : (
-          agents.map((record) => (
-            <SwitcherAgentRow
-              key={record.id}
-              record={record}
-              records={records}
-              epicId={epicId}
-              tabId={tabId}
-              onClose={onClose}
+    <ChatTreeSurfaceContext.Provider value={surface}>
+      <div className="flex min-h-0 flex-1 flex-col pb-safe-bottom">
+        {/* One header shape across both tabs: search, then create, then the
+            view menu. */}
+        <SwitcherListHeader
+          search={
+            <SwitcherSearchField
+              value={searchQuery}
+              onValueChange={setSearchQuery}
+              placeholder="Search agents…"
+              label="Search agents"
+              clearLabel="Clear agent search"
+              testIdPrefix="switcher-agents-search"
             />
-          ))
-        )}
+          }
+          action={
+            canMutate ? (
+              <SwitcherNewChatAction
+                epicId={epicId}
+                tabId={tabId}
+                onClose={onClose}
+              />
+            ) : null
+          }
+          viewMenu={<SwitcherAgentsViewMenu epicId={epicId} />}
+        />
+        <ChatTreePanelBody epicId={epicId} tabId={tabId} />
       </div>
-    </NotificationIndicatorsProvider>
-  );
-}
-
-function SwitcherAgentRow(props: {
-  readonly record: EpicTreeRecord;
-  readonly records: ReadonlyArray<EpicTreeRecord>;
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly onClose: () => void;
-}) {
-  const { record, records, epicId, tabId, onClose } = props;
-  const activate = useSwitcherActivate(epicId, tabId, onClose);
-  const isActive = useIsActiveEpicArtifact(tabId, record.id);
-  const agentType: "chat" | "terminal-agent" =
-    record.type === "terminal-agent" ? "terminal-agent" : "chat";
-
-  // The host the opened tile BINDS TO, and a tab's host binding is for life -
-  // so this has to be the row's owner, exactly as the desktop row resolves it
-  // (`openHostId = useEpicNodeHostId(nodeId) ?? activeHostId`). `record.hostId`
-  // alone is not that host: `recordForChat` stamps chat rows with the app-wide
-  // ACTIVE host, so a retained epic tab bound to host A would permanently open
-  // an A-owned chat against host B once the user switched hosts, and ask the
-  // wrong machine for the transcript forever after.
-  //
-  // The fallback covers a legacy chat carrying no projected host, and is the
-  // active host by construction - that is precisely what `recordForChat`
-  // stamped - reusing the value already in hand rather than re-subscribing the
-  // row to `useAddressableHostId()`. It differs from the desktop row only
-  // in the no-active-host degenerate case, where this yields the records'
-  // `UNKNOWN_HOST_PLACEHOLDER` and the sidebar its own "unknown-host" literal;
-  // neither is dialable. TUI rows are unaffected either way - both sides of
-  // the `??` read the same projection field for them.
-  const ownerHostId = useEpicNodeHostId(record.id);
-  const openHostId = ownerHostId ?? record.hostId;
-
-  const onSelect = useCallback(() => {
-    const type = record.type;
-    if (!isOpenableEpicNodeKind(type)) return;
-    activate(() =>
-      makeOpenableNodeRef({
-        id: record.id,
-        instanceId: uuidv4(),
-        type,
-        name: record.name,
-        hostId: openHostId,
-      }),
-    );
-  }, [activate, record, openHostId]);
-
-  const cascadeSummary = formatCascadeSummary(
-    computeDescendantCounts(records, record.id),
-  );
-
-  return (
-    <SwitcherListRow
-      icon={
-        // No host prop: the icon resolves the row's owner host itself, from the
-        // same selector `openHostId` above uses. `record.hostId` is the ACTIVE
-        // host for chat rows and is never the right answer for either.
-        <SwitcherAgentIcon
-          epicId={epicId}
-          nodeId={record.id}
-          type={agentType}
-        />
-      }
-      label={record.name}
-      secondaryLabel={null}
-      badge={null}
-      active={isActive}
-      onSelect={onSelect}
-      selectTestId={`switcher-agent-row-${record.id}`}
-      actions={
-        <SwitcherRowActions
-          epicId={epicId}
-          tabId={tabId}
-          kind={agentType}
-          nodeId={record.id}
-          name={record.name}
-          cascadeSummary={cascadeSummary}
-        />
-      }
-    />
+    </ChatTreeSurfaceContext.Provider>
   );
 }

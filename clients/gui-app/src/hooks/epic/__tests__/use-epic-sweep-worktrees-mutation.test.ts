@@ -41,6 +41,7 @@ describe("sweepingWorktreePathsForHost", () => {
     worktreePath,
     branch: null,
     repoIdentifier: null,
+    stopOwners: false,
   });
 
   it("does not let a sweep on one host reserve the same path on another", () => {

@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
+import {
+  ChatTreeSurfaceContext,
+  type ChatTreeSurface,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
@@ -464,5 +468,61 @@ describe("EpicSidebarCloudChatRow", () => {
         "false",
       );
     });
+  });
+});
+
+/**
+ * A cloud row inside a mounted surface. Its tap must dismiss the surface the
+ * same way a local row's does - it sits in the same tree, and a row that opens
+ * a tile behind a sheet nothing closes is the bug this covers.
+ */
+describe("EpicSidebarCloudChatRow on a mounting surface", () => {
+  function surfaceValue(onRowActivated: () => void): ChatTreeSurface {
+    return { onRowActivated, revealRowControls: true, searchQuery: null };
+  }
+
+  it("dismisses the surface when the row is tapped", () => {
+    let dismissed = 0;
+    render(
+      <ChatTreeSurfaceContext.Provider
+        value={surfaceValue(() => (dismissed += 1))}
+      >
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          epicId={CHAT.identity.taskId}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </ChatTreeSurfaceContext.Provider>,
+    );
+
+    fireEvent.click(
+      screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`),
+    );
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("does not dismiss on the desktop sidebar, which mounts no surface", () => {
+    // Control arm: the same click with no provider must reach the same open
+    // path and simply have nothing to dismiss.
+    render(
+      <EpicSidebarCloudChatRow
+        chat={CHAT}
+        epicId={CHAT.identity.taskId}
+        tabId="tab-1"
+        depth={0}
+        selectionMode={false}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`),
+    );
+
+    expect(
+      screen.getByTestId(`epic-sidebar-cloud-item-${CHAT.identity.chatId}`),
+    ).toBeTruthy();
   });
 });

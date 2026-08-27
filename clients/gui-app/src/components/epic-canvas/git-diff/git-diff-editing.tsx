@@ -9,7 +9,7 @@ import {
   type SetStateAction,
 } from "react";
 import { useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import type { FileContents } from "@pierre/diffs";
+import type { FileContents, FileDiffContentsLoader } from "@pierre/diffs";
 import type { EditorOptions } from "@pierre/diffs/edit";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
@@ -132,6 +132,7 @@ export interface GitDiffEditingModel {
   readonly pinnedDiff: GitGetFileDiffResponse | null;
   readonly notice: string | null;
   readonly loading: boolean;
+  readonly loadDiffFiles: FileDiffContentsLoader | undefined;
   readonly editAdapter: DiffClickToEditAdapter;
   readonly state: FileEditRuntimeState | null;
   readonly editableFiles: EditableDiffFiles | null;
@@ -211,6 +212,29 @@ export function useGitDiffEditing(
     [args.file.path, args.hostId, args.runningDir, userId],
   );
   const identityKey = useMemo(() => fileEditIdentityKey(identity), [identity]);
+  const refetchContents = contentsQuery.refetch;
+  const loadDiffFiles = useCallback<FileDiffContentsLoader>(
+    async (fileDiff) => {
+      const result = await refetchContents();
+      if (result.error !== null) throw result.error;
+      const contents = result.data;
+      if (contents === undefined) {
+        throw new Error("Couldn't load the full file contents.");
+      }
+      if (contents.error !== null) throw new Error(contents.error);
+      if (contents.newFile === null) {
+        throw new Error("This change has no current file contents.");
+      }
+      if (fileDiff.type === "rename-pure") {
+        return { oldFile: null, newFile: contents.newFile };
+      }
+      if (contents.oldFile === null) {
+        throw new Error("This change has no original file contents.");
+      }
+      return { oldFile: contents.oldFile, newFile: contents.newFile };
+    },
+    [refetchContents],
+  );
   const fileSession = useFileEditSession({
     client: args.client,
     identity,
@@ -502,6 +526,10 @@ export function useGitDiffEditing(
     pinnedDiff: hydration?.pinnedDiff ?? null,
     notice,
     loading: contentsQuery.isFetching,
+    loadDiffFiles:
+      args.interactionEnabled && supportsFileContents
+        ? loadDiffFiles
+        : undefined,
     editAdapter,
     state: fileSession.state,
     editableFiles,
