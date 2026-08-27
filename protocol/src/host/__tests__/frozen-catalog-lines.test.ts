@@ -27,7 +27,6 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
-  providersListResponseSchemaV71,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -98,20 +97,21 @@ const LIVE_FROZEN_EXPORTS = {
   // the live shape would fail on its FIRST attempt rather than on the release
   // that shipped it. That is what happened: the auth-aware enablement fields
   // turned this row red, v7.0 was hand-frozen under the reserved `V70` names,
-  // and v7.1 opened against live. This row was NOT regenerated - it names the
-  // frozen schema now and its dump is unchanged.
-  //
-  // One correction to the procedure `host/registry.ts` states: the new line is
-  // a MINOR, because `versioned-rpc.ts` rejects a major bump that is not a
-  // breaking change and two optional fields are not one. v8.0 stays right for
-  // id/enum growth on a host->client catalog payload.
+  // and a 7.1 opened against live. This row was NOT regenerated - it names the
+  // frozen schema now and its dump is unchanged. It stayed unchanged when
+  // those same two fields were later REMOVED and took 7.1 with them: a freeze
+  // records what a line served, so undoing the growth that triggered it does
+  // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
   // The head line now, holding v7.0's old job: it names the LIVE schema, so
   // the next attempt to grow it fails here first. Same response - freeze the
   // line that stopped being head, open the next one, do not regenerate.
-  // 7.1 froze when 8.0 opened for Reasonix, for the same reason
-  // `agent.gui.listHarnesses@7.1` did.
-  "providers.list@7.1": providersListResponseSchemaV71,
+  //
+  // There is no `providers.list@7.1` row because there is no such line: the
+  // enablement pair was its entire delta over 7.0 and both were removed. This
+  // list and the snapshot's key set are held equal below, so deleting a row
+  // here without deleting the fixture (or the reverse) fails rather than
+  // silently narrowing what is guarded.
   "providers.list@8.0": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,

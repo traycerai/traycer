@@ -1420,10 +1420,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const renamePending = anyMutationPending([
-    renameChat.isPending,
-    renameTerminalAgent.isPending,
-  ]);
 
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const deletePending = anyMutationPending([
@@ -1589,7 +1585,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   }, [canMutate, nodeName]);
 
   const commitRename = useCallback(() => {
-    if (renamePending) return;
     const trimmed = renameValue.trim();
     if (trimmed.length === 0) {
       setIsRenaming(false);
@@ -1599,26 +1594,68 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       setIsRenaming(false);
       return;
     }
-    epicHandle.store.getState().renameArtifact(nodeId, trimmed);
-    renameArtifactInTab(tabId, nodeId, trimmed);
+    // Settle the editor on COMMIT, not on the ack — same contract as the
+    // artifact tree and as `useInlineRename`, which both tab strips rename
+    // through. The overlay below is the feedback; a failure toasts and rolls
+    // back. This also closes a real hole in the arms that follow: the
+    // no-RPC-arm `else` retired the stamp and left the input open forever,
+    // because the only `setIsRenaming(false)` lived in the success callback.
+    setIsRenaming(false);
+    // DOC-RESIDENT terminal agents keep the direct doc write - see the same
+    // branch in `use-rename-canvas-tab.ts`: `epic.renameTuiAgent` refuses a
+    // row the serving host has no registry entry for (`E_AGENT_NOT_LOCAL`),
+    // so the overlay path would only ever roll back.
+    if (artifactType === "terminal-agent") {
+      const agents = epicHandle.store.getState().tuiAgents.byId;
+      if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
+        if (epicHandle.store.getState().renameArtifact(nodeId, trimmed)) {
+          renameArtifactInTab(tabId, nodeId, trimmed);
+        }
+        return;
+      }
+    }
+    // The optimistic overlay, in place of the `renameArtifact` doc write this
+    // used to do. That write no-opped for every registry-backed row — which
+    // post chats-off-YJS is most of this tree — so these renames had no local
+    // feedback at all. Rationale and the promise-carried retire contract live
+    // in `use-rename-canvas-tab.ts`, which this mirrors.
+    const requestId = epicHandle.store
+      .getState()
+      .beginRenameMutation(nodeId, trimmed);
+    const retire = (outcome: "landed" | "failed"): void => {
+      if (requestId === null) return;
+      epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+    };
+    const landed = (): void => {
+      retire("landed");
+      // The tab snapshot only on settlement - it is a persisted fallback with
+      // no rollback path, so a speculative write would preserve a rejected
+      // title across restarts - and only while this is still the LATEST
+      // stamped rename for the node: settles are unordered, and an older ack
+      // landing last must not overwrite the newer snapshot. See
+      // `use-rename-canvas-tab.ts`.
+      if (
+        requestId === null ||
+        epicHandle.store.getState().isLatestRenameStamp(nodeId, requestId)
+      ) {
+        renameArtifactInTab(tabId, nodeId, trimmed);
+      }
+    };
+    const failed = (): void => {
+      retire("failed");
+    };
     if (artifactType === "chat") {
-      renameChat.mutate(
-        { epicId, chatId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameChat
+        .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+        .then(landed, failed);
     } else if (artifactType === "terminal-agent") {
-      renameTerminalAgent.mutate(
-        { epicId, tuiAgentId: nodeId, title: trimmed },
-        {
-          onSuccess: () => {
-            setIsRenaming(false);
-          },
-        },
-      );
+      void renameTerminalAgent
+        .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+        .then(landed, failed);
+    } else {
+      // No RPC arm for this kind — nothing can ack it, so a lingering stamp
+      // would never land; drop it outright.
+      retire("failed");
     }
   }, [
     artifactType,
@@ -1629,14 +1666,12 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     renameArtifactInTab,
     renameChat,
     renameTerminalAgent,
-    renamePending,
     renameValue,
     tabId,
   ]);
 
   const handleRenameKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
-      if (renamePending) return;
       if (event.key === "Enter") {
         event.preventDefault();
         commitRename();
@@ -1645,7 +1680,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
         setIsRenaming(false);
       }
     },
-    [commitRename, renamePending],
+    [commitRename],
   );
 
   const performDelete = () => {
@@ -1728,7 +1763,6 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       onRenameValueChange={setRenameValue}
       onCommitRename={commitRename}
       onRenameKeyDown={handleRenameKeyDown}
-      renamePending={renamePending}
       onToggle={handleToggle}
       onClick={rowClick}
       onDoubleClick={rowDoubleClick}
@@ -1776,7 +1810,6 @@ interface ChatNodeShellProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onCommitRename: () => void;
   readonly onRenameKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1878,7 +1911,6 @@ function ChatNodeShellBody(
     onRenameValueChange,
     onCommitRename,
     onRenameKeyDown,
-    renamePending,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1967,7 +1999,6 @@ function ChatNodeShellBody(
             onRenameValueChange={onRenameValueChange}
             onBlur={onCommitRename}
             onKeyDown={onRenameKeyDown}
-            renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
             isArchived={archiveRow.isArchived}
@@ -2433,7 +2464,6 @@ interface ChatRenameRowProps {
   readonly onRenameValueChange: (value: string) => void;
   readonly onBlur: () => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
-  readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
   readonly isArchived: boolean;
@@ -2450,7 +2480,6 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     onRenameValueChange,
     onBlur,
     onKeyDown,
-    renamePending,
     nodeName,
     nodeId,
   } = props;
@@ -2489,18 +2518,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
             }}
             onBlur={onBlur}
             onKeyDown={onKeyDown}
-            disabled={renamePending}
             className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
             aria-label={`Rename ${nodeName}`}
             data-testid={`epic-sidebar-rename-input-${nodeId}`}
           />
-          {renamePending ? (
-            <AgentSpinningDots
-              className="shrink-0 text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          ) : null}
         </div>
       </div>
     </div>

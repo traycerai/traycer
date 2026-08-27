@@ -8,6 +8,7 @@ import {
   downgradeRequestAcrossMajors,
   isRpcErrorCode,
   mergeConnectionManifests,
+  SERVES_EVERY_INSTALLED_MAJOR,
   splitConnectionManifest,
   upgradeResponseToVersion,
   upgradeResponseToVersionWithContext,
@@ -468,7 +469,13 @@ export class WsRpcClient<
   }
 
   private buildManifest(): SplitConnectionManifest {
-    return splitConnectionManifest(this.registry, RELEASED_FLOOR_METHOD_NAMES);
+    // See the note in `remote-session.ts`: unary majors are all serveable by
+    // a client, so only the stream manifest narrows.
+    return splitConnectionManifest(
+      this.registry,
+      RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
   }
 }
 

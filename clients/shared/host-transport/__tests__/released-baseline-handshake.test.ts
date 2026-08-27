@@ -15,6 +15,8 @@ import {
   defineRpcContract,
 } from "@traycer/protocol/framework/index";
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
+import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import {
   manifestFromSurface,
   protocolSurfaceSchema,
@@ -475,7 +477,7 @@ describe.skipIf(baselines.length === 0)(
         if (open.kind === "open") {
           expect(open.manifest["synthetic.baselineFallback"]).toBeUndefined();
           expect(open.optionalManifest?.["synthetic.baselineFallback"]).toEqual(
-            { major: 1, minor: 0 },
+            { major: 1, minor: 0, supportedMajors: [1] },
           );
         }
 
@@ -548,7 +550,7 @@ describe.skipIf(baselines.length === 0)(
           ).toBeUndefined();
           expect(
             open.optionalManifest?.["synthetic.baselineUnsupported"],
-          ).toEqual({ major: 1, minor: 0 });
+          ).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
         }
 
         // No optionalManifest on the old ack means the optional method is
@@ -573,7 +575,10 @@ describe.skipIf(baselines.length === 0)(
         // exercises the open handshake plus a per-method check that must pass.
         const method = "epic.subscribe";
         expect(
-          buildStreamManifest(hostStreamRpcRegistry)[method],
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          )[method],
         ).toBeDefined();
         expect(stream[method]).toBeDefined();
 
@@ -622,7 +627,10 @@ describe.skipIf(baselines.length === 0)(
         };
         expect(open.kind).toBe("open");
         expect(open.manifest).toEqual(
-          buildStreamManifest(hostStreamRpcRegistry),
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            CLIENT_SERVED_STREAM_MAJORS,
+          ),
         );
         expect(open.optionalManifest).toBeUndefined();
 
