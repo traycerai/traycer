@@ -196,21 +196,27 @@ export class RelaySocket {
    * window. No verdict is duplicated: the probe fails through the same
    * {@link fail} path. A socket that has not opened, or is closed, has nothing
    * to probe and is a no-op.
+   *
+   * Returns whether THIS call armed a fresh probe. A joined burst, a socket
+   * with nothing to probe, and a staleness check that failed the socket
+   * synchronously all return false - which is what lets the caller attach
+   * per-probe policy (the session's failed-probe redial latch) to exactly the
+   * poke whose deadline is live, instead of to whichever wake happened last.
    */
-  pokeKeepalive(probeTimeoutMs: number): void {
+  pokeKeepalive(probeTimeoutMs: number): boolean {
     // The outstanding-probe check comes FIRST, before anything is sent. A probe
     // already in flight is already asking this exact question, so a second poke
     // has nothing to learn and every extra ping is pure wire traffic - and
     // pokes do arrive in bursts, one per subscriber on a single visibility
-    // edge. (That also means a burst's FIRST poke owns the deadline: a later
-    // poke with a different timeout joins the in-flight probe rather than
-    // re-arming it.)
+    // edge. (That also means a burst's FIRST poke owns the deadline AND the
+    // policy: a later poke with different tuning joins the in-flight probe
+    // rather than re-arming it.)
     if (this.closed || !this.opened || this.probeTimer !== null) {
-      return;
+      return false;
     }
     this.runKeepaliveTick();
     if (this.closed) {
-      return;
+      return false;
     }
     this.probeTimer = setTimeout(() => {
       this.probeTimer = null;
@@ -224,6 +230,7 @@ export class RelaySocket {
         RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
       );
     }, probeTimeoutMs);
+    return true;
   }
 
   close(code: number, reason: string): void {

@@ -1272,14 +1272,20 @@ export class RemoteSession<
       // A socket that merely looks alive is left connected and answers the
       // poke's probe on its own deadline.
       //
-      // The latch goes up BEFORE the poke: a socket already past its scheduled
-      // pong deadline fails synchronously inside it, and that loss must find
-      // the latch already cleared by its own drop rather than half-armed.
-      this.wakeProbeImmediateRedial =
-        probe !== null && probe.immediateRedialOnFailure;
-      this.connection.relaySocket.pokeKeepalive(
+      // The latch belongs to the poke that ARMED the probe, exactly as the
+      // deadline does - `pokeKeepalive` reports that. A wake that merely joins
+      // an in-flight probe must not rewrite the policy that probe was started
+      // under (a default-tuned `wake-online` landing mid-burst would otherwise
+      // retract a mobile resume's immediate redial), and a poke whose
+      // staleness check failed the socket synchronously armed nothing - its
+      // own drop has already cleared the latch, and it stays cleared.
+      const armedProbe = this.connection.relaySocket.pokeKeepalive(
         probe === null ? RELAY_WAKE_PROBE_TIMEOUT_MS : probe.timeoutMs,
       );
+      if (armedProbe) {
+        this.wakeProbeImmediateRedial =
+          probe !== null && probe.immediateRedialOnFailure;
+      }
     }
     this.collapseBackoff(reason);
   }
