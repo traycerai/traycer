@@ -5,6 +5,7 @@ import type {
   ChatRunSettings,
   ChatRunStatus,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { InterviewAnswerability } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   Message,
@@ -683,15 +684,39 @@ const NO_UNANSWERABLE_INTERVIEWS: ReadonlyArray<UnanswerableInterviewView> = [];
  * over the host's pending set: every id here has no streaming block, so the two
  * can never name the same block.
  *
- * There is no transient window to debounce. The host broadcasts an interview's
- * `blockDelta` before the `interviewRequested` frame that makes it pending
- * (chat-session-manager `handleRuntimeEvent`), and hydration surfaces detached
- * waits in the same snapshot that carries their persisted blocks - so a pending
- * id without a streaming block is genuinely stuck, not mid-arrival.
+ * There is no transient window to debounce ON THE LEGACY LINE. The host
+ * broadcasts an interview's `blockDelta` before the `interviewRequested` frame
+ * that makes it pending (chat-session-manager `handleRuntimeEvent`), and
+ * hydration surfaces detached waits in the same snapshot that carries their
+ * persisted blocks - so a pending id without a streaming block is genuinely
+ * stuck, not mid-arrival.
+ *
+ * ## Why the windowed line needs `hostAnswerability`
+ *
+ * That whole argument rests on the transcript being WHOLE. Once `messages` is
+ * the hydrated window, "no streaming block here" stops meaning "no streaming
+ * block": the question can be perfectly answerable and merely cold - its row
+ * past the inline tail, or a detached wait the eager range has not reached -
+ * and this would offer to error out a question the user could have answered.
+ * A block delta arriving for an EVICTED row is dropped rather than seated, so
+ * even the flush-before-publish ordering above stops closing the gap.
+ *
+ * So on that line the host judges it, and the three states are distinct:
+ *
+ * - **an entry with an ordinal** - answerable, merely cold. Not listed here;
+ *   the store hydrates that row and the card appears.
+ * - **an entry with `ordinal: null`** - no row renders it. Genuinely stuck,
+ *   listed, and dismissal is the right affordance.
+ * - **no entry** - the host has not judged this id (it became pending after
+ *   the snapshot). Not listed: an unjudged question is not evidence of one.
+ *
+ * @param hostAnswerability The host's judgement, or `null` on the legacy line -
+ * where absence in `messages` IS the answer and no second opinion exists.
  */
 export function findUnanswerableInterviews(
   messages: ReadonlyArray<ChatMessageModel>,
   hostPendingInterviews: ReadonlyArray<ChatPendingInterviewState>,
+  hostAnswerability: ReadonlyArray<InterviewAnswerability> | null,
 ): ReadonlyArray<UnanswerableInterviewView> {
   if (hostPendingInterviews.length === 0) return NO_UNANSWERABLE_INTERVIEWS;
   const streamingBlockIds = new Set<string>();
@@ -702,9 +727,22 @@ export function findUnanswerableInterviews(
       streamingBlockIds.add(segment.id);
     }
   }
+  // Only the ids the host judged UNRENDERABLE. Both other states - judged and
+  // placeable, or not judged at all - fall outside this set, which is why the
+  // check below is membership rather than a lookup with a default.
+  const hostStuckBlockIds =
+    hostAnswerability === null
+      ? null
+      : new Set(
+          hostAnswerability
+            .filter((entry) => entry.ordinal === null)
+            .map((entry) => entry.blockId),
+        );
   const unanswerable: UnanswerableInterviewView[] = [];
   for (const interview of hostPendingInterviews) {
     if (streamingBlockIds.has(interview.blockId)) continue;
+    if (hostStuckBlockIds !== null && !hostStuckBlockIds.has(interview.blockId))
+      continue;
     unanswerable.push({
       blockId: interview.blockId,
       requestedAt: interview.requestedAt,

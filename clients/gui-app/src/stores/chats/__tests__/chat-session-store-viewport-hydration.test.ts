@@ -111,6 +111,8 @@ function snapshot(input: {
     pinnedTaskTodoItems: [],
     latestForkableAssistantMessageId: null,
     restorableSetupInterruption: null,
+    interviewAnswerability: [],
+    latestAssistantAuthFailureTurnKey: null,
   };
   return {
     kind: "snapshot",

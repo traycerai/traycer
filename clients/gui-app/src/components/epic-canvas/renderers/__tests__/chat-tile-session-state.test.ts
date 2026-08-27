@@ -929,9 +929,11 @@ describe("findUnanswerableInterviews", () => {
     ];
 
     expect(
-      findUnanswerableInterviews(messages, [
-        { blockId: "settled-block", requestedAt: 10 },
-      ]),
+      findUnanswerableInterviews(
+        messages,
+        [{ blockId: "settled-block", requestedAt: 10 }],
+        null,
+      ),
     ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
   });
 
@@ -940,6 +942,7 @@ describe("findUnanswerableInterviews", () => {
       findUnanswerableInterviews(
         [],
         [{ blockId: "ghost-block", requestedAt: 7 }],
+        null,
       ),
     ).toEqual([{ blockId: "ghost-block", requestedAt: 7 }]);
   });
@@ -954,7 +957,7 @@ describe("findUnanswerableInterviews", () => {
 
     // The two derivations partition the host's pending set - a block routed to
     // the card must never also raise the escape hatch.
-    expect(findUnanswerableInterviews(messages, pending)).toEqual([]);
+    expect(findUnanswerableInterviews(messages, pending, null)).toEqual([]);
     expect(
       findPendingInterview(messages, (id) => id === "streaming-block")?.blockId,
     ).toBe("streaming-block");
@@ -971,10 +974,14 @@ describe("findUnanswerableInterviews", () => {
     ];
 
     expect(
-      findUnanswerableInterviews(messages, [
-        { blockId: "settled-block", requestedAt: 10 },
-        { blockId: "streaming-block", requestedAt: 20 },
-      ]),
+      findUnanswerableInterviews(
+        messages,
+        [
+          { blockId: "settled-block", requestedAt: 10 },
+          { blockId: "streaming-block", requestedAt: 20 },
+        ],
+        null,
+      ),
     ).toEqual([{ blockId: "settled-block", requestedAt: 10 }]);
   });
 
@@ -986,6 +993,7 @@ describe("findUnanswerableInterviews", () => {
           { blockId: "newer-block", requestedAt: 20 },
           { blockId: "older-block", requestedAt: 10 },
         ],
+        null,
       ).map((interview) => interview.blockId),
     ).toEqual(["older-block", "newer-block"]);
   });
@@ -993,7 +1001,7 @@ describe("findUnanswerableInterviews", () => {
   it("returns one stable empty reference so the composer memo cannot churn", () => {
     // `renderedMessages` changes on every streaming token; a fresh `[]` here
     // would re-identify the composer's props each token.
-    const first = findUnanswerableInterviews([], []);
+    const first = findUnanswerableInterviews([], [], null);
     const second = findUnanswerableInterviews(
       [
         interviewMessage("m-1", [
@@ -1001,10 +1009,95 @@ describe("findUnanswerableInterviews", () => {
         ]),
       ],
       [{ blockId: "streaming-block", requestedAt: 10 }],
+      null,
     );
 
     expect(first).toEqual([]);
     expect(second).toBe(first);
+  });
+
+  /**
+   * The windowed line, where "not in `messages`" stopped being evidence.
+   *
+   * The three cases below are the three states the host's judgement can be in
+   * for a pending id, and only ONE of them may reach the dismiss affordance.
+   * The other two are a question the reader can still answer.
+   */
+  describe("on the windowed line", () => {
+    it("does not offer to dismiss a question the host placed at an ordinal", () => {
+      // The bug this fixes. The block is answerable and merely cold - its row
+      // outside the retained window - so the rendered scan misses it, and
+      // before the host's answer this offered to settle it as errored.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "cold-block", requestedAt: 10 }],
+          [{ blockId: "cold-block", ordinal: 7 }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("offers to dismiss a question the host says no row renders", () => {
+      // `ordinal: null` is a judgement, not an absence: the host walked the
+      // whole transcript and found nothing that could ever draw a card. This
+      // is the phantom-interview case, and suppressing the notice here would
+      // leave the chat wedged with no way out.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "stuck-block", requestedAt: 10 }],
+          [{ blockId: "stuck-block", ordinal: null }],
+        ),
+      ).toEqual([{ blockId: "stuck-block", requestedAt: 10 }]);
+    });
+
+    it("does not offer to dismiss a question the host has not judged", () => {
+      // An id that became pending AFTER the snapshot: `interviewRequested`
+      // publishes it, and the block delta that would have rendered it was
+      // dropped because its row is evicted. Absent from the judgement is
+      // "unjudged", never "unrenderable" - the next snapshot decides.
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [{ blockId: "fresh-block", requestedAt: 10 }],
+          [{ blockId: "other-block", ordinal: null }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("still keeps a rendered streaming block out of the notice", () => {
+      // The rendered scan is not replaced by the judgement, it is narrowed by
+      // it: a block this client can already draw needs no host opinion.
+      const messages = [
+        interviewMessage("m-1", [
+          { blockId: "live-block", status: "streaming" },
+        ]),
+      ];
+
+      expect(
+        findUnanswerableInterviews(
+          messages,
+          [{ blockId: "live-block", requestedAt: 10 }],
+          [{ blockId: "live-block", ordinal: null }],
+        ),
+      ).toEqual([]);
+    });
+
+    it("separates a cold question from a genuinely stuck one in the same chat", () => {
+      expect(
+        findUnanswerableInterviews(
+          [],
+          [
+            { blockId: "stuck-block", requestedAt: 10 },
+            { blockId: "cold-block", requestedAt: 20 },
+          ],
+          [
+            { blockId: "stuck-block", ordinal: null },
+            { blockId: "cold-block", ordinal: 3 },
+          ],
+        ),
+      ).toEqual([{ blockId: "stuck-block", requestedAt: 10 }]);
+    });
   });
 });
 
@@ -1096,6 +1189,8 @@ function windowedLine(input: {
       pinnedTaskTodoItems: [],
       latestForkableAssistantMessageId: null,
       restorableSetupInterruption: null,
+      interviewAnswerability: [],
+      latestAssistantAuthFailureTurnKey: null,
     },
   };
 }
@@ -1379,5 +1474,7 @@ function derivedWith(
     pinnedTaskTodoItems: [],
     latestForkableAssistantMessageId: null,
     restorableSetupInterruption: null,
+    interviewAnswerability: [],
+    latestAssistantAuthFailureTurnKey: null,
   };
 }

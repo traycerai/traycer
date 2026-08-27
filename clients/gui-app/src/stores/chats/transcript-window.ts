@@ -1549,7 +1549,7 @@ export function unhydratedRowCount(window: TranscriptWindow): number {
 /**
  * What to fetch next, or `null` when the window is already sufficient.
  *
- * Two obligations, in priority order:
+ * Three obligations, in priority order:
  *
  * 1. **The tail, when the LAST ROW is not hydrated.** A snapshot whose
  *    `rowCount` is positive and whose tail seated nothing means the host's tail
@@ -1563,16 +1563,29 @@ export function unhydratedRowCount(window: TranscriptWindow): number {
  *    rows above it as an outstanding obligation would prefetch scrollback the
  *    reader may never reach on every single snapshot. Once the tail is in,
  *    hydration is the viewport's business.
- * 2. **The visible span**, whichever part of it is not hydrated.
+ * 2. **`required`** - rows something OTHER than the viewport is blocked on.
+ *    Today that is exactly one thing: a row carrying a pending interview's
+ *    question, which no scroll will ever bring into view because the card
+ *    renders in the composer. A chat blocked on a question nobody can see is
+ *    stuck, so this outranks scrollback the reader may never reach; it sits
+ *    below the tail only because the tail is where the answer usually already
+ *    is, and asking for it is the cheaper way to get there.
+ * 3. **The visible span**, whichever part of it is not hydrated.
  *
  * An invalidated window returns `null`: no range can repair a void index, and
  * issuing one against a coordinate space the client has left would seat bodies
  * under the wrong rows. The caller owes a `resnapshot` instead, which is a
  * different frame and a different decision.
+ *
+ * @param required Ordinals that must be hydrated regardless of the viewport.
+ * An ordinal outside the transcript selects itself out - see
+ * {@link firstRequiredGap} - so a judgement carried across a `rowCount` change
+ * cannot plan a request the host would answer with nothing.
  */
 export function planTranscriptHydration(
   window: TranscriptWindow,
   visible: OrdinalRange | null,
+  required: readonly number[],
 ): OrdinalRange | null {
   if (window.invalidated) return null;
   if (window.rowCount === 0) return null;
@@ -1586,8 +1599,45 @@ export function planTranscriptHydration(
     const lastTailGap = tailGaps.at(-1);
     if (lastTailGap !== undefined) return lastTailGap;
   }
+  const requiredGap = firstRequiredGap(window, required);
+  if (requiredGap !== null) return requiredGap;
   if (visible === null) return null;
   return transcriptHydrationGaps(window, visible)[0] ?? null;
+}
+
+/**
+ * The lowest required ordinal this window does not hold, as a ONE-ROW range.
+ *
+ * One row rather than the gap around it because the caller wants that row and
+ * nothing else: the host serves the first requested row whatever it costs
+ * (`read-range.ts`), so a single-row ask always succeeds, while widening it to
+ * the enclosing gap could spend the whole frame budget on scrollback nobody
+ * asked for and still stop short of the row that matters.
+ *
+ * Lowest first so a chat blocked on several questions works through them in
+ * transcript order, which is the order the notice lists them in.
+ *
+ * An ordinal outside the transcript needs no guard of its own, and deliberately
+ * does not have one. {@link transcriptHydrationGaps} clamps to `[0, rowCount)`
+ * and answers an empty range with no gap, so a row that does not exist reports
+ * itself hydrated and is skipped by the same line that skips a row the window
+ * already holds. A second bound here would be a restatement of that clamp -
+ * correct today, and one more place to disagree with it later.
+ */
+function firstRequiredGap(
+  window: TranscriptWindow,
+  required: readonly number[],
+): OrdinalRange | null {
+  let lowest: number | null = null;
+  for (const ordinal of required) {
+    if (lowest !== null && ordinal >= lowest) continue;
+    const range = { fromOrdinal: ordinal, toOrdinal: ordinal + 1 };
+    if (transcriptHydrationGaps(window, range).length === 0) continue;
+    lowest = ordinal;
+  }
+  return lowest === null
+    ? null
+    : { fromOrdinal: lowest, toOrdinal: lowest + 1 };
 }
 
 /**
@@ -1615,11 +1665,19 @@ export function planTranscriptHydration(
  * hydrates/evicts/re-fetches that row forever while it never renders once.
  * Protecting what the reader is looking at bounds the overage by one
  * viewport's spans and ends when they scroll away.
+ *
+ * `required` is protected for the SAME reason and would otherwise reintroduce
+ * that loop in its purest form. Those rows are re-planned unconditionally -
+ * they are not gated on a viewport that could scroll away - so a required span
+ * evicted as coldest is re-requested on the next plan, evicted again, and the
+ * client fetches one row forever. It ends the way the viewport's does: when the
+ * question settles and the ordinal stops being required.
  */
 export function evictTranscriptWindowToBudget(
   input: TranscriptWindow,
   maxBytes: number,
   visible: OrdinalRange | null,
+  required: readonly number[],
 ): TranscriptWindow {
   // The one place the byte figure is READ, and therefore the one place it has
   // to be true. Settling FIRST rather than after the early return is the whole
@@ -1629,6 +1687,13 @@ export function evictTranscriptWindowToBudget(
   if (window.hydratedBytes <= maxBytes) return window;
   const isProtected = (span: HydratedSpan): boolean => {
     if (spanEnd(span) >= window.rowCount && window.rowCount > 0) return true;
+    if (
+      required.some(
+        (ordinal) => span.fromOrdinal <= ordinal && spanEnd(span) > ordinal,
+      )
+    ) {
+      return true;
+    }
     return (
       visible !== null &&
       span.fromOrdinal < visible.toOrdinal &&

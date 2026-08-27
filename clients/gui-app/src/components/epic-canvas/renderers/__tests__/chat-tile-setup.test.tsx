@@ -262,6 +262,8 @@ function emitWindowedSnapshot(
         pinnedTaskTodoItems: [],
         latestForkableAssistantMessageId: null,
         restorableSetupInterruption,
+        interviewAnswerability: [],
+        latestAssistantAuthFailureTurnKey: null,
       },
     },
   });

@@ -10966,6 +10966,8 @@ describe("createChatSessionStore", () => {
             clientActionId: "send-1",
             messageId: "queued-msg",
           },
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
         },
       }),
     ).toMatchObject({
@@ -10998,6 +11000,8 @@ describe("createChatSessionStore", () => {
           pinnedTaskTodoItems: [],
           latestForkableAssistantMessageId: null,
           restorableSetupInterruption: null,
+          interviewAnswerability: [],
+          latestAssistantAuthFailureTurnKey: null,
         },
       }),
     ).toBeNull();
