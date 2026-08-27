@@ -2474,22 +2474,64 @@ export function createChatSessionStoreWithNotificationDependencies(
     };
 
     /**
-     * Is a chunked delivery still missing part of what it promised?
+     * Which chunked streams have actually DELIVERED something this epoch.
      *
-     * Both streams state their own total, which is what makes this answerable
-     * without tracking chunk counts: the skeleton's is `rowCount` (and
+     * The watchdog below detects a stream that stopped part way, and "part way"
+     * is only meaningful for a stream that started. A snapshot names totals
+     * (`rowCount`, `accumulatedFileChangeCount`) before any chunk is sent, and
+     * for some chats no chunk is ever sent - a short transcript rides the
+     * snapshot's own tail. Reading those totals alone, an ordinary healthy chat
+     * looks exactly like a stalled one, and every one of them would buy a
+     * pointless whole-transcript resnapshot. `windowed-session-binding`'s
+     * "stops asking once the snapshot lands" is precisely that case.
+     *
+     * Keyed by epoch rather than cleared per snapshot, and that is what keeps
+     * the aux-snapshot case working: an aux-only re-broadcast clears the
+     * resnapshot latch and `invalidated` mid-stream, so the flag has to survive
+     * it to notice that the re-stream never resumed. An epoch change is a new
+     * coordinate space and genuinely starts over.
+     */
+    let chunkStreamsStarted: {
+      epoch: number;
+      skeleton: boolean;
+      summaries: boolean;
+    } | null = null;
+
+    const noteChunkStreamStarted = (which: "skeleton" | "summaries"): void => {
+      const epoch = get().transcriptWindow.epoch;
+      const started =
+        chunkStreamsStarted?.epoch === epoch
+          ? chunkStreamsStarted
+          : { epoch, skeleton: false, summaries: false };
+      started[which] = true;
+      chunkStreamsStarted = started;
+    };
+
+    /**
+     * Is a chunked delivery that STARTED still missing part of what it
+     * promised?
+     *
+     * Each stream states its own total, which is what makes this answerable
+     * without counting chunks: the skeleton's is `rowCount` (and
      * `skeletonComplete` is only set by a chunk carrying `isFinal`, once its
      * coverage agrees), and the summaries' is `accumulatedFileChangeCount`
-     * from the snapshot.
+     * from the snapshot. The `started` gate is what stops those totals from
+     * indicting a chat that was never going to stream at all.
      */
     const chunkedDeliveryIncomplete = (): boolean => {
       const state = get();
-      if (state.transcriptWindow.rowCount > 0) {
-        if (!state.transcriptWindow.skeletonComplete) return true;
+      const started =
+        chunkStreamsStarted?.epoch === state.transcriptWindow.epoch
+          ? chunkStreamsStarted
+          : null;
+      if (started === null) return false;
+      if (started.skeleton && !state.transcriptWindow.skeletonComplete) {
+        return true;
       }
       return (
+        started.summaries &&
         state.accumulatedFileChangeSummaries.length <
-        state.accumulatedFileChangeCount
+          state.accumulatedFileChangeCount
       );
     };
 
@@ -3163,6 +3205,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Re-arms while the skeleton is still short, disarms once it covers
         // `rowCount`. A stream that simply stops after a non-final chunk is
         // otherwise indistinguishable from one still in progress.
+        noteChunkStreamStarted("skeleton");
         armStreamCompletionWatchdog(false);
         requestPlannedHydration();
       },
@@ -3300,6 +3343,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // The gap check above only fires when a LATER chunk exposes the hole,
         // so it cannot see the stream simply stopping. Armed after the `set`
         // so the watchdog reads the assembled length this chunk produced.
+        noteChunkStreamStarted("summaries");
         armStreamCompletionWatchdog(false);
       },
       onActionAck: (frame) => {

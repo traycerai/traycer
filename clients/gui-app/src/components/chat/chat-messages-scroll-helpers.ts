@@ -230,23 +230,65 @@ export function chatViewportAnchorRowIndex(
  * construction: viewport-driven hydration is already fetching the rows the
  * reader is looking at.
  */
+/**
+ * The indexes of the hydrated rows, ascending, built once per `rows` array.
+ *
+ * The scan below runs on every scroll frame, and a reading line inside a large
+ * unhydrated region walked the entire placeholder run - backwards to the start
+ * of the chat, then forwards to its end - before answering. That is O(rowCount)
+ * per frame, on a structure whose whole point is that `rowCount` may be tens of
+ * thousands.
+ *
+ * `rows` is safe to key on and is exactly the right granularity: scrolling does
+ * not rebuild it (it changes only when the window or the rendered set does), so
+ * a scroll gesture pays one build and then binary-searches. A `WeakMap` because
+ * the answer is only ever valid for the array it was derived from, and keying
+ * on it makes staleness unrepresentable rather than something to invalidate.
+ */
+const hydratedIndexesByRows = new WeakMap<object, readonly number[]>();
+
+function hydratedIndexes(
+  rows: ReadonlyArray<TranscriptListRow>,
+): readonly number[] {
+  const cached = hydratedIndexesByRows.get(rows);
+  if (cached !== undefined) return cached;
+  const indexes: number[] = [];
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index].kind === "hydrated") indexes.push(index);
+  }
+  hydratedIndexesByRows.set(rows, indexes);
+  return indexes;
+}
+
 function nearestHydratedMessageId(
   rows: ReadonlyArray<TranscriptListRow>,
   anchorRowIndex: number,
 ): string | null {
-  for (
-    let index = Math.min(anchorRowIndex, rows.length - 1);
-    index >= 0;
-    index -= 1
-  ) {
-    const row = rows[index];
-    if (row.kind === "hydrated") return row.model.id;
+  const indexes = hydratedIndexes(rows);
+  if (indexes.length === 0) return null;
+  const anchor = Math.min(anchorRowIndex, rows.length - 1);
+  // The last hydrated index at or before the anchor. Same at-or-before-then-
+  // after preference as the linear walk it replaces, so the row chosen is
+  // unchanged - only the cost of finding it is.
+  let low = 0;
+  let high = indexes.length - 1;
+  let atOrBefore: number | null = null;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const candidate = indexes[mid];
+    if (candidate <= anchor) {
+      atOrBefore = candidate;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
   }
-  for (let index = anchorRowIndex + 1; index < rows.length; index += 1) {
-    const row = rows[index];
-    if (row.kind === "hydrated") return row.model.id;
-  }
-  return null;
+  // `low` now points at the first index PAST the anchor, which is the forward
+  // fallback when nothing sits at or before it.
+  const chosen =
+    atOrBefore ?? (low < indexes.length ? indexes[low] : indexes[0]);
+  const row = rows[chosen];
+  return row.kind === "hydrated" ? row.model.id : null;
 }
 
 /**

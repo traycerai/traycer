@@ -140,6 +140,36 @@ function skeletonRowIdSet(
 }
 
 /**
+ * Placeholder rows already built, keyed by the skeleton they were built from.
+ *
+ * This function reruns on every block delta - `transcriptWindow` is replaced
+ * per token while a turn streams - and the `rowCount` loop below allocates a
+ * row object for each of the (often thousands of) unhydrated ordinals every
+ * time. That is work proportional to the WHOLE chat on the hottest path in the
+ * app, in the structure introduced to make long chats cheap.
+ *
+ * A placeholder is a pure function of `(skeleton array, ordinal)`, and the
+ * skeleton is safe to key on: `applySkeletonChunk` and `applyIndexChange` are
+ * the only writers and both copy (`const skeleton = [...window.skeleton]`)
+ * before mutating, so a given array identity never changes contents. Every
+ * other window update spreads `{...window, spans}` and carries the same array
+ * through - which is exactly the streaming case this exists for.
+ *
+ * A `WeakMap` so the cache dies with the skeleton it describes: it is scoped
+ * per window rather than per chat, needs no invalidation, and cannot leak
+ * across sessions.
+ *
+ * Reuse also makes the row objects referentially STABLE across deltas, which
+ * matters beyond allocation: the stable-row pass and the minimap projection
+ * both scan this array, and an unchanged placeholder now compares equal by
+ * identity instead of by field.
+ */
+const placeholderRowsBySkeleton = new WeakMap<
+  object,
+  Map<number, TranscriptListRow>
+>();
+
+/**
  * Merge what the renderer produced with what the window says exists.
  *
  * @param window The transcript window, or `null` on the legacy line - where
@@ -192,6 +222,12 @@ export function transcriptListRows(input: {
 
   const skeletonRowIds = skeletonRowIdSet(window.skeleton);
 
+  let placeholders = placeholderRowsBySkeleton.get(window.skeleton);
+  if (placeholders === undefined) {
+    placeholders = new Map<number, TranscriptListRow>();
+    placeholderRowsBySkeleton.set(window.skeleton, placeholders);
+  }
+
   const rows: TranscriptListRow[] = [];
   for (let ordinal = 0; ordinal < window.rowCount; ordinal += 1) {
     const model = modelByOrdinal.get(ordinal);
@@ -200,13 +236,23 @@ export function transcriptListRows(input: {
       continue;
     }
     if (suppressedOrdinals.has(ordinal)) continue;
+    // Reused across deltas: see `placeholderRowsBySkeleton`. Nothing here reads
+    // the spans or the rendered models, so a body arriving elsewhere in the
+    // chat cannot change this row.
+    const cached = placeholders.get(ordinal);
+    if (cached !== undefined) {
+      rows.push(cached);
+      continue;
+    }
     const entry = window.skeleton[ordinal] ?? null;
-    rows.push({
+    const row: TranscriptListRow = {
       kind: "placeholder",
       key: entry === null ? unplacedRowKey(ordinal) : entry.rowId,
       ordinal,
       entry,
-    });
+    };
+    placeholders.set(ordinal, row);
+    rows.push(row);
   }
   for (const model of rendered) {
     if (placedRowIds.has(model.id)) continue;
