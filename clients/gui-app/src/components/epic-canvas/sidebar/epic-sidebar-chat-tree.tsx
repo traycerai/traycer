@@ -119,6 +119,10 @@ import {
   useEpicSidebarExpansionStore,
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import {
   useAncestorIds,
   useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
@@ -216,6 +220,7 @@ import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
   combineSidebarVisibleIds,
+  revealArchiveHiddenIds,
   sidebarTreeRootIds,
   useMaybeSidebarBulkSelection,
 } from "./epic-sidebar-selection";
@@ -599,6 +604,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const allRootIds = usePanelRootIds(panelId, comparator);
   const filterMatchIds = useChatFilterMatchIds(epicId);
   const tree = useEpicTreeIndex();
+  const revealRequest = useSidebarNodeRevealRequest(tabId);
+  const ancestorIdsOfReveal = useAncestorIds(revealRequest?.nodeId ?? null);
   // Bulk selection owns the header outright (`PanelGroupSectionHeader` returns
   // the selection actions before it ever considers the search row), so while
   // selection mode is on there is no search input to type into, to read a query
@@ -634,6 +641,25 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => expandMatchesToVisibleIds(narrowedMatchIds, tree.nodeById),
     [narrowedMatchIds, tree],
   );
+  // Reveal is a transient visibility exception. It must be able to surface the
+  // requested local row through the user's current narrowing without mutating
+  // their search or filter state; once the row scrolls into view, the request
+  // is consumed and the usual projection resumes.
+  const revealVisibleIds = useMemo(() => {
+    if (
+      revealRequest === null ||
+      !Object.hasOwn(tree.nodeById, revealRequest.nodeId)
+    ) {
+      return narrowedVisibleIds;
+    }
+    if (narrowedVisibleIds === null) return null;
+    const revealPathIds = expandMatchesToVisibleIds(
+      new Set([revealRequest.nodeId]),
+      tree.nodeById,
+    );
+    if (revealPathIds === null) return narrowedVisibleIds;
+    return new Set([...narrowedVisibleIds, ...revealPathIds]);
+  }, [narrowedVisibleIds, revealRequest, tree]);
   // Filter-only, still ancestor-expanded: the indicator query below reads this
   // one so it does not refetch on every keystroke.
   const filterVisibleIds = useMemo(
@@ -683,8 +709,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   });
   const hasCollaborators = taskHasCollaborators(collaboratorsQuery.data);
   const filterRootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, narrowedVisibleIds),
-    [allRootIds, narrowedVisibleIds],
+    () => applyVisibleFilter(allRootIds, revealVisibleIds),
+    [allRootIds, revealVisibleIds],
   );
 
   // Indicators must be fetched BEFORE archive hiding is applied. Archived
@@ -719,12 +745,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
   const [notificationIndicators, setNotificationIndicators] =
     useState<SurfaceNotificationIndicators>(EMPTY_INDICATOR_STATE_RESPONSE);
-  const archiveHiddenIds = useChatArchiveHiddenIds({
+  const baseArchiveHiddenIds = useChatArchiveHiddenIds({
     epicId,
     tabId,
     chatIds: indicatorChatIds,
     notificationIndicators,
   });
+  const archiveHiddenIds = useMemo(() => {
+    if (revealRequest === null) return baseArchiveHiddenIds;
+    return revealArchiveHiddenIds(
+      baseArchiveHiddenIds,
+      [revealRequest.nodeId],
+      tree,
+    );
+  }, [baseArchiveHiddenIds, revealRequest, tree]);
 
   // Two independent narrowings, kept separate on purpose. `filterRootIds` is
   // the interface/ownership filter result and feeds the "no matches" empty
@@ -740,8 +774,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [filterRootIds, archiveHiddenIds],
   );
   const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(narrowedVisibleIds, archiveHiddenIds, tree),
-    [narrowedVisibleIds, archiveHiddenIds, tree],
+    () => combineSidebarVisibleIds(revealVisibleIds, archiveHiddenIds, tree),
+    [revealVisibleIds, archiveHiddenIds, tree],
   );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
@@ -838,13 +872,24 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       ),
     [unfoldedCloudChats, chatFilter, searchQuery],
   );
-  const visibleCloudChats = useMemo(
-    () =>
-      filterMatchingCloudChats.filter((chat) =>
-        cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
-      ),
-    [filterMatchingCloudChats, archiveVisibility],
-  );
+  const visibleCloudChats = useMemo(() => {
+    const visible = filterMatchingCloudChats.filter((chat) =>
+      cloudRowMatchesArchiveVisibility(chat, archiveVisibility),
+    );
+    if (revealRequest === null) return visible;
+    const revealedCloudChat = unfoldedCloudChats.find(
+      (chat) => chat.identity.chatId === revealRequest.nodeId,
+    );
+    return revealedCloudChat === undefined ||
+      visible.includes(revealedCloudChat)
+      ? visible
+      : [...visible, revealedCloudChat];
+  }, [
+    archiveVisibility,
+    filterMatchingCloudChats,
+    revealRequest,
+    unfoldedCloudChats,
+  ]);
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -889,12 +934,16 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     : EMPTY_PENDING_LIST;
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  // Filter- and search-only: see `combineSidebarVisibleIds`. Archive hiding must
-  // never reach here. A search match nested under a collapsed parent forces that
-  // parent open for the same reason a filter match does.
+  // Filter-, search-, and reveal-only: see `combineSidebarVisibleIds`. Archive
+  // hiding must never reach here. A nested target forces its parent open for the
+  // same reason a filter match does.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, narrowedVisibleIds),
-    [ancestorIdsOfActive, narrowedVisibleIds],
+    () =>
+      mergeForcedExpanded(
+        mergeForcedExpanded(ancestorIdsOfActive, ancestorIdsOfReveal),
+        revealVisibleIds,
+      ),
+    [ancestorIdsOfActive, ancestorIdsOfReveal, revealVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -917,6 +966,30 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     },
     [tabId, panelId, expandAction],
   );
+
+  useLayoutEffect(() => {
+    if (revealRequest === null) return;
+    const region = treeRegionRef.current;
+    if (region === null) return;
+    for (const ancestorId of ancestorIdsOfReveal) {
+      expandAction(tabId, panelId, ancestorId);
+    }
+    const row = Array.from(
+      region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+    ).find((element) => element.dataset.sidebarNodeId === revealRequest.nodeId);
+    if (row === undefined) return;
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    clearSidebarNodeRevealRequest(tabId, revealRequest.nonce);
+  }, [
+    ancestorIdsOfReveal,
+    expandAction,
+    expandedIds,
+    panelId,
+    revealRequest,
+    tabId,
+    tree,
+    visibleCloudChats,
+  ]);
 
   const expansion = useMemo<ExpansionController>(
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
@@ -2381,6 +2454,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
   // nothing shifts horizontally or vertically between viewing and renaming.
   return (
     <div
+      data-sidebar-node-id={nodeId}
       className={cn(
         "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
@@ -2657,6 +2731,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         htmlFor={selectionInputId}
         ref={dragRef}
         data-testid={`epic-sidebar-item-${nodeId}`}
+        data-sidebar-node-id={nodeId}
         data-artifact-type={artifactType}
         className={rowClassName}
         style={{
@@ -2730,6 +2805,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           : null,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
+      data-sidebar-node-id={nodeId}
       data-artifact-type={artifactType}
       className={rowClassName}
       style={{

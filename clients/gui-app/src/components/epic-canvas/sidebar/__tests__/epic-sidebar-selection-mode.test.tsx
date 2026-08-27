@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { domMax, LazyMotion } from "motion/react";
-import type { ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
@@ -23,6 +23,10 @@ import { useNewConversationModalStore } from "@/stores/epics/new-conversation-mo
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
 
 interface TestTreeNode {
   readonly id: string;
@@ -420,9 +424,14 @@ vi.mock("@/components/ui/sidebar", () => ({
   SidebarGroup: (props: { readonly children: ReactNode }) => (
     <div>{props.children}</div>
   ),
-  SidebarGroupContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
+  SidebarGroupContent: forwardRef<
+    HTMLDivElement,
+    { readonly children: ReactNode; readonly "data-testid"?: string }
+  >((props, ref) => (
+    <div ref={ref} data-testid={props["data-testid"]}>
+      {props.children}
+    </div>
+  )),
 }));
 
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
@@ -1081,6 +1090,29 @@ describe("epic sidebar selection mode", () => {
       usePanelHeaderSearchStore.getInitialState(),
       true,
     );
+    useSidebarNodeRevealStore.setState({ requestsByViewTabId: {} }, true);
+  });
+
+  it("scrolls a requested agent row into view and consumes the request", async () => {
+    seedChatTree();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "agent-root");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const row = screen.getByTestId("epic-sidebar-item-agent-root");
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+    expect(scrollIntoView.mock.instances).toContain(row);
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
   });
 
   it("selects chat rows explicitly and bulk-deletes topmost selected chat roots", async () => {

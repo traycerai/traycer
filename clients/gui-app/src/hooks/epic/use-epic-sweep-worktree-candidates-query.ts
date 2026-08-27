@@ -1,5 +1,10 @@
 import { useMemo } from "react";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import {
+  queryOptions,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   classifyWorktreeTier,
@@ -10,6 +15,7 @@ import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/w
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { isPerPathEnrichmentQueryKey } from "@/lib/query-keys/worktree-enrichment-keys";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -41,7 +47,7 @@ export interface EpicSweepWorktreeRow {
 }
 
 export interface EpicSweepWorktreeCandidatesResult {
-  /** Host on which these rows were freshly proven; null means no usable proof. */
+  /** Host from which the shown snapshot originated; null means no snapshot. */
   readonly hostId: string | null;
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
   /** True while the act-time probe is in flight (first open OR a re-open). */
@@ -88,13 +94,12 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  * unchecked until the user refreshes or reopens the dialog. Staleness here
  * only ever under-claims, never false-greens.
  *
- * Rows are recomputed only from a settled probe (`isPending` while in flight,
- * including re-opens), so the dialog can never offer rows from a previous
- * open. Pass `null` (or an empty selection) while the dialog is closed to
- * disable the query. Any error yields zero rows ("failure -> no candidates");
- * the host-side
- * busy-check on `worktree.deleteByPath` remains the authoritative backstop
- * either way.
+ * Cached enrichment rows are presentation-only while that proof is in flight:
+ * they let the dialog paint immediately on first open and retain its previous
+ * snapshot on re-open, but the caller must keep selection and Sweep disabled
+ * until `isPending` and `isError` are both false. Pass `null` (or an empty
+ * selection) while the dialog is closed to disable the query. The host-side
+ * busy-check on `worktree.deleteByPath` remains the authoritative backstop.
  */
 /**
  * Sweep-candidate rows against a caller-resolved client. The proof (and the
@@ -108,6 +113,7 @@ export function useEpicSweepWorktreeCandidatesForClient(
   epicIds: ReadonlyArray<string> | null,
 ): EpicSweepWorktreeCandidatesResult {
   const readiness = useReactiveHostReadiness(client);
+  const queryClient = useQueryClient();
   // Sorted + de-duplicated so the cache identity does not depend on selection
   // ORDER, and so re-selecting the same tasks reuses the same query slot.
   const selectedEpicIds = useMemo(
@@ -175,6 +181,18 @@ export function useEpicSweepWorktreeCandidatesForClient(
       // trusting a previous open's proof.
       staleTime: 0,
       retry: false,
+      // Task and History surfaces already keep task-owned provenance enriched.
+      // Seed this selection-specific proof query from that warm method cache so
+      // first-open is useful immediately; the forced query still starts now
+      // and is the only state that authorises the destructive action.
+      initialData: () =>
+        selectedEpicIds === null || readiness.hostId === null
+          ? undefined
+          : cachedTaskWorktrees(queryClient, readiness.hostId, selectedEpicIds),
+      // The warm snapshot is not an act-time proof even if its cache write was
+      // recent. Zero preserves the forced-on-open contract and retains the
+      // snapshot if that proof fails.
+      initialDataUpdatedAt: 0,
     }),
   );
 
@@ -190,15 +208,11 @@ export function useEpicSweepWorktreeCandidatesForClient(
   const canRefresh =
     selectedEpicIds !== null && selectedEpicIds.length > 0 && readiness.isReady;
   const worktrees = data?.worktrees;
-  // While the probe is in flight, retained data from a PREVIOUS open must
-  // not surface as offerable rows — the whole point is act-time proof.
   if (
     selectedEpicIds === null ||
     readiness.hostId === null ||
     !readiness.isReady ||
-    worktrees === undefined ||
-    isError ||
-    isPending
+    worktrees === undefined
   ) {
     return {
       hostId: null,
@@ -220,12 +234,48 @@ export function useEpicSweepWorktreeCandidatesForClient(
   return {
     hostId: readiness.hostId,
     rows,
-    isPending: false,
+    isPending,
     isError,
     checkedAt: oldestResolvedAt(rows.map((row) => row.entry.resolvedAt)),
     canRefresh,
     refresh,
   };
+}
+
+/**
+ * Folds the already-mounted task provenance queries into a first-paint
+ * snapshot for Sweep. The dedicated forced-proof key intentionally sits
+ * outside this method scope, so reading the cache is the bridge between the
+ * attention/event enrichment leg and the act-time safety check.
+ */
+function cachedTaskWorktrees(
+  queryClient: QueryClient,
+  hostId: string,
+  selectedEpicIds: ReadonlyArray<string>,
+): WorktreeListAllForHostResponseV14 | undefined {
+  const selected = new Set(selectedEpicIds);
+  const byPath = new Map<string, WorktreeHostEntryV14>();
+  const cachedResponses =
+    queryClient.getQueriesData<WorktreeListAllForHostResponseV14>({
+      queryKey: hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
+    });
+  for (const [queryKey, response] of cachedResponses) {
+    if (response === undefined || !isPerPathEnrichmentQueryKey(queryKey)) {
+      continue;
+    }
+    for (const entry of response.worktrees) {
+      if (!entry.owners.some((owner) => selected.has(owner.epicId))) continue;
+      const previous = byPath.get(entry.worktreePath);
+      const previousResolvedAt =
+        previous?.resolvedAt ?? Number.NEGATIVE_INFINITY;
+      const nextResolvedAt = entry.resolvedAt ?? Number.NEGATIVE_INFINITY;
+      if (previous === undefined || nextResolvedAt >= previousResolvedAt) {
+        byPath.set(entry.worktreePath, entry);
+      }
+    }
+  }
+  if (byPath.size === 0) return undefined;
+  return { worktrees: [...byPath.values()], nextCursor: null };
 }
 
 function classifySweepRow(
