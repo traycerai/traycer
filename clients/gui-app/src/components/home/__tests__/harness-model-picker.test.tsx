@@ -3631,6 +3631,41 @@ describe("<HarnessModelPicker />", () => {
     });
   });
 
+  it("opens settings on the picker's exact provider, profile, and host", async () => {
+    queryMock.providerStates = [
+      providerCliStateWithProfiles({
+        providerId: "claude-code",
+        profiles: claudeProfilesForDropdown(),
+      }),
+    ];
+    renderPicker({
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-opus-4-7",
+        profileId: "work-profile",
+      },
+      createProfileHostId: "host-b",
+    });
+
+    await openPickerByTriggerName(/^Claude Opus 4\.7/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Provider CLI settings" }),
+    );
+
+    expect(useProvidersFocusStore.getState()).toMatchObject({
+      focusHarnessId: "claude",
+      focusHostId: "host-b",
+      focusTargetHostId: "host-b",
+      focusProfileId: "work-profile",
+      startSignIn: false,
+      focusTab: "usage",
+    });
+    expect(openSettingsMock).toHaveBeenCalledWith({
+      section: "providers",
+      resetToGeneral: false,
+    });
+  });
+
   it("keeps the query when switching harness, re-scopes the results, and commits", async () => {
     const { selections } = renderPicker(undefined);
 
