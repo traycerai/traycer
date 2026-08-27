@@ -809,7 +809,19 @@ function FileTreeBodyForResolvedHost(
           className="text-ui-sm"
         />
       </InputGroup>
-      <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
+      {/* `data-vaul-no-drag`: inside the mobile switcher sheet this tree is a
+          vaul drawer descendant, and vaul decides scroll-vs-dismiss by climbing
+          `parentElement` from the touch target looking for a scroller. Pierre's
+          scroller lives in a SHADOW ROOT, and a touch inside one retargets to
+          the host - so that climb sees no scrollable element and claims the
+          gesture as a drawer drag, leaving the tree unscrollable. The attribute
+          states the fact vaul cannot observe: this subtree scrolls itself.
+          Inert on desktop, which mounts no drawer. */}
+      <div
+        {...bridge.wrapperProps}
+        data-vaul-no-drag=""
+        className="relative min-h-0 flex-1"
+      >
         {/* `invisible`, not unmount: the model keeps its DOM/state for the
             instant the query changes to something that does match. */}
         <div className={cn("h-full", noMatches && "invisible")}>

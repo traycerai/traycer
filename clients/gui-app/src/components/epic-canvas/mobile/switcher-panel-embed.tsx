@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { SharingPanel } from "@/components/epic-canvas/panels/epic-sharing/panel";
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
@@ -6,16 +6,24 @@ import { FileTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar
 
 /** The switcher categories whose body is the desktop panel body, unmodified. */
 export type SwitcherEmbedCategory =
-  | "file-tree"
-  | "git-diff"
-  | "pull-requests"
-  | "sharing";
+  "file-tree" | "git-diff" | "pull-requests" | "sharing";
 
 interface SwitcherPanelEmbedProps {
   readonly category: SwitcherEmbedCategory;
   readonly epicId: string;
   readonly tabId: string;
 }
+
+/**
+ * The surface these panel bodies are sitting on. The desktop sidebar they were
+ * written for is `bg-background`; this sheet is `bg-popover` (`drawer.tsx`), and
+ * `@pierre/trees` paints its own background on the list container and every row.
+ * Declared here rather than inside the tree, because the SHEET is what knows
+ * which surface it is - the tree is mounted on both.
+ */
+const SWITCHER_EMBED_SURFACE_STYLE = {
+  "--pierre-tree-surface": "var(--popover)",
+} as CSSProperties;
 
 /**
  * File-tree, Git-diff, Pull-requests and Sharing categories. Unlike the flat
@@ -40,10 +48,21 @@ interface SwitcherPanelEmbedProps {
  * internal scroller, while the sharing panel is a plain stack of sections that
  * relies on the desktop sidebar's scroll region, so it is given an equivalent
  * one here.
+ *
+ * The two Pierre trees need one thing more, because their scroller is inside a
+ * SHADOW ROOT. vaul decides scroll-vs-dismiss by climbing `parentElement` from
+ * the touch target, a touch inside a shadow root retargets to the host, and
+ * `parentElement` does not cross the boundary - so that climb finds nothing
+ * scrollable and claims the gesture as a drawer dismiss. Both tree wrappers
+ * carry `data-vaul-no-drag` to say what vaul cannot see. The flat lists are
+ * unaffected: their scrollers are ordinary light DOM.
  */
 export function SwitcherPanelEmbed(props: SwitcherPanelEmbedProps) {
   return (
-    <div className="min-h-0 flex-1 pb-safe-bottom">
+    <div
+      className="min-h-0 flex-1 pb-safe-bottom"
+      style={SWITCHER_EMBED_SURFACE_STYLE}
+    >
       <SwitcherEmbeddedBody {...props} />
     </div>
   );
