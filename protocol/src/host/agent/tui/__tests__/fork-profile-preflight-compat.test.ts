@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
@@ -45,20 +48,22 @@ describe("agent.tui.validateForkProfile is optional, not floor", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.optionalManifest["agent.tui.validateForkProfile"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
     expect(split.manifest["agent.tui.validateForkProfile"]).toBeUndefined();
   });
 
-  it("declares degrade: { kind: \"unsupported\" }", () => {
+  it('declares degrade: { kind: "unsupported" }', () => {
     const entry = hostRpcRegistry["agent.tui.validateForkProfile"];
     expect(Object.hasOwn(entry, "degrade")).toBe(true);
-    expect(
-      "degrade" in entry ? entry.degrade : undefined,
-    ).toEqual({ kind: "unsupported" });
+    expect("degrade" in entry ? entry.degrade : undefined).toEqual({
+      kind: "unsupported",
+    });
   });
 });
 

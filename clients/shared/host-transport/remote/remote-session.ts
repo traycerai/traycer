@@ -11,7 +11,9 @@ import {
   mergeConnectionManifests,
   selectConnectionManifestForPeer,
   splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
 } from "@traycer/protocol/framework/capability-manifest";
+import { CLIENT_SERVED_STREAM_MAJORS } from "../served-stream-majors";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   buildStreamManifest,
@@ -714,11 +716,18 @@ export class RemoteSession<
     const rpcSplit = splitConnectionManifest(
       options.rpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      // Unary methods have no client-side implementation to be missing: the
+      // client sends a request and reads a response, so every installed major
+      // is serveable. Only the STREAM half needs narrowing.
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     this.clientManifests = {
       rpc: rpcSplit.manifest,
       optionalRpc: rpcSplit.optionalManifest,
-      stream: buildStreamManifest(options.streamRegistry),
+      stream: buildStreamManifest(
+        options.streamRegistry,
+        CLIENT_SERVED_STREAM_MAJORS,
+      ),
     };
     this.clientRpcMerged = mergeConnectionManifests(
       rpcSplit.manifest,

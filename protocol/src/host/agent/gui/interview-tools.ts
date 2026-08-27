@@ -29,8 +29,7 @@ export function isOpenCodeInterviewToolName(toolName: string): boolean {
 
 export function isKnownInterviewToolName(toolName: string): boolean {
   return (
-    isClaudeInterviewToolName(toolName) ||
-    isOpenCodeInterviewToolName(toolName)
+    isClaudeInterviewToolName(toolName) || isOpenCodeInterviewToolName(toolName)
   );
 }
 

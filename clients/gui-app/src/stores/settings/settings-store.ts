@@ -45,7 +45,9 @@ export const DEFAULT_MINIMAP_SIDE: MinimapPlacement = "right";
 // keeps its identity on blur; block falls back to a hollow outline so an
 // unfocused pane stays visually distinct from a focused non-blinking block.
 export type TerminalInactiveCursorStyle =
-  TerminalCursorStyle | "outline" | "none";
+  | TerminalCursorStyle
+  | "outline"
+  | "none";
 
 export function inactiveCursorStyleFor(
   style: TerminalCursorStyle,

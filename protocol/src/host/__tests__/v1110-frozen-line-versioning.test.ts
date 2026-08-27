@@ -140,9 +140,7 @@ describe("providers.list request lines 1.0..6.0 <-> 7.0", () => {
       // Asserted against the schema the registered `providers.list` v7.0
       // contract actually binds, so this is what a real peer negotiating v7.0
       // decodes against.
-      expect(() =>
-        providersListRequestSchema.parse(canonical),
-      ).not.toThrow();
+      expect(() => providersListRequestSchema.parse(canonical)).not.toThrow();
     }
   });
 

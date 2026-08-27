@@ -183,7 +183,8 @@ interface SidebarRowMenuSeparatorEntry {
 }
 
 export type SidebarRowMenuEntry =
-  SidebarRowMenuItemEntry | SidebarRowMenuSeparatorEntry;
+  | SidebarRowMenuItemEntry
+  | SidebarRowMenuSeparatorEntry;
 
 export function SidebarDropdownMenuItems(props: {
   readonly entries: ReadonlyArray<SidebarRowMenuEntry>;

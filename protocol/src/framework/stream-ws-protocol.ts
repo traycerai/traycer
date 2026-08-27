@@ -88,7 +88,7 @@ export const hostCredentialStateSchema = z.enum([
  */
 export const STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE = "STREAM_SUBSCRIBE_TIMEOUT";
 
-/** First frame sent by the client: bearer token + per-method canonicals. */
+/** First frame sent by the client: bearer token + per-method version manifest. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";
   readonly token: string;

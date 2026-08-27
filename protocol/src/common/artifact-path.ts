@@ -136,8 +136,9 @@ export function isEpicArtifactCommentsDirName(name: string): boolean {
   // Padding first: it is positional, and folding can change length (`ß` to
   // `ss`), so stripping a tail afterwards would be reasoning about the wrong
   // string. The constant is already folded and unpadded.
-  return caseFold(stripWin32TrailingPadding(name)) ===
-    EPIC_ARTIFACT_COMMENTS_DIRNAME;
+  return (
+    caseFold(stripWin32TrailingPadding(name)) === EPIC_ARTIFACT_COMMENTS_DIRNAME
+  );
 }
 
 /**

@@ -102,7 +102,9 @@ export interface PlatformBridgeSurface {
     onTopologyChange(
       handler: Listener<{
         readonly reason:
-          "display-added" | "display-removed" | "display-metrics-changed";
+          | "display-added"
+          | "display-removed"
+          | "display-metrics-changed";
         readonly topology: DisplayTopology;
       }>,
     ): Disposable;

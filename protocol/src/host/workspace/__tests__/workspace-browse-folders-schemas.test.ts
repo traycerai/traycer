@@ -29,8 +29,9 @@ describe("workspace.browseFolders absolute-path contract", () => {
   const RELATIVE = ["", ".", "..", "projects", "./projects", "~", "~/projects"];
 
   it.each(ABSOLUTE)("accepts the absolute host path %j", (path) => {
-    expect(workspaceBrowseFoldersRequestSchema.parse({ directoryPath: path }))
-      .toEqual({ directoryPath: path });
+    expect(
+      workspaceBrowseFoldersRequestSchema.parse({ directoryPath: path }),
+    ).toEqual({ directoryPath: path });
   });
 
   it.each(RELATIVE)("rejects the relative path %j on a request", (path) => {

@@ -7,7 +7,10 @@ import {
   parseCompatExceptionsFile,
   protocolSurfaceSchema,
 } from "@traycer/protocol/framework/surface-compat";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**

@@ -46,7 +46,8 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       readonly onSelect: (() => void) | undefined;
       readonly onClick: (() => void) | undefined;
       readonly onKeyDown:
-        ((event: KeyboardEvent<HTMLButtonElement>) => void) | undefined;
+        | ((event: KeyboardEvent<HTMLButtonElement>) => void)
+        | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-disabled": boolean | undefined;
       readonly "aria-current": "true" | undefined;

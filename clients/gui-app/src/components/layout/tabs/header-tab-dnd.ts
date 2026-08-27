@@ -111,33 +111,11 @@ export function readHeaderTabSlotDropData(
 }
 
 /**
- * Share of a tab's width, centred, reserved for the pair-into-split gesture.
- * The outer thirds stay pure reorder, so the common gesture (slide a tab past
- * its neighbours) never has to cross a splitting zone at its destination.
- */
-export const HEADER_STRIP_PAIR_BAND_RATIO = 0.4;
-
-/**
- * Whether the pointer is inside a tab's central pair band. Trailing slots cover
- * empty strip space with no tab to pair against, so they are always reorder.
- */
-export function isHeaderStripPairZone(input: {
-  readonly slot: HeaderTabSlotDropData;
-  readonly pointerX: number;
-  readonly slotRect: RectLike | null;
-}): boolean {
-  const { slot, pointerX, slotRect } = input;
-  if (slot.isTrailing || slotRect === null) return false;
-  const center = slotRect.left + slotRect.width / 2;
-  const halfBand = (slotRect.width * HEADER_STRIP_PAIR_BAND_RATIO) / 2;
-  return Math.abs(pointerX - center) <= halfBand;
-}
-
-/**
- * Pointer-x midpoint insertion-index resolution over a header slot, with
- * reorder noop suppression for header-tab sources (`sourceIndex` is the
- * dragged tab's rendered index; pass null for canvas tear-off sources,
- * which have no noop slot).
+ * Pointer-x midpoint insertion-index resolution over a header slot, for CANVAS
+ * TEAR-OFF onto the strip - a source with no slot of its own, so hit-testing
+ * cannot feed back on itself. Header-tab reorder does NOT come through here; it
+ * resolves from `header-strip-drag-model.ts` instead. `sourceIndex` is retained
+ * for the noop-suppression case and is null for tear-off.
  */
 export function resolveHeaderStripDropIndex(input: {
   readonly slot: HeaderTabSlotDropData;

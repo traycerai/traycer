@@ -88,7 +88,8 @@ function pendingRefetch(): {
 } {
   let markIssued: () => void = () => undefined;
   let resolvePending:
-    ((result: { readonly error: HostRpcError | null }) => void) | null = null;
+    | ((result: { readonly error: HostRpcError | null }) => void)
+    | null = null;
   const issued = new Promise<void>((resolve) => {
     markIssued = resolve;
   });

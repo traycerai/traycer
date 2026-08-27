@@ -235,7 +235,8 @@ export const ALL_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] = [
 export type HostNotificationsSurface =
   | { readonly method: "host.notifications.list" }
   | { readonly method: "host.notifications.feed.subscribe" }
-  | { readonly method: "host.notifications.subscribe" };
+  | { readonly method: "host.notifications.subscribe" }
+  | { readonly method: "host.notifications.cloudFeed.subscribe" };
 
 /**
  * Enumerated per SUPPORTED major, never `major > N`.
@@ -272,6 +273,17 @@ export function visibleHostNotificationKinds(
     // The frozen host-v1.1.7 stream has no successor minor and never will.
     case "host.notifications.subscribe":
       return RELEASED_HOST_NOTIFICATION_KINDS;
+    // The cloud relay serves every subscriber from one shared replica, so this
+    // projection is what keeps a `@1.0` subscriber's rows AND summary closed
+    // over the arms its parser can represent - the relay derives its
+    // compatibility buckets from here rather than re-deciding `minor >= 1`.
+    case "host.notifications.cloudFeed.subscribe":
+      if (schemaVersion.major === 1) {
+        return schemaVersion.minor >= 1
+          ? ALL_HOST_NOTIFICATION_KINDS
+          : RELEASED_HOST_NOTIFICATION_KINDS;
+      }
+      return RELEASED_HOST_NOTIFICATION_KINDS;
   }
 }
 
@@ -298,6 +310,9 @@ export function streamCarriesChannelEmissionFrame(
       return schemaVersion.major === 1 && schemaVersion.minor === 0;
     // Unary: no frames at all.
     case "host.notifications.list":
+      return false;
+    // Snapshot/connectionState/pong only, on both installed minors.
+    case "host.notifications.cloudFeed.subscribe":
       return false;
   }
 }
@@ -1157,6 +1172,58 @@ export const hostNotificationsCloudFeedSubscribeV10 = defineStreamRpcContract({
 });
 
 /**
+ * Additive minor of the cloud feed row: identical envelope, entry slot widened
+ * to the `@2.1` union so a `host.operation.finished` occurrence is
+ * representable. V10 stays frozen - its closed union is a released parser's
+ * contract, and one new arm reaching it is treated as connection corruption
+ * (see `hostNotificationEntrySchema`'s doc), never a cosmetic failure.
+ *
+ * A V11 frame is a strict superset of a V10 frame, so one client-side parser
+ * (the V11 one) reads both minors; which ROWS it receives is decided
+ * host-side by `visibleHostNotificationKinds` for the negotiated version.
+ */
+export const hostNotificationsCloudFeedRowSchemaV11 = z.object({
+  ...hostNotificationsCloudFeedRowSchema.shape,
+  entry: hostNotificationEntrySchemaV21,
+});
+export type HostNotificationsCloudFeedRowV11 = z.infer<
+  typeof hostNotificationsCloudFeedRowSchemaV11
+>;
+
+export const hostNotificationsCloudFeedSubscribeServerFrameSchemaV11 =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      connectionState: z.literal("connected"),
+      version: z.number().int().nonnegative(),
+      rows: z.array(hostNotificationsCloudFeedRowSchemaV11),
+      summary: hostNotificationsCloudFeedSummarySchema,
+    }),
+    z.object({
+      kind: z.literal("connectionState"),
+      ...textFrameFields,
+      connectionState: z.literal("reconnecting"),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+  ]);
+export type HostNotificationsCloudFeedSubscribeServerFrameV11 = z.infer<
+  typeof hostNotificationsCloudFeedSubscribeServerFrameSchemaV11
+>;
+
+/** Additive minor: same open request and client frames, widened entry union. */
+export const hostNotificationsCloudFeedSubscribeV11 = defineStreamRpcContract({
+  method: "host.notifications.cloudFeed.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: hostNotificationsCloudFeedSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
+  clientFrameSchema: hostNotificationsCloudFeedSubscribeClientFrameSchemaV10,
+});
+
+/**
  * The whole of a per-entry mutation: WHICH entry.
  *
  * A marker is set once and merged by "first time it happened", so the write is
@@ -1326,19 +1393,18 @@ export const hostNotificationsIndicatorState = defineRpcContract({
  * false so a newer renderer keeps its sidebar fully functional against an
  * older host rather than treating field absence as a malformed response.
  */
-export const hostNotificationsIndicatorStateUpgradeV10ToV11 =
-  defineUpgradePath<
-    typeof hostNotificationsIndicatorStateV10,
-    typeof hostNotificationsIndicatorState
-  >({
-    from: hostNotificationsIndicatorStateV10.schemaVersion,
-    to: hostNotificationsIndicatorState.schemaVersion,
-    upgradeRequest: (request) => request,
-    upgradeResponse: (response) => ({
-      epics: addPendingForkDefault(response.epics),
-      chats: addPendingForkDefault(response.chats),
-    }),
-  });
+export const hostNotificationsIndicatorStateUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostNotificationsIndicatorStateV10,
+  typeof hostNotificationsIndicatorState
+>({
+  from: hostNotificationsIndicatorStateV10.schemaVersion,
+  to: hostNotificationsIndicatorState.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    epics: addPendingForkDefault(response.epics),
+    chats: addPendingForkDefault(response.chats),
+  }),
+});
 
 function addPendingForkDefault(
   states: Readonly<Record<string, HostNotificationsIndicatorStateV10>>,

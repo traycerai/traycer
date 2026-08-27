@@ -117,7 +117,12 @@ export type HostClientCloudState = "ok" | "down";
 
 /** Update lifecycle surfaced per host (Architecture §7 & §13). */
 export type HostUpdateState =
-  "current" | "available" | "pending" | "updating" | "failed" | "required";
+  | "current"
+  | "available"
+  | "pending"
+  | "updating"
+  | "failed"
+  | "required";
 
 /**
  * Per-host update policy (Architecture §13, T16). `manual` (default) means

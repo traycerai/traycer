@@ -200,7 +200,8 @@ function useRetainedPlainTerminalTombstoneReconciliation(args: {
   readonly hostId: string;
   readonly queryKey: QueryKey;
   readonly deletedRevisionByIdentity:
-    Readonly<Partial<Record<string, number>>> | undefined;
+    | Readonly<Partial<Record<string, number>>>
+    | undefined;
 }): void {
   const queryClient = useQueryClient();
   const deletedRevisionByIdentity = args.deletedRevisionByIdentity;

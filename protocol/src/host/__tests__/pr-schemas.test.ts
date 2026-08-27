@@ -51,7 +51,10 @@ import {
   prGetLocalDiffSummaryV10,
   prGetLocalFileDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
@@ -1494,9 +1497,9 @@ describe("prGetLocalFileDiffRequestSchema", () => {
   it("defaults byteBudget to the 256 KiB per-file budget and accepts null", () => {
     const { byteBudget, ...withoutBudget } = LOCAL_FILE_DIFF_REQUEST_FIXTURE;
     expect(byteBudget).toBe(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET);
-    expect(prGetLocalFileDiffRequestSchema.parse(withoutBudget).byteBudget).toBe(
-      DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET,
-    );
+    expect(
+      prGetLocalFileDiffRequestSchema.parse(withoutBudget).byteBudget,
+    ).toBe(DEFAULT_PR_LOCAL_FILE_DIFF_BYTE_BUDGET);
     expect(
       prGetLocalFileDiffRequestSchema.parse({
         ...LOCAL_FILE_DIFF_REQUEST_FIXTURE,
@@ -1607,16 +1610,19 @@ describe("pr split RPC contracts", () => {
     const split = splitConnectionManifest(
       hostRpcRegistry,
       RELEASED_FLOOR_METHOD_NAMES,
+      SERVES_EVERY_INSTALLED_MAJOR,
     );
     expect(split.manifest["pr.getLocalDiffSummary"]).toBeUndefined();
     expect(split.manifest["pr.getLocalFileDiff"]).toBeUndefined();
     expect(split.optionalManifest["pr.getLocalDiffSummary"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
     expect(split.optionalManifest["pr.getLocalFileDiff"]).toEqual({
       major: 1,
       minor: 0,
+      supportedMajors: [1],
     });
   });
 });
@@ -1672,7 +1678,14 @@ describe("prLocalDiffSummaryFileV11Schema", () => {
     // Each decodes (forgivingly) to bytes whose canonical encoding differs:
     // missing padding, url-safe alphabet, embedded whitespace, trailing
     // junk, nonzero padding bits, and a plainly non-base64 string.
-    const aliases = ["/w", "_w==", " dG9rZW4=", "dG9rZW4=junk", "Yf==", "not-base64"];
+    const aliases = [
+      "/w",
+      "_w==",
+      " dG9rZW4=",
+      "dG9rZW4=junk",
+      "Yf==",
+      "not-base64",
+    ];
     for (const alias of aliases) {
       expect(
         prLocalDiffSummaryFileV11Schema.safeParse({

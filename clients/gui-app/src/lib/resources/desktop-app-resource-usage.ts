@@ -39,9 +39,11 @@ interface RunnerHostWindowShape {
         readonly diagnostics:
           | {
               readonly getMetrics:
-                (() => Promise<DesktopProcessMetricsSnapshot>) | undefined;
+                | (() => Promise<DesktopProcessMetricsSnapshot>)
+                | undefined;
               readonly takeHeapSnapshot:
-                (() => Promise<string | null>) | undefined;
+                | (() => Promise<string | null>)
+                | undefined;
             }
           | undefined;
       }

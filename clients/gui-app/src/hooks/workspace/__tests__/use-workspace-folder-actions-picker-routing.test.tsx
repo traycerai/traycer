@@ -105,7 +105,8 @@ const INITIAL_PICKER_STATE = useRemoteFolderPickerStore.getState();
  */
 function pickedHostIdOf(requestPick: Mock): string | null {
   const passed = requestPick.mock.calls[0]?.[0] as
-    HostClient<HostRpcRegistry> | undefined;
+    | HostClient<HostRpcRegistry>
+    | undefined;
   return passed?.getActiveHostId() ?? null;
 }
 

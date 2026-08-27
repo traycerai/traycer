@@ -57,6 +57,9 @@ function terminalAgent(fields: {
   const { id, harnessId, title, parentId, updatedAt } = fields;
   return {
     id,
+    // An ordinary registry-backed agent - this suite exercises mention-item
+    // ordering, not doc residency.
+    docResident: false,
     harnessId,
     title,
     parentId,

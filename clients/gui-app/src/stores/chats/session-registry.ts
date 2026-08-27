@@ -153,6 +153,22 @@ export class ChatSessionRegistry {
     return handles;
   }
 
+  /**
+   * Live session keys bound to one host, across every epic. Overview's
+   * `host.status` refresh uses this so a membership change on host B does
+   * not void host A's settled busy. Reads `entry.hostId` (the acquire-time
+   * identity), not the WeakMap the React hook stamps.
+   */
+  membershipIdsForHost(hostId: string): string[] {
+    const ids: string[] = [];
+    for (const entry of this.entries.values()) {
+      if (entry.hostId !== hostId) continue;
+      ids.push(entry.key);
+    }
+    ids.sort();
+    return ids;
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {

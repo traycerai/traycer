@@ -24,7 +24,10 @@ import type { CommandFn } from "../runner/runner";
 type ActivityHookEvent = "start" | "stop";
 
 type NoopReason =
-  "missing-context" | "unknown-event" | "unknown-provider" | "host-unreachable";
+  | "missing-context"
+  | "unknown-event"
+  | "unknown-provider"
+  | "host-unreachable";
 
 // Identity fields shared by the `promptSubmitted` call and its `recordActivity`
 // fallback - both carry the exact same payload (see the module doc).

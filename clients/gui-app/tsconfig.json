@@ -1,9 +1,8 @@
 {
   "compilerOptions": {
     "ignoreDeprecations": "6.0",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@traycer-clients/shared/*": ["../shared/*"],
       "@traycer/protocol/utils/*": ["../../protocol/utils/*"],
       "@traycer/protocol/*": ["../../protocol/src/*"]

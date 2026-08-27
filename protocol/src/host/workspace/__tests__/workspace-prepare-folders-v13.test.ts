@@ -51,7 +51,7 @@ describe("workspace.prepareFolders v1.3", () => {
     ).toBe(false);
   });
 
-  it.each(["projects/new-workspace", "~/new-workspace"]) (
+  it.each(["projects/new-workspace", "~/new-workspace"])(
     "rejects a relative create-and-prepare path %j",
     (path) => {
       expect(

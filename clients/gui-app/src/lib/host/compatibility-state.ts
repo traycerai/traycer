@@ -211,7 +211,8 @@ type HostCompatibilityContextValue = Context<HostCompatibility | null>;
 
 interface HostCompatibilityDevGlobals {
   __TRAYCER_HOST_COMPATIBILITY_CONTEXT__:
-    HostCompatibilityContextValue | undefined;
+    | HostCompatibilityContextValue
+    | undefined;
 }
 
 function createStableHostCompatibilityContext(): HostCompatibilityContextValue {

@@ -39,9 +39,9 @@ describe("windowsShellCaptionFamily", () => {
   }
 
   it("is case-insensitive on the binary name and Git-install segment", () => {
-    expect(windowsShellCaptionFamily("C:\\Program Files\\PowerShell\\7\\PWSH.EXE")).toBe(
-      "powershell",
-    );
+    expect(
+      windowsShellCaptionFamily("C:\\Program Files\\PowerShell\\7\\PWSH.EXE"),
+    ).toBe("powershell");
     expect(
       windowsShellCaptionFamily("C:\\Program Files\\GIT\\BIN\\BASH.EXE"),
     ).toBe("git-bash");

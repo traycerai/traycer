@@ -25,7 +25,8 @@ export interface ProviderPackPreparing {
   readonly retryAtMs: number | null;
   /** Why the install is stuck. Null on the `downloading` arm. */
   readonly reason:
-    Extract<ProviderManagedInstallState, { status: "error" }>["reason"] | null;
+    | Extract<ProviderManagedInstallState, { status: "error" }>["reason"]
+    | null;
   /**
    * True when the host would still SPAWN something for this provider right
    * now - a bundled, PATH-discovered or custom candidate reporting

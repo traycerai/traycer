@@ -585,7 +585,8 @@ describe("MRU resolver wiring (decision 10)", () => {
     await shortcuts.reconcileGlobalShortcuts({});
 
     const runCallback = electron.register.mock.calls[0]?.[1] as
-      (() => void) | undefined;
+      | (() => void)
+      | undefined;
     if (runCallback === undefined) {
       throw new Error("expected the summon definition's run callback");
     }

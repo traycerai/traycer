@@ -84,7 +84,9 @@ describe("presentChat", () => {
     expect(presented.messages[2].timestamp).toBe(3);
     expect(presented.events[1].eventId).toBe("e-2");
     expect(presented.events[1].timestamp).toBe(5);
-    expect(presented.events[1].raw).toEqual(canonicalizeJsonValue(unknownEvent));
+    expect(presented.events[1].raw).toEqual(
+      canonicalizeJsonValue(unknownEvent),
+    );
   });
 
   it("surfaces an unknown block inside a KNOWN assistant message", () => {
@@ -128,7 +130,10 @@ describe("presentChat", () => {
       },
     ]);
     expect(blocks[2].payloadRefs).toEqual([
-      { ref: { kind: "plan-content", hash: "ccc333" }, availability: "missing" },
+      {
+        ref: { kind: "plan-content", hash: "ccc333" },
+        availability: "missing",
+      },
     ]);
   });
 
@@ -215,7 +220,9 @@ describe("presentChat", () => {
 describe("fallback copy", () => {
   it("names the variant so a support report is actionable", () => {
     expect(describeUnknownVariant("block", "holodeck")).toContain("holodeck");
-    expect(describeUnknownVariant("message", "telemetry")).toContain("telemetry");
+    expect(describeUnknownVariant("message", "telemetry")).toContain(
+      "telemetry",
+    );
     expect(describeUnknownVariant("event", "warp.engaged")).toContain(
       "warp.engaged",
     );

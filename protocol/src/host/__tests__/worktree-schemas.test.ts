@@ -1211,12 +1211,10 @@ describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
       }).workspaces[0].presence,
     ).toBe("absent");
     // OLD CLIENT + NEW HOST: a v1.3 caller strips the fields it never knew.
-    const asV13 =
-      worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded);
+    const asV13 = worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded);
     expect(asV13.workspaces[0]).not.toHaveProperty("repoBranchPrefix");
     expect(asV13.workspaces[0]).not.toHaveProperty("presence");
   });
-
 });
 
 describe("workspacePresenceSchema", () => {

@@ -258,7 +258,10 @@ export type AttachmentMentionNode = RecordValue<
   CommonRecordRegistry,
   "attachment-mention-node"
 >;
-export type PermissionRole = RecordValue<CommonRecordRegistry, "permission-role">;
+export type PermissionRole = RecordValue<
+  CommonRecordRegistry,
+  "permission-role"
+>;
 export type TicketStatus = RecordValue<CommonRecordRegistry, "ticket-status">;
 export type EpicArtifactKind = RecordValue<
   CommonRecordRegistry,

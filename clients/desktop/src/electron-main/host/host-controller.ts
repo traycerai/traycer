@@ -315,7 +315,11 @@ interface EnsureResultShape {
   readonly version: string | null;
   readonly runtimeVersion: string | null;
   readonly action:
-    "noop" | "installed" | "service-registered" | "started" | null;
+    | "noop"
+    | "installed"
+    | "service-registered"
+    | "started"
+    | null;
   readonly installGeneration: string | null;
   readonly postSwapError: string | null;
 }

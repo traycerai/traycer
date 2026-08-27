@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { JsonContent } from "../registry";
-import {
-  ContextType,
-  jsonContentToMarkdown,
-} from "../json-content-serializer";
+import { ContextType, jsonContentToMarkdown } from "../json-content-serializer";
 
 function mentionDoc(attrs: Record<string, unknown>): JsonContent {
   return {
@@ -133,8 +130,7 @@ describe("GitHub mention serialization", () => {
             id: `${marker}:acme/widgets#${contextType === ContextType.GithubPullRequest ? 42 : 7}`,
             organizationLogin: "acme",
             repositoryName: "widgets",
-            issueNumber:
-              contextType === ContextType.GithubPullRequest ? 42 : 7,
+            issueNumber: contextType === ContextType.GithubPullRequest ? 42 : 7,
             githubHost: "github.example.test",
             url: `https://github.com/acme/widgets/${path}`,
           },
@@ -149,20 +145,23 @@ describe("GitHub mention serialization", () => {
   it.each([
     [ContextType.GithubPullRequest, 42],
     [ContextType.GithubIssue, 7],
-  ] as const)("uses the compact repository reference for display (%s)", (contextType, number) => {
-    expect(
-      serialize(
-        {
-          contextType,
-          organizationLogin: "acme",
-          repositoryName: "widgets",
-          issueNumber: number,
-          url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
-        },
-        "user",
-      ),
-    ).toBe(`See \`acme/widgets#${number}\` before merging.`);
-  });
+  ] as const)(
+    "uses the compact repository reference for display (%s)",
+    (contextType, number) => {
+      expect(
+        serialize(
+          {
+            contextType,
+            organizationLogin: "acme",
+            repositoryName: "widgets",
+            issueNumber: number,
+            url: `https://github.com/acme/widgets/${contextType === ContextType.GithubPullRequest ? "pull" : "issues"}/${number}`,
+          },
+          "user",
+        ),
+      ).toBe(`See \`acme/widgets#${number}\` before merging.`);
+    },
+  );
 
   // Without a url, the host is the only thing that can disambiguate an
   // enterprise reference from the same coordinates on github.com - the same

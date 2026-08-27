@@ -208,7 +208,8 @@ vi.mock("react-virtuoso", async () => {
     readonly totalCount?: number;
     readonly computeItemKey?: (index: number, item: undefined) => Key;
     readonly initialTopMostItemIndex?:
-      number | { readonly index: number | "LAST" };
+      | number
+      | { readonly index: number | "LAST" };
     readonly itemContent?: (index: number, item: undefined) => ReactNode;
   }
 
@@ -621,6 +622,9 @@ function titleInputValue(): string {
 function sourceAgent(): TuiAgentProjection {
   return {
     id: "source-agent",
+    // An ordinary registry-backed agent - this suite exercises the fork
+    // dialog's profile picker, not doc residency.
+    docResident: false,
     harnessId: "claude",
     title: "Source terminal",
     parentId: "source-parent",

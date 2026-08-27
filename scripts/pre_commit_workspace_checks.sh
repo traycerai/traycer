@@ -26,21 +26,58 @@ nx_parallel="${NX_PARALLEL:-8}"
 #
 # Override with NX_COMPILE_PARALLEL when you know the box can take it.
 nx_compile_parallel="${NX_COMPILE_PARALLEL:-3}"
+workspace_check_lane="${WORKSPACE_CHECK_LANE:-all}"
+
+run_static_checks() {
+  local args=("$@")
+  bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
+  if [ -n "${CI:-}" ]; then
+    bun run format:check
+  else
+    bun run format
+  fi
+}
+
+run_compile_checks() {
+  bun x nx affected --target=compile "$@" --parallel="${nx_compile_parallel}"
+}
+
+run_build_checks() {
+  bun x nx affected --target=build "$@" --parallel="${nx_compile_parallel}"
+}
 
 run_full_checks() {
   echo "Running full workspace checks..."
-  bun run lint
-  bun run format
-  bun run compile
-  bun run build
+  case "${workspace_check_lane}" in
+    static)
+      bun run lint
+      if [ -n "${CI:-}" ]; then bun run format:check; else bun run format; fi
+      ;;
+    compile) bun run compile ;;
+    build) bun run build ;;
+    all)
+      bun run lint
+      if [ -n "${CI:-}" ]; then bun run format:check; else bun run format; fi
+      bun run compile
+      bun run build
+      ;;
+    *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
+  esac
 }
 
 run_affected() {
   local args=("$@")
-  bun x nx affected --target=lint "${args[@]}" --parallel="${nx_parallel}"
-  bun x nx affected --target=format "${args[@]}" --parallel="${nx_parallel}"
-  bun x nx affected --targets=compile,build "${args[@]}" \
-    --parallel="${nx_compile_parallel}"
+  case "${workspace_check_lane}" in
+    static) run_static_checks "${args[@]}" ;;
+    compile) run_compile_checks "${args[@]}" ;;
+    build) run_build_checks "${args[@]}" ;;
+    all)
+      run_static_checks "${args[@]}"
+      bun x nx affected --targets=compile,build "${args[@]}" \
+        --parallel="${nx_compile_parallel}"
+      ;;
+    *) echo "Unknown WORKSPACE_CHECK_LANE: ${workspace_check_lane}" >&2; exit 2 ;;
+  esac
 }
 
 if [ -n "${CI:-}" ] && [ -n "${NX_BASE:-}" ] && [ -n "${NX_HEAD:-}" ]; then
