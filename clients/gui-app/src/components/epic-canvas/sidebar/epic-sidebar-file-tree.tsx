@@ -65,6 +65,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import {
   useWorkspaceFileListSubscription,
@@ -776,6 +777,7 @@ function FileTreeBodyForResolvedHost(
     ),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
     <div
@@ -802,7 +804,14 @@ function FileTreeBodyForResolvedHost(
           className="h-7"
         />
       </div>
-      <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
+      {/* Pierre's scroller lives in a shadow root; inside the mobile switcher
+          sheet the modal scroll lock would keep it from ever touch-scrolling.
+          See `useShadowScrollerTouchShield`. */}
+      <div
+        {...bridge.wrapperProps}
+        ref={touchShieldRef}
+        className="relative min-h-0 flex-1"
+      >
         {/* `invisible`, not unmount: the model keeps its DOM/state for the
             instant the query changes to something that does match. */}
         <div className={cn("h-full", noMatches && "invisible")}>

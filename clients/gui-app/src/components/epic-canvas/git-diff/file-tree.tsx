@@ -14,6 +14,7 @@ import { GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useShadowScrollerTouchShield } from "@/hooks/ui/use-shadow-scroller-touch-shield";
 import {
   GIT_DIFF_TILE_DND_TYPE,
   getGitDiffTileDragId,
@@ -266,9 +267,17 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
     id: getGitDiffTileDragId(`tree:${props.viewTabId}:${props.group}`),
     resolveSourceData: resolveDragSourceData,
   });
+  const touchShieldRef = useShadowScrollerTouchShield();
 
   return (
-    <div {...bridge.wrapperProps} className="flex h-full min-h-0 flex-col">
+    // Pierre's scroller lives in a shadow root; inside the mobile switcher
+    // sheet the modal scroll lock would keep it from ever touch-scrolling.
+    // See `useShadowScrollerTouchShield`.
+    <div
+      {...bridge.wrapperProps}
+      ref={touchShieldRef}
+      className="flex h-full min-h-0 flex-col"
+    >
       <PierreFileTree
         className="h-full min-h-0"
         model={model}
