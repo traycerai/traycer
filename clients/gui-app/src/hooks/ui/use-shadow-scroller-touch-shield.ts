@@ -16,16 +16,23 @@ import { useCallback, useRef } from "react";
  * what makes the failure look like a hit-testing bug rather than what it is.
  *
  * Stopping `touchmove` propagation at the light-DOM wrapper keeps those
- * touches out of the document-level dispatch, and the engine engages the
- * native pan for the shadow-internal scroller directly. Bubble phase, not
- * capture: the scroller's own shadow-internal listeners must still see the
- * gesture. The listener is inert wherever no document-level `touchmove`
- * consumer is mounted (desktop, and sheets without scroll locks).
+ * touches away from document BUBBLE listeners — capture-phase listeners on
+ * document or window still run, since capture descends before the wrapper's
+ * bubble position — and the engine engages the native pan for the
+ * shadow-internal scroller directly. Bubble phase, not capture: listeners at
+ * and below the touched element (the scroller's own shadow-internal ones
+ * included) have already run by the time the wrapper's bubble listener
+ * stops the event. The listener is inert wherever no document-level
+ * `touchmove` consumer is mounted (desktop, and sheets without scroll locks).
  *
  * Attach the returned ref to the nearest light-DOM wrapper of the
  * shadow-rooted scroller. The wrapper must not itself need `touchmove` to
  * reach ancestors — drawer drag-to-dismiss decisions ride pointer events and
- * are unaffected.
+ * are unaffected. The flip side is a standing constraint: any bubble-phase
+ * `touchmove` listener above the wrapper — native or React synthetic — is
+ * deaf to tree gestures. Nothing above listens for `touchmove` today; a
+ * future listener that must hear these gestures needs a capture-phase
+ * registration.
  */
 export function useShadowScrollerTouchShield(): (
   node: HTMLElement | null,

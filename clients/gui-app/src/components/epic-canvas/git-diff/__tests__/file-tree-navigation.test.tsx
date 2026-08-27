@@ -150,10 +150,10 @@ describe("<FileTree /> nested focus navigation", () => {
   });
 
   /**
-   * The same wrapper also carries `useShadowScrollerTouchShield`'s ref (see
-   * `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
+   * The tree's light-DOM wrapper carries `useShadowScrollerTouchShield`'s ref
+   * (see `use-shadow-scroller-touch-shield.ts`), which stops a `touchmove`
    * bubbling out of Pierre's shadow-rooted scroller before it reaches a
-   * document-level listener - the modal scroll lock a vaul drawer registers
+   * document BUBBLE listener - the modal scroll lock a vaul drawer registers
    * while open. jsdom has no `TouchEvent`, so a plain bubbling `Event` stands
    * in; the hook only calls `stopPropagation()`, which does not care about
    * the event's concrete type. `touchstart` is the control: it is untouched
