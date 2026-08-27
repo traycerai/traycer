@@ -20,6 +20,12 @@ import type { TuiAgentRecordSummaryV11 } from "@traycer/protocol/host/epic/tui-a
 interface TuiAgentListAnswer {
   readonly tuiAgents: readonly TuiAgentRecordSummaryV11[];
   readonly issuedAtSeq: number | null;
+  /**
+   * WHICH store's counter `issuedAtSeq` was read from - see the chat twin
+   * (`ChatRecordListAnswer.fenceIdentity`): a cached answer can outlive the
+   * store, and a cross-generation fence is degraded to `null` at apply.
+   */
+  readonly fenceIdentity: number | null;
 }
 
 /**
@@ -80,7 +86,7 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     HostRpcRegistry,
     "epic.listTuiAgents",
     TuiAgentListAnswer,
-    number | null
+    { readonly seq: number; readonly fenceIdentity: number } | null
   >({
     cacheKeyIdentity: [viewerUserId],
     client,
@@ -100,18 +106,34 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     // `TuiAgentListAnswer`. A push delta that lands while this request is
     // in flight advances the counter past this value, which is exactly how
     // the store knows the answer could not have carried that row.
-    captureRequestContext: () =>
-      store === null ? null : store.getState().peekTuiAgentIngestSeq(),
-    mapResponse: ({ response, requestContext }) => ({
-      tuiAgents: response.tuiAgents,
-      issuedAtSeq: requestContext ?? null,
-    }),
+    captureRequestContext: () => {
+      if (store === null) return null;
+      const state = store.getState();
+      return {
+        seq: state.peekTuiAgentIngestSeq(),
+        fenceIdentity: state.ingestFenceIdentity,
+      };
+    },
+    mapResponse: ({ response, requestContext }) => {
+      const context = requestContext ?? null;
+      return {
+        tuiAgents: response.tuiAgents,
+        issuedAtSeq: context === null ? null : context.seq,
+        fenceIdentity: context === null ? null : context.fenceIdentity,
+      };
+    },
   });
 
   const answer = query.data ?? null;
   useEffect(() => {
     if (answer === null || store === null) return;
-    store.getState().applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);
+    // A cross-generation fence is degraded to `null`, never trusted - see
+    // `TuiAgentListAnswer.fenceIdentity` and the chat twin.
+    const fence =
+      answer.fenceIdentity === store.getState().ingestFenceIdentity
+        ? answer.issuedAtSeq
+        : null;
+    store.getState().applyTuiAgentRecords(answer.tuiAgents, fence);
   }, [answer, store]);
 }
 

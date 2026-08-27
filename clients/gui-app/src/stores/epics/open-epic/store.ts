@@ -609,6 +609,20 @@ export interface OpenEpicState {
    */
   peekTuiAgentIngestSeq: () => number;
   /**
+   * Which STORE GENERATION the two ingest counters above belong to. The
+   * counters are per-store and restart at zero when an epic session is
+   * rebuilt after eviction, while the TanStack cache can retain a list
+   * answer whose `issuedAtSeq` was captured against the PREVIOUS store - a
+   * fence from another generation is numerically meaningless here, and
+   * replayed as-is its (typically larger) value lets the omission pass
+   * retract rows the old counter never covered. The record hooks capture
+   * this WITH the fence and hand back `null` instead when the applying
+   * store is not the one the fence was read from - the same conservative
+   * "no session to read at dispatch" path, which holds omitted rows one
+   * extra pass. Module-monotonic; never reused across generations.
+   */
+  ingestFenceIdentity: number;
+  /**
    * Applies ONE `host.chatRecords.subscribe@1.1` terminal-agent delta - the
    * push half of the table {@link OpenEpicState.applyTuiAgentRecords} fills
    * from the poll, with {@link OpenEpicState.applyChatRecordDelta}'s exact
@@ -888,6 +902,13 @@ const EMPTY_Y_UPDATE_BYTES = 2;
  * in `retirePendingMutation`.
  */
 const LANDED_MUTATION_TTL_MS = 30_000;
+
+/**
+ * Mints {@link OpenEpicState.ingestFenceIdentity} - one value per store
+ * construction, module-monotonic so no two generations (even of the same
+ * epic) ever share one.
+ */
+let nextIngestFenceIdentity = 1;
 
 function encodeBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
@@ -1949,6 +1970,10 @@ export function createOpenEpicStore(
   const chatRowSeq = new Map<string, number>();
   let chatIngestSeq = 0;
   let chatSnapshotFence = 0;
+  // See {@link OpenEpicState.ingestFenceIdentity}: which generation the two
+  // ingest counters belong to, so a cached fence can never cross stores.
+  const mintedIngestFenceIdentity = nextIngestFenceIdentity;
+  nextIngestFenceIdentity += 1;
 
   /**
    * Locally initiated creations with no record back yet, keyed like
@@ -4047,6 +4072,8 @@ export function createOpenEpicStore(
           },
 
           peekChatIngestSeq: () => chatIngestSeq,
+
+          ingestFenceIdentity: mintedIngestFenceIdentity,
 
           markChatRecordListAuthoritative: () => {
             if (disposed || get().chatRecordListAuthoritative) return;

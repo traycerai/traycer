@@ -516,6 +516,7 @@ function createDirtyEpicHandle(
     beginReparentMutation: () => null,
     retirePendingMutation: () => false,
     isLatestPendingRename: () => false,
+    ingestFenceIdentity: 0,
     deleteArtifact: () => false,
     reparentArtifact: () => false,
     setEpicTitle: () => false,

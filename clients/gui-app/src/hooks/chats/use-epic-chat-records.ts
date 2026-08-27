@@ -19,6 +19,17 @@ import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 interface ChatRecordListAnswer {
   readonly chats: readonly ChatRecordSummary[];
   readonly issuedAtSeq: number | null;
+  /**
+   * WHICH store's counter `issuedAtSeq` was read from
+   * (`OpenEpicState.ingestFenceIdentity`). The cache outlives a store: an
+   * epic evicted and reopened gets a fresh store whose counter restarts at
+   * zero, and a cached answer's fence from the old store is numerically
+   * meaningless there - typically larger, letting the omission pass retract
+   * rows the answer never actually covered. The applying effect compares
+   * this against the CURRENT store and degrades the fence to `null` (the
+   * conservative no-session path) on mismatch.
+   */
+  readonly fenceIdentity: number | null;
 }
 
 /**
@@ -78,7 +89,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
     HostRpcRegistry,
     "epic.listChatRecords",
     ChatRecordListAnswer,
-    number | null
+    { readonly seq: number; readonly fenceIdentity: number } | null
   >({
     cacheKeyIdentity: [viewerUserId],
     client,
@@ -100,12 +111,22 @@ export function useEpicSyncChatRecords(epicId: string): void {
     // `ChatRecordListAnswer`. A push delta that lands while this request is
     // in flight advances the counter past this value, which is exactly how
     // the store knows the answer could not have carried that row.
-    captureRequestContext: () =>
-      store === null ? null : store.getState().peekChatIngestSeq(),
-    mapResponse: ({ response, requestContext }) => ({
-      chats: response.chats,
-      issuedAtSeq: requestContext ?? null,
-    }),
+    captureRequestContext: () => {
+      if (store === null) return null;
+      const state = store.getState();
+      return {
+        seq: state.peekChatIngestSeq(),
+        fenceIdentity: state.ingestFenceIdentity,
+      };
+    },
+    mapResponse: ({ response, requestContext }) => {
+      const context = requestContext ?? null;
+      return {
+        chats: response.chats,
+        issuedAtSeq: context === null ? null : context.seq,
+        fenceIdentity: context === null ? null : context.fenceIdentity,
+      };
+    },
   });
 
   const answer = query.data ?? null;
@@ -115,7 +136,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {
-      store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
+      // A cached answer can outlive the store its fence was read from - see
+      // `ChatRecordListAnswer.fenceIdentity`. A cross-generation fence is
+      // degraded to `null`, never trusted.
+      const fence =
+        answer.fenceIdentity === store.getState().ingestFenceIdentity
+          ? answer.issuedAtSeq
+          : null;
+      store.getState().applyChatRecords(answer.chats, fence);
     }
     store.getState().markChatRecordListAuthoritative();
   }, [answer, recordListAuthoritative, store]);
