@@ -27,6 +27,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -204,7 +205,11 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
             </Button>
           </TooltipWrapper>
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
+        <PopoverContent
+          {...paneActivationDeferProps}
+          align="end"
+          className="w-[min(80vw,15rem)] gap-0 p-1"
+        >
           {settings.map((setting) => (
             <DiffSettingRow
               key={setting.label}
