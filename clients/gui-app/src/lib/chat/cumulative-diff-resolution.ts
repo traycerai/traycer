@@ -103,13 +103,34 @@ export function mergeCumulativeDiffs(input: {
   readonly inline: ReadonlyArray<ResolvedSnapshotDiff>;
   readonly fetchable: ReadonlyArray<FetchableAccumulatedChange>;
   readonly fetches: ReadonlyArray<AccumulatedChangeFetchState>;
+  /**
+   * How many of `filePaths` the host rows cannot speak to yet, because the
+   * summary stream is still arriving.
+   *
+   * Absence is ambiguous until the set is complete, and this hook resolves the
+   * ambiguity toward LOADING rather than toward reverted. Reverting is the
+   * conclusion that silently drops a section, and it is unrecoverable from the
+   * user's side: the tile looks finished. Loading is recoverable by waiting,
+   * which is exactly what is happening.
+   */
+  readonly undeliveredPaths: number;
 }): CumulativeDiffResolution {
-  const { fetchable, fetches, filePaths, inline } = input;
+  const { fetchable, fetches, filePaths, inline, undeliveredPaths } = input;
   if (fetchable.length === 0) {
-    return { resolved: inline, isLoading: false, stale: false, failed: false };
+    // Before the first chunk this is EVERY path, which is the case that
+    // rendered "source unavailable" for a bundle that was merely early.
+    return {
+      resolved: inline,
+      isLoading: undeliveredPaths > 0,
+      stale: false,
+      failed: false,
+    };
   }
   const fetched = new Map<string, ResolvedSnapshotDiff>();
-  let isLoading = false;
+  // Seeded, not assigned: a path the summary stream has not reached yet is
+  // outstanding for the same reason a query still in flight is, and the tile
+  // must keep loading rather than present a partial bundle as a whole one.
+  let isLoading = undeliveredPaths > 0;
   let stale = false;
   let failed = false;
   // The two arrays are paired by position and the caller builds them that way,

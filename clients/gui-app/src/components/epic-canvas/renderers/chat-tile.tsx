@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { SetupCardWindowIdentity } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { ChatTranscriptJumpTarget } from "@/stores/chats/chat-transcript-jump-store";
 import { useMeasuredElementHeight } from "@/hooks/ui/use-measured-element-height";
 import { useChatMessageActions } from "./use-chat-message-actions";
 import { useChatQueueActions } from "./use-chat-queue-actions";
@@ -967,6 +968,36 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const consumeTranscriptJump = useChatTranscriptJumpStore(
     (s) => s.consumeJump,
   );
+  // Reached through the handle's store rather than the `view` projection: this
+  // is an ACTION, stable for the store's life, so routing it through the
+  // reactive selection would put a new identity in the effect's deps on every
+  // frame.
+  const requestTranscriptOrdinal = useStore(
+    viewHandle.store,
+    (s) => s.requestTranscriptOrdinal,
+  );
+  // The ordinal a cold jump target sits at, when it is one this client can
+  // identify without the host. `null` means "nothing to ask for", which is both
+  // the legacy line and the target kinds whose row id needs rendered models.
+  const coldJumpOrdinal = (
+    transcriptWindow: TranscriptWindow | null,
+    target: ChatTranscriptJumpTarget,
+  ): number | null => {
+    if (transcriptWindow === null) return null;
+    const rowId =
+      target.kind === "message"
+        ? target.messageId
+        : target.kind === "event"
+          ? chatTranscriptEventRowId(target.eventId)
+          : target.kind === "first-message"
+            ? (transcriptWindow.skeleton[0]?.rowId ?? null)
+            : null;
+    if (rowId === null) return null;
+    const ordinal = transcriptWindow.skeleton.findIndex(
+      (entry) => entry !== undefined && entry.rowId === rowId,
+    );
+    return ordinal < 0 ? null : ordinal;
+  };
   // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
   // chat transcript streams independently of the graph stream, so a warm tile
   // routinely learns about a message from the timeline BEFORE its own stream
@@ -998,12 +1029,46 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         return sentMessageAnchorId(view.messages, target);
       }
       if (target.kind === "first-message") {
-        return view.messages[0]?.id ?? null;
+        // Ordinal 0 of the WHOLE transcript, not the first row this client
+        // happens to hold. On the windowed line `view.messages` is a bounded
+        // slice, so `messages[0]` is the top of the hydrated tail - and "jump
+        // to the first message" then navigated confidently to the middle of
+        // the chat, which is worse than not moving at all.
+        //
+        // Resolved through the skeleton, which is whole-chat: its entry at
+        // ordinal 0 names the real first row. If that row is not hydrated yet
+        // this returns null and the effect re-runs when it is, which is the
+        // same retry every other target kind relies on.
+        const firstRowId =
+          view.transcriptWindow === null
+            ? (view.messages[0]?.id ?? null)
+            : (view.transcriptWindow.skeleton[0]?.rowId ?? null);
+        if (firstRowId === null) return null;
+        return (
+          view.messages.find((message) => message.id === firstRowId)?.id ?? null
+        );
       }
       return messageIdForBlock(view.messages, target.blockId);
     };
     const messageId = resolveTargetMessageId();
-    if (messageId === null) return;
+    if (messageId === null) {
+      // Unresolved, and on the windowed line that is routinely because the
+      // target row is COLD rather than because it does not exist yet. Waiting
+      // alone deadlocks: the scroll is what moves the viewport, the viewport is
+      // what drives hydration, and the scroll is what we are holding back. So
+      // name the ordinal and let the planner fetch it; this effect re-runs when
+      // the row lands.
+      //
+      // Only for a target whose ROW ID is derivable client-side - a user
+      // message and an event anchor, whose row ids are the message id and
+      // `chatTranscriptEventRowId`. A block or a sent-message anchor is
+      // identified by walking rendered models, which a cold row has none of,
+      // and resolving those needs the host to locate the row.
+      requestTranscriptOrdinal(coldJumpOrdinal(view.transcriptWindow, target));
+      return;
+    }
+    // Resolved, so nothing is owed on its behalf any more.
+    requestTranscriptOrdinal(null);
     if (target.kind === "block") {
       scrollToBlock(
         target.blockId,
@@ -1018,10 +1083,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       scrollToMessage(messageId);
     }
     consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+    // The jump is done, so the ordinal it was holding open is released. Doing
+    // this AFTER the consume rather than beside the resolve keeps the request
+    // alive across the beat between the two.
+    requestTranscriptOrdinal(null);
   }, [
     consumeTranscriptJump,
     hostId,
     props.node.id,
+    requestTranscriptOrdinal,
     scrollToBlock,
     scrollToMessage,
     scrollToTranscriptEnd,
@@ -1029,6 +1099,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     view.lower.backgroundItems,
     view.messages,
     view.snapshotLoaded,
+    view.transcriptWindow,
   ]);
   // ...but a target that never arrives must not wait forever. One timer per
   // request id (transcript churn does not restart it): if the row has not shown
@@ -1373,6 +1444,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       snapshotLoaded: s.snapshotLoaded,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       transcriptHydrationSequence: s.transcriptHydrationSequence,
+      coldRewrittenMessageIds: s.coldRewrittenMessageIds,
       chat: s.chat,
       access: s.access,
       messages: s.messages,

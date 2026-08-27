@@ -378,6 +378,7 @@ function windowedSnapshot(input: {
       heldUpdates: [],
       transcriptEpoch: input.epoch,
       rowCount: input.rowCount,
+      indexRevision: null,
       tail: {
         fromOrdinal: input.tailFromOrdinal,
         messages: [...input.tailMessages],
@@ -1153,6 +1154,7 @@ describe("index deltas", () => {
         chatId: CHAT_ID,
         epoch: 5,
         rowCount: 2,
+        indexRevision: 1,
         changes: [{ type: "reindexed" }],
       });
 
@@ -1190,6 +1192,7 @@ describe("index deltas", () => {
         chatId: CHAT_ID,
         epoch: 5,
         rowCount: 2,
+        indexRevision: 1,
         changes: [{ type: "reindexed" }],
       });
       expect(harness.resnapshotCount()).toBe(1);
@@ -1226,6 +1229,7 @@ describe("index deltas", () => {
         chatId: CHAT_ID,
         epoch: 5,
         rowCount: 2,
+        indexRevision: 1,
         changes: [{ type: "reindexed" }],
       });
       expect(harness.resnapshotCount()).toBe(1);
@@ -1319,6 +1323,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 0,
+          generation: 1,
           summaries: [summary("a.ts"), summary("b.ts")],
           isFinal: false,
         },
@@ -1331,6 +1336,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 2,
+          generation: 1,
           summaries: [summary("c.ts")],
           isFinal: true,
         },
@@ -1367,6 +1373,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 5,
           fromIndex: 0,
+          generation: 2,
           summaries: [summary("z.ts")],
           isFinal: true,
         },
@@ -1418,6 +1425,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 0,
+          generation: 1,
           summaries: [summary("a.ts")],
           isFinal: false,
         },
@@ -1431,6 +1439,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 3,
+          generation: 1,
           summaries: [summary("d.ts")],
           isFinal: true,
         },
@@ -1493,6 +1502,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 0,
+          generation: 1,
           summaries: [summary("a.ts")],
           isFinal: true,
         },
@@ -1557,6 +1567,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 0,
+          generation: 1,
           summaries: [summary("current.ts")],
           isFinal: true,
         },
@@ -1582,6 +1593,7 @@ describe("accumulated-change chunks", () => {
         chunk: {
           epoch: 4,
           fromIndex: 0,
+          generation: 1,
           summaries: [summary("abandoned.ts")],
           isFinal: true,
         },
@@ -1648,7 +1660,13 @@ describe("a record that arrives with no ordinal", () => {
           epoch: 4,
           fromOrdinal: 0,
           entries: [
-            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
+            {
+              rowId: "row-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
           ],
           isFinal: true,
         },
@@ -1705,7 +1723,13 @@ describe("a record that arrives with no ordinal", () => {
           epoch: 4,
           fromOrdinal: 0,
           entries: [
-            { rowId: "row-0", createdAt: 1, role: "user", byteLength: 10 },
+            {
+              rowId: "row-0",
+              createdAt: 1,
+              role: "user",
+              byteLength: 10,
+              bodyDigest: "d0",
+            },
           ],
           isFinal: true,
         },
@@ -1742,11 +1766,18 @@ describe("a record that arrives with no ordinal", () => {
         chatId: CHAT_ID,
         epoch: 4,
         rowCount: 2,
+        indexRevision: 1,
         changes: [
           {
             type: "appended",
             entries: [
-              { rowId: "row-1", createdAt: 9, role: "user", byteLength: 128 },
+              {
+                rowId: "row-1",
+                createdAt: 9,
+                role: "user",
+                byteLength: 128,
+                bodyDigest: "d1",
+              },
             ],
           },
         ],
@@ -1807,6 +1838,7 @@ describe("a record that arrives with no ordinal", () => {
         chatId: CHAT_ID,
         epoch: 5,
         rowCount: 1,
+        indexRevision: 1,
         changes: [{ type: "reindexed" }],
       });
 

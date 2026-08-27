@@ -725,6 +725,14 @@ export interface ChatSessionState {
    */
   readonly coldRewrittenMessageIds: ReadonlySet<string>;
   /**
+   * An ordinal a pending transcript JUMP needs hydrated, or `null`.
+   *
+   * Set by the surface that holds the jump request when its target resolves to
+   * a row outside the retained spans, and cleared when the jump is consumed.
+   * See {@link requiredHydrationOrdinalsOf}.
+   */
+  readonly jumpTargetOrdinal: number | null;
+  /**
    * The accumulated-change SUMMARIES, assembled from the chunk frames.
    *
    * Separate from {@link accumulatedFileChanges} rather than replacing it,
@@ -881,6 +889,8 @@ export interface ChatSessionState {
    * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
    * the tile error state's retry affordance.
    */
+  /** See the implementation - names the ordinal a pending jump is waiting on. */
+  requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
   /**
    * Which ordinals the transcript viewport is currently showing, from the
@@ -2799,7 +2809,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       const next = planTranscriptHydration(
         transcriptWindow,
         visibleTranscriptRange,
-        pendingInterviewOrdinalsOf(state),
+        requiredHydrationOrdinalsOf(state),
       );
       if (next === null) return;
       const inFlight = inFlightHydrationRequest;
@@ -3263,6 +3273,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // fresh store does.
             accumulatedFileChangeCount: 0,
             coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+            jumpTargetOrdinal: null,
             accumulatedFileChangeSummaries: [],
           },
           // A downgrade frame is a LEGACY snapshot - full records - so the
@@ -3502,7 +3513,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           visibleTranscriptRange,
           // And the row a pending question lives on, which is re-planned with
           // no viewport to scroll away from and would loop hardest of all.
-          pendingInterviewOrdinalsOf(get()),
+          requiredHydrationOrdinalsOf(get()),
         );
         // Rides the same `set` as the rows it describes, so no consumer can
         // observe the rows without the fact that a range delivered them.
@@ -4698,6 +4709,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       transcriptDerived: null,
       accumulatedFileChangeCount: 0,
       coldRewrittenMessageIds: EMPTY_COLD_REWRITTEN_IDS,
+      jumpTargetOrdinal: null,
       accumulatedFileChangeSummaries: [],
       backgroundItems: undefined,
       managedCommands: [],
@@ -4723,6 +4735,19 @@ export function createChatSessionStoreWithNotificationDependencies(
         applyVisibleTranscriptRange(range);
       },
 
+      /**
+       * Name (or clear) the ordinal a pending transcript jump is waiting on.
+       *
+       * Called by the surface holding the jump request when its target is not
+       * in the hydrated set. Hydration is otherwise driven by the VIEWPORT, and
+       * the jump does not move the viewport until its target arrives - so
+       * without this the request waits on a row nothing will fetch.
+       */
+      requestTranscriptOrdinal: (ordinal: number | null) => {
+        if (get().jumpTargetOrdinal === ordinal) return;
+        set({ jumpTargetOrdinal: ordinal });
+        if (ordinal !== null) requestPlannedHydration();
+      },
       retry: () => {
         if (disposed) return;
         closeStreamClient();
@@ -6595,16 +6620,32 @@ function pendingInterviewOrdinals(
   return ordinals;
 }
 
-/** The pair as the STORE currently holds it, for every caller but a snapshot. */
-function pendingInterviewOrdinalsOf(
+/**
+ * The ordinals hydration must reach beyond the viewport, as the STORE currently
+ * holds them.
+ *
+ * Two sources, and they are here together because `planTranscriptHydration`
+ * takes one list: the pending interviews' answer cards, and a transcript JUMP
+ * whose target is cold.
+ *
+ * The jump one is not an optimization. A cross-tile jump waits for its target
+ * to appear before it scrolls, and a scroll is what moves the viewport, which
+ * is what drives hydration - so for a target outside the retained spans the
+ * request waits on a row that nothing will ever ask for, and the jump parks
+ * forever. Naming the ordinal here is what breaks that circle.
+ */
+function requiredHydrationOrdinalsOf(
   state: ChatSessionState,
 ): ReadonlyArray<number> {
-  return pendingInterviewOrdinals(
+  const interviews = pendingInterviewOrdinals(
     state.transcriptDerived === null
       ? null
       : state.transcriptDerived.interviewAnswerability,
     state.pendingInterviews,
   );
+  const jump = state.jumpTargetOrdinal;
+  if (jump === null) return interviews;
+  return interviews.includes(jump) ? interviews : [...interviews, jump];
 }
 
 /**

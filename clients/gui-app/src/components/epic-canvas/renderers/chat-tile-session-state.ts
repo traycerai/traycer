@@ -303,21 +303,67 @@ function hasRunningManagedCommand(
   return managedCommands.some((command) => command.status.state === "running");
 }
 
+/**
+ * Whether the transcript contains this user row AT ALL - hydrated or not.
+ *
+ * `state.messages` cannot answer it on the windowed line. It is a bounded,
+ * evictable slice, so "the replacement row is not there" conflates "the edit
+ * never landed" with "the reader has scrolled away from it", and the second is
+ * the ordinary steady state for an edit made a few turns ago.
+ *
+ * The SKELETON can: it is one entry per row for the whole chat, and a user
+ * row's id is its message id. Scanned rather than indexed because this runs
+ * only while an inline edit is outstanding - a rare, short-lived state - so the
+ * cost is paid in a case that barely occurs, and building a per-render index of
+ * a 20k-row skeleton to answer one membership question would not be.
+ *
+ * A sparse skeleton (chunks still streaming) can answer `false` for a row that
+ * exists. That degrades to the pre-existing behaviour rather than to a new
+ * failure: the action-ledger checks below still hold in the near term, and the
+ * answer becomes durable as soon as the skeleton completes.
+ */
+function transcriptHasUserRow(
+  state: Pick<ChatSessionState, "messages" | "transcriptWindow">,
+  messageId: string,
+): boolean {
+  if (
+    state.messages.some(
+      (message) => message.role === "user" && message.messageId === messageId,
+    )
+  ) {
+    return true;
+  }
+  return state.transcriptWindow.skeleton.some(
+    (entry) => entry !== undefined && entry.rowId === messageId,
+  );
+}
+
 export function normalizeInlineEditForSession(
   inlineEdit: InlineEditState | null,
   state: Pick<
     ChatSessionState,
-    "messages" | "pendingActions" | "acceptedActions"
+    "messages" | "pendingActions" | "acceptedActions" | "transcriptWindow"
   >,
 ): InlineEditState | null {
   if (inlineEdit === null) return null;
+  // The DURABLE success signal, and the reason it is not `state.messages`.
+  //
+  // An accepted edit settles twice over: its replacement row is persisted, and
+  // its accepted-action entry is recorded. Both of those are transient in
+  // `state` - the row is evictable once the reader scrolls past it, and the
+  // accepted entry is pruned - so once both have gone this function fell
+  // through to the last branch, which KEEPS the edit alive with its ids
+  // cleared. `displayedMessages` then re-appended the stale `originalMessage`
+  // as an unplaced row and other message actions stayed locked, for an edit
+  // that succeeded and was rendered correctly minutes earlier.
+  //
+  // The last branch is still right for what it was written for - a REJECTED
+  // dispatch, which must return the composer to an editable state - and that
+  // is precisely why the success case has to be answered from something that
+  // does not expire.
   if (
     inlineEdit.pendingMessageId !== null &&
-    state.messages.some(
-      (message) =>
-        message.role === "user" &&
-        message.messageId === inlineEdit.pendingMessageId,
-    )
+    transcriptHasUserRow(state, inlineEdit.pendingMessageId)
   ) {
     return null;
   }

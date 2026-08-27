@@ -20,7 +20,10 @@ import {
 } from "@/lib/chat/resolve-snapshot-diff-content";
 import { useSnapshotDiffQuery } from "@/hooks/snapshots/use-snapshot-diff-query";
 import { useSnapshotResolveCumulativeDiffs } from "@/hooks/snapshots/use-snapshot-resolve-cumulative-diffs";
-import { hostAccumulatedChangeRows } from "@/lib/chat/accumulated-change-rows";
+import {
+  accumulatedSummarySetComplete,
+  hostAccumulatedChangeRows,
+} from "@/lib/chat/accumulated-change-rows";
 import {
   isWindowedTranscript,
   type ChatSessionState,
@@ -208,9 +211,13 @@ function SnapshotDiffTileResolved(props: {
       ): SnapshotDiffSource & {
         readonly snapshotLoaded: boolean;
         readonly accumulatedFileChangeSummaries: ChatSessionState["accumulatedFileChangeSummaries"];
+        readonly accumulatedFileChangeCount: number;
         readonly windowed: boolean;
       } => ({
         snapshotLoaded: s.snapshotLoaded,
+        // The AUTHORITATIVE total, against which the delivered summaries are a
+        // prefix while the stream is still arriving.
+        accumulatedFileChangeCount: s.accumulatedFileChangeCount,
         messages: s.messages,
         liveAssistantBlocks: s.liveAssistantMessage?.blocks ?? null,
         accumulatedFileChanges: s.accumulatedFileChanges,
@@ -225,12 +232,23 @@ function SnapshotDiffTileResolved(props: {
   );
   const {
     accumulatedFileChanges,
+    accumulatedFileChangeCount,
     accumulatedFileChangeSummaries,
     liveAssistantBlocks,
     messages,
     snapshotLoaded,
     windowed,
   } = source;
+  // Whether `hostRows` is the WHOLE accumulated set or a delivered prefix of
+  // one. A bundle names its paths as of when it was opened, and a path missing
+  // from a complete set is a file that has since been reverted - but a path
+  // missing from a PREFIX is simply one whose chunk has not landed. The two
+  // read identically here and mean opposite things.
+  const hostRowsComplete = accumulatedSummarySetComplete({
+    windowed,
+    hostChangeCount: accumulatedFileChangeCount,
+    deliveredSummaryCount: accumulatedFileChangeSummaries.length,
+  });
   // How the cumulative kinds address their contents: on the windowed line a
   // row's `digest` is what fetches the file bodies the snapshot no longer
   // carries.
@@ -275,6 +293,7 @@ function SnapshotDiffTileResolved(props: {
     epicId: handle.epicId,
     chatId: handle.chatId,
     hostRows,
+    hostRowsComplete,
     inlineChanges: accumulatedFileChanges,
     enabled: segmentHashes === null,
   });

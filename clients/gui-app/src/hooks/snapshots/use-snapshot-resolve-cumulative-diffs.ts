@@ -45,12 +45,34 @@ export function useSnapshotResolveCumulativeDiffs(args: {
   readonly epicId: string;
   readonly chatId: string;
   readonly hostRows: ReadonlyArray<AccumulatedChangeRow>;
+  /**
+   * Whether {@link hostRows} is the whole accumulated set rather than the
+   * prefix delivered so far.
+   *
+   * Load-bearing for absence. A bundle names its paths as of when it was
+   * opened, and this hook reads a path missing from `hostRows` as "reverted
+   * since, so drop the section". That is right for a complete set and wrong
+   * for a prefix: reopening an existing bundle starts from the snapshot, whose
+   * summary chunks normally arrive AFTERWARDS, so every file still in transit
+   * looked reverted and the tile rendered the early ones as a finished bundle -
+   * or "source unavailable" before the first chunk - with nothing on screen
+   * saying it was still loading.
+   */
+  readonly hostRowsComplete: boolean;
   readonly inlineChanges: ReadonlyArray<ChatAccumulatedFileChange>;
   /** False for a hash-backed tile, whose contents come from the hash query. */
   readonly enabled: boolean;
 }): CumulativeDiffResolution {
-  const { chatId, client, enabled, epicId, hostRows, inlineChanges, payload } =
-    args;
+  const {
+    chatId,
+    client,
+    enabled,
+    epicId,
+    hostRows,
+    hostRowsComplete,
+    inlineChanges,
+    payload,
+  } = args;
 
   // The paths this tile shows, in the order it shows them. A bundle names them
   // as of when it was opened, so a path since reverted off the accumulated set
@@ -66,6 +88,13 @@ export function useSnapshotResolveCumulativeDiffs(args: {
     () => fetchableAccumulatedChanges(filePaths, hostRows),
     [filePaths, hostRows],
   );
+  // Paths this tile shows that `hostRows` says nothing about YET. Zero once the
+  // set is complete, at which point an absent path really is a reverted one.
+  const undeliveredPaths = useMemo(() => {
+    if (hostRowsComplete) return 0;
+    const known = new Set(hostRows.map((row) => row.filePath));
+    return filePaths.filter((filePath) => !known.has(filePath)).length;
+  }, [filePaths, hostRows, hostRowsComplete]);
 
   const contentQueries = useHostQueries<
     HostRpcRegistry,
@@ -117,6 +146,7 @@ export function useSnapshotResolveCumulativeDiffs(args: {
         filePaths,
         inline,
         fetchable,
+        undeliveredPaths,
         fetches: contentQueries.map((query) => ({
           isLoading: query.isLoading,
           data: query.data,
@@ -125,6 +155,6 @@ export function useSnapshotResolveCumulativeDiffs(args: {
           isError: query.isError,
         })),
       }),
-    [contentQueries, fetchable, filePaths, inline],
+    [contentQueries, fetchable, filePaths, inline, undeliveredPaths],
   );
 }

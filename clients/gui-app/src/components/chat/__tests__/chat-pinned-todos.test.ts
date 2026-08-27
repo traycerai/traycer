@@ -396,6 +396,7 @@ describe("buildPinnedTodoRenderState", () => {
         // selection's items; `a semantic todo does not seed the task fold`
         // below is the case where the two differ.
         taskItems: hostTodo.items,
+        activeTurnId: null,
       });
 
       expect(state.todo).toBe(hostTodo);
@@ -423,6 +424,7 @@ describe("buildPinnedTodoRenderState", () => {
         kind: "host",
         todo: null,
         taskItems: [],
+        activeTurnId: null,
       });
 
       expect(state.todo).toBeNull();
@@ -464,6 +466,7 @@ describe("buildPinnedTodoRenderState", () => {
         // selection's items; `a semantic todo does not seed the task fold`
         // below is the case where the two differ.
         taskItems: hostTodo.items,
+        activeTurnId: null,
       });
 
       // The host's item, carried forward by id with the live status applied -
@@ -518,6 +521,7 @@ describe("buildPinnedTodoRenderState", () => {
         },
         // What the task deltas actually apply to.
         taskItems: [todoItem("tracked task", "in_progress")],
+        activeTurnId: null,
       });
 
       expect(state.todo?.items).toEqual([
@@ -557,6 +561,7 @@ describe("buildPinnedTodoRenderState", () => {
           items: [todoItem("host task", "in_progress")],
         },
         taskItems: [todoItem("host task", "in_progress")],
+        activeTurnId: null,
       });
 
       expect(state.todo?.items.map((item) => item.text)).toEqual([
@@ -597,6 +602,7 @@ describe("buildPinnedTodoRenderState", () => {
         // selection's items; `a semantic todo does not seed the task fold`
         // below is the case where the two differ.
         taskItems: hostTodo.items,
+        activeTurnId: null,
       });
 
       expect(state.todo?.id).toBe("task-create-live:task-todo");

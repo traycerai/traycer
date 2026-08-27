@@ -324,6 +324,11 @@ export function publishedChatSessionState(
     transcriptWindow: emptyTranscriptWindow(),
     transcriptDerived: null,
     accumulatedFileChangeCount: 0,
+    // A published copy is static: nothing evicts, nothing jumps, and there is
+    // no stream to request hydration from. All three are the inert values.
+    coldRewrittenMessageIds: new Set(),
+    jumpTargetOrdinal: null,
+    requestTranscriptOrdinal: () => undefined,
     accumulatedFileChangeSummaries: [],
     backgroundItems: undefined,
     pendingBackgroundStops: {},

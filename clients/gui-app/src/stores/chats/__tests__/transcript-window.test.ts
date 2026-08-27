@@ -118,6 +118,7 @@ function windowWithSkeleton(rowCount: number): TranscriptWindow {
   const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
     epoch: 1,
     rowCount,
+    indexRevision: null,
     tail: { fromOrdinal: rowCount, messages: [], events: [] },
   });
   return applySkeletonChunk(seeded, {
@@ -133,6 +134,7 @@ describe("windowed snapshot seating", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 5,
+      indexRevision: null,
       tail: {
         fromOrdinal: 3,
         messages: [userMessage("m-3", 3), userMessage("m-4", 4)],
@@ -162,6 +164,7 @@ describe("windowed snapshot seating", () => {
     const refreshed = applyWindowedSnapshot(seeded, {
       epoch: 1,
       rowCount: 10,
+      indexRevision: null,
       tail: { fromOrdinal: 9, messages: [userMessage("m-9", 9)], events: [] },
     });
     expect(refreshed.spans.map((span) => span.fromOrdinal)).toEqual([0, 9]);
@@ -180,6 +183,7 @@ describe("windowed snapshot seating", () => {
     const rebased = applyWindowedSnapshot(seeded, {
       epoch: 2,
       rowCount: 4,
+      indexRevision: null,
       tail: { fromOrdinal: 4, messages: [], events: [] },
     });
     expect(rebased.spans).toEqual([]);
@@ -194,6 +198,7 @@ describe("windowed snapshot seating", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 40,
+      indexRevision: null,
       tail: { fromOrdinal: 40, messages: [], events: [] },
     });
     expect(window.spans).toEqual([]);
@@ -206,6 +211,7 @@ describe("skeleton chunks", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 6,
+      indexRevision: null,
       tail: { fromOrdinal: 6, messages: [], events: [] },
     });
     const first = applySkeletonChunk(seeded, {
@@ -234,6 +240,7 @@ describe("skeleton chunks", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 9,
+      indexRevision: null,
       tail: { fromOrdinal: 9, messages: [], events: [] },
     });
     const short = applySkeletonChunk(seeded, {
@@ -253,6 +260,7 @@ describe("skeleton chunks", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 9,
+      indexRevision: null,
       tail: { fromOrdinal: 9, messages: [], events: [] },
     });
     const first = applySkeletonChunk(seeded, {
@@ -295,6 +303,7 @@ describe("skeleton chunks", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: { fromOrdinal: 1, messages: [userMessage("m-1", 1)], events: [] },
     });
     expect(seeded.spans).toHaveLength(1);
@@ -344,6 +353,7 @@ describe("index deltas", () => {
     const appended = applyIndexChange(held, {
       epoch: 1,
       rowCount: 6,
+      indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(4, 2) }],
     });
     expect(appended.rowCount).toBe(6);
@@ -362,6 +372,7 @@ describe("index deltas", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 100,
+      indexRevision: null,
       tail: { fromOrdinal: 100, messages: [], events: [] },
     });
     const partial = applySkeletonChunk(seeded, {
@@ -375,6 +386,7 @@ describe("index deltas", () => {
     const appended = applyIndexChange(partial, {
       epoch: 1,
       rowCount: 102,
+      indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(100, 2) }],
     });
 
@@ -397,6 +409,7 @@ describe("index deltas", () => {
     const afterLoss = applyIndexChange(held, {
       epoch: 1,
       rowCount: 102,
+      indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(101, 1) }],
     });
 
@@ -414,6 +427,7 @@ describe("index deltas", () => {
     const appended = applyIndexChange(held, {
       epoch: 1,
       rowCount: 102,
+      indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(100, 2) }],
     });
 
@@ -441,6 +455,7 @@ describe("index deltas", () => {
     const updated = applyIndexChange(held, {
       epoch: 1,
       rowCount: 4,
+      indexRevision: 1,
       changes: [
         {
           type: "updated",
@@ -469,6 +484,7 @@ describe("index deltas", () => {
     const next = applyIndexChange(held, {
       epoch: 1,
       rowCount: 5,
+      indexRevision: 1,
       changes: [
         { type: "appended", entries: skeletonEntries(3, 2) },
         {
@@ -497,6 +513,7 @@ describe("index deltas", () => {
     const reindexed = applyIndexChange(held, {
       epoch: 2,
       rowCount: 3,
+      indexRevision: 1,
       changes: [{ type: "reindexed" }],
     });
     expect(reindexed.invalidated).toBe(true);
@@ -510,6 +527,7 @@ describe("index deltas", () => {
     const stale = applyIndexChange(window, {
       epoch: 7,
       rowCount: 99,
+      indexRevision: 1,
       changes: [{ type: "appended", entries: skeletonEntries(4, 1) }],
     });
     expect(stale.rowCount).toBe(4);
@@ -685,6 +703,7 @@ describe("gaps and what to request next", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 40,
+      indexRevision: null,
       tail: { fromOrdinal: 40, messages: [], events: [] },
     });
     expect(planTranscriptHydration(window, null, [])).toEqual({
@@ -698,6 +717,7 @@ describe("gaps and what to request next", () => {
       applyWindowedSnapshot(emptyTranscriptWindow(), {
         epoch: 1,
         rowCount: 40,
+        indexRevision: null,
         tail: { fromOrdinal: 40, messages: [], events: [] },
       }),
       rangeResponse({
@@ -717,6 +737,7 @@ describe("gaps and what to request next", () => {
     const window = applyIndexChange(windowWithSkeleton(10), {
       epoch: 2,
       rowCount: 10,
+      indexRevision: 1,
       changes: [{ type: "reindexed" }],
     });
     expect(
@@ -740,6 +761,7 @@ describe("gaps and what to request next", () => {
         applyWindowedSnapshot(emptyTranscriptWindow(), {
           epoch: 1,
           rowCount: 40,
+          indexRevision: null,
           tail: { fromOrdinal: 40, messages: [], events: [] },
         }),
         rangeResponse({
@@ -777,6 +799,7 @@ describe("gaps and what to request next", () => {
       const noTail = applyWindowedSnapshot(emptyTranscriptWindow(), {
         epoch: 1,
         rowCount: 40,
+        indexRevision: null,
         tail: { fromOrdinal: 40, messages: [], events: [] },
       });
       expect(planTranscriptHydration(noTail, null, [4])).toEqual({
@@ -1379,6 +1402,7 @@ describe("holdsEveryRecordFrom", () => {
     const seeded = applyWindowedSnapshot(windowWithSkeleton(30), {
       epoch: 1,
       rowCount: 30,
+      indexRevision: null,
       tail: {
         fromOrdinal: 25,
         messages: Array.from({ length: 5 }, (_unused, index) =>
@@ -1439,6 +1463,7 @@ describe("holdsEveryRecordFrom", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 2,
+      indexRevision: null,
       tail: {
         fromOrdinal: 0,
         messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
@@ -1498,6 +1523,7 @@ describe("what an overlap keeps", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: {
         fromOrdinal: 2,
         messages: [messageWithText(userMessage("row-2", 3), "half-written")],
@@ -1511,6 +1537,7 @@ describe("what an overlap keeps", () => {
     const reconnected = applyWindowedSnapshot(seeded, {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: { fromOrdinal: 2, messages: [], events: [] },
     });
     expect(reconnected.spans).toHaveLength(0);
@@ -1540,6 +1567,7 @@ describe("what an overlap keeps", () => {
     const rebroadcast = applyWindowedSnapshot(seeded, {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: { fromOrdinal: 3, messages: [], events: [] },
     });
     expect(rebroadcast.spans).toHaveLength(1);
@@ -1552,6 +1580,7 @@ describe("what an overlap keeps", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: {
         fromOrdinal: 2,
         messages: [userMessage("row-2", 3)],
@@ -1576,6 +1605,7 @@ describe("what an overlap keeps", () => {
     const seeded = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 3,
+      indexRevision: null,
       tail: {
         fromOrdinal: 2,
         messages: [userMessage("row-2", 3)],
@@ -1675,6 +1705,7 @@ describe("a record lives in exactly one span", () => {
     const rewritten = applyIndexChange(later, {
       epoch: 1,
       rowCount: 10,
+      indexRevision: 1,
       changes: [
         {
           type: "updated",
@@ -1692,6 +1723,7 @@ describe("the inline tail's row context", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 5,
+      indexRevision: null,
       tail: {
         fromOrdinal: 3,
         rowIds: ["row-3", "row-4"],
@@ -1710,6 +1742,7 @@ describe("the inline tail's row context", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 5,
+      indexRevision: null,
       tail: {
         fromOrdinal: 3,
         messages: [userMessage("row-3", 3), userMessage("row-4", 4)],
@@ -1726,6 +1759,7 @@ describe("the inline tail's row context", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 5,
+      indexRevision: null,
       tail: {
         fromOrdinal: 3,
         rowIds: [],
@@ -1838,6 +1872,7 @@ describe("what a span charges the byte budget", () => {
     const bare = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 2,
+      indexRevision: null,
       tail: {
         fromOrdinal: 0,
         rowIds: ["row-0", "row-1"],
@@ -1848,6 +1883,7 @@ describe("what a span charges the byte budget", () => {
     const withContext = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 2,
+      indexRevision: null,
       tail: {
         fromOrdinal: 0,
         rowIds: ["row-0", "row-1"],

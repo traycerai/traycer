@@ -63,6 +63,7 @@ function windowOf(
   return {
     epoch: 1,
     rowCount,
+    indexRevision: 1,
     skeleton,
     skeletonComplete: true,
     spans,

@@ -906,6 +906,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           composerOverlayHeight={state.composerOverlayHeight}
           transcriptWindow={null}
           onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+          coldRewrittenMessageIds={new Set()}
         />
       </div>
       {options.withSiblingChrome === true ? siblingChrome() : null}
@@ -4575,6 +4576,7 @@ describe("ChatMessages scroll policy", () => {
             composerOverlayHeight={80}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={noOpOnVisibleOrdinalRangeChange}
+            coldRewrittenMessageIds={new Set()}
           />
         </Parent>
       );

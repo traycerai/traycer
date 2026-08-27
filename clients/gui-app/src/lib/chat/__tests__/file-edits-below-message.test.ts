@@ -187,6 +187,7 @@ describe("resolveRevertScope", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 2,
+      indexRevision: null,
       tail: { fromOrdinal: 0, messages, events },
     });
     expect(
@@ -210,6 +211,7 @@ describe("resolveRevertScope", () => {
     const window = applyWindowedSnapshot(emptyTranscriptWindow(), {
       epoch: 1,
       rowCount: 40,
+      indexRevision: null,
       tail: {
         fromOrdinal: 38,
         messages: [userMessage("u38"), userMessage("u39")],

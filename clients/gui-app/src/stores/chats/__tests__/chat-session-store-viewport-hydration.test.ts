@@ -151,6 +151,7 @@ function snapshot(input: {
       heldUpdates: [],
       transcriptEpoch: 1,
       rowCount: input.rowCount,
+      indexRevision: null,
       tail: {
         fromOrdinal: input.tailFromOrdinal,
         messages: [...input.tailMessages],
@@ -326,6 +327,7 @@ function updatedEntry(ordinal: number): {
 function indexChanged(input: {
   readonly epoch: number;
   readonly rowCount: number;
+  readonly indexRevision: number;
   readonly changes: readonly ChatIndexChange[];
 }): Parameters<ChatStreamCallbacks["onIndexChanged"]>[0] {
   return {
@@ -335,6 +337,7 @@ function indexChanged(input: {
     chatId: CHAT_ID,
     epoch: input.epoch,
     rowCount: input.rowCount,
+    indexRevision: input.indexRevision,
     changes: [...input.changes],
   };
 }
@@ -350,6 +353,7 @@ function accumulatedChanges(
     chunk: {
       epoch: 1,
       fromIndex: 0,
+      generation: 1,
       summaries: [
         {
           filePath,
@@ -655,6 +659,7 @@ describe("chat session viewport hydration: review fixes", () => {
         indexChanged({
           epoch: 1,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "reindexed" }],
         }),
       );
@@ -1007,6 +1012,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
         indexChanged({
           epoch: 1,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "updated", entries: [updatedEntry(12)] }],
         }),
       );
@@ -1040,6 +1046,7 @@ describe("chat session viewport hydration: a range answered out of order", () =>
         indexChanged({
           epoch: 1,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "updated", entries: [updatedEntry(5)] }],
         }),
       );
@@ -1130,6 +1137,7 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
         indexChanged({
           epoch: 2,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "reindexed" }],
         }),
       );
@@ -1154,6 +1162,7 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
         indexChanged({
           epoch: 2,
           rowCount: 41,
+          indexRevision: 2,
           changes: [{ type: "appended", entries: [skeletonEntry(40)] }],
         }),
       );
@@ -1172,6 +1181,7 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
         indexChanged({
           epoch: 2,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "reindexed" }],
         }),
       );
@@ -1182,6 +1192,7 @@ describe("chat session viewport hydration: resnapshot after invalidation", () =>
         indexChanged({
           epoch: 3,
           rowCount: 40,
+          indexRevision: 1,
           changes: [{ type: "reindexed" }],
         }),
       );

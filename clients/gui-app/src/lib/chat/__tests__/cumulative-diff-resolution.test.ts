@@ -82,6 +82,7 @@ describe("mergeCumulativeDiffs", () => {
         inline,
         fetchable: [],
         fetches: [],
+        undeliveredPaths: 0,
       }),
     ).toEqual({
       resolved: inline,
@@ -104,6 +105,7 @@ describe("mergeCumulativeDiffs", () => {
             data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
           },
         ],
+        undeliveredPaths: 0,
       }),
     ).toEqual({
       resolved: [
@@ -122,6 +124,7 @@ describe("mergeCumulativeDiffs", () => {
         inline: [],
         fetchable,
         fetches: [{ isLoading: true, isError: false, data: undefined }],
+        undeliveredPaths: 0,
       }),
     ).toMatchObject({ resolved: [], isLoading: true });
   });
@@ -138,6 +141,7 @@ describe("mergeCumulativeDiffs", () => {
         inline: [],
         fetchable,
         fetches: [{ isLoading: false, isError: false, data: { stale: true } }],
+        undeliveredPaths: 0,
       }),
     ).toEqual({ resolved: [], isLoading: false, stale: true, failed: false });
   });
@@ -169,6 +173,7 @@ describe("mergeCumulativeDiffs", () => {
           data: { stale: false, beforeContent: "b1\n", afterContent: "b2\n" },
         },
       ],
+      undeliveredPaths: 0,
     });
     expect(result.resolved.map((entry) => entry.filePath)).toEqual([
       "/a.ts",
@@ -189,6 +194,7 @@ describe("mergeCumulativeDiffs", () => {
           data: { stale: false, beforeContent: "x\n", afterContent: "y\n" },
         },
       ],
+      undeliveredPaths: 0,
     });
     expect(result.resolved.map((entry) => entry.filePath)).toEqual(["/a.ts"]);
   });

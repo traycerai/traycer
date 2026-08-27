@@ -255,6 +255,7 @@ function emitWindowedSnapshot(
       missingWorktreePaths: [],
       transcriptEpoch: 1,
       rowCount: 0,
+      indexRevision: null,
       tail: { fromOrdinal: 0, messages: [], events: [] },
       derived: {
         latestAssistantUsage: null,

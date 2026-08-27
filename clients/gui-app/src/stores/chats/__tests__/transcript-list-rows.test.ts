@@ -83,6 +83,7 @@ function windowOf(input: {
   return {
     epoch: 1,
     rowCount: input.rowCount,
+    indexRevision: 1,
     skeleton: input.skeleton,
     skeletonComplete: input.skeletonComplete,
     spans: input.spans,
