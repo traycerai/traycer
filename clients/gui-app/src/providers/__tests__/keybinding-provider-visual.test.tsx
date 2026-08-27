@@ -277,6 +277,23 @@ function keyDown(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keydown", init);
 }
 
+function terminalKeyDown(init: KeyboardEventInit): KeyboardEvent {
+  const terminalHost = document.createElement("div");
+  terminalHost.setAttribute("data-terminal-host", "");
+  const textarea = document.createElement("textarea");
+  terminalHost.append(textarea);
+  document.body.append(terminalHost);
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    textarea.dispatchEvent(event);
+  });
+  return event;
+}
+
 function keyUp(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keyup", init);
 }
@@ -769,6 +786,137 @@ describe("<KeybindingProvider /> visual leader hints", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expectModHintVisible(false);
+  });
+
+  it("passes non-mac shell-policy Ctrl chords through when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const palette = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      ctrlKey: true,
+    });
+    const closeOthers = terminalKeyDown({
+      code: "KeyW",
+      key: "w",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const split = terminalKeyDown({
+      code: "KeyN",
+      key: "n",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const toggleTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+    });
+    const maximizeTerminal = terminalKeyDown({
+      code: "KeyJ",
+      key: "j",
+      ctrlKey: true,
+      altKey: true,
+    });
+    const stash = terminalKeyDown({
+      code: "KeyS",
+      key: "s",
+      ctrlKey: true,
+    });
+
+    expect(palette.defaultPrevented).toBe(false);
+    expect(closeOthers.defaultPrevented).toBe(false);
+    expect(split.defaultPrevented).toBe(false);
+    expect(toggleTerminal.defaultPrevented).toBe(false);
+    expect(maximizeTerminal.defaultPrevented).toBe(false);
+    expect(stash.defaultPrevented).toBe(false);
+  });
+
+  it("reserves non-mac app-policy Ctrl digit chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "Digit2",
+      key: "2",
+      ctrlKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves non-encodable non-mac Ctrl punctuation chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const settings = terminalKeyDown({
+      code: "Comma",
+      key: ",",
+      ctrlKey: true,
+    });
+    const zoomOut = terminalKeyDown({
+      code: "Minus",
+      key: "-",
+      ctrlKey: true,
+    });
+
+    expect(settings.defaultPrevented).toBe(true);
+    expect(zoomOut.defaultPrevented).toBe(true);
+  });
+
+  it("reserves the palette secondary chord when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyP",
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves explicit user-rebound Ctrl chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    const calls: Array<string> = [];
+    const unregister = registerDynamicActionHandler("app.zoom.in", () =>
+      calls.push("zoom-in"),
+    );
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "app.zoom.in": "mod+shift+p",
+      },
+    });
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyP",
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    unregister();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(calls).toEqual(["zoom-in"]);
+  });
+
+  it("reserves macOS Command chords when a terminal is focused", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      metaKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("clears pending timers and visible hints on window blur", () => {

@@ -57,7 +57,8 @@ export function useEpicImageFetcher(): ImageBytesFetcher {
 
 /** Synchronously checks the currently-open epic's local attachment replica. */
 export function useEpicAttachmentBytesPresence():
-  ((hash: string) => boolean) | null {
+  | ((hash: string) => boolean)
+  | null {
   const handle = useOpenEpicHandle();
   const snapshotLoaded = useEpicSnapshotLoaded();
   const hasAttachmentBytes = useCallback(

@@ -44,7 +44,6 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
-  providersListResponseSchemaV71,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -71,7 +70,7 @@ const FIXTURES = {
   "agent.gui.listHarnesses@4.0": dump(listGuiHarnessesResponseSchemaV40),
   "agent.gui.listHarnesses@5.0": dump(listGuiHarnessesResponseSchemaV50),
   "agent.gui.listHarnesses@6.0": dump(listGuiHarnessesResponseSchemaV60),
-  // v7.0 froze when v7.1 opened for the auth-aware enablement row fields. Up
+  // v7.0 froze when v7.1 opened for the row's `authStatus`. Up
   // to that point the 2.1-6.0 rows above were `guiHarnessOptionSchema.extend({
   // id })` - a pinned id over the LIVE body - so these dumps were only ever
   // half-frozen. They now share the hand-frozen `guiHarnessOptionBaseShapeV70`
@@ -117,16 +116,14 @@ const FIXTURES = {
   // recording it, and it is what mechanizes "freeze line N before N ships".
   //
   // THAT PREVENTION WORKED, and this row now dumps the FROZEN v7.0 schema
-  // rather than the live one. When the auth-aware enablement fields
-  // (`enablementMode`/`enablementSource`) were added to
+  // rather than the live one. When the (since removed) auth-aware enablement
+  // fields `enablementMode`/`enablementSource` were added to
   // `providerCliStateBaseShape`, this row went red exactly as designed; the
-  // response was to hand-freeze v7.0 under the reserved `V70` names and open
-  // v7.1 against live, NOT to regenerate this row. Its dump is unchanged.
-  //
-  // A MINOR, not the v8.0 this text used to prescribe: `versioned-rpc.ts`
-  // rejects a major bump that is not a breaking change, and two optional
-  // fields are not one. v8.0 remains right for the growth this text had in
-  // mind (new ids/enum values on a host->client catalog payload).
+  // response was to hand-freeze v7.0 under the reserved `V70` names and open a
+  // 7.1 against live, NOT to regenerate this row. Its dump is unchanged - by
+  // that freeze, and by the later removal of the two fields, which took the
+  // whole 7.1 line with it (they were its entire delta) and left v7.0 as the
+  // last frozen line under the live v8.0.
   //
   // The dump is DEEP - it walks `providerProfileSchema`,
   // `providerNativeCapabilitiesSchema`, `nativeListResultSchema` and every
@@ -135,14 +132,7 @@ const FIXTURES = {
   // this snapshot. When that happens, hand-freeze the sub-schema that grew (the
   // `*V70Preimage` shapes are the precedent); do not regenerate to green.
   "providers.list@7.0": dump(providersListResponseSchemaV70),
-  // That response applied again, one line later: 7.1 dumped the live schema
-  // until Reasonix, then froze under `providersListResponseSchemaV71` and 8.0
-  // opened against live. Note 7.1 froze even though no tag has shipped it - a
-  // released 7.0 forbids any minor of major 7 from growing the enum, so the
-  // "wait for the release" reading does not apply to a MINOR. Its dump is
-  // unchanged by the freeze.
-  "providers.list@7.1": dump(providersListResponseSchemaV71),
-  // The head line. It inherits 7.1's old job here: it dumps the LIVE schema,
+  // The head line. It dumps the LIVE schema,
   // so the FIRST attempt to grow the live shape goes red on this row rather
   // than on the release that ships the growth. Same response then applies -
   // freeze the line that stopped being head, open the next one.

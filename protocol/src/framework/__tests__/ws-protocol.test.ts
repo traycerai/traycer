@@ -48,6 +48,51 @@ describe("ws-protocol canonical Zod schemas", () => {
       }
     });
 
+    it("accepts supportedMajors on manifest entries and strips unrelated future keys", () => {
+      const parsed = clientOpenFrameSchema.safeParse({
+        kind: "open",
+        token: "t-0",
+        manifest: {
+          "host.echo": {
+            major: 2,
+            minor: 3,
+            supportedMajors: [1, 2],
+            futureKey: true,
+          },
+        },
+      });
+
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.manifest["host.echo"]).toEqual({
+          major: 2,
+          minor: 3,
+          supportedMajors: [1, 2],
+        });
+      }
+    });
+
+    it.each([
+      { supportedMajors: [] },
+      { supportedMajors: [-1] },
+      { supportedMajors: [1.5] },
+      { supportedMajors: ["1"] },
+    ])("rejects malformed supportedMajors: %j", ({ supportedMajors }) => {
+      expect(
+        clientOpenFrameSchema.safeParse({
+          kind: "open",
+          token: "t-0",
+          manifest: {
+            "host.echo": {
+              major: 2,
+              minor: 3,
+              supportedMajors,
+            },
+          },
+        }).success,
+      ).toBe(false);
+    });
+
     it("pins current `open` frame wire bytes", () => {
       const frame = {
         kind: "open" as const,

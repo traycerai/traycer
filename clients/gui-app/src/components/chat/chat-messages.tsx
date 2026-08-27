@@ -322,7 +322,12 @@ function isDemonstrablyPastIssuedFreeRestoreTarget(
 }
 
 type ChatKeyboardScrollAction =
-  "page-up" | "page-down" | "line-up" | "line-down" | "top" | "bottom";
+  | "page-up"
+  | "page-down"
+  | "line-up"
+  | "line-down"
+  | "top"
+  | "bottom";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (

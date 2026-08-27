@@ -31,9 +31,11 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
       readonly children: ReactNode;
       readonly onSelect: (() => void) | undefined;
       readonly onFocus:
-        ((event: React.FocusEvent<HTMLButtonElement>) => void) | undefined;
+        | ((event: React.FocusEvent<HTMLButtonElement>) => void)
+        | undefined;
       readonly onPointerMove:
-        ((event: React.PointerEvent<HTMLButtonElement>) => void) | undefined;
+        | ((event: React.PointerEvent<HTMLButtonElement>) => void)
+        | undefined;
       readonly "aria-label": string | undefined;
       readonly "aria-keyshortcuts": string | undefined;
       readonly "aria-current": "true" | undefined;
@@ -66,7 +68,8 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
     DropdownMenuContent: (props: {
       readonly children: ReactNode;
       readonly onKeyDown:
-        ((event: React.KeyboardEvent<HTMLDivElement>) => void) | undefined;
+        | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
+        | undefined;
     }): ReactNode => (
       <div
         role="menu"

@@ -1617,9 +1617,9 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
   `agent.selectionGuide.getGlobal` (returns `{ content, generatedDefaultContent }`),
   `agent.selectionGuide.setGlobal`, and
   `agent.selectionGuide.resetGlobalToDefault` through the agent selection guide
-  hooks. The global guide is the only scope: per-workspace
-  `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
-  still send them, current clients ignore them).
+  hooks. This settings panel edits only the global guide. A workspace can add
+  `.traycer/agent-selection-guide.md` manually; agents layer that file over the
+  global guide when they work in that workspace.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

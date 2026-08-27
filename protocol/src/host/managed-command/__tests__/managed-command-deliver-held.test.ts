@@ -7,7 +7,10 @@ import {
   managedCommandHeldReleaseFailureSchema,
   managedCommandHeldReleaseUnattributedSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
-import { hostRpcRegistry, hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 
 /**
@@ -65,7 +68,7 @@ describe("managedCommand.deliverHeld@1.0 request", () => {
   // empty, fully-successful response - indistinguishable on the wire from a
   // real delivery. Nothing a person can do produces it; it is what a caller
   // that meant `null` gets from building the array off an empty selection.
-  it("rejects an empty commandIds array rather than accepting it as \"deliver nothing\"", () => {
+  it('rejects an empty commandIds array rather than accepting it as "deliver nothing"', () => {
     expect(() =>
       managedCommandDeliverHeldRequestSchema.parse({
         epicId: "epic-1",

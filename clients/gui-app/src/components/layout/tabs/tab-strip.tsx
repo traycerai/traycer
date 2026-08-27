@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
+import { runHeaderStripCommitHandoff } from "./header-strip-commit-handoff";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LayoutGroup } from "motion/react";
 import { useDroppable } from "@dnd-kit/core";
@@ -8,7 +16,11 @@ import {
   HEADER_TAB_TRAILING_SLOT_DROP_ID,
   type HeaderTabSlotDropData,
 } from "@/components/layout/tabs/header-tab-dnd";
-import { useHeaderStripDropIndex } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useActiveHeaderTab,
+  useHeaderStripDropIndex,
+  useHeaderStripOffsets,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import { useTabOpenInNewWindowFlow } from "@/components/layout/tabs/use-tab-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow";
@@ -77,6 +89,19 @@ function TabStripBody() {
   // Single insertion index covering header-tab reorder AND canvas tear-off
   // hovers - both flow through the root DndContext into the drag store.
   const dropIndicatorIndex = useHeaderStripDropIndex();
+  const activeHeaderTab = useActiveHeaderTab();
+  // Explicit per-item displacement resolved by the drag model - the same
+  // mechanism the tile strip uses. No provisional CSS `order`, no layout
+  // projection, so no projection can be stranded mid-flight.
+  const headerOffsets = useHeaderStripOffsets();
+  // Parent layout effects run AFTER every child's, so by here every strip item
+  // has registered and published its current target. Driving the re-base from
+  // this one boundary is what makes it reach EVERY item whose baseline moved -
+  // an earlier per-item version reached only the items React happened to
+  // re-render, which is one tab per commit.
+  useLayoutEffect(() => {
+    runHeaderStripCommitHandoff();
+  });
 
   const isLandingPage = activePathname === "/";
   const indicatorEpicIds = useMemo(
@@ -268,33 +293,39 @@ function TabStripBody() {
               onWheel={handleWheel}
               className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
             >
-              {headerItemIds.map((itemId, index) => (
-                <HeaderStripItemRenderer
-                  key={itemId}
-                  itemId={itemId}
-                  stripIndex={index}
-                  memberOffset={memberOffsetBefore(layoutItems, index)}
-                  isActive={itemId === activeItemId}
-                  isNextActive={headerItemIds[index + 1] === activeItemId}
-                  nextIsSplit={layoutItems[index + 1]?.kind === "split"}
-                  isLastItem={index === headerItemIds.length - 1}
-                  showDropIndicatorBefore={dropIndicatorIndex === index}
-                  showDropIndicatorAfter={
-                    dropIndicatorIndex === index + 1 &&
-                    index === headerItemIds.length - 1
-                  }
-                  onClose={closeTabFlow.requestCloseTab}
-                  onCloseOtherTabs={closeTabFlow.closeOtherTabs}
-                  onDuplicateTab={handleDuplicateTab}
-                  canCloseOtherTabs={canCloseOtherTabs}
-                  onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-                  canOpenInNewWindow={openInNewWindowFlow.isAvailable}
-                  onSplitCommand={handleSplitCommand}
-                  taskPinnedStates={taskPinnedStates}
-                  pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-                  onSetTaskPinned={handleSetTaskPinned}
-                />
-              ))}
+              {headerItemIds.map((itemId, index) => {
+                return (
+                  <HeaderStripItemRenderer
+                    key={itemId}
+                    itemId={itemId}
+                    stripIndex={index}
+                    offsetX={headerOffsets.get(itemId) ?? 0}
+                    memberOffset={memberOffsetBefore(layoutItems, index)}
+                    isActive={itemId === activeItemId}
+                    isNextActive={headerItemIds[index + 1] === activeItemId}
+                    nextIsSplit={layoutItems[index + 1]?.kind === "split"}
+                    isLastItem={index === headerItemIds.length - 1}
+                    showDropIndicatorBefore={
+                      activeHeaderTab === null && dropIndicatorIndex === index
+                    }
+                    showDropIndicatorAfter={
+                      activeHeaderTab === null &&
+                      dropIndicatorIndex === index + 1 &&
+                      index === headerItemIds.length - 1
+                    }
+                    onClose={closeTabFlow.requestCloseTab}
+                    onCloseOtherTabs={closeTabFlow.closeOtherTabs}
+                    onDuplicateTab={handleDuplicateTab}
+                    canCloseOtherTabs={canCloseOtherTabs}
+                    onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+                    canOpenInNewWindow={openInNewWindowFlow.isAvailable}
+                    onSplitCommand={handleSplitCommand}
+                    taskPinnedStates={taskPinnedStates}
+                    pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+                    onSetTaskPinned={handleSetTaskPinned}
+                  />
+                );
+              })}
             </div>
           </LayoutGroup>
           <TabStripNewButton onNewTab={handleNewTab} />
@@ -309,6 +340,7 @@ function TabStripBody() {
 interface HeaderStripItemRendererProps {
   readonly itemId: string;
   readonly stripIndex: number;
+  readonly offsetX: number;
   readonly memberOffset: number;
   // Passed as named booleans rather than packed into one positional string.
   // `memo` compares primitives, so five props cost the same as one - and a
@@ -360,6 +392,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       <SplitTabItem
         item={item}
         stripIndex={props.stripIndex}
+        offsetX={props.offsetX}
         leftMemberIndex={props.memberOffset}
         rightMemberIndex={props.memberOffset + Number(item.left.kind === "tab")}
         isActive={isActive}
@@ -385,6 +418,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       tab={item.tab}
       index={props.memberOffset}
       stripIndex={props.stripIndex}
+      offsetX={props.offsetX}
       isActive={isActive}
       showDropIndicatorBefore={showDropIndicatorBefore}
       showDropIndicatorAfter={showDropIndicatorAfter}
@@ -408,6 +442,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly tab: HeaderTab;
   readonly index: number;
   readonly stripIndex: number;
+  readonly offsetX: number;
   readonly isActive: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
@@ -442,6 +477,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       dnd={dnd}
       chrome="own"
       includeMotionFrame
+      offsetX={props.offsetX}
       isActive={props.isActive}
       showSeparatorAfter={props.showSeparatorAfter}
       showDropIndicatorBefore={props.showDropIndicatorBefore}

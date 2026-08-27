@@ -704,7 +704,10 @@ function usePublishedChatFallbackRef(args: {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
   readonly liveArtifact:
-    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+    | EpicArtifactProjection
+    | EpicChatProjection
+    | EpicTuiAgentProjection
+    | null;
   readonly activeHostId: string | null;
 }): {
   /**
@@ -1122,7 +1125,10 @@ interface ComputeIsRemoteDeletedArgs {
   readonly snapshotLoaded: boolean;
   readonly leafArtifact: EpicNodeRef | null;
   readonly liveArtifact:
-    EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection | null;
+    | EpicArtifactProjection
+    | EpicChatProjection
+    | EpicTuiAgentProjection
+    | null;
   readonly isSelfDeleted: boolean;
   /**
    * Symmetric counterpart to `isSelfDeleted`: the local user just initiated

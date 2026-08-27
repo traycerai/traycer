@@ -117,7 +117,9 @@ interface PermissionResult {
 }
 
 type PushPluginEvent =
-  PushRegistrationToken | PushRegistrationError | PushNotificationAction;
+  | PushRegistrationToken
+  | PushRegistrationError
+  | PushNotificationAction;
 
 /**
  * A class rather than an object literal: `addListener`'s single broad-param

@@ -164,7 +164,10 @@ describe("adversarial: legacy seeding seams", () => {
     });
     await setShell("/bin/cat", null); // switch away; seeding must preserve zsh flags
     const cfg = await readCliConfig();
-    expect(cfg.shell.entries).toContainEqual({ path: "/bin/zsh", args: ["-l", "-i"] });
+    expect(cfg.shell.entries).toContainEqual({
+      path: "/bin/zsh",
+      args: ["-l", "-i"],
+    });
   });
 
   it("does NOT seed when legacy args are deep-equal to the family default", async () => {
@@ -208,7 +211,10 @@ describe("adversarial: legacy seeding seams", () => {
     await setShell("/bin/cat", null); // triggers seeding logic
     const cfg = await readCliConfig();
     // The existing entry must be preserved; the legacy mirror must NOT overwrite it.
-    expect(cfg.shell.entries).toContainEqual({ path: "/bin/bash", args: ["-x"] });
+    expect(cfg.shell.entries).toContainEqual({
+      path: "/bin/bash",
+      args: ["-x"],
+    });
     expect(
       cfg.shell.entries.filter((e) => e.path === "/bin/bash"),
     ).toHaveLength(1);

@@ -77,7 +77,10 @@ const label: ServiceLabel = {
 };
 
 type HarnessServiceState =
-  "running" | "stopped" | "not-installed" | "externally-managed";
+  | "running"
+  | "stopped"
+  | "not-installed"
+  | "externally-managed";
 
 interface ControllerHarness {
   readonly controller: ServiceController;

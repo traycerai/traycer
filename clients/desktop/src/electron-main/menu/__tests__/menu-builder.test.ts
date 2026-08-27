@@ -82,6 +82,17 @@ function menuByLabel(
   return item;
 }
 
+function menuByRole(
+  items: readonly CapturedMenuItem[],
+  role: string,
+): CapturedMenuItem {
+  const item = items.find((entry) => entry.role === role);
+  if (item === undefined) {
+    throw new Error(`missing menu role ${role}`);
+  }
+  return item;
+}
+
 describe("buildApplicationMenu", () => {
   it("assigns stable ids to every renderer-visible Windows submenu", () => {
     const items = template(
@@ -469,6 +480,68 @@ describe("buildApplicationMenu", () => {
         false,
       );
     }
+  });
+
+  it("keeps terminal-conflicting accelerator labels visible but unregisters them off macOS", () => {
+    (["win32", "linux"] as const).forEach((platform) => {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+        }),
+      );
+      const fileMenu = menuByLabel(items, "File").submenu ?? [];
+      const editMenu = menuByLabel(items, "Edit").submenu ?? [];
+      const viewMenu = menuByLabel(items, "View").submenu ?? [];
+      const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+      const closeTab = menuByLabel(fileMenu, "Close Tab");
+      const settings = menuByLabel(fileMenu, "Settings...");
+      const find = menuByLabel(editMenu, "Find");
+      const findNext = menuByLabel(editMenu, "Find Next");
+      const findPrevious = menuByLabel(editMenu, "Find Previous");
+      const minimize = menuByLabel(windowMenu, "Minimize");
+
+      expect(closeTab.accelerator).toBe("CmdOrCtrl+W");
+      expect(settings.accelerator).toBe("CmdOrCtrl+,");
+      expect(find.accelerator).toBe("CommandOrControl+F");
+      expect(findNext.accelerator).toBe("CommandOrControl+G");
+      expect(minimize.accelerator).toBe("CmdOrCtrl+M");
+      expect(closeTab.registerAccelerator).toBe(false);
+      expect(settings.registerAccelerator).toBe(false);
+      expect(find.registerAccelerator).toBe(false);
+      expect(findNext.registerAccelerator).toBe(false);
+      expect(minimize.registerAccelerator).toBe(false);
+      expect(findPrevious.registerAccelerator).toBeUndefined();
+      expect(menuByRole(fileMenu, "quit").registerAccelerator).toBe(false);
+      expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(false);
+      expect(menuByRole(viewMenu, "reload").registerAccelerator).toBe(false);
+      expect(menuByRole(windowMenu, "close").registerAccelerator).toBe(false);
+    });
+  });
+
+  it("keeps terminal-conflicting accelerators registered on macOS", () => {
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+      }),
+    );
+    const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const editMenu = menuByLabel(items, "Edit").submenu ?? [];
+    const viewMenu = menuByLabel(items, "View").submenu ?? [];
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+    expect(menuByLabel(appMenu, "Settings...").registerAccelerator).toBe(true);
+    expect(menuByLabel(fileMenu, "Close Tab").registerAccelerator).toBe(true);
+    expect(menuByLabel(editMenu, "Find").registerAccelerator).toBe(true);
+    expect(menuByLabel(editMenu, "Find Next").registerAccelerator).toBe(true);
+    expect(menuByLabel(windowMenu, "Minimize").registerAccelerator).toBe(true);
+    expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(true);
+    expect(menuByRole(viewMenu, "reload").registerAccelerator).toBe(true);
   });
 
   it("disables File Close Tab when no target window tab is closable", () => {

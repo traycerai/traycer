@@ -46,7 +46,9 @@ export interface ManagedCommandLifecycleVariables {
 }
 
 type LifecycleMethod =
-  "managedCommand.start" | "managedCommand.stop" | "managedCommand.delete";
+  | "managedCommand.start"
+  | "managedCommand.stop"
+  | "managedCommand.delete";
 
 /**
  * Resolve the per-command host client from an already-looked-up directory

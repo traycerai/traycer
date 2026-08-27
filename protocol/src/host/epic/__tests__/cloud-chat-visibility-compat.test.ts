@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { splitConnectionManifest } from "@traycer/protocol/framework/index";
+import {
+  splitConnectionManifest,
+  SERVES_EVERY_INSTALLED_MAJOR,
+} from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { releasedMethodNames } from "@traycer/protocol/host/__tests__/__fixtures__/released-method-names";
@@ -66,10 +69,12 @@ describe("cloud-chat visibility mutations are optional, not floor", () => {
       const split = splitConnectionManifest(
         hostRpcRegistry,
         RELEASED_FLOOR_METHOD_NAMES,
+        SERVES_EVERY_INSTALLED_MAJOR,
       );
       expect(split.optionalManifest[method]).toEqual({
         major: 1,
         minor: 0,
+        supportedMajors: [1],
       });
       expect(split.manifest[method]).toBeUndefined();
     },

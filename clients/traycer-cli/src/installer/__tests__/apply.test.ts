@@ -34,7 +34,10 @@ const mocks = vi.hoisted(() => ({
   lifecycleCalls: [] as Array<{ bootstrap: unknown; force: boolean }>,
   lifecycleBeforeSwapShouldThrow: false,
   lifecyclePostSwapAction: "restart" as
-    "restart" | "start" | "install" | "none",
+    | "restart"
+    | "start"
+    | "install"
+    | "none",
   lifecyclePostSwapError: null as string | null,
   // `vi.mock` factories are hoisted above this file's own top-level `let
   // sandboxRoot` - a direct reference there hits a TDZ `ReferenceError`,

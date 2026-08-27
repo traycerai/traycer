@@ -72,9 +72,7 @@ describe("terminal.list@2.2 currentCwd", () => {
       sessions: [{ ...base, currentCwd: base.cwd }],
       homeCwd: "/Users/dev",
     });
-    expect(
-      upgradeResponseToVersion(listRegistry, V21, V22, response),
-    ).toEqual({
+    expect(upgradeResponseToVersion(listRegistry, V21, V22, response)).toEqual({
       sessions: [{ ...base, currentCwd: base.cwd }],
       homeCwd: "/Users/dev",
     });
@@ -113,7 +111,9 @@ describe("terminal.list@2.2 currentCwd", () => {
       2,
       1,
       listTerminalsResponseSchemaV23.parse({
-        sessions: [{ ...base, currentCwd: "/work/live", lifecycleOwner: "registry" }],
+        sessions: [
+          { ...base, currentCwd: "/work/live", lifecycleOwner: "registry" },
+        ],
         homeCwd: "/Users/dev",
       }),
     );

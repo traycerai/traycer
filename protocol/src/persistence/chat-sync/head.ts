@@ -146,7 +146,8 @@ export const chatHeadCohortPartSchema = chatHeadAddressPartSchema
 export type ChatHeadCohortPart = z.infer<typeof chatHeadCohortPartSchema>;
 
 /** Algorithm id recorded in the head so a cut is reproducible forever. */
-export const CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1 = "fastcdc-gear-v1" as const;
+export const CHAT_SYNC_CDC_ALGORITHM_FASTCDC_GEAR_V1 =
+  "fastcdc-gear-v1" as const;
 
 /**
  * Content-defined-chunking parameters the writer used to cut this head.
@@ -721,7 +722,9 @@ function encodeCore(core: ChatHeadCore): JsonObject {
   );
 }
 
-function encodeSimpleLevel(level: { readonly residual: JsonObject }): JsonObject {
+function encodeSimpleLevel(level: {
+  readonly residual: JsonObject;
+}): JsonObject {
   const { residual, ...declared } = level;
   return mergeResidual({ ...declared }, residual);
 }
@@ -864,7 +867,8 @@ export type ChatHeadDocumentResult =
 export const CHAT_HEAD_DOCUMENT_CORRUPTION_MESSAGES: Readonly<
   Record<ChatHeadDocumentCorruptionReason, string>
 > = {
-  "malformed-json": "This chat's stored record is damaged and could not be read.",
+  "malformed-json":
+    "This chat's stored record is damaged and could not be read.",
   "parts-envelope-missing":
     "This chat's stored record is incomplete and could not be opened.",
   "schema-rejected":
@@ -921,7 +925,10 @@ export function decodeChatHeadDocument(
   }
 
   if (!isJsonObject(parsed)) {
-    return corruptDocument("malformed-json", "Head document is not a JSON object");
+    return corruptDocument(
+      "malformed-json",
+      "Head document is not a JSON object",
+    );
   }
 
   const envelope = readJsonProperty(parsed, CHAT_HEAD_PARTS_KEY);
@@ -1011,7 +1018,9 @@ export const CHAT_SYNC_READER_VERSION: SchemaVersion = {
   minor: CHAT_SYNC_SCHEMA_VERSION.minor,
 };
 
-export type ChatHeadRefusalReason = "unsupported-major" | "reader-below-minimum";
+export type ChatHeadRefusalReason =
+  | "unsupported-major"
+  | "reader-below-minimum";
 
 export type ChatHeadVersionGate =
   | { readonly ok: true }

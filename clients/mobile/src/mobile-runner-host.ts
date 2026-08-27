@@ -250,7 +250,8 @@ export class MobileRunnerHost implements IRunnerHost {
   private readonly selectionAuthorityMount: InProcessSelectionAuthority;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly fleetHostIds:
-    (() => Promise<readonly string[] | null>) | null;
+    | (() => Promise<readonly string[] | null>)
+    | null;
 
   constructor(options: MobileRunnerHostOptions) {
     this.signInUrl = options.signInUrl;

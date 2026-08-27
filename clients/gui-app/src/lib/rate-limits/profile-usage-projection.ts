@@ -21,7 +21,8 @@ import { creditUsageSeverity } from "@/lib/rate-limits/window-severity";
 
 export type ProfileUsageWindowRole = "primary" | "secondary" | "extra";
 export type ProfileUsageFailureReason =
-  RateLimitUnavailableReason | "fetch_failed";
+  | RateLimitUnavailableReason
+  | "fetch_failed";
 type AvailableProviderRateLimits = Extract<
   ProviderRateLimits,
   { available: true }
@@ -68,7 +69,10 @@ export type ProfileUsageProjection =
       readonly kind: "unavailable";
       readonly severity: "unknown";
       readonly reason:
-        ProfileUsageFailureReason | "expired" | "missing_windows" | "unknown";
+        | ProfileUsageFailureReason
+        | "expired"
+        | "missing_windows"
+        | "unknown";
     });
 
 export interface ProfileUsageProjectionInput {

@@ -745,7 +745,10 @@ export function ReportIssueDialog(
   // four, same telemetry (now tagged with which action was blocked).
   function runIfGateSatisfied(
     blockedAction:
-      "send" | "open_github_issue" | "report_on_github" | "save_bundle",
+      | "send"
+      | "open_github_issue"
+      | "report_on_github"
+      | "save_bundle",
     run: () => void,
   ): void {
     if (!gateSatisfied) {

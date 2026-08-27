@@ -1,5 +1,8 @@
 export type ComposerTopBannerKind =
-  "reauth" | "ambient-drift" | "rate-limit" | "none";
+  | "reauth"
+  | "ambient-drift"
+  | "rate-limit"
+  | "none";
 
 export function resolveComposerTopBannerKind({
   profileDisabled,

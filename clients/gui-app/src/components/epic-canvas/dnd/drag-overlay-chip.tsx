@@ -90,8 +90,12 @@ function canvasOpenableDragSource(
  */
 export function EpicRootDragOverlayContent() {
   const overlayTile = useEpicDndStore((s) => s.activeOverlayTile);
+  // A dragged TILE is the tab itself, so its overlay takes the tile's measured
+  // width instead of sizing to its own content.
+  const tileSourceWidth = useEpicDndStore((s) => s.tileSourceWidth);
   const activeSource = useEpicDndStore((s) => s.activeSource);
   const activeHeaderTab = useEpicDndStore((s) => s.activeHeaderTab);
+  const headerTabWidth = useEpicDndStore((s) => s.headerStripSourceWidth);
   const openableSource = canvasOpenableDragSource(activeSource);
   const railSource =
     activeSource?.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE ? activeSource : null;
@@ -102,11 +106,26 @@ export function EpicRootDragOverlayContent() {
     <>
       <AnimatePresence initial={false}>
         {overlayTile === null || openableSource === null ? null : (
-          <EpicCanvasNodeDragOverlay
-            key={overlayTile.instanceId}
-            node={overlayTile}
-            epicId={openableSource.epicId}
-          />
+          <div
+            style={
+              tileSourceWidth === null ? undefined : { width: tileSourceWidth }
+            }
+            // The chip itself is `w-max max-w-[min(80vw,24rem)]`, so a width on
+            // this wrapper alone does nothing - a 192px tile rendered a 360px
+            // chip. The child variants override both, which makes the dragged
+            // object the tile at its own measured width.
+            className={cn(
+              tileSourceWidth === null
+                ? undefined
+                : "[&>*]:w-full [&>*]:max-w-none",
+            )}
+          >
+            <EpicCanvasNodeDragOverlay
+              key={overlayTile.instanceId}
+              node={overlayTile}
+              epicId={openableSource.epicId}
+            />
+          </div>
         )}
       </AnimatePresence>
       <AnimatePresence initial={false}>
@@ -130,6 +149,7 @@ export function EpicRootDragOverlayContent() {
           <HeaderTabOverlayChip
             key={`${activeHeaderTab.tabKind}:${activeHeaderTab.tabId}`}
             tab={activeHeaderTab}
+            width={headerTabWidth}
           />
         )}
       </AnimatePresence>
@@ -146,7 +166,10 @@ function WorkspaceFolderDragOverlay(props: { readonly name: string }) {
   );
 }
 
-function HeaderTabOverlayChip(props: { readonly tab: HeaderTabDragData }) {
+function HeaderTabOverlayChip(props: {
+  readonly tab: HeaderTabDragData;
+  readonly width: number | null;
+}) {
   const allTabs = useHeaderTabs();
   const tab =
     allTabs.find(
@@ -155,7 +178,7 @@ function HeaderTabOverlayChip(props: { readonly tab: HeaderTabDragData }) {
         candidate.id === props.tab.tabId,
     ) ?? null;
   if (tab === null) return null;
-  return <HeaderTabDragOverlay tab={tab} />;
+  return <HeaderTabDragOverlay tab={tab} width={props.width} />;
 }
 
 function EpicCanvasNodeDragOverlay(props: {

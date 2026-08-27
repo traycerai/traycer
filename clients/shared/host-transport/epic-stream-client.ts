@@ -406,6 +406,10 @@ export class EpicStreamClient {
     envelope: StreamFrameEnvelope,
     binaryPayload: Uint8Array | null,
   ): void {
+    // The receive-path half of the `closed` contract the send methods
+    // already keep: after `close()` the session can still deliver frames
+    // already in flight, and the callbacks must not hear them.
+    if (this.closed) return;
     const parsed = epicSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       return;
