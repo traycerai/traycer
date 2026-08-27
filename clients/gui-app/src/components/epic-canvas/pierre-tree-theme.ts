@@ -12,7 +12,16 @@ export const PIERRE_FILE_TREE_THEME_STYLE = {
   "--trees-border-radius-override": "0.375rem",
   "--trees-icon-width-override": "14px",
   "--trees-scrollbar-gutter-override": "0px",
-  "--trees-bg-override": "var(--background)",
+  // Pierre paints this on the list container, on every row, and on the sticky
+  // overlay - so it must be the surface the tree is actually sitting on, not a
+  // fixed token. The desktop sidebar is `bg-background`, which is why the
+  // fallback is `--background` and desktop renders identically; a host on any
+  // other surface (the mobile switcher sheet is `bg-popover`) declares
+  // `--pierre-tree-surface` and the tree stops painting a slab of the wrong
+  // colour over it. Not `transparent`: the sticky-header overlay and the rows
+  // repainted while scrolling are opaque on purpose, to mask the content
+  // passing underneath them.
+  "--trees-bg-override": "var(--pierre-tree-surface, var(--background))",
   "--trees-fg-override":
     "color-mix(in oklab, var(--foreground) 75%, transparent)",
   "--trees-fg-muted-override": "var(--muted-foreground)",

@@ -355,6 +355,9 @@ export function useHostSessionWake(): () => void {
     // now", and the probe-first flavour would answer a live-but-stuck socket
     // with nothing. The OS resume path makes the opposite call for the
     // opposite reason (`subscribeWakeSignals`).
-    streamClient.reconnectAll(SESSION_WAKE_REASON, { probeFirst: false });
+    streamClient.reconnectAll(SESSION_WAKE_REASON, {
+      probeFirst: false,
+      wakeProbe: null,
+    });
   }, [streamClient]);
 }

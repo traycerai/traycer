@@ -34,6 +34,7 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import type {
   PushPermissionState,
   StoredCredentials,
+  SystemResumeEvent,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -127,7 +128,7 @@ export interface PushTokenSource {
  * cold start or sign-in.
  */
 export interface SystemResumeSource {
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 }
 
 export interface PushRegistrationTarget {

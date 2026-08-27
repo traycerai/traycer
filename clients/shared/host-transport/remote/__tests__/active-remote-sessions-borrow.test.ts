@@ -9,8 +9,15 @@ import {
   remoteSessionBorrowCountForTest,
   retireAllRemoteSessions,
   tryAcquireReadyRemoteSession,
+  type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "../active-remote-sessions";
+
+// Borrow semantics are policy-independent (the borrow surface never consults
+// sweep eligibility), so one sweep-eligible policy serves every case here.
+const BORROW_TEST_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
 
 // `tryAcquireReadyRemoteSession` / `hasBorrowableRemoteSession` (Ticket 06):
 // the narrow, non-lingering-extending surface a fleet-status poller gets. The
@@ -42,6 +49,7 @@ function fakeSession(): FakeSession {
     isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
     sendUnary: vi.fn(async () => ({}) as never),
+    forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),
@@ -86,7 +94,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     owner.close(); // last consumer gone: entry now lingers at refCount 0
     expect(tryAcquireReadyRemoteSession(identity.hostId)).toBeNull();
@@ -105,7 +117,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     expect(borrow).not.toBeNull();
@@ -146,7 +162,7 @@ describe("tryAcquireReadyRemoteSession", () => {
     // never wired to fire at all (this repo has been bitten by that shape of
     // vacuous assertion four times).
     const identity = freshIdentity();
-    const view = acquireRemoteSession(identity, factory);
+    const view = acquireRemoteSession(identity, BORROW_TEST_POLICY, factory);
     expect(factory).toHaveBeenCalledTimes(1);
     view.close();
   });
@@ -155,7 +171,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     expect(borrow).not.toBeNull();
@@ -198,7 +218,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     // No underflow leaked onto a successor entry for the SAME identity: a
     // fresh acquire starts its own borrow count at zero.
     const successorSession = fakeSession();
-    const successor = acquireRemoteSession(identity, () => successorSession);
+    const successor = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => successorSession,
+    );
     expect(remoteSessionBorrowCountForTest(identity)).toBe(0);
     successor.close();
   });
@@ -210,7 +234,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     if (borrow === null) throw new Error("expected a borrow");
@@ -236,7 +264,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     if (borrow === null) throw new Error("expected a borrow");
@@ -290,7 +322,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     if (borrow === null) throw new Error("expected a borrow");
@@ -326,7 +362,11 @@ describe("tryAcquireReadyRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     const borrow = tryAcquireReadyRemoteSession(identity.hostId);
     expect(borrow).not.toBeNull();
@@ -351,7 +391,11 @@ describe("hasBorrowableRemoteSession", () => {
     const identity = freshIdentity();
     const session = fakeSession();
     session.ready = true;
-    const owner = acquireRemoteSession(identity, () => session);
+    const owner = acquireRemoteSession(
+      identity,
+      BORROW_TEST_POLICY,
+      () => session,
+    );
 
     expect(hasBorrowableRemoteSession(identity.hostId)).toBe(true);
     owner.close();

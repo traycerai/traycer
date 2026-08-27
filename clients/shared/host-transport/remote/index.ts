@@ -30,12 +30,19 @@ export {
   // `BorrowedRemoteSession.identity` - a consumer that stamps an observation
   // with which connection answered needs to be able to name the type.
   type RemoteSessionIdentity,
+  // `acquireRemoteSession` is exported above and requires a policy, so the
+  // policy type is part of the same public surface.
+  type RemoteSessionAcquirePolicy,
   remoteSessionCacheKey,
   retireAllRemoteSessions,
   wakeHeldRemoteSessions,
   subscribeRemoteSessionReadiness,
   resetRemoteSessionReadinessListenersForTest,
 } from "./active-remote-sessions";
+export {
+  RELAY_WAKE_PROBE_TIMEOUT_BACKGROUNDED_MS,
+  WAKE_FORCE_RECONNECT_AFTER_BACKGROUND_MS,
+} from "./config";
 export {
   mintAttachGrantViaHttp,
   createAttachGrantProvider,

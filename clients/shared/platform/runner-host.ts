@@ -33,6 +33,26 @@ import type {
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 /**
+ * What a shell can say about the wake it is reporting through
+ * `IRunnerHost.onSystemResumed`.
+ */
+export type SystemResumeEvent = {
+  /**
+   * How long the runtime was demonstrably suspended before this resume, in
+   * milliseconds - or `null` when the shell cannot measure it (desktop
+   * `powerMonitor` reports no sleep duration; a mobile shell that never saw
+   * the background edge has no stamp to measure from).
+   *
+   * The number changes what a wake consumer should DO with the sockets the
+   * freeze left behind: a brief measured suspend deserves a short probe of a
+   * socket that may have survived, a long one means the OS has torn the
+   * socket down and probing it only delays the redial. `null` keeps the
+   * conservative desktop-calibrated behavior.
+   */
+  readonly backgroundedForMs: number | null;
+};
+
+/**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
  * and mobile shells.
  *
@@ -421,14 +441,28 @@ export interface IRunnerHost {
    * offline within seconds instead of waiting out the stream heartbeat.
    *
    * Desktop bridges Electron `powerMonitor` `resume`/`unlock-screen` through
-   * the preload IPC bridge. Mobile raises it on the hidden -> visible edge,
-   * where "the machine woke" means the app returned to the foreground and the
-   * OS un-suspended its WebView. Shells with no wake signal at all (web, tests)
+   * the preload IPC bridge. Mobile raises it when the app returns to the
+   * foreground (the DOM visibility edge and the native app-state edge,
+   * deduplicated) - "the machine woke" means the OS un-suspended its WebView.
+   * Shells with no wake signal at all (web, tests)
    * install a no-op whose handler never fires; consumers still pair this with
    * the cross-platform `window` `online` event, so wake recovery degrades
    * gracefully where no native signal exists.
    */
-  onSystemResumed(handler: () => void): Disposable;
+  onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
+
+  /**
+   * Subscribes to network-path changes the shell can observe natively:
+   * connectivity coming back, or the interface type changing under live
+   * connectivity (Wi-Fi -> cellular). Both are moments an existing socket is
+   * dead or about to behave like it, without any DOM `online` event firing -
+   * the network never went "offline", it moved. Mobile raises this from the
+   * OS reachability API and suppresses it while the app is backgrounded (the
+   * resume edge owns recovery there). Desktop and web install a no-op whose
+   * handler never fires: their consumers already cover the equivalent cases
+   * with `window 'online'` and the OS-wake signal.
+   */
+  onNetworkPathChanged(handler: () => void): Disposable;
 
   /**
    * Asks the shell to re-spawn its detached local host. Desktop delegates

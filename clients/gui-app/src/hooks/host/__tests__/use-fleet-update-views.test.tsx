@@ -8,6 +8,7 @@ import {
   acquireRemoteSession,
   resetRemoteSessionReadinessListenersForTest,
   retireAllRemoteSessions,
+  type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
@@ -51,6 +52,7 @@ function fakeSession(): FakeSession {
       }
       return Promise.resolve(session.statusResponse);
     }) as FakeSession["sendUnary"],
+    forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
@@ -67,6 +69,12 @@ function fakeSession(): FakeSession {
   };
   return session;
 }
+
+// Fleet-view reads borrow sessions; they never consult sweep eligibility, so
+// one sweep-eligible policy serves every acquire these tests make.
+const FLEET_TEST_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
 
 function remoteIdentity(hostId: string): RemoteSessionIdentity {
   return {
@@ -138,8 +146,16 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
     // Both sessions HELD by an owner (refCount > 0), which is the admission
     // test `tryAcquireReadyRemoteSession` requires - a borrow never adopts a
     // zero-consumer lingering entry (subject A).
-    const ownerA = acquireRemoteSession(remoteIdentity(hostA), () => sessionA);
-    const ownerB = acquireRemoteSession(remoteIdentity(hostB), () => sessionB);
+    const ownerA = acquireRemoteSession(
+      remoteIdentity(hostA),
+      FLEET_TEST_POLICY,
+      () => sessionA,
+    );
+    const ownerB = acquireRemoteSession(
+      remoteIdentity(hostB),
+      FLEET_TEST_POLICY,
+      () => sessionB,
+    );
 
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useFleetUpdateViews([hostA, hostB]), {
@@ -188,7 +204,11 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
     const hostNoSession = "host-quiet";
     const sessionA = fakeSession();
     sessionA.statusResponse = downloadingStatus("2.1.0");
-    const ownerA = acquireRemoteSession(remoteIdentity(hostA), () => sessionA);
+    const ownerA = acquireRemoteSession(
+      remoteIdentity(hostA),
+      FLEET_TEST_POLICY,
+      () => sessionA,
+    );
 
     const queryClient = makeQueryClient();
     const { result } = renderHook(
@@ -234,8 +254,16 @@ describe("useFleetUpdateViews — per-host cadence (G3a)", () => {
     const sessionB = fakeSession();
     sessionA.statusResponse = downloadingStatus("2.1.0");
     sessionB.statusResponse = idleStatus("1.5.0");
-    const ownerA = acquireRemoteSession(remoteIdentity(hostA), () => sessionA);
-    const ownerB = acquireRemoteSession(remoteIdentity(hostB), () => sessionB);
+    const ownerA = acquireRemoteSession(
+      remoteIdentity(hostA),
+      FLEET_TEST_POLICY,
+      () => sessionA,
+    );
+    const ownerB = acquireRemoteSession(
+      remoteIdentity(hostB),
+      FLEET_TEST_POLICY,
+      () => sessionB,
+    );
 
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useFleetUpdateViews([hostA, hostB]), {
@@ -272,7 +300,11 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
     // If the coalescing failed, this is what WOULD get read — a distinct
     // version from the seeded canonical entry, so a leaked borrow is visible.
     session.statusResponse = downloadingStatus("9.9.9");
-    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      FLEET_TEST_POLICY,
+      () => session,
+    );
 
     const queryClient = makeQueryClient();
     queryClient.setQueryData(
@@ -307,7 +339,11 @@ describe("useFleetUpdateViews — coalescing with the canonical host.status cach
     const hostId = "host-canonical-stale";
     const session = fakeSession();
     session.statusResponse = downloadingStatus("2.1.0");
-    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      FLEET_TEST_POLICY,
+      () => session,
+    );
 
     // No canonical `host.status` cache entry seeded at all — the query state
     // simply does not exist for this host.
@@ -351,7 +387,11 @@ describe("useFleetUpdateViews — global concurrency across real per-host querie
     const owners = hostIds.map((hostId) => {
       const session = fakeSession();
       session.statusResponse = idleStatus("1.5.0");
-      return acquireRemoteSession(remoteIdentity(hostId), () => session);
+      return acquireRemoteSession(
+        remoteIdentity(hostId),
+        FLEET_TEST_POLICY,
+        () => session,
+      );
     });
 
     const queryClient = makeQueryClient();
@@ -392,7 +432,11 @@ describe("useFleetUpdateViews — retention across a declined read (G3e)", () =>
       }
       return originalSendUnary(...args);
     }) as typeof originalSendUnary;
-    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      FLEET_TEST_POLICY,
+      () => session,
+    );
 
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useFleetUpdateViews([hostId]), {

@@ -8,6 +8,7 @@ import {
   acquireRemoteSession,
   resetRemoteSessionReadinessListenersForTest,
   retireAllRemoteSessions,
+  type RemoteSessionAcquirePolicy,
   type RemoteSessionIdentity,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -156,6 +157,7 @@ function readySession(): FakeSession {
       }
       return Promise.resolve(status(null));
     }) as FakeSession["sendUnary"],
+    forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
     }),
@@ -172,6 +174,12 @@ function readySession(): FakeSession {
   };
   return session;
 }
+
+// The borrowed read never consults sweep eligibility; one sweep-eligible
+// policy serves both acquires this suite makes.
+const BORROW_READ_POLICY: RemoteSessionAcquirePolicy = {
+  proactiveWakeEligible: true,
+};
 
 function remoteIdentity(hostId: string): RemoteSessionIdentity {
   return {
@@ -221,7 +229,11 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
     // assertion would pass vacuously.
     const hostId = "host-gated";
     const session = readySession();
-    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      BORROW_READ_POLICY,
+      () => session,
+    );
 
     const readPromise = readUpdateStatusOverBorrowedSession({
       hostId,
@@ -271,7 +283,11 @@ describe("readUpdateStatusOverBorrowedSession — actually enters the fleet read
 
     const hostId = "host-stamp-after-queue";
     const session = readySession();
-    const owner = acquireRemoteSession(remoteIdentity(hostId), () => session);
+    const owner = acquireRemoteSession(
+      remoteIdentity(hostId),
+      BORROW_READ_POLICY,
+      () => session,
+    );
 
     const CALL_TIME_MS = 1_000_000;
     const QUEUE_WAIT_MS = 5_000;

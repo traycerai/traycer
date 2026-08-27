@@ -268,7 +268,15 @@ function GitTreeSectionBody(props: GitTreeSectionBodyProps): ReactNode {
   });
 
   return (
-    <div {...bridge.wrapperProps} className="flex h-full min-h-0 flex-col">
+    // `data-vaul-no-drag` for the same reason as the workspace file tree: this
+    // tree's scroller is inside a shadow root, so vaul's parentElement climb
+    // from the retargeted touch target cannot find it and would claim the
+    // gesture as a drawer dismiss. Inert outside the mobile sheet.
+    <div
+      {...bridge.wrapperProps}
+      data-vaul-no-drag=""
+      className="flex h-full min-h-0 flex-col"
+    >
       <PierreFileTree
         className="h-full min-h-0"
         model={model}

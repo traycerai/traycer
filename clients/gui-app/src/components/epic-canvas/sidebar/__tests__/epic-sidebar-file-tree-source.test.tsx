@@ -209,6 +209,12 @@ let capturedOnSelectionChange: ((paths: ReadonlyArray<string>) => void) | null =
 // reads its options once, at construction, and the model exposes no getter the
 // panel could be asked afterwards.
 let capturedItemHeight: number | undefined = undefined;
+let capturedDensity: string | undefined = undefined;
+// How many times the model was CONSTRUCTED. The panel used to remount across
+// the breakpoint to rebuild a touch-sized model; with one geometry everywhere
+// there is nothing to rebuild, and this is what tells a surviving tree apart
+// from a rebuilt one now that both viewports report the same geometry.
+let modelConstructionCount = 0;
 
 function notifyModel(): void {
   for (const listener of modelListeners) listener();
@@ -356,14 +362,19 @@ vi.mock("@pierre/trees/react", () => ({
   useFileTree: (options: {
     readonly onSelectionChange: (paths: ReadonlyArray<string>) => void;
     readonly itemHeight: number | undefined;
+    readonly density: string;
   }) => {
     capturedOnSelectionChange = options.onSelectionChange;
     // Mount-captured, exactly like the real hook's `useState(() => new
     // FileTree(options))`. Recording it per RENDER instead would make the row
     // geometry look reactive here when it is not, and the viewport-transition
     // case below would pass without the body ever having been rebuilt.
-    const [itemHeightAtConstruction] = useState(() => options.itemHeight);
-    capturedItemHeight = itemHeightAtConstruction;
+    const [geometryAtConstruction] = useState(() => {
+      modelConstructionCount += 1;
+      return { itemHeight: options.itemHeight, density: options.density };
+    });
+    capturedItemHeight = geometryAtConstruction.itemHeight;
+    capturedDensity = geometryAtConstruction.density;
     return { model: mockModel };
   },
 }));
@@ -628,6 +639,28 @@ describe("sidebar file tree source selection", () => {
 
     expect(pinned.subscribedMethods).toEqual(["workspace.subscribeFileList"]);
     expect(ambient.subscribedMethods).toEqual([]);
+  });
+
+  /**
+   * Inside the mobile switcher sheet this tree is a vaul drawer descendant.
+   * vaul's `shouldDrag` walks up from the touch target and, finding no
+   * scrollable ancestor, returns true - it drags the drawer instead of letting
+   * the content scroll. Pierre's scroller is inside a shadow root and a touch
+   * inside one retargets to the host, so that walk starts outside the shadow
+   * tree and can never see it. The attribute is what tells vaul to stay out.
+   *
+   * This is the WORKSPACE tree - the surface actually reported - and it needs
+   * its own arm: the git-diff tree's assertion passes with this marker deleted,
+   * so without this the coverage claim would be true of the wrong mount.
+   *
+   * It pins the marker, not the scrolling. Whether a finger scrolls is touch
+   * arbitration, which jsdom cannot decide.
+   */
+  it("marks the tree wrapper as not a drawer-drag surface", () => {
+    renderPanel(new MockWsStreamClient("unknown"));
+
+    const tree = screen.getByTestId("pierre-file-tree-stub");
+    expect(tree.closest("[data-vaul-no-drag]")).not.toBeNull();
   });
 
   it("builds the tree from the live stream and leaves the unary path disabled", async () => {
@@ -1456,6 +1489,8 @@ describe("file tree on a touch viewport", () => {
     modelListeners.clear();
     capturedOnSelectionChange = null;
     capturedItemHeight = undefined;
+    capturedDensity = undefined;
+    modelConstructionCount = 0;
     installSearchHost({});
     __resetWorkspaceFileListSubscriptionsForTesting();
     useFileTreeStore.setState({ expandedPathsByScope: {} });
@@ -1484,10 +1519,21 @@ describe("file tree on a touch viewport", () => {
     });
   });
 
-  it("asks for touch-sized rows instead of the sidebar's compact ones", () => {
+  /**
+   * The phone shows the desktop's tree, pitch included. Touch used to inflate
+   * rows to a 44px hit target because pierre's rows sit in a shadow root the
+   * mobile hit-area stylesheet cannot reach; the compact pitch is deliberately
+   * kept instead, so the two viewports render one geometry.
+   *
+   * Both options are asserted because either alone leaves the pitch forked:
+   * `density` scales pierre's padding and radius, `itemHeight` overrides the
+   * row box.
+   */
+  it("builds the phone tree with the desktop's row geometry", () => {
     renderPanel(new MockWsStreamClient("unknown"));
 
-    expect(capturedItemHeight).toBe(44);
+    expect(capturedItemHeight).toBeUndefined();
+    expect(capturedDensity).toBe("compact");
   });
 
   it("recycles the single preview tile for a tapped row rather than accumulating one per file", () => {
@@ -1522,17 +1568,30 @@ describe("file tree on a touch viewport", () => {
     );
   });
 
-  it("rebuilds the tree when the window crosses the breakpoint, rather than leaving the other class's rows", () => {
+  /**
+   * The inverse of what this used to assert. The body was keyed on the
+   * viewport class so it would REBUILD across the breakpoint, because pierre
+   * bakes geometry at construction and a touch model differed from a pointer
+   * one. With one geometry everywhere there is nothing to rebuild, and the
+   * remount was not free - it drops the filter query.
+   *
+   * The construction count is what makes this discriminating: now that both
+   * viewports report the same `itemHeight` and `density`, comparing geometry
+   * across the crossing would pass whether the tree survived or was rebuilt.
+   */
+  it("keeps the same tree across a breakpoint crossing instead of rebuilding it", () => {
     setViewportWidth(DESKTOP_WIDTH);
     renderPanel(new MockWsStreamClient("unknown"));
+    expect(modelConstructionCount).toBe(1);
     expect(capturedItemHeight).toBeUndefined();
+    expect(capturedDensity).toBe("compact");
 
     act(() => {
       setViewportWidth(MOBILE_WIDTH);
     });
 
-    // Only a rebuilt model can report this: the mocked hook, like the real
-    // one, reads `itemHeight` once at construction.
-    expect(capturedItemHeight).toBe(44);
+    expect(modelConstructionCount).toBe(1);
+    expect(capturedItemHeight).toBeUndefined();
+    expect(capturedDensity).toBe("compact");
   });
 });
